@@ -5,7 +5,8 @@ import { createPlannerProject, createBlankProject, createNotebookProject, Projec
 import { ProjectEditor } from '../components/ProjectEditor';
 import { TabBar } from '../components/TabBar';
 import { NewProjectModal } from '../components/NewProjectModal';
-import { Square, Home } from 'lucide-react';
+import { CloseProjectConfirmModal } from '../components/CloseProjectConfirmModal';
+import { Square, Home, Github } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import clsx from 'clsx';
 
@@ -34,6 +35,7 @@ export function EditorPage() {
   });
 
   const [showNewProjectModal, setShowNewProjectModal] = useState(false);
+  const [closingProjectId, setClosingProjectId] = useState<string | null>(null);
 
   // Persist projects state
   useEffect(() => {
@@ -105,16 +107,53 @@ export function EditorPage() {
     setShowNewProjectModal(false);
   };
 
-  const handleCloseProject = (id: string) => {
-      const newProjects = projects.filter(p => p.id !== id);
-      if (newProjects.length === 0) {
-          handleCreateProject('blank');
-          return;
-      }
+  const initiateCloseProject = (id: string) => {
+      setClosingProjectId(id);
+  };
+
+  const executeCloseProject = () => {
+      if (!closingProjectId) return;
+      const id = closingProjectId;
       
-      setProjects(newProjects);
-      if (activeProjectId === id) {
-          setActiveProjectId(newProjects[newProjects.length - 1].id);
+      const remainingProjects = projects.filter(p => p.id !== id);
+      
+      if (remainingProjects.length === 0) {
+          // If closing the last project, replace it with a fresh blank project
+          const newState = createBlankProject();
+          const newId = `proj_${Date.now()}`;
+          const newProject: Project = {
+              id: newId,
+              name: 'Blank Project',
+              initialState: newState
+          };
+          setProjects([newProject]);
+          setActiveProjectId(newId);
+      } else {
+          setProjects(remainingProjects);
+          if (activeProjectId === id) {
+              setActiveProjectId(remainingProjects[remainingProjects.length - 1].id);
+          }
+      }
+      setClosingProjectId(null);
+  };
+
+  const downloadProjectJson = (project: Project) => {
+      const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(project.initialState, null, 2));
+      const downloadAnchorNode = document.createElement('a');
+      downloadAnchorNode.setAttribute("href", dataStr);
+      downloadAnchorNode.setAttribute("download", `${project.name.replace(/\s+/g, '_')}_${new Date().toISOString().split('T')[0]}.json`);
+      document.body.appendChild(downloadAnchorNode); 
+      downloadAnchorNode.click();
+      downloadAnchorNode.remove();
+  };
+
+  const handleSaveAndClose = () => {
+      if (closingProjectId) {
+          const project = projects.find(p => p.id === closingProjectId);
+          if (project) {
+              downloadProjectJson(project);
+          }
+          executeCloseProject();
       }
   };
 
@@ -125,6 +164,8 @@ export function EditorPage() {
   const handleUpdateProjectState = (id: string, state: AppState) => {
       setProjects(prev => prev.map(p => p.id === id ? { ...p, initialState: state } : p));
   };
+
+  const closingProject = closingProjectId ? projects.find(p => p.id === closingProjectId) : null;
 
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-slate-200">
@@ -142,14 +183,19 @@ export function EditorPage() {
                     projects={projects} 
                     activeProjectId={activeProjectId}
                     onSelect={setActiveProjectId}
-                    onClose={handleCloseProject}
+                    onClose={initiateCloseProject}
                     onNew={() => setShowNewProjectModal(true)}
                 />
             </div>
             
-            <Link to="/docs" className="text-xs font-medium text-slate-500 hover:text-blue-600 hidden sm:block">
-                Docs
-            </Link>
+            <div className="flex items-center gap-3 hidden sm:flex">
+                <a href="https://github.com/doctect/doctect" target="_blank" rel="noopener noreferrer" className="text-slate-400 hover:text-slate-900 transition-colors" title="View on GitHub">
+                    <Github size={18} />
+                </a>
+                <Link to="/docs" className="text-xs font-medium text-slate-500 hover:text-blue-600">
+                    Docs
+                </Link>
+            </div>
         </header>
 
         {/* Project Workspace Area */}
@@ -177,6 +223,14 @@ export function EditorPage() {
             isOpen={showNewProjectModal}
             onClose={() => setShowNewProjectModal(false)}
             onSelectPreset={handleCreateProject}
+        />
+
+        <CloseProjectConfirmModal
+            isOpen={!!closingProjectId}
+            onClose={() => setClosingProjectId(null)}
+            onConfirmClose={executeCloseProject}
+            onSaveAndClose={handleSaveAndClose}
+            projectName={closingProject?.name || 'Project'}
         />
     </div>
   );

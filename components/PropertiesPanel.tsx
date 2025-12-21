@@ -1,4 +1,5 @@
 
+
 import React, { useState } from 'react';
 import { AppState, AppNode, TemplateElement, PageTemplate } from '../types';
 import { Trash, Settings2, RectangleVertical, RectangleHorizontal } from 'lucide-react';
@@ -83,11 +84,29 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
                             <option value="legal">Legal</option>
                             <option value="a5">A5</option>
                         </optgroup>
-                        <optgroup label="E-Ink Devices">
-                            <option value="note_10_3">10.3" Devices (RM2, A5X, Go 10.3)</option>
-                            <option value="rm_pp">reMarkable Paper Pro (11.8")</option>
-                            <option value="note_13_3">13.3" Devices (Note Max, Tab X)</option>
-                            <option value="note_7_8">7.8" Devices (Nomad, Nova)</option>
+                        <optgroup label="11.8&quot; Devices">
+                            <option value="rm_pp">reMarkable Paper Pro</option>
+                        </optgroup>
+                        <optgroup label="10.3&quot; Devices">
+                            <option value="rm2">reMarkable 2</option>
+                            <option value="boox_note_air">Boox Note Air 3 / 3C</option>
+                            <option value="boox_go_10">Boox Go 10.3</option>
+                            <option value="supernote_a5x">Supernote A5 X / Manta</option>
+                            <option value="kindle_scribe">Kindle Scribe</option>
+                            <option value="note_10_3">Generic 10.3"</option>
+                        </optgroup>
+                        <optgroup label="13.3&quot; Devices">
+                            <option value="boox_tab_x">Boox Tab X</option>
+                            <option value="boox_note_max">Boox Note Max</option>
+                            <option value="note_13_3">Generic 13.3"</option>
+                        </optgroup>
+                        <optgroup label="7.8&quot; Devices">
+                            <option value="supernote_nomad">Supernote Nomad</option>
+                            <option value="boox_nova_air">Boox Nova Air</option>
+                            <option value="note_7_8">Generic 7.8"</option>
+                        </optgroup>
+                        <optgroup label="7&quot; Devices">
+                            <option value="rm_pp_move">reMarkable Paper Pro Move</option>
                         </optgroup>
                     </select>
 
