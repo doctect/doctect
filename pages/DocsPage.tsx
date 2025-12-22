@@ -222,7 +222,7 @@ export const DocsPage: React.FC = () => {
                             <tr>
                                <td className="py-5 px-6 font-bold text-blue-700 whitespace-nowrap">Child Referrer</td>
                                <td className="py-5 px-6 text-slate-600">
-                                   Advanced. Used to jump to a page that contains a reference to the current page (e.g., Day -- Week).
+                                   Advanced. Used to jump to a page that contains a reference to the current page (e.g., Day -> Week).
                                </td>
                             </tr>
                             <tr>
