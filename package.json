@@ -4,13 +4,19 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "concurrently \"vite\" \"node server/index.js\"",
+    "server": "node server/index.js",
     "build": "vite build",
     "preview": "vite preview"
   },
   "dependencies": {
     "@remix-run/router": "^1.15.3",
+    "better-auth": "^1.4.10",
+    "better-sqlite3": "^9.6.0",
     "clsx": "^2.1.1",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "express": "^5.2.1",
     "jspdf": "^3.0.4",
     "lucide-react": "^0.554.0",
     "react": "^19.2.0",
@@ -22,6 +28,7 @@
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.0.0",
+    "concurrently": "^9.2.1",
     "typescript": "~5.8.2",
     "vite": "^6.2.0"
   }

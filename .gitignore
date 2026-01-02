@@ -1,5 +1,5 @@
 .env
-
+client.json
 # Logs
 logs
 *.log
