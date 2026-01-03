@@ -11,6 +11,7 @@ RUN npm install --legacy-peer-deps
 COPY . .
 
 # Build frontend
+# Build frontend
 RUN npm run build
 
 # Stage 2: Production image

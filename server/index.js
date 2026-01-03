@@ -2,8 +2,8 @@ import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import { toNodeHandler } from "better-auth/node";
-import { auth } from "./auth.js";
-import db from './db.js';
+import { createAuth } from "./auth.js";
+import db, { logEvent, getStats } from './db.js';
 
 // Polyfill for Node 18
 if (!global.crypto) {
@@ -21,14 +21,40 @@ app.use(cors({
     allowedHeaders: ["Content-Type", "Authorization", "Cookie"]
 }));
 
+// Multi-tenant Auth Instance Cache
+const authInstances = new Map();
+
+const getAuthForRequest = (req) => {
+    const host = req.headers.host;
+    if (!host) {
+        // Fallback for missing host (shouldn't happen in HTTP)
+        console.warn("Missing Host header, creating ephemeral auth instance");
+        return createAuth();
+    }
+
+    if (!authInstances.has(host)) {
+        const protocol = req.headers['x-forwarded-proto'] || 'http';
+        const baseURL = `${protocol}://${host}/api/auth`;
+        console.log(`Creating new Auth instance for host: ${host} with baseURL: ${baseURL}`);
+        authInstances.set(host, createAuth({ baseURL }));
+    }
+    return authInstances.get(host);
+};
+
+
 // Better Auth Handler
-app.use("/api/auth", toNodeHandler(auth));
+// Better Auth Handler (Dynamic)
+app.use("/api/auth", (req, res, next) => {
+    const auth = getAuthForRequest(req);
+    return toNodeHandler(auth)(req, res, next);
+});
 
 app.use(express.json());
 
 // Middleware to check for admin session
 const requireAdmin = async (req, res, next) => {
     try {
+        const auth = getAuthForRequest(req);
         const session = await auth.api.getSession({
             headers: req.headers
         });
@@ -55,11 +81,10 @@ const requireAdmin = async (req, res, next) => {
 };
 
 
-app.post('/api/track', (req, res) => {
+app.post('/api/track', async (req, res) => {
     const { type, payload } = req.body;
     try {
-        const stmt = db.prepare('INSERT INTO events (type, payload) VALUES (?, ?)');
-        stmt.run(type, JSON.stringify(payload || {}));
+        await logEvent(type, payload);
         res.status(201).json({ success: true });
     } catch (err) {
         console.error('Error tracking event:', err);
@@ -67,19 +92,10 @@ app.post('/api/track', (req, res) => {
     }
 });
 
-app.get('/api/stats', requireAdmin, (req, res) => {
+app.get('/api/stats', requireAdmin, async (req, res) => {
     try {
-        const totalEvents = db.prepare('SELECT COUNT(*) as count FROM events').get();
-        const byType = db.prepare('SELECT type, COUNT(*) as count FROM events GROUP BY type').all();
-
-        // Get last 50 events
-        const recent = db.prepare('SELECT * FROM events ORDER BY timestamp DESC LIMIT 50').all();
-
-        res.json({
-            total: totalEvents.count,
-            byType,
-            recent
-        });
+        const stats = await getStats();
+        res.json(stats);
     } catch (err) {
         console.error('Error fetching stats:', err);
         res.status(500).json({ error: 'Failed to fetch stats' });

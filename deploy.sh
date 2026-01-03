@@ -43,10 +43,27 @@ sudo docker push $IMAGE_URI
 
 # 5. Deploy to Cloud Run
 echo "Deploying to Cloud Run..."
-read -p "Enter your Google Client ID: " GOOGLE_CLIENT_ID
-read -p "Enter your Google Client Secret: " GOOGLE_CLIENT_SECRET
+# Load environment variables from .env
+if [ -f .env ]; then
+  export $(grep -v '^#' .env | xargs)
+fi
 
-read -p "Enter Admin Emails (comma separated) for Cloud Run: " ADMIN_EMAILS
+# Fallback prompts if sensitive vars are missing
+if [ -z "$GOOGLE_CLIENT_ID" ]; then
+    read -p "Enter your Google Client ID: " GOOGLE_CLIENT_ID
+fi
+
+if [ -z "$GOOGLE_CLIENT_SECRET" ]; then
+    read -p "Enter your Google Client Secret: " GOOGLE_CLIENT_SECRET
+fi
+
+if [ -z "$ADMIN_EMAILS" ]; then
+    read -p "Enter Admin Emails (comma separated) for Cloud Run: " ADMIN_EMAILS
+fi
+
+if [ -z "$DATABASE_URL" ]; then
+    read -p "Enter Database URL (Postgres/Neon) [Leave empty for local SQLite]: " DATABASE_URL
+fi
 
 gcloud run deploy $APP_NAME \
   --image $IMAGE_URI \
@@ -56,7 +73,52 @@ gcloud run deploy $APP_NAME \
   --set-env-vars GOOGLE_CLIENT_ID=$GOOGLE_CLIENT_ID \
   --set-env-vars GOOGLE_CLIENT_SECRET=$GOOGLE_CLIENT_SECRET \
   --set-env-vars ADMIN_EMAILS="$ADMIN_EMAILS" \
-  --set-env-vars CLIENT_URL="https://${APP_NAME}-9677729296.us-central1.run.app" \
-  --set-env-vars BETTER_AUTH_URL="https://${APP_NAME}-9677729296.us-central1.run.app/api/auth"
+  --set-env-vars DATABASE_URL="$DATABASE_URL" \
+# Get the deployed URL
+SERVICE_URL=$(gcloud run services describe $APP_NAME --platform managed --region $REGION --format 'value(status.url)')
 
-echo "Deployment complete! Note: You might need to update CLIENT_URL and BETTER_AUTH_URL env vars in the Cloud Run console once you know the exact URL assigned by Google."
+echo "Service URL: $SERVICE_URL"
+
+# Determine URLs for env vars
+# If CLIENT_URL is already set (e.g. from .env), use it. Otherwise use the Service URL.
+FINAL_CLIENT_URL=${CLIENT_URL:-$SERVICE_URL}
+FINAL_BETTER_AUTH_URL=${BETTER_AUTH_URL:-"${FINAL_CLIENT_URL}/api/auth"}
+
+echo "Configuring Service with URLs:"
+echo "  CLIENT_URL: $FINAL_CLIENT_URL"
+
+# Escape commas in TRUSTED_ORIGINS by replacing them with pipes (|)
+# This avoids gcloud's comma delimiter issue entirely.
+SAFE_TRUSTED_ORIGINS=$(echo "$TRUSTED_ORIGINS" | tr ',' '|')
+
+# Check if keys are loaded
+if [ -z "$GOOGLE_CLIENT_ID" ]; then
+  echo "WARNING: GOOGLE_CLIENT_ID is empty"
+else
+  echo "GOOGLE_CLIENT_ID loaded (length: ${#GOOGLE_CLIENT_ID})"
+fi
+
+# Step 1: Explicitly remove BETTER_AUTH_URL if it exists
+echo "Removing BETTER_AUTH_URL to allow dynamic domain inference..."
+gcloud run services update $APP_NAME \
+  --platform managed \
+  --region $REGION \
+  --remove-env-vars BETTER_AUTH_URL || echo "BETTER_AUTH_URL was not present or could not be removed (ignoring)."
+
+# Step 2: Update all other environment variables
+echo "Updating environment variables..."
+gcloud run services update $APP_NAME \
+  --platform managed \
+  --region $REGION \
+  --set-env-vars CLIENT_URL="$FINAL_CLIENT_URL" \
+  --set-env-vars TRUSTED_ORIGINS="$SAFE_TRUSTED_ORIGINS" \
+  --set-env-vars GOOGLE_CLIENT_ID="$GOOGLE_CLIENT_ID" \
+  --set-env-vars GOOGLE_CLIENT_SECRET="$GOOGLE_CLIENT_SECRET" \
+  --set-env-vars ADMIN_EMAILS="$ADMIN_EMAILS" \
+  --set-env-vars DATABASE_URL="$DATABASE_URL"
+
+echo "Deployment complete!"
+echo "App is live at: $FINAL_CLIENT_URL"
+if [ "$FINAL_CLIENT_URL" != "$SERVICE_URL" ]; then
+    echo "(Mapped to custom domain)"
+fi
