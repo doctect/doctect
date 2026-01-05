@@ -11,6 +11,155 @@ const DEBUG_PDF = false; // Set to true to see debug visuals
 // We point 'bold' to the same VF file; jsPDF might not render full weight without static files,
 // but this prevents 404 errors during generation.
 const FONT_URLS: Record<string, Record<string, string>> = {
+    // Sans-Serif
+    'open-sans': {
+        normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/opensans/OpenSans%5Bwdth%2Cwght%5D.ttf',
+        bold: 'https://raw.githubusercontent.com/google/fonts/main/ofl/opensans/OpenSans%5Bwdth%2Cwght%5D.ttf',
+        italic: 'https://raw.githubusercontent.com/google/fonts/main/ofl/opensans/OpenSans-Italic%5Bwdth%2Cwght%5D.ttf'
+    },
+    'lato': {
+        normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/lato/Lato-Regular.ttf',
+        bold: 'https://raw.githubusercontent.com/google/fonts/main/ofl/lato/Lato-Bold.ttf',
+        italic: 'https://raw.githubusercontent.com/google/fonts/main/ofl/lato/Lato-Italic.ttf'
+    },
+    'montserrat': {
+        normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/montserrat/Montserrat%5Bwght%5D.ttf',
+        bold: 'https://raw.githubusercontent.com/google/fonts/main/ofl/montserrat/Montserrat%5Bwght%5D.ttf',
+        italic: 'https://raw.githubusercontent.com/google/fonts/main/ofl/montserrat/Montserrat-Italic%5Bwght%5D.ttf'
+    },
+    'roboto': {
+        normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/roboto/Roboto%5Bwdth%2Cwght%5D.ttf',
+        bold: 'https://raw.githubusercontent.com/google/fonts/main/ofl/roboto/Roboto%5Bwdth%2Cwght%5D.ttf',
+        italic: 'https://raw.githubusercontent.com/google/fonts/main/ofl/roboto/Roboto-Italic%5Bwdth%2Cwght%5D.ttf'
+    },
+    'poppins': {
+        normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/poppins/Poppins-Regular.ttf',
+        bold: 'https://raw.githubusercontent.com/google/fonts/main/ofl/poppins/Poppins-Bold.ttf',
+        italic: 'https://raw.githubusercontent.com/google/fonts/main/ofl/poppins/Poppins-Italic.ttf'
+    },
+    'nunito': {
+        normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/nunito/Nunito%5Bwght%5D.ttf',
+        bold: 'https://raw.githubusercontent.com/google/fonts/main/ofl/nunito/Nunito%5Bwght%5D.ttf',
+        italic: 'https://raw.githubusercontent.com/google/fonts/main/ofl/nunito/Nunito-Italic%5Bwght%5D.ttf'
+    },
+    'inter': {
+        normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/inter/Inter%5Bopsz%2Cwght%5D.ttf',
+        bold: 'https://raw.githubusercontent.com/google/fonts/main/ofl/inter/Inter%5Bopsz%2Cwght%5D.ttf',
+        italic: 'https://raw.githubusercontent.com/google/fonts/main/ofl/inter/Inter-Italic%5Bopsz%2Cwght%5D.ttf'
+    },
+    'work-sans': {
+        normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/worksans/WorkSans%5Bwght%5D.ttf',
+        bold: 'https://raw.githubusercontent.com/google/fonts/main/ofl/worksans/WorkSans%5Bwght%5D.ttf',
+        italic: 'https://raw.githubusercontent.com/google/fonts/main/ofl/worksans/WorkSans-Italic%5Bwght%5D.ttf'
+    },
+    'source-sans-pro': {
+        normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/sourcesans3/SourceSans3%5Bwght%5D.ttf',
+        bold: 'https://raw.githubusercontent.com/google/fonts/main/ofl/sourcesans3/SourceSans3%5Bwght%5D.ttf',
+        italic: 'https://raw.githubusercontent.com/google/fonts/main/ofl/sourcesans3/SourceSans3-Italic%5Bwght%5D.ttf'
+    },
+    'raleway': {
+        normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/raleway/Raleway%5Bwght%5D.ttf',
+        bold: 'https://raw.githubusercontent.com/google/fonts/main/ofl/raleway/Raleway%5Bwght%5D.ttf',
+        italic: 'https://raw.githubusercontent.com/google/fonts/main/ofl/raleway/Raleway-Italic%5Bwght%5D.ttf'
+    },
+    'ubuntu': {
+        normal: 'https://raw.githubusercontent.com/google/fonts/main/ufl/ubuntu/Ubuntu-Regular.ttf',
+        bold: 'https://raw.githubusercontent.com/google/fonts/main/ufl/ubuntu/Ubuntu-Bold.ttf',
+        italic: 'https://raw.githubusercontent.com/google/fonts/main/ufl/ubuntu/Ubuntu-Italic.ttf'
+    },
+    'pt-sans': {
+        normal: 'https://raw.githubusercontent.com/ArtifexSoftware/urw-base35-fonts/master/fonts/URWGothic-Book.ttf',
+        bold: 'https://raw.githubusercontent.com/ArtifexSoftware/urw-base35-fonts/master/fonts/URWGothic-Demi.ttf'
+    },
+    'noto-sans': {
+        normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/notosans/NotoSans%5Bwdth%2Cwght%5D.ttf',
+        bold: 'https://raw.githubusercontent.com/google/fonts/main/ofl/notosans/NotoSans%5Bwdth%2Cwght%5D.ttf',
+        italic: 'https://raw.githubusercontent.com/google/fonts/main/ofl/notosans/NotoSans-Italic%5Bwdth%2Cwght%5D.ttf'
+    },
+    'oxygen': {
+        normal: 'https://raw.githubusercontent.com/ArtifexSoftware/urw-base35-fonts/master/fonts/NimbusSans-Regular.ttf',
+        bold: 'https://raw.githubusercontent.com/ArtifexSoftware/urw-base35-fonts/master/fonts/NimbusSans-Bold.ttf'
+    },
+    'fira-sans': {
+        normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/firasans/FiraSans-Regular.ttf',
+        bold: 'https://raw.githubusercontent.com/google/fonts/main/ofl/firasans/FiraSans-Bold.ttf',
+        italic: 'https://raw.githubusercontent.com/google/fonts/main/ofl/firasans/FiraSans-Italic.ttf'
+    },
+
+    // Serif
+    'lora': {
+        normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/lora/Lora%5Bwght%5D.ttf',
+        bold: 'https://raw.githubusercontent.com/google/fonts/main/ofl/lora/Lora%5Bwght%5D.ttf',
+        italic: 'https://raw.githubusercontent.com/google/fonts/main/ofl/lora/Lora-Italic%5Bwght%5D.ttf'
+    },
+    'merriweather': {
+        normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/merriweather/Merriweather-Regular.ttf',
+        bold: 'https://raw.githubusercontent.com/google/fonts/main/ofl/merriweather/Merriweather-Bold.ttf',
+        italic: 'https://raw.githubusercontent.com/google/fonts/main/ofl/merriweather/Merriweather-Italic.ttf'
+    },
+    'playfair-display': {
+        normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/playfairdisplay/PlayfairDisplay%5Bwght%5D.ttf',
+        bold: 'https://raw.githubusercontent.com/google/fonts/main/ofl/playfairdisplay/PlayfairDisplay%5Bwght%5D.ttf',
+        italic: 'https://raw.githubusercontent.com/google/fonts/main/ofl/playfairdisplay/PlayfairDisplay-Italic%5Bwght%5D.ttf'
+    },
+    'pt-serif': {
+        normal: 'https://raw.githubusercontent.com/ArtifexSoftware/urw-base35-fonts/master/fonts/C059-Roman.ttf',
+        bold: 'https://raw.githubusercontent.com/ArtifexSoftware/urw-base35-fonts/master/fonts/C059-Bold.ttf',
+        italic: 'https://raw.githubusercontent.com/ArtifexSoftware/urw-base35-fonts/master/fonts/C059-Italic.ttf'
+    },
+    'libre-baskerville': {
+        normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/librebaskerville/LibreBaskerville-Regular.ttf',
+        bold: 'https://raw.githubusercontent.com/google/fonts/main/ofl/librebaskerville/LibreBaskerville-Bold.ttf',
+        italic: 'https://raw.githubusercontent.com/google/fonts/main/ofl/librebaskerville/LibreBaskerville-Italic.ttf'
+    },
+    'crimson-text': {
+        normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/crimsontext/CrimsonText-Regular.ttf',
+        bold: 'https://raw.githubusercontent.com/google/fonts/main/ofl/crimsontext/CrimsonText-Bold.ttf',
+        italic: 'https://raw.githubusercontent.com/google/fonts/main/ofl/crimsontext/CrimsonText-Italic.ttf'
+    },
+    'eb-garamond': {
+        normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/ebgaramond/EBGaramond%5Bwght%5D.ttf',
+        bold: 'https://raw.githubusercontent.com/google/fonts/main/ofl/ebgaramond/EBGaramond%5Bwght%5D.ttf',
+        italic: 'https://raw.githubusercontent.com/google/fonts/main/ofl/ebgaramond/EBGaramond-Italic%5Bwght%5D.ttf'
+    },
+    'cormorant-garamond': {
+        normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/cormorantgaramond/CormorantGaramond-Regular.ttf',
+        bold: 'https://raw.githubusercontent.com/google/fonts/main/ofl/cormorantgaramond/CormorantGaramond-Bold.ttf',
+        italic: 'https://raw.githubusercontent.com/google/fonts/main/ofl/cormorantgaramond/CormorantGaramond-Italic.ttf'
+    },
+    'noto-serif': {
+        normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/notoserif/NotoSerif%5Bwdth%2Cwght%5D.ttf',
+        bold: 'https://raw.githubusercontent.com/google/fonts/main/ofl/notoserif/NotoSerif%5Bwdth%2Cwght%5D.ttf',
+        italic: 'https://raw.githubusercontent.com/google/fonts/main/ofl/notoserif/NotoSerif-Italic%5Bwdth%2Cwght%5D.ttf'
+    },
+
+    // Monospace
+    'roboto-mono': {
+        normal: 'https://raw.githubusercontent.com/google/fonts/main/apache/robotomono/RobotoMono%5Bwght%5D.ttf',
+        bold: 'https://raw.githubusercontent.com/google/fonts/main/apache/robotomono/RobotoMono%5Bwght%5D.ttf',
+        italic: 'https://raw.githubusercontent.com/google/fonts/main/apache/robotomono/RobotoMono-Italic%5Bwght%5D.ttf'
+    },
+    'fira-code': {
+        normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/firacode/FiraCode%5Bwght%5D.ttf',
+        bold: 'https://raw.githubusercontent.com/google/fonts/main/ofl/firacode/FiraCode%5Bwght%5D.ttf'
+    },
+    'source-code-pro': {
+        normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/sourcecodepro/SourceCodePro%5Bwght%5D.ttf',
+        bold: 'https://raw.githubusercontent.com/google/fonts/main/ofl/sourcecodepro/SourceCodePro%5Bwght%5D.ttf',
+        italic: 'https://raw.githubusercontent.com/google/fonts/main/ofl/sourcecodepro/SourceCodePro-Italic%5Bwght%5D.ttf'
+    },
+    'jetbrains-mono': {
+        normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/jetbrainsmono/JetBrainsMono%5Bwght%5D.ttf',
+        bold: 'https://raw.githubusercontent.com/google/fonts/main/ofl/jetbrainsmono/JetBrainsMono%5Bwght%5D.ttf',
+        italic: 'https://raw.githubusercontent.com/google/fonts/main/ofl/jetbrainsmono/JetBrainsMono-Italic%5Bwght%5D.ttf'
+    },
+    'ubuntu-mono': {
+        normal: 'https://raw.githubusercontent.com/google/fonts/main/ufl/ubuntumono/UbuntuMono-Regular.ttf',
+        bold: 'https://raw.githubusercontent.com/google/fonts/main/ufl/ubuntumono/UbuntuMono-Bold.ttf',
+        italic: 'https://raw.githubusercontent.com/google/fonts/main/ufl/ubuntumono/UbuntuMono-Italic.ttf'
+    },
+
+    // Handwriting / Script
     'caveat': {
         normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/caveat/Caveat%5Bwght%5D.ttf',
         bold: 'https://raw.githubusercontent.com/google/fonts/main/ofl/caveat/Caveat%5Bwght%5D.ttf'
@@ -22,19 +171,52 @@ const FONT_URLS: Record<string, Record<string, string>> = {
     'patrick-hand': {
         normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/patrickhand/PatrickHand-Regular.ttf'
     },
-    'merriweather': {
-        normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/merriweather/Merriweather-Regular.ttf',
-        bold: 'https://raw.githubusercontent.com/google/fonts/main/ofl/merriweather/Merriweather-Bold.ttf',
-        italic: 'https://raw.githubusercontent.com/google/fonts/main/ofl/merriweather/Merriweather-Italic.ttf'
+    'pacifico': {
+        normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/pacifico/Pacifico-Regular.ttf'
     },
-    'playfair-display': {
-        normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/playfairdisplay/PlayfairDisplay%5Bwght%5D.ttf',
-        bold: 'https://raw.githubusercontent.com/google/fonts/main/ofl/playfairdisplay/PlayfairDisplay%5Bwght%5D.ttf'
+    'great-vibes': {
+        normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/greatvibes/GreatVibes-Regular.ttf'
     },
-    'roboto-mono': {
-        normal: 'https://raw.githubusercontent.com/google/fonts/main/apache/robotomono/RobotoMono%5Bwght%5D.ttf',
-        bold: 'https://raw.githubusercontent.com/google/fonts/main/apache/robotomono/RobotoMono%5Bwght%5D.ttf',
-        italic: 'https://raw.githubusercontent.com/google/fonts/main/apache/robotomono/RobotoMono-Italic%5Bwght%5D.ttf'
+    'satisfy': {
+        normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/satisfy/Satisfy-Regular.ttf'
+    },
+    'sacramento': {
+        normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/sacramento/Sacramento-Regular.ttf'
+    },
+    'allura': {
+        normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/allura/Allura-Regular.ttf'
+    },
+    'amatic-sc': {
+        normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/amaticsc/AmaticSC-Regular.ttf',
+        bold: 'https://raw.githubusercontent.com/google/fonts/main/ofl/amaticsc/AmaticSC-Bold.ttf'
+    },
+    'indie-flower': {
+        normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/indieflower/IndieFlower-Regular.ttf'
+    },
+    'kalam': {
+        normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/kalam/Kalam-Regular.ttf',
+        bold: 'https://raw.githubusercontent.com/google/fonts/main/ofl/kalam/Kalam-Bold.ttf'
+    },
+    'shadows-into-light': {
+        normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/shadowsintolight/ShadowsIntoLight-Regular.ttf'
+    },
+
+    // Display
+    'bebas-neue': {
+        normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/bebasneue/BebasNeue-Regular.ttf'
+    },
+    'oswald': {
+        normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/oswald/Oswald%5Bwght%5D.ttf',
+        bold: 'https://raw.githubusercontent.com/google/fonts/main/ofl/oswald/Oswald%5Bwght%5D.ttf'
+    },
+    'anton': {
+        normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/anton/Anton-Regular.ttf'
+    },
+    'righteous': {
+        normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/righteous/Righteous-Regular.ttf'
+    },
+    'archivo-black': {
+        normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/archivoblack/ArchivoBlack-Regular.ttf'
     }
 };
 

@@ -3,23 +3,72 @@
 export const UNIT_CONVERSION = { 'pt': 1, 'px': 1, 'in': 72, 'mm': 2.83465 };
 
 export const FONTS = [
-    { value: 'helvetica', label: 'Helvetica (Sans)' },
-    { value: 'times', label: 'Times New Roman (Serif)' },
-    { value: 'courier', label: 'Courier (Mono)' },
-    { value: 'caveat', label: 'Caveat (Handwriting)' },
-    { value: 'dancing-script', label: 'Dancing Script (Handwriting)' }, 
-    { value: 'patrick-hand', label: 'Patrick Hand (Marker)' },
-    { value: 'merriweather', label: 'Merriweather (Serif)' },
-    { value: 'playfair-display', label: 'Playfair Display (Serif)' }, 
-    { value: 'roboto-mono', label: 'Roboto Mono' }
+  // Sans-Serif
+  { value: 'helvetica', label: 'Helvetica' },
+  { value: 'open-sans', label: 'Open Sans' },
+  { value: 'lato', label: 'Lato' },
+  { value: 'montserrat', label: 'Montserrat' },
+  { value: 'roboto', label: 'Roboto' },
+  { value: 'poppins', label: 'Poppins' },
+  { value: 'nunito', label: 'Nunito' },
+  { value: 'inter', label: 'Inter' },
+  { value: 'work-sans', label: 'Work Sans' },
+  { value: 'source-sans-pro', label: 'Source Sans Pro' },
+  { value: 'raleway', label: 'Raleway' },
+  { value: 'ubuntu', label: 'Ubuntu' },
+  { value: 'pt-sans', label: 'PT Sans' },
+  { value: 'noto-sans', label: 'Noto Sans' },
+  { value: 'oxygen', label: 'Oxygen' },
+  { value: 'fira-sans', label: 'Fira Sans' },
+
+  // Serif
+  { value: 'times', label: 'Times New Roman' },
+  { value: 'lora', label: 'Lora' },
+  { value: 'merriweather', label: 'Merriweather' },
+  { value: 'playfair-display', label: 'Playfair Display' },
+  { value: 'pt-serif', label: 'PT Serif' },
+  { value: 'libre-baskerville', label: 'Libre Baskerville' },
+  { value: 'crimson-text', label: 'Crimson Text' },
+  { value: 'eb-garamond', label: 'EB Garamond' },
+  { value: 'cormorant-garamond', label: 'Cormorant Garamond' },
+  { value: 'noto-serif', label: 'Noto Serif' },
+
+  // Monospace
+  { value: 'courier', label: 'Courier' },
+  { value: 'roboto-mono', label: 'Roboto Mono' },
+  { value: 'fira-code', label: 'Fira Code' },
+  { value: 'source-code-pro', label: 'Source Code Pro' },
+  { value: 'jetbrains-mono', label: 'JetBrains Mono' },
+  { value: 'ubuntu-mono', label: 'Ubuntu Mono' },
+
+  // Handwriting / Script
+  { value: 'caveat', label: 'Caveat' },
+  { value: 'dancing-script', label: 'Dancing Script' },
+  { value: 'patrick-hand', label: 'Patrick Hand' },
+  { value: 'pacifico', label: 'Pacifico' },
+  { value: 'great-vibes', label: 'Great Vibes' },
+  { value: 'satisfy', label: 'Satisfy' },
+  { value: 'sacramento', label: 'Sacramento' },
+  { value: 'allura', label: 'Allura' },
+  { value: 'amatic-sc', label: 'Amatic SC' },
+  { value: 'indie-flower', label: 'Indie Flower' },
+  { value: 'kalam', label: 'Kalam' },
+  { value: 'shadows-into-light', label: 'Shadows Into Light' },
+
+  // Display
+  { value: 'bebas-neue', label: 'Bebas Neue' },
+  { value: 'oswald', label: 'Oswald' },
+  { value: 'anton', label: 'Anton' },
+  { value: 'righteous', label: 'Righteous' },
+  { value: 'archivo-black', label: 'Archivo Black' },
 ];
 
 export const BORDER_STYLES = [
-    { value: 'solid', label: 'Solid' },
-    { value: 'dashed', label: 'Dashed' },
-    { value: 'dotted', label: 'Dotted' },
-    { value: 'double', label: 'Double' },
-    { value: 'none', label: 'None' }
+  { value: 'solid', label: 'Solid' },
+  { value: 'dashed', label: 'Dashed' },
+  { value: 'dotted', label: 'Dotted' },
+  { value: 'double', label: 'Double' },
+  { value: 'none', label: 'None' }
 ];
 
 export const PAGE_PRESETS: Record<string, { name: string, w: number, h: number }> = {
@@ -37,8 +86,8 @@ export const PAGE_PRESETS: Record<string, { name: string, w: number, h: number }
   'boox_note_air': { name: 'Boox Note Air 3 / 3C', w: 445, h: 592 },
   'boox_go_10': { name: 'Boox Go 10.3', w: 445, h: 592 },
   'supernote_a5x': { name: 'Supernote A5 X / A5 X2', w: 445, h: 592 },
-  'kindle_scribe': { name: 'Kindle Scribe', w: 432, h: 576 }, 
-  'note_10_3': { name: 'Generic 10.3"', w: 445, h: 592 }, 
+  'kindle_scribe': { name: 'Kindle Scribe', w: 432, h: 576 },
+  'note_10_3': { name: 'Generic 10.3"', w: 445, h: 592 },
 
   // 13.3" Devices
   'boox_tab_x': { name: 'Boox Tab X', w: 574, h: 765 },

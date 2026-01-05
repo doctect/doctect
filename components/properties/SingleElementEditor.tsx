@@ -7,6 +7,62 @@ import { ChildIndexSelector } from './ChildIndexSelector';
 import { BORDER_STYLES, FONTS } from '../../constants/editor';
 import clsx from 'clsx';
 
+// Font family mapping for CSS (used for font dropdown preview)
+const getFontFamily = (fontValue: string): string => {
+    const fontMap: Record<string, string> = {
+        'helvetica': 'Helvetica, Arial, sans-serif',
+        'open-sans': '"Open Sans", sans-serif',
+        'lato': 'Lato, sans-serif',
+        'montserrat': 'Montserrat, sans-serif',
+        'roboto': 'Roboto, sans-serif',
+        'poppins': 'Poppins, sans-serif',
+        'nunito': 'Nunito, sans-serif',
+        'inter': 'Inter, sans-serif',
+        'work-sans': '"Work Sans", sans-serif',
+        'source-sans-pro': '"Source Sans Pro", sans-serif',
+        'raleway': 'Raleway, sans-serif',
+        'ubuntu': 'Ubuntu, sans-serif',
+        'pt-sans': '"PT Sans", sans-serif',
+        'noto-sans': '"Noto Sans", sans-serif',
+        'oxygen': 'Oxygen, sans-serif',
+        'fira-sans': '"Fira Sans", sans-serif',
+        'times': '"Times New Roman", Times, serif',
+        'lora': 'Lora, serif',
+        'merriweather': 'Merriweather, serif',
+        'playfair-display': '"Playfair Display", serif',
+        'pt-serif': '"PT Serif", serif',
+        'libre-baskerville': '"Libre Baskerville", serif',
+        'crimson-text': '"Crimson Text", serif',
+        'eb-garamond': '"EB Garamond", serif',
+        'cormorant-garamond': '"Cormorant Garamond", serif',
+        'noto-serif': '"Noto Serif", serif',
+        'courier': 'Courier, monospace',
+        'roboto-mono': '"Roboto Mono", monospace',
+        'fira-code': '"Fira Code", monospace',
+        'source-code-pro': '"Source Code Pro", monospace',
+        'jetbrains-mono': '"JetBrains Mono", monospace',
+        'ubuntu-mono': '"Ubuntu Mono", monospace',
+        'caveat': 'Caveat, cursive',
+        'dancing-script': '"Dancing Script", cursive',
+        'patrick-hand': '"Patrick Hand", cursive',
+        'pacifico': 'Pacifico, cursive',
+        'great-vibes': '"Great Vibes", cursive',
+        'satisfy': 'Satisfy, cursive',
+        'sacramento': 'Sacramento, cursive',
+        'allura': 'Allura, cursive',
+        'amatic-sc': '"Amatic SC", cursive',
+        'indie-flower': '"Indie Flower", cursive',
+        'kalam': 'Kalam, cursive',
+        'shadows-into-light': '"Shadows Into Light", cursive',
+        'bebas-neue': '"Bebas Neue", sans-serif',
+        'oswald': 'Oswald, sans-serif',
+        'anton': 'Anton, sans-serif',
+        'righteous': 'Righteous, cursive',
+        'archivo-black': '"Archivo Black", sans-serif',
+    };
+    return fontMap[fontValue] || fontValue;
+};
+
 interface SingleElementEditorProps {
     element: TemplateElement;
     onUpdate: (updates: Partial<TemplateElement>) => void;
@@ -74,6 +130,8 @@ const SmartValueInput: React.FC<{
 
 export const SingleElementEditor: React.FC<SingleElementEditorProps> = ({ element, onUpdate, onOpenNodeSelector, state, activeNode }) => {
     const [showRefBuilder, setShowRefBuilder] = useState(false);
+    const [showFontPicker, setShowFontPicker] = useState(false);
+    const [fontSearch, setFontSearch] = useState('');
 
     // Ref Builder State (Strings now to support fields)
     const [refPIdx, setRefPIdx] = useState("0");
@@ -562,9 +620,53 @@ export const SingleElementEditor: React.FC<SingleElementEditorProps> = ({ elemen
                     )}
 
                     <div className="grid grid-cols-2 gap-2">
-                        <select className="col-span-2 border rounded px-1 py-1 text-xs bg-white" value={element.fontFamily || 'helvetica'} onChange={e => { localStorage.setItem('doctect_last_fontFamily', e.target.value); onUpdate({ fontFamily: e.target.value }); }}>
-                            {FONTS.map(f => <option key={f.value} value={f.value}>{f.label}</option>)}
-                        </select>
+                        <div className="col-span-2 relative">
+                            <button
+                                type="button"
+                                className="w-full border rounded px-2 py-2 text-sm bg-white text-left flex justify-between items-center hover:bg-slate-50"
+                                style={{ fontFamily: getFontFamily(element.fontFamily || 'helvetica') }}
+                                onClick={() => setShowFontPicker(!showFontPicker)}
+                            >
+                                {FONTS.find(f => f.value === (element.fontFamily || 'helvetica'))?.label || 'Helvetica'}
+                                <span className="text-slate-400 text-xs">▼</span>
+                            </button>
+                            {showFontPicker && (
+                                <div className="absolute z-50 w-full mt-1 bg-white border rounded shadow-lg">
+                                    <input
+                                        type="text"
+                                        className="w-full px-2 py-1.5 border-b text-sm focus:outline-none"
+                                        placeholder="Search fonts..."
+                                        value={fontSearch}
+                                        onChange={e => setFontSearch(e.target.value)}
+                                        autoFocus
+                                    />
+                                    <div className="max-h-56 overflow-y-auto">
+                                        {[...FONTS]
+                                            .sort((a, b) => a.label.localeCompare(b.label))
+                                            .filter(f => f.label.toLowerCase().includes(fontSearch.toLowerCase()))
+                                            .map(f => (
+                                                <button
+                                                    key={f.value}
+                                                    type="button"
+                                                    className={clsx(
+                                                        "w-full px-2 py-1.5 text-left text-sm hover:bg-blue-50",
+                                                        element.fontFamily === f.value && "bg-blue-100"
+                                                    )}
+                                                    style={{ fontFamily: getFontFamily(f.value) }}
+                                                    onClick={() => {
+                                                        localStorage.setItem('doctect_last_fontFamily', f.value);
+                                                        onUpdate({ fontFamily: f.value });
+                                                        setShowFontPicker(false);
+                                                        setFontSearch('');
+                                                    }}
+                                                >
+                                                    {f.label}
+                                                </button>
+                                            ))}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
                         <div className="flex items-center gap-1 border rounded px-1">
                             <input type="number" className="w-full border-none text-xs focus:ring-0" value={element.fontSize || 12} onChange={e => { localStorage.setItem('doctect_last_fontSize', e.target.value); onUpdate({ fontSize: parseInt(e.target.value) }); }} />
                             <span className="text-[10px] text-slate-400">px</span>

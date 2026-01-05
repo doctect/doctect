@@ -301,13 +301,64 @@ export const CanvasElement: React.FC<CanvasElementProps> = ({ element, selected,
         pointerEvents: (tool === 'select') ? 'auto' : 'none',
     };
 
-    const fontFamily = element.fontFamily === 'caveat' ? 'Caveat, cursive'
-        : element.fontFamily === 'merriweather' ? 'Merriweather, serif'
-            : element.fontFamily === 'roboto-mono' ? '"Roboto Mono", monospace'
-                : element.fontFamily === 'dancing-script' ? '"Dancing Script", cursive'
-                    : element.fontFamily === 'playfair-display' ? '"Playfair Display", serif'
-                        : element.fontFamily === 'patrick-hand' ? '"Patrick Hand", cursive'
-                            : element.fontFamily;
+    // Font family mapping for CSS
+    const FONT_FAMILY_MAP: Record<string, string> = {
+        // Sans-Serif
+        'helvetica': 'Helvetica, Arial, sans-serif',
+        'open-sans': '"Open Sans", sans-serif',
+        'lato': 'Lato, sans-serif',
+        'montserrat': 'Montserrat, sans-serif',
+        'roboto': 'Roboto, sans-serif',
+        'poppins': 'Poppins, sans-serif',
+        'nunito': 'Nunito, sans-serif',
+        'inter': 'Inter, sans-serif',
+        'work-sans': '"Work Sans", sans-serif',
+        'source-sans-pro': '"Source Sans Pro", sans-serif',
+        'raleway': 'Raleway, sans-serif',
+        'ubuntu': 'Ubuntu, sans-serif',
+        'pt-sans': '"PT Sans", sans-serif',
+        'noto-sans': '"Noto Sans", sans-serif',
+        'oxygen': 'Oxygen, sans-serif',
+        'fira-sans': '"Fira Sans", sans-serif',
+        // Serif
+        'times': '"Times New Roman", Times, serif',
+        'lora': 'Lora, serif',
+        'merriweather': 'Merriweather, serif',
+        'playfair-display': '"Playfair Display", serif',
+        'pt-serif': '"PT Serif", serif',
+        'libre-baskerville': '"Libre Baskerville", serif',
+        'crimson-text': '"Crimson Text", serif',
+        'eb-garamond': '"EB Garamond", serif',
+        'cormorant-garamond': '"Cormorant Garamond", serif',
+        'noto-serif': '"Noto Serif", serif',
+        // Monospace
+        'courier': 'Courier, monospace',
+        'roboto-mono': '"Roboto Mono", monospace',
+        'fira-code': '"Fira Code", monospace',
+        'source-code-pro': '"Source Code Pro", monospace',
+        'jetbrains-mono': '"JetBrains Mono", monospace',
+        'ubuntu-mono': '"Ubuntu Mono", monospace',
+        // Handwriting / Script
+        'caveat': 'Caveat, cursive',
+        'dancing-script': '"Dancing Script", cursive',
+        'patrick-hand': '"Patrick Hand", cursive',
+        'pacifico': 'Pacifico, cursive',
+        'great-vibes': '"Great Vibes", cursive',
+        'satisfy': 'Satisfy, cursive',
+        'sacramento': 'Sacramento, cursive',
+        'allura': 'Allura, cursive',
+        'amatic-sc': '"Amatic SC", cursive',
+        'indie-flower': '"Indie Flower", cursive',
+        'kalam': 'Kalam, cursive',
+        'shadows-into-light': '"Shadows Into Light", cursive',
+        // Display
+        'bebas-neue': '"Bebas Neue", sans-serif',
+        'oswald': 'Oswald, sans-serif',
+        'anton': 'Anton, sans-serif',
+        'righteous': 'Righteous, cursive',
+        'archivo-black': '"Archivo Black", sans-serif',
+    };
+    const fontFamily = FONT_FAMILY_MAP[element.fontFamily || 'helvetica'] || element.fontFamily;
 
     // Grid
     if (element.type === 'grid' && element.gridConfig) {
