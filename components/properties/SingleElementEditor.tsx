@@ -129,6 +129,8 @@ const SmartValueInput: React.FC<{
 };
 
 export const SingleElementEditor: React.FC<SingleElementEditorProps> = ({ element, onUpdate, onOpenNodeSelector, state, activeNode }) => {
+    console.log('[SingleElementEditor] RENDER - element.id:', element?.id, 'fontFamily:', element?.fontFamily);
+
     const [showRefBuilder, setShowRefBuilder] = useState(false);
     const [showFontPicker, setShowFontPicker] = useState(false);
     const [fontSearch, setFontSearch] = useState('');
@@ -638,7 +640,6 @@ export const SingleElementEditor: React.FC<SingleElementEditorProps> = ({ elemen
                                         placeholder="Search fonts..."
                                         value={fontSearch}
                                         onChange={e => setFontSearch(e.target.value)}
-                                        autoFocus
                                     />
                                     <div className="max-h-56 overflow-y-auto">
                                         {[...FONTS]

@@ -12,6 +12,11 @@ const DEBUG_PDF = false; // Set to true to see debug visuals
 // but this prevents 404 errors during generation.
 const FONT_URLS: Record<string, Record<string, string>> = {
     // Sans-Serif
+    'helvetica': {
+        normal: 'https://raw.githubusercontent.com/ArtifexSoftware/urw-base35-fonts/master/fonts/NimbusSans-Regular.ttf',
+        bold: 'https://raw.githubusercontent.com/ArtifexSoftware/urw-base35-fonts/master/fonts/NimbusSans-Bold.ttf',
+        italic: 'https://raw.githubusercontent.com/ArtifexSoftware/urw-base35-fonts/master/fonts/NimbusSans-Italic.ttf'
+    },
     'open-sans': {
         normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/opensans/OpenSans%5Bwdth%2Cwght%5D.ttf',
         bold: 'https://raw.githubusercontent.com/google/fonts/main/ofl/opensans/OpenSans%5Bwdth%2Cwght%5D.ttf',
@@ -68,8 +73,9 @@ const FONT_URLS: Record<string, Record<string, string>> = {
         italic: 'https://raw.githubusercontent.com/google/fonts/main/ufl/ubuntu/Ubuntu-Italic.ttf'
     },
     'pt-sans': {
-        normal: 'https://raw.githubusercontent.com/ArtifexSoftware/urw-base35-fonts/master/fonts/URWGothic-Book.ttf',
-        bold: 'https://raw.githubusercontent.com/ArtifexSoftware/urw-base35-fonts/master/fonts/URWGothic-Demi.ttf'
+        normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/ptsans/PTSans-Regular.ttf',
+        bold: 'https://raw.githubusercontent.com/google/fonts/main/ofl/ptsans/PTSans-Bold.ttf',
+        italic: 'https://raw.githubusercontent.com/google/fonts/main/ofl/ptsans/PTSans-Italic.ttf'
     },
     'noto-sans': {
         normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/notosans/NotoSans%5Bwdth%2Cwght%5D.ttf',
@@ -77,8 +83,9 @@ const FONT_URLS: Record<string, Record<string, string>> = {
         italic: 'https://raw.githubusercontent.com/google/fonts/main/ofl/notosans/NotoSans-Italic%5Bwdth%2Cwght%5D.ttf'
     },
     'oxygen': {
-        normal: 'https://raw.githubusercontent.com/ArtifexSoftware/urw-base35-fonts/master/fonts/NimbusSans-Regular.ttf',
-        bold: 'https://raw.githubusercontent.com/ArtifexSoftware/urw-base35-fonts/master/fonts/NimbusSans-Bold.ttf'
+        normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/oxygen/Oxygen-Regular.ttf',
+        bold: 'https://raw.githubusercontent.com/google/fonts/main/ofl/oxygen/Oxygen-Bold.ttf',
+        italic: 'https://raw.githubusercontent.com/google/fonts/main/ofl/oxygen/Oxygen-Regular.ttf' // No italic?
     },
     'fira-sans': {
         normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/firasans/FiraSans-Regular.ttf',
@@ -87,6 +94,11 @@ const FONT_URLS: Record<string, Record<string, string>> = {
     },
 
     // Serif
+    'times': {
+        normal: 'https://raw.githubusercontent.com/ArtifexSoftware/urw-base35-fonts/master/fonts/NimbusRoman-Regular.ttf',
+        bold: 'https://raw.githubusercontent.com/ArtifexSoftware/urw-base35-fonts/master/fonts/NimbusRoman-Bold.ttf',
+        italic: 'https://raw.githubusercontent.com/ArtifexSoftware/urw-base35-fonts/master/fonts/NimbusRoman-Italic.ttf'
+    },
     'lora': {
         normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/lora/Lora%5Bwght%5D.ttf',
         bold: 'https://raw.githubusercontent.com/google/fonts/main/ofl/lora/Lora%5Bwght%5D.ttf',
@@ -103,9 +115,9 @@ const FONT_URLS: Record<string, Record<string, string>> = {
         italic: 'https://raw.githubusercontent.com/google/fonts/main/ofl/playfairdisplay/PlayfairDisplay-Italic%5Bwght%5D.ttf'
     },
     'pt-serif': {
-        normal: 'https://raw.githubusercontent.com/ArtifexSoftware/urw-base35-fonts/master/fonts/C059-Roman.ttf',
-        bold: 'https://raw.githubusercontent.com/ArtifexSoftware/urw-base35-fonts/master/fonts/C059-Bold.ttf',
-        italic: 'https://raw.githubusercontent.com/ArtifexSoftware/urw-base35-fonts/master/fonts/C059-Italic.ttf'
+        normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/ptserif/PTSerif-Regular.ttf',
+        bold: 'https://raw.githubusercontent.com/google/fonts/main/ofl/ptserif/PTSerif-Bold.ttf',
+        italic: 'https://raw.githubusercontent.com/google/fonts/main/ofl/ptserif/PTSerif-Italic.ttf'
     },
     'libre-baskerville': {
         normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/librebaskerville/LibreBaskerville-Regular.ttf',
@@ -134,6 +146,11 @@ const FONT_URLS: Record<string, Record<string, string>> = {
     },
 
     // Monospace
+    'courier': {
+        normal: 'https://raw.githubusercontent.com/ArtifexSoftware/urw-base35-fonts/master/fonts/NimbusMonoPS-Regular.ttf',
+        bold: 'https://raw.githubusercontent.com/ArtifexSoftware/urw-base35-fonts/master/fonts/NimbusMonoPS-Bold.ttf',
+        italic: 'https://raw.githubusercontent.com/ArtifexSoftware/urw-base35-fonts/master/fonts/NimbusMonoPS-Italic.ttf'
+    },
     'roboto-mono': {
         normal: 'https://raw.githubusercontent.com/google/fonts/main/apache/robotomono/RobotoMono%5Bwght%5D.ttf',
         bold: 'https://raw.githubusercontent.com/google/fonts/main/apache/robotomono/RobotoMono%5Bwght%5D.ttf',
@@ -141,7 +158,8 @@ const FONT_URLS: Record<string, Record<string, string>> = {
     },
     'fira-code': {
         normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/firacode/FiraCode%5Bwght%5D.ttf',
-        bold: 'https://raw.githubusercontent.com/google/fonts/main/ofl/firacode/FiraCode%5Bwght%5D.ttf'
+        bold: 'https://raw.githubusercontent.com/google/fonts/main/ofl/firacode/FiraCode%5Bwght%5D.ttf',
+        italic: 'https://raw.githubusercontent.com/google/fonts/main/ofl/firacode/FiraCode%5Bwght%5D.ttf' // Italic not typical for fira code
     },
     'source-code-pro': {
         normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/sourcecodepro/SourceCodePro%5Bwght%5D.ttf',
