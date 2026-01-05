@@ -6,7 +6,7 @@ export const blankPresetData = {
       "id": "root",
       "parentId": null,
       "type": "a4_blank",
-      "title": "My Project",
+      "title": "Blank Project",
       "data": {},
       "children": []
     }
