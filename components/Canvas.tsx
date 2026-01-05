@@ -666,10 +666,13 @@ export const Canvas: React.FC<CanvasProps> = ({
                 opacity: 1,
                 zIndex: maxZ + 1,
                 text: tool === 'text' ? 'New Text' : undefined,
-                fontSize: 16,
-                fontFamily: 'helvetica',
-                textColor: '#000000',
-                align: 'center',
+                fontSize: parseInt(localStorage.getItem('doctect_last_fontSize') || '16'),
+                fontFamily: localStorage.getItem('doctect_last_fontFamily') || 'helvetica',
+                fontWeight: (localStorage.getItem('doctect_last_fontWeight') as 'normal' | 'bold') || 'normal',
+                fontStyle: (localStorage.getItem('doctect_last_fontStyle') as 'normal' | 'italic') || 'normal',
+                textDecoration: (localStorage.getItem('doctect_last_textDecoration') as 'none' | 'underline') || 'none',
+                textColor: localStorage.getItem('doctect_last_textColor') || '#000000',
+                align: (localStorage.getItem('doctect_last_align') as 'left' | 'center' | 'right') || 'center',
                 gridConfig: gridConfig as any,
                 flip: flip
             };
