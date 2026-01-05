@@ -45,7 +45,7 @@ export interface TemplateElement {
   rotation: number;
   zIndex?: number;
   flip?: boolean; // For lines: false = \, true = /
-  
+
   // Styling
   fill: string; // Background color or pattern color
   fillType?: FillType;
@@ -55,13 +55,14 @@ export interface TemplateElement {
   stroke: string;
   strokeWidth: number;
   opacity: number;
-  borderRadius?: number; 
+  borderRadius?: number;
   borderStyle?: 'solid' | 'dashed' | 'dotted' | 'none' | 'double'; // Grid/Shape border style
 
   // Typography
   text?: string;
   fontSize?: number;
   fontFamily?: string;
+  autoWidth?: boolean;
   fontWeight?: 'normal' | 'bold';
   fontStyle?: 'normal' | 'italic';
   textDecoration?: 'none' | 'underline' | 'line-through';
@@ -77,14 +78,14 @@ export interface TemplateElement {
   linkValue?: string; // Primary value (Node ID, Index, URL, Depth, Offset)
   linkSecondaryValue?: string; // Secondary value (Secondary Index for fallbacks)
   linkReferrerParentType?: string; // Filter for child_referrer: only link to referrers whose parent has this type
-  dataBinding?: string; 
+  dataBinding?: string;
 }
 
 export interface PageTemplate {
-  id: string; 
+  id: string;
   name: string;
-  width: number; 
-  height: number; 
+  width: number;
+  height: number;
   elements: TemplateElement[];
 }
 
@@ -92,16 +93,16 @@ export interface AppState {
   nodes: Record<string, AppNode>;
   rootId: string;
   templates: Record<string, PageTemplate>;
-  
+
   // UI State
-  viewMode: 'hierarchy' | 'templates'; 
+  viewMode: 'hierarchy' | 'templates';
   selectedNodeId: string;
-  selectedTemplateId: string; 
+  selectedTemplateId: string;
   selectedElementIds: string[];
   scale: number;
   tool: 'select' | 'hand' | ElementType;
   showJsonModal: boolean;
-  
+
   // Layout State
   sidebarWidth: number;
   propertiesPanelWidth: number;
@@ -111,7 +112,7 @@ export interface AppState {
   // Node Selector
   showNodeSelector: boolean;
   nodeSelectorMode: 'grid_source' | 'link_element' | 'create_reference';
-  editingElementId: string | null; 
+  editingElementId: string | null;
 
   // Clipboard
   clipboard: TemplateElement[];

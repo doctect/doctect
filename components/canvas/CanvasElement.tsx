@@ -352,11 +352,16 @@ export const CanvasElement: React.FC<CanvasElementProps> = ({ element, selected,
     const bounds = getElementBounds(element);
     const style: React.CSSProperties = {
         position: 'absolute',
-        left: element.x, top: element.y, width: bounds.w, height: bounds.h,
+        left: element.x, top: element.y,
+        width: bounds.w,
+        height: bounds.h,
         transform: `rotate(${element.rotation || 0}deg)`,
         opacity: element.opacity,
         zIndex: element.zIndex || 0,
         pointerEvents: (tool === 'select') ? 'auto' : 'none',
+        whiteSpace: element.autoWidth ? 'pre' : undefined,
+        minWidth: element.autoWidth ? 20 : undefined,
+        minHeight: element.autoWidth ? 20 : undefined,
     };
 
     const fontFamily = FONT_FAMILY_MAP[element.fontFamily || 'helvetica'] || element.fontFamily;
@@ -557,7 +562,7 @@ export const CanvasElement: React.FC<CanvasElementProps> = ({ element, selected,
                     fontStyle: element.fontStyle,
                     textDecoration: element.textDecoration,
                     textAlign: element.align || 'left',
-                    whiteSpace: 'pre-wrap',
+                    whiteSpace: element.autoWidth ? 'pre' : 'pre-wrap',
                     pointerEvents: 'none',
                     zIndex: 2
                 }}>

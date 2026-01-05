@@ -576,13 +576,46 @@ export const SingleElementEditor: React.FC<SingleElementEditorProps> = ({ elemen
                                 className="w-full border rounded px-2 py-1 text-sm min-h-[60px]"
                                 placeholder="Text content or {{field}}"
                                 value={element.text || (element.dataBinding ? `{{${element.dataBinding}}}` : '')}
+                                autoFocus={element.type === 'text' && !element.text}
                                 onChange={e => {
                                     const val = e.target.value;
+                                    let updates: any = {};
                                     if (val.startsWith('{{') && val.endsWith('}}')) {
-                                        onUpdate({ text: '', dataBinding: val.slice(2, -2) });
+                                        updates = { text: '', dataBinding: val.slice(2, -2) };
                                     } else {
-                                        onUpdate({ text: val, dataBinding: '' });
+                                        updates = { text: val, dataBinding: '' };
                                     }
+
+                                    // Auto-size calculation
+                                    if (element.type === 'text' && element.autoWidth) {
+                                        const fontSize = element.fontSize || 16;
+                                        const fontFamily = getFontFamily(element.fontFamily || 'helvetica');
+                                        const fontWeight = element.fontWeight || 'normal';
+                                        const fontStyle = element.fontStyle || 'normal';
+
+                                        const div = document.createElement('div');
+                                        div.style.position = 'absolute';
+                                        div.style.visibility = 'hidden';
+                                        div.style.whiteSpace = 'pre';
+                                        // Use explicit styles to ensure correct font rendering
+                                        div.style.fontSize = `${fontSize}px`;
+                                        div.style.fontFamily = fontFamily;
+                                        div.style.fontWeight = fontWeight;
+                                        div.style.fontStyle = fontStyle;
+                                        div.style.lineHeight = '1.2';
+                                        div.style.padding = '0';
+                                        div.style.display = 'inline-block';
+                                        div.innerText = val || ' ';
+
+                                        document.body.appendChild(div);
+                                        const w = div.offsetWidth;
+                                        const h = div.offsetHeight;
+                                        document.body.removeChild(div);
+
+                                        updates.w = Math.ceil(w + 25); // 25px buffer
+                                        updates.h = Math.max(20, Math.ceil(h));
+                                    }
+                                    onUpdate(updates);
                                 }}
                             />
 

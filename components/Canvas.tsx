@@ -598,7 +598,8 @@ export const Canvas: React.FC<CanvasProps> = ({
                 } : item), false);
             } else {
                 onUpdateElements(elements.map(item => item.id === elId ? {
-                    ...item, x: finalX, y: finalY, w: newW, h: newH
+                    ...item, x: finalX, y: finalY, w: newW, h: newH,
+                    autoWidth: item.type === 'text' ? false : item.autoWidth
                 } : item), false);
             }
         }
@@ -611,7 +612,39 @@ export const Canvas: React.FC<CanvasProps> = ({
             let w = Math.abs(newShapeCurrent.x - newShapeStart.x);
             let h = Math.abs(newShapeCurrent.y - newShapeStart.y);
 
+
             if (w < MIN_DRAG_THRESHOLD && h < MIN_DRAG_THRESHOLD) {
+                if (tool === 'text') {
+                    onInteractionStart();
+                    const maxZ = elements.reduce((max, el) => Math.max(max, el.zIndex || 0), 0);
+                    const newEl: TemplateElement = {
+                        id: Math.random().toString(36).substr(2, 9),
+                        type: 'text',
+                        x: newShapeStart.x,
+                        y: newShapeStart.y,
+                        w: 100, // Default width
+                        h: 20,
+                        rotation: 0,
+                        fill: '',
+                        fillType: 'solid',
+                        stroke: '',
+                        strokeWidth: 0,
+                        borderStyle: 'solid',
+                        opacity: 1,
+                        zIndex: maxZ + 1,
+                        text: '',
+                        autoWidth: true,
+                        fontSize: parseInt(localStorage.getItem('doctect_last_fontSize') || '16'),
+                        fontFamily: localStorage.getItem('doctect_last_fontFamily') || 'helvetica',
+                        fontWeight: (localStorage.getItem('doctect_last_fontWeight') as 'normal' | 'bold') || 'normal',
+                        fontStyle: (localStorage.getItem('doctect_last_fontStyle') as 'normal' | 'italic') || 'normal',
+                        textDecoration: (localStorage.getItem('doctect_last_textDecoration') as 'none' | 'underline') || 'none',
+                        textColor: localStorage.getItem('doctect_last_textColor') || '#000000',
+                        align: (localStorage.getItem('doctect_last_align') as 'left' | 'center' | 'right') || 'center',
+                    };
+                    onUpdateElements([...elements, newEl], false);
+                    onSelectElements([newEl.id]);
+                }
                 setNewShapeStart(null);
                 setNewShapeCurrent(null);
                 return;
@@ -665,7 +698,7 @@ export const Canvas: React.FC<CanvasProps> = ({
                 borderStyle: 'solid',
                 opacity: 1,
                 zIndex: maxZ + 1,
-                text: tool === 'text' ? 'New Text' : undefined,
+                text: tool === 'text' ? '' : undefined,
                 fontSize: parseInt(localStorage.getItem('doctect_last_fontSize') || '16'),
                 fontFamily: localStorage.getItem('doctect_last_fontFamily') || 'helvetica',
                 fontWeight: (localStorage.getItem('doctect_last_fontWeight') as 'normal' | 'bold') || 'normal',

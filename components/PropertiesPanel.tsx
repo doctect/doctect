@@ -152,6 +152,7 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
 
                 {selectedElements.length === 1 ? (
                     <SingleElementEditor
+                        key={selectedElements[0].id}
                         element={selectedElements[0]}
                         onUpdate={handleUpdate}
                         onOpenNodeSelector={handleOpenNodeSelector}

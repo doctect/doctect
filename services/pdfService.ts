@@ -1224,11 +1224,15 @@ export const generatePDF = async (state: AppState) => {
                 const fontSize = Number(el.fontSize) || 12;
                 const lineHeight = fontSize * 1.2; // Standard line height multiplier
 
+                // Auto-Width Logic: Treat as left-aligned with no width limit
+                const isAutoWidth = !!el.autoWidth;
+                const effectiveAlign = isAutoWidth ? 'left' : (el.align || 'left');
+
                 // Calculate max width for text wrapping
-                // For text elements, use the element width minus padding
-                // For shapes, use a smaller area
                 let maxWidth = w;
-                if (el.type === 'text') {
+                if (isAutoWidth) {
+                    maxWidth = 10000; // Effectively no wrapping
+                } else if (el.type === 'text') {
                     maxWidth = w - 2; // Small padding
                 } else {
                     maxWidth = w - 10; // More padding for shapes
@@ -1254,8 +1258,8 @@ export const generatePDF = async (state: AppState) => {
                 // Calculate X position based on alignment
                 let posX: number;
                 if (el.type === 'text') {
-                    if (el.align === 'center') posX = lx + w / 2;
-                    else if (el.align === 'right') posX = lx + w;
+                    if (effectiveAlign === 'center') posX = lx + w / 2;
+                    else if (effectiveAlign === 'right') posX = lx + w;
                     else posX = lx;
                 } else {
                     // Shapes
@@ -1267,7 +1271,7 @@ export const generatePDF = async (state: AppState) => {
                 // Render each line
                 lines.forEach((line: string, idx: number) => {
                     const lineY = startY + idx * lineHeight + yOffset;
-                    doc.text(line, posX, lineY, { align: el.align || 'left' });
+                    doc.text(line, posX, lineY, { align: effectiveAlign, baseline: 'alphabetic' });
                 });
 
                 if (el.textDecoration === 'underline') {
