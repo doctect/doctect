@@ -40,14 +40,19 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, initial
 
     // History Management
     const historyRef = useRef<HistoryState>({ past: [], future: [] });
+    const onNameChangeRef = useRef(onNameChange);
+
+    useEffect(() => {
+        onNameChangeRef.current = onNameChange;
+    }, [onNameChange]);
 
     // Update parent name when root title changes
     useEffect(() => {
         const rootNode = state.nodes[state.rootId];
         if (rootNode) {
-            onNameChange(rootNode.title);
+            onNameChangeRef.current(rootNode.title);
         }
-    }, [state.nodes[state.rootId]?.title, onNameChange]);
+    }, [state.nodes[state.rootId]?.title]);
 
     // Debounce state changes to parent for persistence
     useEffect(() => {
@@ -449,6 +454,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, initial
     };
 
     const handleUpdateTemplateElements = (newElements: TemplateElement[], shouldSaveHistory = true) => {
+        console.log('[ProjectEditor] handleUpdateTemplateElements', newElements.length);
         let targetTemplateId = state.selectedTemplateId;
         if (state.viewMode === 'hierarchy') {
             const currentNode = state.nodes[state.selectedNodeId];
@@ -470,6 +476,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, initial
     };
 
     const handleUpdateElement = (id: string, updates: Partial<TemplateElement>) => {
+        console.log('[ProjectEditor] handleUpdateElement', id, updates);
         let targetTemplateId = state.selectedTemplateId;
         if (state.viewMode === 'hierarchy') targetTemplateId = state.nodes[state.selectedNodeId]?.type;
         if (!targetTemplateId) return;
@@ -579,6 +586,8 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, initial
 
     const currentTemplateId = state.viewMode === 'hierarchy' ? state.nodes[state.selectedNodeId]?.type : state.selectedTemplateId;
     const currentTemplate = state.templates[currentTemplateId] || Object.values(state.templates)[0];
+
+    console.log('[ProjectEditor] RENDER');
 
     return (
         <div className="flex h-full w-full flex-col bg-slate-100 text-slate-900 overflow-hidden">
