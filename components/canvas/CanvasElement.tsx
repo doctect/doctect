@@ -10,13 +10,13 @@ interface CanvasElementProps {
     currentNodeId: string;
     tool: string;
     // We only show handles if exactly one element is selected
-    showHandles: boolean; 
+    showHandles: boolean;
 }
 
 const traverseGridData = (
-    currentNodes: string[], 
-    steps: TraversalStep[], 
-    depth: number, 
+    currentNodes: string[],
+    steps: TraversalStep[],
+    depth: number,
     nodes: Record<string, AppNode>
 ): string[] => {
     if (depth >= steps.length) return currentNodes;
@@ -35,7 +35,7 @@ const traverseGridData = (
         }
 
         const children = targetNode.children || [];
-        
+
         const start = step.sliceStart || 0;
         const end = step.sliceCount !== undefined ? start + step.sliceCount : undefined;
         const sliced = children.slice(start, end);
@@ -50,7 +50,7 @@ const traverseGridData = (
 const evaluateMath = (expr: string | number, data: Record<string, string>): number => {
     const str = String(expr).trim();
     if (!str) return 0;
-    
+
     // Simple integer
     if (/^-?\d+$/.test(str)) return parseInt(str, 10);
 
@@ -76,16 +76,16 @@ const evaluateMath = (expr: string | number, data: Record<string, string>): numb
     // Variable lookup
     const val = data[str];
     if (val !== undefined && val !== "") return parseInt(val, 10);
-    
+
     return 0;
 };
 
 // Helper: Find a node that refers to a specific child of the current node
 const findChildReferrerNode = (
-    currentNode: AppNode, 
-    allNodes: Record<string, AppNode>, 
-    startIndexVal: string | number, 
-    countVal: string | number, 
+    currentNode: AppNode,
+    allNodes: Record<string, AppNode>,
+    startIndexVal: string | number,
+    countVal: string | number,
     typeFilter?: string
 ): AppNode | undefined => {
     // 1. Resolve Start Index & Count with arithmetic
@@ -98,25 +98,25 @@ const findChildReferrerNode = (
 
     for (let i = 0; i < absCount; i++) {
         const idx = start + (i * direction);
-        if (idx < 0) continue; 
-        
+        if (idx < 0) continue;
+
         let targetChildId = (currentNode.children && currentNode.children[idx]) ? currentNode.children[idx] : undefined;
         if (!targetChildId) continue;
 
         const allReferrers = Object.values(allNodes).filter(n => n.referenceId === targetChildId);
         let bestReferrer: AppNode | undefined;
-        
+
         if (typeFilter && typeFilter.trim() !== '') {
             bestReferrer = allReferrers.find(ref => {
-                 const parent = ref.parentId ? allNodes[ref.parentId] : null;
-                 return parent && parent.type === typeFilter;
+                const parent = ref.parentId ? allNodes[ref.parentId] : null;
+                return parent && parent.type === typeFilter;
             });
         }
-        
+
         if (!bestReferrer && allReferrers.length > 0) {
-             bestReferrer = allReferrers[0];
+            bestReferrer = allReferrers[0];
         }
-        
+
         if (bestReferrer && bestReferrer.parentId) {
             return allNodes[bestReferrer.parentId];
         }
@@ -156,7 +156,7 @@ const getContextNodes = (startNode: AppNode, nodes: Record<string, AppNode>): Ap
     const potentialTargets = [startNode.id];
     if (startNode.referenceId) potentialTargets.push(startNode.referenceId);
 
-    const referrers = Object.values(nodes).filter(n => 
+    const referrers = Object.values(nodes).filter(n =>
         n.referenceId && potentialTargets.includes(n.referenceId)
     );
 
@@ -183,55 +183,55 @@ const getContextNodes = (startNode: AppNode, nodes: Record<string, AppNode>): Ap
 
 // Helper to resolve text content with data binding
 const resolveText = (text: string | undefined, node: AppNode | undefined, nodes: Record<string, AppNode>): string => {
-  let content = text || "";
-  if (!content.includes('{{')) return content;
-  if (!node) return content;
+    let content = text || "";
+    if (!content.includes('{{')) return content;
+    if (!node) return content;
 
-  // 1. Handle explicit Child Referrer lookups first
-  content = content.replace(/\{\{child_referrer:([^:]+):([^:]+):([^:]*):([^}]+)\}\}/g, (_, startStr, countStr, typeFilter, field) => {
-      const referrerParent = findChildReferrerNode(node, nodes, startStr, countStr, typeFilter);
-      
-      if (referrerParent) {
-          if (field === 'title') return referrerParent.title;
-          if (referrerParent.data && referrerParent.data[field] !== undefined) return referrerParent.data[field];
-      }
-      return "";
-  });
+    // 1. Handle explicit Child Referrer lookups first
+    content = content.replace(/\{\{child_referrer:([^:]+):([^:]+):([^:]*):([^}]+)\}\}/g, (_, startStr, countStr, typeFilter, field) => {
+        const referrerParent = findChildReferrerNode(node, nodes, startStr, countStr, typeFilter);
 
-  // 2. Build the context chain
-  const contextNodes = getContextNodes(node, nodes);
+        if (referrerParent) {
+            if (field === 'title') return referrerParent.title;
+            if (referrerParent.data && referrerParent.data[field] !== undefined) return referrerParent.data[field];
+        }
+        return "";
+    });
 
-  return content.replace(/\{\{([^}]+)\}\}/g, (_, key) => {
-      const trimmedKey = key.trim();
-      
-      for (const ctxNode of contextNodes) {
-          if (trimmedKey === 'title') return ctxNode.title;
-          if (ctxNode.data && ctxNode.data[trimmedKey] !== undefined) {
-              return ctxNode.data[trimmedKey];
-          }
-      }
-      return ""; 
-  });
+    // 2. Build the context chain
+    const contextNodes = getContextNodes(node, nodes);
+
+    return content.replace(/\{\{([^}]+)\}\}/g, (_, key) => {
+        const trimmedKey = key.trim();
+
+        for (const ctxNode of contextNodes) {
+            if (trimmedKey === 'title') return ctxNode.title;
+            if (ctxNode.data && ctxNode.data[trimmedKey] !== undefined) {
+                return ctxNode.data[trimmedKey];
+            }
+        }
+        return "";
+    });
 };
 
 export const CanvasElement: React.FC<CanvasElementProps> = ({ element, selected, nodes, currentNodeId, tool, showHandles }) => {
-    
+
     const contextNode = nodes[currentNodeId];
 
     const getElementBounds = (el: TemplateElement) => {
         if (el.type === 'grid' && el.gridConfig) {
             const { cols, gapX, gapY, sourceType, sourceId, dataSliceStart, dataSliceCount, traversalPath } = el.gridConfig;
             let items: any[] = [];
-            
+
             if (sourceType === 'current') {
                 items = nodes[currentNodeId] ? [currentNodeId] : [];
                 if (!traversalPath || traversalPath.length === 0) {
-                     items = nodes[currentNodeId]?.children || [];
+                    items = nodes[currentNodeId]?.children || [];
                 }
             } else if (sourceType === 'specific' && sourceId) {
                 items = [sourceId];
                 if (!traversalPath || traversalPath.length === 0) {
-                     items = nodes[sourceId]?.children || [];
+                    items = nodes[sourceId]?.children || [];
                 }
             }
 
@@ -242,17 +242,17 @@ export const CanvasElement: React.FC<CanvasElementProps> = ({ element, selected,
             const start = dataSliceStart || 0;
             const limit = dataSliceCount;
             if (start > 0 || limit !== undefined) {
-                 const end = limit !== undefined ? start + limit : undefined;
-                 items = items.slice(start, end);
+                const end = limit !== undefined ? start + limit : undefined;
+                items = items.slice(start, end);
             }
 
             const displayCount = items.length > 0 ? items.length : 6;
             const colCount = Math.max(1, cols || 3);
             const rowCount = Math.max(1, Math.ceil((displayCount + (el.gridConfig.offsetStart || 0)) / colCount));
-            
+
             const totalW = colCount * el.w + (colCount - 1) * (gapX || 0);
             const totalH = rowCount * el.h + (rowCount - 1) * (gapY || 0);
-            
+
             return { w: totalW, h: totalH };
         }
         return { w: el.w, h: el.h };
@@ -262,20 +262,20 @@ export const CanvasElement: React.FC<CanvasElementProps> = ({ element, selected,
         if (el.type === 'line') return {};
         const hasFill = el.fill || (el.fillType === 'pattern');
         const hasBorder = el.strokeWidth > 0;
-        const strokeColor = el.stroke || '#000000'; 
-  
+        const strokeColor = el.stroke || '#000000';
+
         if (!hasFill && !hasBorder && el.type === 'text') return {};
-  
+
         const bgStyle: React.CSSProperties = {
             backgroundColor: el.fillType === 'pattern' ? 'transparent' : (el.fill || 'transparent'),
             border: hasBorder ? `${el.strokeWidth}px ${el.borderStyle || 'solid'} ${strokeColor}` : undefined
         };
-        
+
         if (hasBorder && el.borderStyle === 'double') {
-             bgStyle.borderStyle = 'double';
-             bgStyle.borderWidth = Math.max(3, el.strokeWidth);
+            bgStyle.borderStyle = 'double';
+            bgStyle.borderWidth = Math.max(3, el.strokeWidth);
         }
-  
+
         if (el.fillType === 'pattern') {
             const color = el.fill || '#000000';
             const spacing = el.patternSpacing || 10;
@@ -291,28 +291,28 @@ export const CanvasElement: React.FC<CanvasElementProps> = ({ element, selected,
         return bgStyle;
     };
 
-    const bounds = getElementBounds(element); 
+    const bounds = getElementBounds(element);
     const style: React.CSSProperties = {
         position: 'absolute',
         left: element.x, top: element.y, width: bounds.w, height: bounds.h,
         transform: `rotate(${element.rotation || 0}deg)`,
         opacity: element.opacity,
         zIndex: element.zIndex || 0,
-        pointerEvents: (tool === 'select') ? 'auto' : 'none', 
+        pointerEvents: (tool === 'select') ? 'auto' : 'none',
     };
 
-    const fontFamily = element.fontFamily === 'caveat' ? 'Caveat, cursive' 
-                    : element.fontFamily === 'merriweather' ? 'Merriweather, serif'
-                    : element.fontFamily === 'roboto-mono' ? '"Roboto Mono", monospace'
-                    : element.fontFamily === 'dancing-script' ? '"Dancing Script", cursive'
+    const fontFamily = element.fontFamily === 'caveat' ? 'Caveat, cursive'
+        : element.fontFamily === 'merriweather' ? 'Merriweather, serif'
+            : element.fontFamily === 'roboto-mono' ? '"Roboto Mono", monospace'
+                : element.fontFamily === 'dancing-script' ? '"Dancing Script", cursive'
                     : element.fontFamily === 'playfair-display' ? '"Playfair Display", serif'
-                    : element.fontFamily === 'patrick-hand' ? '"Patrick Hand", cursive'
-                    : element.fontFamily;
+                        : element.fontFamily === 'patrick-hand' ? '"Patrick Hand", cursive'
+                            : element.fontFamily;
 
     // Grid
     if (element.type === 'grid' && element.gridConfig) {
         const { cols, gapX, gapY, sourceType, sourceId, displayField, offsetMode, offsetField, offsetAdjustment, dataSliceStart, dataSliceCount, traversalPath } = element.gridConfig;
-        
+
         let items: any[] = [];
         let roots: string[] = [];
         if (sourceType === 'current') {
@@ -325,16 +325,16 @@ export const CanvasElement: React.FC<CanvasElementProps> = ({ element, selected,
             items = traverseGridData(roots, traversalPath, 0, nodes);
         } else {
             if (roots.length > 0) {
-                 const r = nodes[roots[0]];
-                 if (r) items = r.children || [];
+                const r = nodes[roots[0]];
+                if (r) items = r.children || [];
             }
         }
 
         const start = dataSliceStart || 0;
         const limit = dataSliceCount;
         if (start > 0 || limit !== undefined) {
-                const end = limit !== undefined ? start + limit : undefined;
-                items = items.slice(start, end);
+            const end = limit !== undefined ? start + limit : undefined;
+            items = items.slice(start, end);
         }
 
         const isMock = items.length === 0;
@@ -347,7 +347,7 @@ export const CanvasElement: React.FC<CanvasElementProps> = ({ element, selected,
             if (firstNode && firstNode.referenceId && nodes[firstNode.referenceId]) {
                 firstNode = nodes[firstNode.referenceId];
             }
-            
+
             if (firstNode && firstNode.data && firstNode.data[offsetField]) {
                 const parsed = parseInt(firstNode.data[offsetField], 10);
                 if (!isNaN(parsed)) {
@@ -360,10 +360,10 @@ export const CanvasElement: React.FC<CanvasElementProps> = ({ element, selected,
             offset += colCount;
         }
 
-        const displayItems = isMock ? Array.from({length: 6}) : items;
+        const displayItems = isMock ? Array.from({ length: 6 }) : items;
         const safeGapX = gapX ?? 10;
         const safeGapY = gapY ?? 10;
-        
+
         let templatePattern = displayField || '{{title}}';
         if (!templatePattern.includes('{{')) {
             templatePattern = `{{${templatePattern}}}`;
@@ -377,8 +377,8 @@ export const CanvasElement: React.FC<CanvasElementProps> = ({ element, selected,
                     const col = ((pos % colCount) + colCount) % colCount;
                     const cx = col * (element.w + safeGapX);
                     const cy = row * (element.h + safeGapY);
-                    
-                    let label = `Item ${idx+1}`;
+
+                    let label = `Item ${idx + 1}`;
                     if (!isMock && nodes[childId]) {
                         let n = nodes[childId];
                         if (n.referenceId && nodes[n.referenceId]) n = nodes[n.referenceId];
@@ -390,7 +390,7 @@ export const CanvasElement: React.FC<CanvasElementProps> = ({ element, selected,
                             position: 'absolute', left: cx, top: cy, width: element.w, height: element.h,
                             ...getBackgroundStyle(element),
                             borderRadius: element.borderRadius || 0,
-                            display: 'flex', 
+                            display: 'flex',
                             justifyContent: element.align === 'center' ? 'center' : element.align === 'right' ? 'flex-end' : 'flex-start',
                             alignItems: element.verticalAlign === 'top' ? 'flex-start' : element.verticalAlign === 'bottom' ? 'flex-end' : 'center',
                             fontSize: element.fontSize || 12,
@@ -400,7 +400,7 @@ export const CanvasElement: React.FC<CanvasElementProps> = ({ element, selected,
                             fontStyle: element.fontStyle,
                             textDecoration: element.textDecoration,
                             overflow: 'hidden'
-                        }}><span className="truncate px-1">{label}</span></div>
+                        }}><span className="truncate" style={{ padding: '0 1px' }}>{label}</span></div>
                     );
                 })}
                 {selected && <div className="absolute -inset-px border border-blue-500 pointer-events-none z-10" />}
@@ -427,7 +427,7 @@ export const CanvasElement: React.FC<CanvasElementProps> = ({ element, selected,
     if (element.type === 'triangle') {
         const bgStyle = getBackgroundStyle(element);
         const bgStyleNoBorder = { ...bgStyle, border: 'none', borderWidth: 0 };
-        
+
         return (
             <div key={element.id} data-element-id={element.id} className="absolute group" style={style}>
                 <div style={{
@@ -435,25 +435,25 @@ export const CanvasElement: React.FC<CanvasElementProps> = ({ element, selected,
                     clipPath: 'polygon(50% 0%, 0% 100%, 100% 100%)',
                     ...bgStyleNoBorder
                 }} />
-                
+
                 {(element.strokeWidth > 0) && (
-                    <svg className="absolute inset-0 w-full h-full pointer-events-none" style={{overflow:'visible'}}>
-                        <polygon 
-                            points={`${element.w/2},0 0,${element.h} ${element.w},${element.h}`} 
-                            fill="none" 
-                            stroke={element.stroke || 'transparent'} 
+                    <svg className="absolute inset-0 w-full h-full pointer-events-none" style={{ overflow: 'visible' }}>
+                        <polygon
+                            points={`${element.w / 2},0 0,${element.h} ${element.w},${element.h}`}
+                            fill="none"
+                            stroke={element.stroke || 'transparent'}
                             strokeWidth={element.strokeWidth}
                             strokeLinejoin="round"
                             strokeDasharray={element.borderStyle === 'dashed' ? '5,5' : element.borderStyle === 'dotted' ? '2,2' : ''}
                         />
                     </svg>
                 )}
-                
+
                 {(element.text || element.dataBinding) && (
-                    <div className="absolute inset-0 flex px-1 overflow-hidden" style={{
-                        justifyContent: 'center', 
+                    <div className="absolute inset-0 flex" style={{
+                        justifyContent: 'center',
                         alignItems: element.verticalAlign === 'top' ? 'flex-start' : element.verticalAlign === 'bottom' ? 'flex-end' : 'center',
-                        paddingTop: element.verticalAlign === 'top' ? element.h / 3 : 0, 
+                        paddingTop: element.verticalAlign === 'top' ? element.h / 3 : 0,
                         paddingBottom: element.verticalAlign === 'bottom' ? 5 : 0,
                         color: element.textColor,
                         fontFamily: fontFamily,
@@ -461,6 +461,7 @@ export const CanvasElement: React.FC<CanvasElementProps> = ({ element, selected,
                         fontWeight: element.fontWeight,
                         fontStyle: element.fontStyle,
                         textDecoration: element.textDecoration,
+                        textAlign: 'center',
                         whiteSpace: 'pre-wrap',
                         pointerEvents: 'none',
                         zIndex: 2
@@ -492,9 +493,9 @@ export const CanvasElement: React.FC<CanvasElementProps> = ({ element, selected,
                     borderRadius: '50%',
                 }} />
             )}
-            
+
             {(element.text || element.dataBinding) && (
-                <div className="absolute inset-0 flex px-1 overflow-hidden" style={{
+                <div className="absolute inset-0 flex" style={{
                     justifyContent: element.align === 'center' ? 'center' : element.align === 'right' ? 'flex-end' : 'flex-start',
                     alignItems: element.verticalAlign === 'top' ? 'flex-start' : element.verticalAlign === 'bottom' ? 'flex-end' : 'center',
                     color: element.textColor,
@@ -503,6 +504,7 @@ export const CanvasElement: React.FC<CanvasElementProps> = ({ element, selected,
                     fontWeight: element.fontWeight,
                     fontStyle: element.fontStyle,
                     textDecoration: element.textDecoration,
+                    textAlign: element.align || 'left',
                     whiteSpace: 'pre-wrap',
                     pointerEvents: 'none',
                     zIndex: 2
