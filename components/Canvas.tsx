@@ -4,6 +4,7 @@ import React, { useRef, useState, useEffect, useLayoutEffect, MouseEvent } from 
 import { AppState, TemplateElement, PageTemplate, AppNode, TraversalStep } from '../types';
 import clsx from 'clsx';
 import { CanvasElement } from './canvas/CanvasElement';
+import { OverlayTextEditor } from './canvas/OverlayTextEditor';
 
 interface CanvasProps {
     template: PageTemplate;
@@ -116,6 +117,10 @@ export const Canvas: React.FC<CanvasProps> = ({
     // Marquee Selection State
     const [isSelecting, setIsSelecting] = useState(false);
     const [selectionBox, setSelectionBox] = useState<{ x: number, y: number, w: number, h: number } | null>(null);
+
+    // Inline Editing State
+    const [editingElementId, setEditingElementId] = useState<string | null>(null);
+
 
     // Dynamic Grid Calculation
     const effectiveGridSize = React.useMemo(() => {
@@ -644,6 +649,7 @@ export const Canvas: React.FC<CanvasProps> = ({
                     };
                     onUpdateElements([...elements, newEl], false);
                     onSelectElements([newEl.id]);
+                    setEditingElementId(newEl.id);
                 }
                 setNewShapeStart(null);
                 setNewShapeCurrent(null);
@@ -712,6 +718,9 @@ export const Canvas: React.FC<CanvasProps> = ({
             // Pass false for saveHistory because we already called onInteractionStart manually above
             onUpdateElements([...elements, newEl], false);
             onSelectElements([newEl.id]);
+            if (tool === 'text') {
+                setEditingElementId(newEl.id);
+            }
         } else if (isSelecting && selectionBox) {
             const ids: string[] = [];
             elements.forEach(el => {
@@ -801,7 +810,7 @@ export const Canvas: React.FC<CanvasProps> = ({
     return (
         <div
             ref={outerContainerRef}
-            className={clsx("w-full h-full bg-slate-200 overflow-auto flex relative select-none")}
+            className={clsx("w-full h-full bg-slate-200 overflow-auto flex relative select-none canvas-scroll-container")}
             style={{ cursor: containerCursor }}
             onMouseDown={handleMouseDown}
             onMouseMove={handleMouseMove}
@@ -842,8 +851,25 @@ export const Canvas: React.FC<CanvasProps> = ({
                                 currentNodeId={currentNodeId}
                                 tool={tool}
                                 showHandles={selectedElementIds.includes(el.id) && selectedElementIds.length === 1}
+                                onDoubleClick={() => setEditingElementId(el.id)}
+                                isEditing={editingElementId === el.id}
                             />
                         ))}
+
+                        {editingElementId && (() => {
+                            const el = elements.find(e => e.id === editingElementId);
+                            if (el && el.type === 'text') {
+                                return (
+                                    <OverlayTextEditor
+                                        key={el.id}
+                                        element={el}
+                                        onChange={(id, updates) => onUpdateElements(elements.map(e => e.id === id ? { ...e, ...updates } : e), false)}
+                                        onFinish={() => setEditingElementId(null)}
+                                    />
+                                );
+                            }
+                            return null;
+                        })()}
 
                         {renderCreationPreview()}
 

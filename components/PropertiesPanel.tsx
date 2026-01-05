@@ -71,7 +71,7 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
     }, [onOpenNodeSelector, selectedElements]);
 
     return (
-        <div className="flex flex-col h-full overflow-y-auto bg-white border-l">
+        <div className="flex flex-col h-full overflow-y-auto bg-white border-l" data-prevent-finish-edit="true">
             <div className="p-4 border-b bg-slate-50">
                 <h3 className="font-bold text-slate-700 flex items-center gap-2">
                     <Settings2 size={16} />

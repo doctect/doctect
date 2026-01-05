@@ -75,16 +75,26 @@ test.describe('Editor Canvas Interactions', () => {
         // Should be empty initially. Width starts at default 100px until typed in.
         await expect(textEl).toHaveText('');
 
-        // Verify Focus: The textarea in PropertiesPanel should be focused.
-        // We type immediately.
+        // Verify Inline Editing: The overlay textarea should be present and focused
+        const overlay = page.getByTestId('overlay-text-editor');
+        await expect(overlay).toBeVisible();
+        await expect(overlay).toBeFocused();
+
+        // Type in the overlay
         const textToType = 'Hello World This Is Long';
         await page.keyboard.type(textToType);
 
-        // Verify text updated on canvas
-        await expect(textEl).toContainText(textToType);
+        // Verify text update in overlay
+        await expect(overlay).toHaveValue(textToType);
 
-        // Verify width expanded (Auto Width)
-        // Default was 100 or min 20. Long string should make it > 150.
+        // Blur/Escape to finish editing
+        await page.keyboard.press('Escape');
+        await expect(overlay).not.toBeVisible();
+
+        // Verify text updated on canvas element
+        await expect(textEl).toHaveText(textToType);
+
+        // Verify width expanded
         const newBox = await textEl.boundingBox();
         expect(newBox.width).toBeGreaterThan(150);
     });
