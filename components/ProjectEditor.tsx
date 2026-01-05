@@ -40,11 +40,14 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, initial
 
     // History Management
     const historyRef = useRef<HistoryState>({ past: [], future: [] });
+
     const onNameChangeRef = useRef(onNameChange);
+    const onStateChangeRef = useRef(onStateChange);
 
     useEffect(() => {
         onNameChangeRef.current = onNameChange;
-    }, [onNameChange]);
+        onStateChangeRef.current = onStateChange;
+    }, [onNameChange, onStateChange]);
 
     // Update parent name when root title changes
     useEffect(() => {
@@ -57,12 +60,12 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, initial
     // Debounce state changes to parent for persistence
     useEffect(() => {
         const timer = setTimeout(() => {
-            if (onStateChange) {
-                onStateChange(state);
+            if (onStateChangeRef.current) {
+                onStateChangeRef.current(state);
             }
         }, 1000);
         return () => clearTimeout(timer);
-    }, [state, onStateChange]);
+    }, [state]);
 
     const saveToHistory = useCallback(() => {
         historyRef.current.past.push({
