@@ -61,9 +61,10 @@ interface OverlayTextEditorProps {
     element: TemplateElement;
     onChange: (id: string, updates: Partial<TemplateElement>) => void;
     onFinish: () => void;
+    onSwitchToSelect?: () => void;
 }
 
-export const OverlayTextEditor: React.FC<OverlayTextEditorProps> = ({ element, onChange, onFinish }) => {
+export const OverlayTextEditor: React.FC<OverlayTextEditorProps> = ({ element, onChange, onFinish, onSwitchToSelect }) => {
     const editorRef = useRef<HTMLDivElement>(null);
     const [initialText] = useState(element.text || '');
 
@@ -160,6 +161,7 @@ export const OverlayTextEditor: React.FC<OverlayTextEditorProps> = ({ element, o
         e.stopPropagation();
         if (e.key === 'Escape') {
             onFinish();
+            onSwitchToSelect?.();
         }
     };
 
@@ -194,6 +196,7 @@ export const OverlayTextEditor: React.FC<OverlayTextEditorProps> = ({ element, o
                 fontWeight: element.fontWeight,
                 fontStyle: element.fontStyle,
                 textDecoration: element.textDecoration,
+                textDecorationColor: element.textColor,
                 color: element.textColor,
                 // Cursor interaction
                 cursor: 'text',

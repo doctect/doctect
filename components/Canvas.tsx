@@ -20,6 +20,7 @@ interface CanvasProps {
     onSelectElements: (ids: string[]) => void;
     onZoom: (newScale: number) => void;
     onInteractionStart: () => void;
+    onSwitchToSelect?: () => void;
 }
 
 const MIN_DRAG_THRESHOLD = 5;
@@ -86,7 +87,8 @@ export const Canvas: React.FC<CanvasProps> = ({
     onUpdateElements,
     onSelectElements,
     onZoom,
-    onInteractionStart
+    onInteractionStart,
+    onSwitchToSelect
 }) => {
     const containerRef = useRef<HTMLDivElement>(null);
     const outerContainerRef = useRef<HTMLDivElement>(null);
@@ -622,13 +624,14 @@ export const Canvas: React.FC<CanvasProps> = ({
                 if (tool === 'text') {
                     onInteractionStart();
                     const maxZ = elements.reduce((max, el) => Math.max(max, el.zIndex || 0), 0);
+                    const fontSize = parseInt(localStorage.getItem('doctect_last_fontSize') || '16');
                     const newEl: TemplateElement = {
                         id: Math.random().toString(36).substr(2, 9),
                         type: 'text',
                         x: newShapeStart.x,
                         y: newShapeStart.y,
-                        w: 100, // Default width
-                        h: 20,
+                        w: Math.max(10, fontSize * 1), // Width for ~1 char
+                        h: Math.max(20, fontSize * 1.5), // Height based on line height
                         rotation: 0,
                         fill: '',
                         fillType: 'solid',
@@ -865,6 +868,7 @@ export const Canvas: React.FC<CanvasProps> = ({
                                         element={el}
                                         onChange={(id, updates) => onUpdateElements(elements.map(e => e.id === id ? { ...e, ...updates } : e), false)}
                                         onFinish={() => setEditingElementId(null)}
+                                        onSwitchToSelect={onSwitchToSelect}
                                     />
                                 );
                             }

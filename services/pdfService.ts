@@ -1275,13 +1275,23 @@ export const generatePDF = async (state: AppState) => {
                 });
 
                 if (el.textDecoration === 'underline') {
+                    // Set underline color to match text color
+                    const underlineRgb = hexToRgb(el.textColor || '#000000');
+                    if (underlineRgb) {
+                        doc.setDrawColor(underlineRgb.r, underlineRgb.g, underlineRgb.b);
+                    }
+                    doc.setLineWidth(Math.max(0.5, fontSize * 0.05)); // Scale line width to font size
+
                     // Calculate underline for each line
                     lines.forEach((line: string, idx: number) => {
                         const txtWidth = doc.getTextWidth(line);
-                        const lineY = startY + idx * lineHeight + 2 + yOffset;
+                        // Underline offset: ~15% of fontSize below baseline
+                        const underlineOffset = fontSize * 0.15;
+                        const lineY = startY + idx * lineHeight + underlineOffset + yOffset;
                         let lineX = posX;
-                        if (el.align === 'center') lineX -= txtWidth / 2;
-                        if (el.align === 'right') lineX -= txtWidth;
+                        // Use effectiveAlign (not el.align) to match text rendering
+                        if (effectiveAlign === 'center') lineX -= txtWidth / 2;
+                        if (effectiveAlign === 'right') lineX -= txtWidth;
 
                         doc.setLineDashPattern([], 0);
                         doc.setLineCap('butt');

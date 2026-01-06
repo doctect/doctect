@@ -459,6 +459,7 @@ export const CanvasElement: React.FC<CanvasElementProps> = (props) => {
                             fontWeight: element.fontWeight,
                             fontStyle: element.fontStyle,
                             textDecoration: element.textDecoration,
+                            textDecorationColor: element.textColor || '#000',
                             overflow: 'hidden'
                         }}><span className="truncate" style={{ padding: '0 1px' }}>{label}</span></div>
                     );
@@ -521,6 +522,7 @@ export const CanvasElement: React.FC<CanvasElementProps> = (props) => {
                         fontWeight: element.fontWeight,
                         fontStyle: element.fontStyle,
                         textDecoration: element.textDecoration,
+                        textDecorationColor: element.textColor,
                         textAlign: 'center',
                         whiteSpace: 'pre-wrap',
                         pointerEvents: 'none',
@@ -564,6 +566,7 @@ export const CanvasElement: React.FC<CanvasElementProps> = (props) => {
                     fontWeight: element.fontWeight,
                     fontStyle: element.fontStyle,
                     textDecoration: element.textDecoration,
+                    textDecorationColor: element.textColor,
                     textAlign: element.align || 'left',
                     whiteSpace: element.autoWidth ? 'pre' : 'pre-wrap',
                     pointerEvents: 'none',
