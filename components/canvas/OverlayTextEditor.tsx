@@ -135,6 +135,16 @@ export const OverlayTextEditor: React.FC<OverlayTextEditorProps> = ({ element, o
         }
     }, []);
 
+    // Cleanup: Clear selection on unmount to prevent ghost cursor
+    useEffect(() => {
+        return () => {
+            const sel = window.getSelection();
+            if (sel) {
+                sel.removeAllRanges();
+            }
+        };
+    }, []);
+
     const handleInput = (e: React.FormEvent<HTMLDivElement>) => {
         // Activate Lock
         captureScrolls();
