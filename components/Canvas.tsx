@@ -4,6 +4,7 @@ import React, { useRef, useState, useEffect, useLayoutEffect, MouseEvent } from 
 import { AppState, TemplateElement, PageTemplate, AppNode, TraversalStep } from '../types';
 import clsx from 'clsx';
 import { CanvasElement } from './canvas/CanvasElement';
+import { OverlayTextEditor } from './canvas/OverlayTextEditor';
 
 interface CanvasProps {
     template: PageTemplate;
@@ -19,6 +20,7 @@ interface CanvasProps {
     onSelectElements: (ids: string[]) => void;
     onZoom: (newScale: number) => void;
     onInteractionStart: () => void;
+    onSwitchToSelect?: () => void;
 }
 
 const MIN_DRAG_THRESHOLD = 5;
@@ -85,7 +87,8 @@ export const Canvas: React.FC<CanvasProps> = ({
     onUpdateElements,
     onSelectElements,
     onZoom,
-    onInteractionStart
+    onInteractionStart,
+    onSwitchToSelect
 }) => {
     const containerRef = useRef<HTMLDivElement>(null);
     const outerContainerRef = useRef<HTMLDivElement>(null);
@@ -116,6 +119,10 @@ export const Canvas: React.FC<CanvasProps> = ({
     // Marquee Selection State
     const [isSelecting, setIsSelecting] = useState(false);
     const [selectionBox, setSelectionBox] = useState<{ x: number, y: number, w: number, h: number } | null>(null);
+
+    // Inline Editing State
+    const [editingElementId, setEditingElementId] = useState<string | null>(null);
+
 
     // Dynamic Grid Calculation
     const effectiveGridSize = React.useMemo(() => {
@@ -598,7 +605,8 @@ export const Canvas: React.FC<CanvasProps> = ({
                 } : item), false);
             } else {
                 onUpdateElements(elements.map(item => item.id === elId ? {
-                    ...item, x: finalX, y: finalY, w: newW, h: newH
+                    ...item, x: finalX, y: finalY, w: newW, h: newH,
+                    autoWidth: item.type === 'text' ? false : item.autoWidth
                 } : item), false);
             }
         }
@@ -611,7 +619,41 @@ export const Canvas: React.FC<CanvasProps> = ({
             let w = Math.abs(newShapeCurrent.x - newShapeStart.x);
             let h = Math.abs(newShapeCurrent.y - newShapeStart.y);
 
+
             if (w < MIN_DRAG_THRESHOLD && h < MIN_DRAG_THRESHOLD) {
+                if (tool === 'text') {
+                    onInteractionStart();
+                    const maxZ = elements.reduce((max, el) => Math.max(max, el.zIndex || 0), 0);
+                    const fontSize = parseInt(localStorage.getItem('doctect_last_fontSize') || '16');
+                    const newEl: TemplateElement = {
+                        id: Math.random().toString(36).substr(2, 9),
+                        type: 'text',
+                        x: newShapeStart.x,
+                        y: newShapeStart.y,
+                        w: Math.max(10, fontSize * 1), // Width for ~1 char
+                        h: Math.max(20, fontSize * 1.5), // Height based on line height
+                        rotation: 0,
+                        fill: '',
+                        fillType: 'solid',
+                        stroke: '',
+                        strokeWidth: 0,
+                        borderStyle: 'solid',
+                        opacity: 1,
+                        zIndex: maxZ + 1,
+                        text: '',
+                        autoWidth: true,
+                        fontSize: parseInt(localStorage.getItem('doctect_last_fontSize') || '16'),
+                        fontFamily: localStorage.getItem('doctect_last_fontFamily') || 'helvetica',
+                        fontWeight: (localStorage.getItem('doctect_last_fontWeight') as 'normal' | 'bold') || 'normal',
+                        fontStyle: (localStorage.getItem('doctect_last_fontStyle') as 'normal' | 'italic') || 'normal',
+                        textDecoration: (localStorage.getItem('doctect_last_textDecoration') as 'none' | 'underline') || 'none',
+                        textColor: localStorage.getItem('doctect_last_textColor') || '#000000',
+                        align: (localStorage.getItem('doctect_last_align') as 'left' | 'center' | 'right') || 'center',
+                    };
+                    onUpdateElements([...elements, newEl], false);
+                    onSelectElements([newEl.id]);
+                    setEditingElementId(newEl.id);
+                }
                 setNewShapeStart(null);
                 setNewShapeCurrent(null);
                 return;
@@ -665,7 +707,7 @@ export const Canvas: React.FC<CanvasProps> = ({
                 borderStyle: 'solid',
                 opacity: 1,
                 zIndex: maxZ + 1,
-                text: tool === 'text' ? 'New Text' : undefined,
+                text: tool === 'text' ? '' : undefined,
                 fontSize: parseInt(localStorage.getItem('doctect_last_fontSize') || '16'),
                 fontFamily: localStorage.getItem('doctect_last_fontFamily') || 'helvetica',
                 fontWeight: (localStorage.getItem('doctect_last_fontWeight') as 'normal' | 'bold') || 'normal',
@@ -679,6 +721,9 @@ export const Canvas: React.FC<CanvasProps> = ({
             // Pass false for saveHistory because we already called onInteractionStart manually above
             onUpdateElements([...elements, newEl], false);
             onSelectElements([newEl.id]);
+            if (tool === 'text') {
+                setEditingElementId(newEl.id);
+            }
         } else if (isSelecting && selectionBox) {
             const ids: string[] = [];
             elements.forEach(el => {
@@ -768,7 +813,7 @@ export const Canvas: React.FC<CanvasProps> = ({
     return (
         <div
             ref={outerContainerRef}
-            className={clsx("w-full h-full bg-slate-200 overflow-auto flex relative select-none")}
+            className={clsx("w-full h-full bg-slate-200 overflow-auto flex relative select-none canvas-scroll-container")}
             style={{ cursor: containerCursor }}
             onMouseDown={handleMouseDown}
             onMouseMove={handleMouseMove}
@@ -809,8 +854,26 @@ export const Canvas: React.FC<CanvasProps> = ({
                                 currentNodeId={currentNodeId}
                                 tool={tool}
                                 showHandles={selectedElementIds.includes(el.id) && selectedElementIds.length === 1}
+                                onDoubleClick={() => setEditingElementId(el.id)}
+                                isEditing={editingElementId === el.id}
                             />
                         ))}
+
+                        {editingElementId && (() => {
+                            const el = elements.find(e => e.id === editingElementId);
+                            if (el && el.type === 'text') {
+                                return (
+                                    <OverlayTextEditor
+                                        key={el.id}
+                                        element={el}
+                                        onChange={(id, updates) => onUpdateElements(elements.map(e => e.id === id ? { ...e, ...updates } : e), false)}
+                                        onFinish={() => setEditingElementId(null)}
+                                        onSwitchToSelect={onSwitchToSelect}
+                                    />
+                                );
+                            }
+                            return null;
+                        })()}
 
                         {renderCreationPreview()}
 

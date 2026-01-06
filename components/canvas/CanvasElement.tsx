@@ -69,6 +69,8 @@ interface CanvasElementProps {
     tool: string;
     // We only show handles if exactly one element is selected
     showHandles: boolean;
+    onDoubleClick?: () => void;
+    isEditing?: boolean;
 }
 
 const traverseGridData = (
@@ -272,7 +274,8 @@ const resolveText = (text: string | undefined, node: AppNode | undefined, nodes:
     });
 };
 
-export const CanvasElement: React.FC<CanvasElementProps> = ({ element, selected, nodes, currentNodeId, tool, showHandles }) => {
+export const CanvasElement: React.FC<CanvasElementProps> = (props) => {
+    const { element, selected, nodes, currentNodeId, tool, showHandles, onDoubleClick, isEditing } = props;
 
     const contextNode = nodes[currentNodeId];
 
@@ -352,11 +355,16 @@ export const CanvasElement: React.FC<CanvasElementProps> = ({ element, selected,
     const bounds = getElementBounds(element);
     const style: React.CSSProperties = {
         position: 'absolute',
-        left: element.x, top: element.y, width: bounds.w, height: bounds.h,
+        left: element.x, top: element.y,
+        width: bounds.w,
+        height: bounds.h,
         transform: `rotate(${element.rotation || 0}deg)`,
         opacity: element.opacity,
         zIndex: element.zIndex || 0,
         pointerEvents: (tool === 'select') ? 'auto' : 'none',
+        whiteSpace: element.autoWidth ? 'pre' : undefined,
+        minWidth: element.autoWidth ? 20 : undefined,
+        minHeight: element.autoWidth ? 20 : undefined,
     };
 
     const fontFamily = FONT_FAMILY_MAP[element.fontFamily || 'helvetica'] || element.fontFamily;
@@ -451,6 +459,7 @@ export const CanvasElement: React.FC<CanvasElementProps> = ({ element, selected,
                             fontWeight: element.fontWeight,
                             fontStyle: element.fontStyle,
                             textDecoration: element.textDecoration,
+                            textDecorationColor: element.textColor || '#000',
                             overflow: 'hidden'
                         }}><span className="truncate" style={{ padding: '0 1px' }}>{label}</span></div>
                     );
@@ -463,7 +472,7 @@ export const CanvasElement: React.FC<CanvasElementProps> = ({ element, selected,
 
     if (element.type === 'line') {
         return (
-            <div key={element.id} data-element-id={element.id} className="absolute group" style={style}>
+            <div key={element.id} data-element-id={element.id} className="absolute group" style={style} onDoubleClick={props.onDoubleClick}>
                 <svg width="100%" height="100%" style={{ overflow: 'visible' }}>
                     {element.flip ? (
                         <line x1="0" y1="100%" x2="100%" y2="0" stroke={element.stroke} strokeWidth={element.strokeWidth} strokeDasharray={element.borderStyle === 'dashed' ? '5,5' : element.borderStyle === 'dotted' ? '2,2' : ''} />
@@ -481,7 +490,7 @@ export const CanvasElement: React.FC<CanvasElementProps> = ({ element, selected,
         const bgStyleNoBorder = { ...bgStyle, border: 'none', borderWidth: 0 };
 
         return (
-            <div key={element.id} data-element-id={element.id} className="absolute group" style={style}>
+            <div key={element.id} data-element-id={element.id} className="absolute group" style={style} onDoubleClick={props.onDoubleClick}>
                 <div style={{
                     width: '100%', height: '100%',
                     clipPath: 'polygon(50% 0%, 0% 100%, 100% 100%)',
@@ -513,6 +522,7 @@ export const CanvasElement: React.FC<CanvasElementProps> = ({ element, selected,
                         fontWeight: element.fontWeight,
                         fontStyle: element.fontStyle,
                         textDecoration: element.textDecoration,
+                        textDecorationColor: element.textColor,
                         textAlign: 'center',
                         whiteSpace: 'pre-wrap',
                         pointerEvents: 'none',
@@ -529,7 +539,7 @@ export const CanvasElement: React.FC<CanvasElementProps> = ({ element, selected,
     }
 
     return (
-        <div key={element.id} data-element-id={element.id} className="absolute group" style={style}>
+        <div key={element.id} data-element-id={element.id} className="absolute group" style={style} onDoubleClick={props.onDoubleClick}>
             {(element.type === 'rect' || element.type === 'text') && (
                 <div style={{
                     width: '100%', height: '100%',
@@ -556,10 +566,12 @@ export const CanvasElement: React.FC<CanvasElementProps> = ({ element, selected,
                     fontWeight: element.fontWeight,
                     fontStyle: element.fontStyle,
                     textDecoration: element.textDecoration,
+                    textDecorationColor: element.textColor,
                     textAlign: element.align || 'left',
-                    whiteSpace: 'pre-wrap',
+                    whiteSpace: element.autoWidth ? 'pre' : 'pre-wrap',
                     pointerEvents: 'none',
-                    zIndex: 2
+                    zIndex: 2,
+                    opacity: isEditing ? 0 : 1
                 }}>
                     {resolveText(element.dataBinding ? `{{${element.dataBinding}}}` : (element.text || ""), contextNode, nodes)}
                 </div>

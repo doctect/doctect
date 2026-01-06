@@ -50,7 +50,53 @@ test.describe('Editor Canvas Interactions', () => {
 
         const elements = page.locator('[data-element-id]');
         await expect(elements).toHaveCount(1);
-        await expect(elements.first()).toContainText('New Text');
+        // Default text is now empty
+        await expect(elements.first()).toHaveText('');
+    });
+
+    test('should click-to-type text on canvas', async ({ page }) => {
+        // Select Text Tool
+        await page.getByTitle('Text Box (T)').click();
+
+        const canvas = page.getByTestId('editor-canvas');
+        const box = await canvas.boundingBox();
+        if (!box) throw new Error('Canvas not found');
+
+        // Click on canvas (small movement < 5px)
+        await page.mouse.move(box.x + 100, box.y + 100);
+        await page.mouse.down();
+        await page.mouse.up();
+
+        // Verify element created
+        const elements = page.locator('[data-element-id]');
+        await expect(elements).toHaveCount(1);
+        const textEl = elements.first();
+
+        // Should be empty initially. Width starts at default 100px until typed in.
+        await expect(textEl).toHaveText('');
+
+        // Verify Inline Editing: The overlay textarea should be present and focused
+        const overlay = page.getByTestId('overlay-text-editor');
+        await expect(overlay).toBeVisible();
+        await expect(overlay).toBeFocused();
+
+        // Type in the overlay
+        const textToType = 'Hello World This Is Long';
+        await page.keyboard.type(textToType);
+
+        // Verify text update in overlay
+        await expect(overlay).toHaveValue(textToType);
+
+        // Blur/Escape to finish editing
+        await page.keyboard.press('Escape');
+        await expect(overlay).not.toBeVisible();
+
+        // Verify text updated on canvas element
+        await expect(textEl).toHaveText(textToType);
+
+        // Verify width expanded
+        const newBox = await textEl.boundingBox();
+        expect(newBox.width).toBeGreaterThan(150);
     });
 
     test('should select and move an element', async ({ page }) => {

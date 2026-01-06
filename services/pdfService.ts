@@ -1224,11 +1224,15 @@ export const generatePDF = async (state: AppState) => {
                 const fontSize = Number(el.fontSize) || 12;
                 const lineHeight = fontSize * 1.2; // Standard line height multiplier
 
+                // Auto-Width Logic: Treat as left-aligned with no width limit
+                const isAutoWidth = !!el.autoWidth;
+                const effectiveAlign = isAutoWidth ? 'left' : (el.align || 'left');
+
                 // Calculate max width for text wrapping
-                // For text elements, use the element width minus padding
-                // For shapes, use a smaller area
                 let maxWidth = w;
-                if (el.type === 'text') {
+                if (isAutoWidth) {
+                    maxWidth = 10000; // Effectively no wrapping
+                } else if (el.type === 'text') {
                     maxWidth = w - 2; // Small padding
                 } else {
                     maxWidth = w - 10; // More padding for shapes
@@ -1254,8 +1258,8 @@ export const generatePDF = async (state: AppState) => {
                 // Calculate X position based on alignment
                 let posX: number;
                 if (el.type === 'text') {
-                    if (el.align === 'center') posX = lx + w / 2;
-                    else if (el.align === 'right') posX = lx + w;
+                    if (effectiveAlign === 'center') posX = lx + w / 2;
+                    else if (effectiveAlign === 'right') posX = lx + w;
                     else posX = lx;
                 } else {
                     // Shapes
@@ -1267,17 +1271,27 @@ export const generatePDF = async (state: AppState) => {
                 // Render each line
                 lines.forEach((line: string, idx: number) => {
                     const lineY = startY + idx * lineHeight + yOffset;
-                    doc.text(line, posX, lineY, { align: el.align || 'left' });
+                    doc.text(line, posX, lineY, { align: effectiveAlign, baseline: 'alphabetic' });
                 });
 
                 if (el.textDecoration === 'underline') {
+                    // Set underline color to match text color
+                    const underlineRgb = hexToRgb(el.textColor || '#000000');
+                    if (underlineRgb) {
+                        doc.setDrawColor(underlineRgb.r, underlineRgb.g, underlineRgb.b);
+                    }
+                    doc.setLineWidth(Math.max(0.5, fontSize * 0.05)); // Scale line width to font size
+
                     // Calculate underline for each line
                     lines.forEach((line: string, idx: number) => {
                         const txtWidth = doc.getTextWidth(line);
-                        const lineY = startY + idx * lineHeight + 2 + yOffset;
+                        // Underline offset: ~15% of fontSize below baseline
+                        const underlineOffset = fontSize * 0.15;
+                        const lineY = startY + idx * lineHeight + underlineOffset + yOffset;
                         let lineX = posX;
-                        if (el.align === 'center') lineX -= txtWidth / 2;
-                        if (el.align === 'right') lineX -= txtWidth;
+                        // Use effectiveAlign (not el.align) to match text rendering
+                        if (effectiveAlign === 'center') lineX -= txtWidth / 2;
+                        if (effectiveAlign === 'right') lineX -= txtWidth;
 
                         doc.setLineDashPattern([], 0);
                         doc.setLineCap('butt');

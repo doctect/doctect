@@ -665,6 +665,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, initial
                             onUpdateElements={(els, save) => handleUpdateTemplateElements(els, save)}
                             onSelectElements={(ids) => setState(s => ({ ...s, selectedElementIds: ids }))}
                             onZoom={(newScale) => setState(s => ({ ...s, scale: newScale }))}
+                            onSwitchToSelect={() => setState(s => ({ ...s, tool: 'select' }))}
                         />
                     </div>
                 </div>
