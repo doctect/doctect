@@ -20,7 +20,7 @@ Steps to reproduce the behavior:
 **Expected behavior**
 A clear and concise description of what you expected to happen.
 
-** JSON Outout **
+**JSON Output**
 Please share the JSON from the JSON option -> Text copy and paste the JSON here or share a link to pastebin
 
 **Screenshots**
