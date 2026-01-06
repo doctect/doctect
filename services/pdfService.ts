@@ -73,9 +73,9 @@ const FONT_URLS: Record<string, Record<string, string>> = {
         italic: 'https://raw.githubusercontent.com/google/fonts/main/ufl/ubuntu/Ubuntu-Italic.ttf'
     },
     'pt-sans': {
-        normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/ptsans/PTSans-Regular.ttf',
-        bold: 'https://raw.githubusercontent.com/google/fonts/main/ofl/ptsans/PTSans-Bold.ttf',
-        italic: 'https://raw.githubusercontent.com/google/fonts/main/ofl/ptsans/PTSans-Italic.ttf'
+        normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/ptsans/PT_Sans-Web-Regular.ttf',
+        bold: 'https://raw.githubusercontent.com/google/fonts/main/ofl/ptsans/PT_Sans-Web-Bold.ttf',
+        italic: 'https://raw.githubusercontent.com/google/fonts/main/ofl/ptsans/PT_Sans-Web-Italic.ttf'
     },
     'noto-sans': {
         normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/notosans/NotoSans%5Bwdth%2Cwght%5D.ttf',
@@ -105,9 +105,9 @@ const FONT_URLS: Record<string, Record<string, string>> = {
         italic: 'https://raw.githubusercontent.com/google/fonts/main/ofl/lora/Lora-Italic%5Bwght%5D.ttf'
     },
     'merriweather': {
-        normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/merriweather/Merriweather-Regular.ttf',
-        bold: 'https://raw.githubusercontent.com/google/fonts/main/ofl/merriweather/Merriweather-Bold.ttf',
-        italic: 'https://raw.githubusercontent.com/google/fonts/main/ofl/merriweather/Merriweather-Italic.ttf'
+        normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/merriweather/Merriweather%5Bopsz%2Cwdth%2Cwght%5D.ttf',
+        bold: 'https://raw.githubusercontent.com/google/fonts/main/ofl/merriweather/Merriweather%5Bopsz%2Cwdth%2Cwght%5D.ttf',
+        italic: 'https://raw.githubusercontent.com/google/fonts/main/ofl/merriweather/Merriweather-Italic%5Bopsz%2Cwdth%2Cwght%5D.ttf'
     },
     'playfair-display': {
         normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/playfairdisplay/PlayfairDisplay%5Bwght%5D.ttf',
@@ -115,14 +115,14 @@ const FONT_URLS: Record<string, Record<string, string>> = {
         italic: 'https://raw.githubusercontent.com/google/fonts/main/ofl/playfairdisplay/PlayfairDisplay-Italic%5Bwght%5D.ttf'
     },
     'pt-serif': {
-        normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/ptserif/PTSerif-Regular.ttf',
-        bold: 'https://raw.githubusercontent.com/google/fonts/main/ofl/ptserif/PTSerif-Bold.ttf',
-        italic: 'https://raw.githubusercontent.com/google/fonts/main/ofl/ptserif/PTSerif-Italic.ttf'
+        normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/ptserif/PT_Serif-Web-Regular.ttf',
+        bold: 'https://raw.githubusercontent.com/google/fonts/main/ofl/ptserif/PT_Serif-Web-Bold.ttf',
+        italic: 'https://raw.githubusercontent.com/google/fonts/main/ofl/ptserif/PT_Serif-Web-Italic.ttf'
     },
     'libre-baskerville': {
-        normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/librebaskerville/LibreBaskerville-Regular.ttf',
-        bold: 'https://raw.githubusercontent.com/google/fonts/main/ofl/librebaskerville/LibreBaskerville-Bold.ttf',
-        italic: 'https://raw.githubusercontent.com/google/fonts/main/ofl/librebaskerville/LibreBaskerville-Italic.ttf'
+        normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/librebaskerville/LibreBaskerville%5Bwght%5D.ttf',
+        bold: 'https://raw.githubusercontent.com/google/fonts/main/ofl/librebaskerville/LibreBaskerville%5Bwght%5D.ttf',
+        italic: 'https://raw.githubusercontent.com/google/fonts/main/ofl/librebaskerville/LibreBaskerville-Italic%5Bwght%5D.ttf'
     },
     'crimson-text': {
         normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/crimsontext/CrimsonText-Regular.ttf',
@@ -135,9 +135,9 @@ const FONT_URLS: Record<string, Record<string, string>> = {
         italic: 'https://raw.githubusercontent.com/google/fonts/main/ofl/ebgaramond/EBGaramond-Italic%5Bwght%5D.ttf'
     },
     'cormorant-garamond': {
-        normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/cormorantgaramond/CormorantGaramond-Regular.ttf',
-        bold: 'https://raw.githubusercontent.com/google/fonts/main/ofl/cormorantgaramond/CormorantGaramond-Bold.ttf',
-        italic: 'https://raw.githubusercontent.com/google/fonts/main/ofl/cormorantgaramond/CormorantGaramond-Italic.ttf'
+        normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/cormorantgaramond/CormorantGaramond%5Bwght%5D.ttf',
+        bold: 'https://raw.githubusercontent.com/google/fonts/main/ofl/cormorantgaramond/CormorantGaramond%5Bwght%5D.ttf',
+        italic: 'https://raw.githubusercontent.com/google/fonts/main/ofl/cormorantgaramond/CormorantGaramond-Italic%5Bwght%5D.ttf'
     },
     'noto-serif': {
         normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/notoserif/NotoSerif%5Bwdth%2Cwght%5D.ttf',
@@ -152,9 +152,9 @@ const FONT_URLS: Record<string, Record<string, string>> = {
         italic: 'https://raw.githubusercontent.com/ArtifexSoftware/urw-base35-fonts/master/fonts/NimbusMonoPS-Italic.ttf'
     },
     'roboto-mono': {
-        normal: 'https://raw.githubusercontent.com/google/fonts/main/apache/robotomono/RobotoMono%5Bwght%5D.ttf',
-        bold: 'https://raw.githubusercontent.com/google/fonts/main/apache/robotomono/RobotoMono%5Bwght%5D.ttf',
-        italic: 'https://raw.githubusercontent.com/google/fonts/main/apache/robotomono/RobotoMono-Italic%5Bwght%5D.ttf'
+        normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/robotomono/RobotoMono%5Bwght%5D.ttf',
+        bold: 'https://raw.githubusercontent.com/google/fonts/main/ofl/robotomono/RobotoMono%5Bwght%5D.ttf',
+        italic: 'https://raw.githubusercontent.com/google/fonts/main/ofl/robotomono/RobotoMono-Italic%5Bwght%5D.ttf'
     },
     'fira-code': {
         normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/firacode/FiraCode%5Bwght%5D.ttf',
@@ -196,7 +196,7 @@ const FONT_URLS: Record<string, Record<string, string>> = {
         normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/greatvibes/GreatVibes-Regular.ttf'
     },
     'satisfy': {
-        normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/satisfy/Satisfy-Regular.ttf'
+        normal: 'https://raw.githubusercontent.com/google/fonts/main/apache/satisfy/Satisfy-Regular.ttf'
     },
     'sacramento': {
         normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/sacramento/Sacramento-Regular.ttf'
@@ -216,7 +216,7 @@ const FONT_URLS: Record<string, Record<string, string>> = {
         bold: 'https://raw.githubusercontent.com/google/fonts/main/ofl/kalam/Kalam-Bold.ttf'
     },
     'shadows-into-light': {
-        normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/shadowsintolight/ShadowsIntoLight-Regular.ttf'
+        normal: 'https://raw.githubusercontent.com/google/fonts/main/ofl/shadowsintolight/ShadowsIntoLight.ttf'
     },
 
     // Display
