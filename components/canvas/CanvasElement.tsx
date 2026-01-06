@@ -563,6 +563,7 @@ export const CanvasElement: React.FC<CanvasElementProps> = (props) => {
                     color: element.textColor,
                     fontFamily: fontFamily,
                     fontSize: element.fontSize,
+                    lineHeight: 1.2, // Explicit line-height to match PDF rendering
                     fontWeight: element.fontWeight,
                     fontStyle: element.fontStyle,
                     textDecoration: element.textDecoration,

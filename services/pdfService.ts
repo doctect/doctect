@@ -564,6 +564,8 @@ const drawPattern = (doc: jsPDF, type: string, x: number, y: number, w: number, 
     // Explicitly set solid line for patterns to prevent inheriting border dash style
     doc.setLineDashPattern([], 0);
 
+    // halfW offset needed: CSS draws 1px line from 0-1px, jsPDF centers line on y.
+    // Adding halfW makes jsPDF line cover same pixels as CSS gradient.
     const halfW = lw / 2;
 
     if (type === 'lines-h') {
@@ -1222,7 +1224,16 @@ export const generatePDF = async (state: AppState) => {
             if (textContent) {
                 applyFont(doc, el);
                 const fontSize = Number(el.fontSize) || 12;
-                const lineHeight = fontSize * 1.2; // Standard line height multiplier
+
+                // Line height matching CSS lineHeight: 1.2
+                const lineHeight = fontSize * 1.2;
+
+                // Half-leading: CSS distributes extra line-height space equally above and below
+                const halfLeading = (lineHeight - fontSize) / 2;
+
+                // Baseline offset from top of line-box: halfLeading + ascent
+                // Most fonts have ascent around 80% of em-box
+                const baselineFromLineTop = halfLeading + fontSize * 0.8;
 
                 // Auto-Width Logic: Treat as left-aligned with no width limit
                 const isAutoWidth = !!el.autoWidth;
@@ -1243,15 +1254,19 @@ export const generatePDF = async (state: AppState) => {
                 const totalTextHeight = lines.length * lineHeight;
 
                 // Calculate starting Y position based on vertical alignment
+                // CSS flexbox with lineHeight: 1.2 aligns the line-box, not the visual text
                 let startY: number;
                 if (el.verticalAlign === 'top') {
-                    startY = ly + fontSize; // First line baseline from top
+                    // Top alignment: line-box top at container top
+                    startY = ly + baselineFromLineTop;
                     if (el.type === 'triangle') startY += h / 6;
                 } else if (el.verticalAlign === 'bottom') {
-                    startY = ly + h - totalTextHeight + fontSize; // Align last line to bottom
+                    // Bottom alignment: last line-box bottom at container bottom
+                    startY = ly + h - totalTextHeight + baselineFromLineTop;
                 } else {
-                    // Middle alignment
-                    startY = ly + (h - totalTextHeight) / 2 + fontSize;
+                    // Middle/center alignment: center the line-boxes
+                    const topOffset = (h - totalTextHeight) / 2;
+                    startY = ly + topOffset + baselineFromLineTop;
                     if (el.type === 'triangle') startY += h / 6;
                 }
 
