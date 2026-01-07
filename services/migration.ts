@@ -16,7 +16,7 @@ import { AppState } from '../types';
 /**
  * Current schema version. Increment this when making breaking changes.
  */
-export const CURRENT_SCHEMA_VERSION = 1;
+export const CURRENT_SCHEMA_VERSION = 2;
 
 /**
  * Migration v0 → v1
@@ -52,6 +52,26 @@ function migrateV0ToV1(state: any): any {
 }
 
 /**
+ * Migration v1 → v2
+ * 
+ * Changes:
+ * - Adds `templatePreviewNodeId` field for template preview node selection
+ *   (New feature: users can select which node's data to use when previewing templates)
+ */
+function migrateV1ToV2(state: any): any {
+    console.log('[Migration] Applying v1 → v2: Adding templatePreviewNodeId');
+
+    // Deep clone to avoid mutations
+    const migrated = JSON.parse(JSON.stringify(state));
+
+    // Initialize templatePreviewNodeId if not present (optional field, undefined is valid)
+    // No action needed since the field is optional - just bump version
+
+    migrated.schemaVersion = 2;
+    return migrated;
+}
+
+/**
  * Main migration function.
  * Takes a raw state object (possibly from an older version) and migrates it
  * to the current schema version.
@@ -82,10 +102,15 @@ export function migrateState(state: any): AppState {
         version = 1;
     }
 
+    if (version < 2) {
+        migratedState = migrateV1ToV2(migratedState);
+        version = 2;
+    }
+
     // Future migrations go here:
-    // if (version < 2) {
-    //     migratedState = migrateV1ToV2(migratedState);
-    //     version = 2;
+    // if (version < 3) {
+    //     migratedState = migrateV2ToV3(migratedState);
+    //     version = 3;
     // }
 
     console.log(`[Migration] Migration complete. Now at v${CURRENT_SCHEMA_VERSION}`);
@@ -101,3 +126,4 @@ export function needsMigration(state: any): boolean {
     const version = state.schemaVersion ?? 0;
     return version < CURRENT_SCHEMA_VERSION;
 }
+

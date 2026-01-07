@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { AppState, AppNode, TemplateElement, PageTemplate, RM_PP_WIDTH, RM_PP_HEIGHT } from '../types';
 import { Sidebar } from './Sidebar';
 import { Canvas } from './Canvas';
@@ -599,6 +599,35 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, initial
     const currentTemplateId = state.viewMode === 'hierarchy' ? state.nodes[state.selectedNodeId]?.type : state.selectedTemplateId;
     const currentTemplate = state.templates[currentTemplateId] || Object.values(state.templates)[0];
 
+    // Compute the effective node ID for preview/context
+    // In hierarchy mode: use the selected node
+    // In template mode: use templatePreviewNodeId if valid, or first matching node, or root
+    const effectivePreviewNodeId = useMemo(() => {
+        if (state.viewMode === 'hierarchy') {
+            return state.selectedNodeId;
+        }
+
+        // Template mode - find a suitable node for preview
+        const templateId = state.selectedTemplateId;
+
+        // If a preview node is explicitly set and it matches the template, use it
+        if (state.templatePreviewNodeId) {
+            const node = state.nodes[state.templatePreviewNodeId];
+            if (node && node.type === templateId) {
+                return state.templatePreviewNodeId;
+            }
+        }
+
+        // Otherwise find first node using this template
+        const matchingNode = Object.values(state.nodes).find(n => n.type === templateId);
+        if (matchingNode) {
+            return matchingNode.id;
+        }
+
+        // Fallback to root
+        return state.rootId;
+    }, [state.viewMode, state.selectedNodeId, state.selectedTemplateId, state.templatePreviewNodeId, state.nodes, state.rootId]);
+
     return (
         <div className="flex h-full w-full flex-col bg-slate-100 text-slate-900 overflow-hidden">
             {/* Editor Toolbar */}
@@ -669,7 +698,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, initial
                             scale={state.scale}
                             tool={state.tool}
                             nodes={state.nodes}
-                            currentNodeId={state.selectedNodeId}
+                            currentNodeId={effectivePreviewNodeId}
                             snapToGrid={state.snapToGrid}
                             showGrid={state.showGrid}
                             onInteractionStart={saveToHistory}

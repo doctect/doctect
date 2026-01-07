@@ -117,6 +117,9 @@ export interface AppState {
   // Clipboard
   clipboard: TemplateElement[];
 
+  // Template Preview
+  templatePreviewNodeId?: string; // Node ID to use for preview when in template view
+
   // Schema Version for migration
   schemaVersion?: number;
 }
