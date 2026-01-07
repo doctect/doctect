@@ -2,6 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { AppState } from '../types';
 import { createPlannerProject, createBlankProject, createNotebookProject, ProjectPreset, getCustomPresets } from '../services/presets';
+import { migrateState } from '../services/migration';
 import { ProjectEditor } from '../components/ProjectEditor';
 import { TabBar } from '../components/TabBar';
 import { NewProjectModal } from '../components/NewProjectModal';
@@ -22,7 +23,14 @@ export function EditorPage() {
     const [projects, setProjects] = useState<Project[]>(() => {
         try {
             const saved = localStorage.getItem('hype_projects');
-            if (saved) return JSON.parse(saved);
+            if (saved) {
+                const parsed = JSON.parse(saved);
+                // Migrate each project's state to current schema
+                return parsed.map((proj: Project) => ({
+                    ...proj,
+                    initialState: migrateState(proj.initialState)
+                }));
+            }
         } catch (e) {
             console.warn("Failed to load projects from storage", e);
         }
@@ -86,8 +94,8 @@ export function EditorPage() {
             const customs = getCustomPresets();
             const found = customs.find(p => p.id === preset);
             if (found && found.initialState) {
-                // Deep clone to avoid mutations affecting the source preset
-                newState = JSON.parse(JSON.stringify(found.initialState));
+                // Deep clone and migrate to current schema
+                newState = migrateState(JSON.parse(JSON.stringify(found.initialState)));
                 baseName = found.title;
             } else {
                 // Fallback

@@ -116,6 +116,9 @@ export interface AppState {
 
   // Clipboard
   clipboard: TemplateElement[];
+
+  // Schema Version for migration
+  schemaVersion?: number;
 }
 
 export const A4_WIDTH = 595.28;

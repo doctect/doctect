@@ -8,6 +8,7 @@ import { NodeSelectorModal } from './NodeSelectorModal';
 import { DeleteConfirmModal } from './DeleteConfirmModal';
 import { HierarchyGeneratorModal } from './HierarchyGeneratorModal';
 import { generatePDF } from '../services/pdfService';
+import { migrateState } from '../services/migration';
 import { Download, Code, Undo2, Redo2, Loader2 } from 'lucide-react';
 import { EditorToolbar } from './EditorToolbar';
 import { saveCustomPreset } from '../services/presets';
@@ -524,11 +525,21 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, initial
             const newRootId = newState.rootId;
             if (!cleanNodes[newRootId]) throw new Error(`Root node '${newRootId}' missing from generated nodes.`);
 
-            setState(s => ({
-                ...s,
+            // Build a partial state and migrate it to ensure schema compatibility
+            const stateToMigrate = {
+                ...state,
                 nodes: cleanNodes,
                 templates: cleanTemplates,
                 rootId: newRootId,
+            };
+            const migratedState = migrateState(stateToMigrate);
+
+            setState(s => ({
+                ...s,
+                nodes: migratedState.nodes,
+                templates: migratedState.templates,
+                rootId: migratedState.rootId,
+                schemaVersion: migratedState.schemaVersion,
                 selectedNodeId: newRootId,
                 selectedElementIds: []
             }));

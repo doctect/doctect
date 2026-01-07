@@ -1,5 +1,6 @@
 
 import { AppState } from "../types";
+import { migrateState, CURRENT_SCHEMA_VERSION } from "./migration";
 import { blankPresetData } from "./blank_preset";
 import { notebookPresetData } from "./notebook_preset";
 import { plannerPresetData } from "./planner_preset";
@@ -44,7 +45,19 @@ export const deleteCustomPreset = (id: string) => {
 export const getCustomPresets = (): PresetDefinition[] => {
     try {
         const stored = localStorage.getItem(STORAGE_KEY);
-        if (stored) return JSON.parse(stored);
+        if (stored) {
+            const presets = JSON.parse(stored);
+            // Migrate each custom preset's initialState to current schema
+            return presets.map((preset: PresetDefinition) => {
+                if (preset.initialState) {
+                    return {
+                        ...preset,
+                        initialState: migrateState(preset.initialState)
+                    };
+                }
+                return preset;
+            });
+        }
     } catch (e) {
         console.warn("Failed to load custom presets", e);
     }
@@ -59,7 +72,7 @@ const loadPreset = (data: any): AppState => {
         throw new Error("Preset data is missing required fields");
     }
 
-    return {
+    const baseState: AppState = {
         nodes: data.nodes,
         rootId: data.rootId,
         templates: data.templates,
@@ -77,8 +90,12 @@ const loadPreset = (data: any): AppState => {
         propertiesPanelWidth: 320,
         snapToGrid: false,
         showGrid: false,
-        clipboard: []
+        clipboard: [],
+        schemaVersion: CURRENT_SCHEMA_VERSION
     };
+
+    // Migrate to ensure all elements have required fields
+    return migrateState(baseState);
 };
 
 // --- PRESET 1: BLANK PROJECT ---
