@@ -322,14 +322,14 @@ export const CanvasElement: React.FC<CanvasElementProps> = (props) => {
     const getBackgroundStyle = (el: TemplateElement): React.CSSProperties => {
         if (el.type === 'line') return {};
         const hasFill = el.fill || (el.fillType === 'pattern');
-        const hasBorder = el.strokeWidth > 0;
-        const strokeColor = el.stroke || '#000000';
+        // Only show border if both strokeWidth > 0 AND stroke color is set
+        const hasBorder = el.strokeWidth > 0 && !!el.stroke;
 
         if (!hasFill && !hasBorder && el.type === 'text') return {};
 
         const bgStyle: React.CSSProperties = {
             backgroundColor: el.fillType === 'pattern' ? 'transparent' : (el.fill || 'transparent'),
-            border: hasBorder ? `${el.strokeWidth}px ${el.borderStyle || 'solid'} ${strokeColor}` : undefined
+            border: hasBorder ? `${el.strokeWidth}px ${el.borderStyle || 'solid'} ${el.stroke}` : undefined
         };
 
         if (hasBorder && el.borderStyle === 'double') {
@@ -337,8 +337,9 @@ export const CanvasElement: React.FC<CanvasElementProps> = (props) => {
             bgStyle.borderWidth = Math.max(3, el.strokeWidth);
         }
 
-        if (el.fillType === 'pattern') {
-            const color = el.fill || '#000000';
+        if (el.fillType === 'pattern' && el.fill) {
+            // Only draw pattern if fill color is set (matches PDF behavior)
+            const color = el.fill;
             const spacing = el.patternSpacing || 10;
             const weight = el.patternWeight || 1;
             if (el.patternType === 'lines-h') bgStyle.backgroundImage = `repeating-linear-gradient(180deg, ${color}, ${color} ${weight}px, transparent ${weight}px, transparent ${spacing}px)`;
@@ -475,9 +476,9 @@ export const CanvasElement: React.FC<CanvasElementProps> = (props) => {
             <div key={element.id} data-element-id={element.id} className="absolute group" style={style} onDoubleClick={props.onDoubleClick}>
                 <svg width="100%" height="100%" style={{ overflow: 'visible' }}>
                     {element.flip ? (
-                        <line x1="0" y1="100%" x2="100%" y2="0" stroke={element.stroke} strokeWidth={element.strokeWidth} strokeDasharray={element.borderStyle === 'dashed' ? '5,5' : element.borderStyle === 'dotted' ? '2,2' : ''} />
+                        <line x1="0" y1="100%" x2="100%" y2="0" stroke={element.stroke || 'none'} strokeWidth={element.strokeWidth} strokeDasharray={element.borderStyle === 'dashed' ? '5,5' : element.borderStyle === 'dotted' ? '2,2' : ''} />
                     ) : (
-                        <line x1="0" y1="0" x2="100%" y2="100%" stroke={element.stroke} strokeWidth={element.strokeWidth} strokeDasharray={element.borderStyle === 'dashed' ? '5,5' : element.borderStyle === 'dotted' ? '2,2' : ''} />
+                        <line x1="0" y1="0" x2="100%" y2="100%" stroke={element.stroke || 'none'} strokeWidth={element.strokeWidth} strokeDasharray={element.borderStyle === 'dashed' ? '5,5' : element.borderStyle === 'dotted' ? '2,2' : ''} />
                     )}
                 </svg>
                 {showHandles && <SelectionHandles element={element} />}
@@ -497,12 +498,12 @@ export const CanvasElement: React.FC<CanvasElementProps> = (props) => {
                     ...bgStyleNoBorder
                 }} />
 
-                {(element.strokeWidth > 0) && (
+                {(element.strokeWidth > 0 && element.stroke) && (
                     <svg className="absolute inset-0 w-full h-full pointer-events-none" style={{ overflow: 'visible' }}>
                         <polygon
                             points={`${element.w / 2},0 0,${element.h} ${element.w},${element.h}`}
                             fill="none"
-                            stroke={element.stroke || 'transparent'}
+                            stroke={element.stroke}
                             strokeWidth={element.strokeWidth}
                             strokeLinejoin="round"
                             strokeDasharray={element.borderStyle === 'dashed' ? '5,5' : element.borderStyle === 'dotted' ? '2,2' : ''}

@@ -492,8 +492,30 @@ export const SingleElementEditor: React.FC<SingleElementEditorProps> = ({ elemen
                 {/* Fill */}
                 <div className="flex items-center gap-2">
                     <div className="w-16 text-xs text-slate-600">Fill</div>
-                    <div className="flex-1 flex gap-1">
-                        <input type="color" className="w-6 h-6 p-0 border-0 rounded overflow-hidden" value={element.fill || '#ffffff'} onChange={e => onUpdate({ fill: e.target.value })} />
+                    <div className="flex-1 flex gap-1 items-center">
+                        <div className="relative w-6 h-6">
+                            <input
+                                type="color"
+                                className="w-6 h-6 p-0 border-0 rounded overflow-hidden cursor-pointer"
+                                value={element.fill || '#ffffff'}
+                                onClick={() => { if (!element.fill) onUpdate({ fill: '#ffffff' }); }}
+                                onInput={e => onUpdate({ fill: (e.target as HTMLInputElement).value })}
+                            />
+                            {!element.fill && (
+                                <div className="absolute inset-0 pointer-events-none flex items-center justify-center bg-white bg-opacity-50 rounded">
+                                    <div className="w-4 h-0.5 bg-red-500 rotate-45" />
+                                </div>
+                            )}
+                        </div>
+                        {element.fill && (
+                            <button
+                                onClick={() => onUpdate({ fill: '' })}
+                                className="text-[9px] text-slate-400 hover:text-red-500 px-1"
+                                title="Clear fill color"
+                            >
+                                ✕
+                            </button>
+                        )}
                         <select
                             className="flex-1 text-xs border rounded bg-white"
                             value={element.fillType || 'solid'}
@@ -534,8 +556,30 @@ export const SingleElementEditor: React.FC<SingleElementEditorProps> = ({ elemen
                 {/* Stroke */}
                 <div className="flex items-center gap-2">
                     <div className="w-16 text-xs text-slate-600">Stroke</div>
-                    <div className="flex-1 flex gap-1">
-                        <input type="color" className="w-6 h-6 p-0 border-0 rounded overflow-hidden" value={element.stroke || '#000000'} onChange={e => onUpdate({ stroke: e.target.value })} />
+                    <div className="flex-1 flex gap-1 items-center">
+                        <div className="relative w-6 h-6">
+                            <input
+                                type="color"
+                                className="w-6 h-6 p-0 border-0 rounded overflow-hidden cursor-pointer"
+                                value={element.stroke || '#000000'}
+                                onClick={() => { if (!element.stroke) onUpdate({ stroke: '#000000' }); }}
+                                onInput={e => onUpdate({ stroke: (e.target as HTMLInputElement).value })}
+                            />
+                            {!element.stroke && (
+                                <div className="absolute inset-0 pointer-events-none flex items-center justify-center bg-white bg-opacity-50 rounded">
+                                    <div className="w-4 h-0.5 bg-red-500 rotate-45" />
+                                </div>
+                            )}
+                        </div>
+                        {element.stroke && (
+                            <button
+                                onClick={() => onUpdate({ stroke: '' })}
+                                className="text-[9px] text-slate-400 hover:text-red-500 px-1"
+                                title="Clear stroke color"
+                            >
+                                ✕
+                            </button>
+                        )}
                         <input type="number" min="0" className="w-12 border rounded px-1 text-xs" placeholder="W" value={element.strokeWidth}
                             onChange={e => {
                                 const val = Number(e.target.value);
