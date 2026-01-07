@@ -203,6 +203,7 @@ export const OverlayTextEditor: React.FC<OverlayTextEditorProps> = ({ element, o
                 // Match Font Styles
                 fontFamily: fontFamily,
                 fontSize: element.fontSize,
+                lineHeight: 1.2, // Match CanvasElement line-height
                 fontWeight: element.fontWeight,
                 fontStyle: element.fontStyle,
                 textDecoration: element.textDecoration,

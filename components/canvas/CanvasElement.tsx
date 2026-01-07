@@ -558,7 +558,12 @@ export const CanvasElement: React.FC<CanvasElementProps> = (props) => {
             )}
 
             {(element.text || element.dataBinding) && (
-                <div className="absolute inset-0 flex" style={{
+                <div className="absolute flex" style={{
+                    // Position at element origin with full height for vertical alignment
+                    top: 0, left: 0,
+                    height: '100%', // Required for vertical alignment to work
+                    minWidth: '100%', // At least cover element width, but can grow for overflow
+                    overflow: 'visible', // Allow text to visually overflow
                     justifyContent: element.align === 'center' ? 'center' : element.align === 'right' ? 'flex-end' : 'flex-start',
                     alignItems: element.verticalAlign === 'top' ? 'flex-start' : element.verticalAlign === 'bottom' ? 'flex-end' : 'center',
                     color: element.textColor,
@@ -571,7 +576,7 @@ export const CanvasElement: React.FC<CanvasElementProps> = (props) => {
                     textDecorationColor: element.textColor,
                     textAlign: element.align || 'left',
                     whiteSpace: element.autoWidth ? 'pre' : 'pre-wrap',
-                    pointerEvents: 'none',
+                    pointerEvents: 'auto',
                     zIndex: 2,
                     opacity: isEditing ? 0 : 1
                 }}>
