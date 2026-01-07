@@ -507,15 +507,13 @@ export const SingleElementEditor: React.FC<SingleElementEditorProps> = ({ elemen
                                 </div>
                             )}
                         </div>
-                        {element.fill && (
-                            <button
-                                onClick={() => onUpdate({ fill: '' })}
-                                className="text-[9px] text-slate-400 hover:text-red-500 px-1"
-                                title="Clear fill color"
-                            >
-                                ✕
-                            </button>
-                        )}
+                        <button
+                            onClick={() => element.fill && onUpdate({ fill: '' })}
+                            className={`text-xs px-1 font-bold ${element.fill ? 'text-red-500 hover:text-red-700 cursor-pointer' : 'text-gray-300 cursor-default'}`}
+                            title={element.fill ? 'Clear fill color' : 'No fill to clear'}
+                        >
+                            ✕
+                        </button>
                         <select
                             className="flex-1 text-xs border rounded bg-white"
                             value={element.fillType || 'solid'}
@@ -571,15 +569,13 @@ export const SingleElementEditor: React.FC<SingleElementEditorProps> = ({ elemen
                                 </div>
                             )}
                         </div>
-                        {element.stroke && (
-                            <button
-                                onClick={() => onUpdate({ stroke: '' })}
-                                className="text-[9px] text-slate-400 hover:text-red-500 px-1"
-                                title="Clear stroke color"
-                            >
-                                ✕
-                            </button>
-                        )}
+                        <button
+                            onClick={() => element.stroke && onUpdate({ stroke: '' })}
+                            className={`text-xs px-1 font-bold ${element.stroke ? 'text-red-500 hover:text-red-700 cursor-pointer' : 'text-gray-300 cursor-default'}`}
+                            title={element.stroke ? 'Clear stroke color' : 'No stroke to clear'}
+                        >
+                            ✕
+                        </button>
                         <input type="number" min="0" className="w-12 border rounded px-1 text-xs" placeholder="W" value={element.strokeWidth}
                             onChange={e => {
                                 const val = Number(e.target.value);
