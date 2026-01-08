@@ -1,9 +1,9 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { AppState, RM_PP_WIDTH, RM_PP_HEIGHT, A4_WIDTH, A4_HEIGHT } from '../types';
-import { X, Play, AlertTriangle, CheckCircle2, RotateCcw, LayoutTemplate, Network } from 'lucide-react';
+import { X, Play, AlertTriangle, CheckCircle2, RotateCcw, LayoutTemplate, Network, Sparkles, Minus, Plus, WrapText } from 'lucide-react';
 import { HighlightedCode } from './HighlightedCode';
-import clsx from 'clsx';
+import { GENERATOR_PRESETS } from './generatorPresets';
 
 interface HierarchyGeneratorModalProps {
   isOpen: boolean;
@@ -11,56 +11,63 @@ interface HierarchyGeneratorModalProps {
   onImport: (newState: Partial<AppState>) => void;
 }
 
-const SimpleEditor: React.FC<{ value: string, onChange: (v: string) => void }> = ({ value, onChange }) => {
-    const textareaRef = useRef<HTMLTextAreaElement>(null);
-    const preRef = useRef<HTMLPreElement>(null);
+interface SimpleEditorProps {
+  value: string;
+  onChange: (v: string) => void;
+  fontSize?: number;
+  wordWrap?: boolean;
+}
 
-    const handleScroll = () => {
-        if (textareaRef.current && preRef.current) {
-            preRef.current.scrollTop = textareaRef.current.scrollTop;
-            preRef.current.scrollLeft = textareaRef.current.scrollLeft;
-        }
-    };
+const SimpleEditor: React.FC<SimpleEditorProps> = ({ value, onChange, fontSize = 12, wordWrap = true }) => {
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const preRef = useRef<HTMLPreElement>(null);
 
-    // Shared styles to ensure pixel-perfect alignment between textarea and pre
-    const sharedStyle: React.CSSProperties = {
-        fontFamily: 'Menlo, Monaco, Consolas, "Courier New", monospace',
-        fontSize: '14px',
-        lineHeight: '1.5',
-        padding: '1rem',
-        whiteSpace: 'pre-wrap',
-        wordBreak: 'break-all',
-        overflowWrap: 'break-word',
-        tabSize: 2,
-    };
+  const handleScroll = () => {
+    if (textareaRef.current && preRef.current) {
+      preRef.current.scrollTop = textareaRef.current.scrollTop;
+      preRef.current.scrollLeft = textareaRef.current.scrollLeft;
+    }
+  };
 
-    return (
-        <div className="relative w-full h-full bg-[#1e1e1e] overflow-hidden rounded-b-lg group">
-             {/* Highlight Layer */}
-             <pre 
-                ref={preRef}
-                className="absolute inset-0 m-0 overflow-hidden pointer-events-none"
-                style={sharedStyle}
-                aria-hidden="true"
-             >
-                <HighlightedCode code={value || ''} />
-             </pre>
-             
-             {/* Input Layer */}
-             <textarea 
-                ref={textareaRef}
-                className="absolute inset-0 w-full h-full bg-transparent text-transparent caret-white resize-none border-none outline-none"
-                style={sharedStyle}
-                value={value || ''}
-                onChange={e => onChange(e.target.value)}
-                onScroll={handleScroll}
-                spellCheck={false}
-                autoCapitalize="off"
-                autoComplete="off"
-                autoCorrect="off"
-             />
-        </div>
-    );
+  // Shared styles to ensure pixel-perfect alignment between textarea and pre
+  const sharedStyle: React.CSSProperties = {
+    fontFamily: 'Menlo, Monaco, Consolas, "Courier New", monospace',
+    fontSize: `${fontSize}px`,
+    lineHeight: '1.5',
+    padding: '1rem',
+    whiteSpace: wordWrap ? 'pre-wrap' : 'pre',
+    wordBreak: wordWrap ? 'break-all' : 'normal',
+    overflowWrap: wordWrap ? 'break-word' : 'normal',
+    tabSize: 2,
+  };
+
+  return (
+    <div className="relative w-full h-full bg-[#1e1e1e] overflow-hidden rounded-b-lg group">
+      {/* Highlight Layer */}
+      <pre
+        ref={preRef}
+        className="absolute inset-0 m-0 overflow-auto pointer-events-none"
+        style={sharedStyle}
+        aria-hidden="true"
+      >
+        <HighlightedCode code={value || ''} />
+      </pre>
+
+      {/* Input Layer */}
+      <textarea
+        ref={textareaRef}
+        className="absolute inset-0 w-full h-full bg-transparent text-transparent caret-white resize-none border-none outline-none overflow-auto"
+        style={sharedStyle}
+        value={value || ''}
+        onChange={e => onChange(e.target.value)}
+        onScroll={handleScroll}
+        spellCheck={false}
+        autoCapitalize="off"
+        autoComplete="off"
+        autoCorrect="off"
+      />
+    </div>
+  );
 };
 
 const DEFAULT_HIERARCHY_SCRIPT = `// 2. BUILD HIERARCHY FOR 2026 PLANNER
@@ -333,10 +340,12 @@ for(let i=1; i<=100; i++) {
 return { nodes, rootId };`;
 
 const DEFAULT_TEMPLATES_SCRIPT = `// 1. DEFINE TEMPLATES
-// Use 't' object to store templates.
 // Constants available: RM_PP_WIDTH, RM_PP_HEIGHT, A4_WIDTH, A4_HEIGHT
+//
+// TIP: You can leave 'elements' as an empty array [] if you want to design
+// the template visually in the editor later. Just define the template structure here.
 
-const t = {
+const templates = {
     "year": {
       "id": "year",
       "name": "Year View",
@@ -1362,14 +1371,36 @@ const t = {
       ]
     }
   }
-  return t;`;
+  return templates;`;
 
 export const HierarchyGeneratorModal: React.FC<HierarchyGeneratorModalProps> = ({ isOpen, onClose, onImport }) => {
-  const [activeTab, setActiveTab] = useState<'templates' | 'hierarchy'>('templates');
-  const [templateScript, setTemplateScript] = useState(DEFAULT_TEMPLATES_SCRIPT);
-  const [hierarchyScript, setHierarchyScript] = useState(DEFAULT_HIERARCHY_SCRIPT);
+  // Default to 'simple' preset for better onboarding
+  const simplePreset = GENERATOR_PRESETS.find(p => p.id === 'simple')!;
+
+  const [templateScript, setTemplateScript] = useState(simplePreset.templateScript);
+  const [hierarchyScript, setHierarchyScript] = useState(simplePreset.hierarchyScript);
+  const [selectedPreset, setSelectedPreset] = useState<string>('simple');
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<boolean>(false);
+  const [fontSize, setFontSize] = useState<number>(12);
+  const [wordWrap, setWordWrap] = useState<boolean>(true);
+
+  const loadPreset = (presetId: string) => {
+    const preset = GENERATOR_PRESETS.find(p => p.id === presetId);
+    if (!preset) return;
+
+    setSelectedPreset(presetId);
+
+    // For 'complex', use the built-in default scripts
+    if (presetId === 'complex') {
+      setTemplateScript(DEFAULT_TEMPLATES_SCRIPT);
+      setHierarchyScript(DEFAULT_HIERARCHY_SCRIPT);
+    } else {
+      setTemplateScript(preset.templateScript);
+      setHierarchyScript(preset.hierarchyScript);
+    }
+    setError(null);
+  };
 
   if (!isOpen) return null;
 
@@ -1377,146 +1408,196 @@ export const HierarchyGeneratorModal: React.FC<HierarchyGeneratorModalProps> = (
     setError(null);
     setSuccess(false);
     try {
-        // 1. Execute Templates Script
-        const SCOPE_CONSTANTS = {
-            RM_PP_WIDTH, RM_PP_HEIGHT, A4_WIDTH, A4_HEIGHT
-        };
-        
-        const templateFn = new Function('consts', `
+      // 1. Execute Templates Script
+      const SCOPE_CONSTANTS = {
+        RM_PP_WIDTH, RM_PP_HEIGHT, A4_WIDTH, A4_HEIGHT
+      };
+
+      const templateFn = new Function('consts', `
             with (consts) {
                 ${templateScript}
             }
         `);
-        
-        const templates = templateFn(SCOPE_CONSTANTS);
-        
-        if (!templates || typeof templates !== 'object') {
-            throw new Error("Template script must return an object where keys are template IDs.");
-        }
 
-        // Auto-generate IDs for elements if missing to prevent selection issues
-        Object.values(templates).forEach((tpl: any) => {
-            if (tpl.elements && Array.isArray(tpl.elements)) {
-                tpl.elements.forEach((el: any, idx: number) => {
-                    if (!el.id) {
-                        el.id = `gen_${tpl.id}_${idx}_${Math.random().toString(36).substr(2, 5)}`;
-                    }
-                });
+      const templates = templateFn(SCOPE_CONSTANTS);
+
+      if (!templates || typeof templates !== 'object') {
+        throw new Error("Template script must return an object where keys are template IDs.");
+      }
+
+      // Auto-generate IDs for elements if missing to prevent selection issues
+      Object.values(templates).forEach((tpl: any) => {
+        if (tpl.elements && Array.isArray(tpl.elements)) {
+          tpl.elements.forEach((el: any, idx: number) => {
+            if (!el.id) {
+              el.id = `gen_${tpl.id}_${idx}_${Math.random().toString(36).substr(2, 5)}`;
             }
-        });
+          });
+        }
+      });
 
-        // 2. Execute Hierarchy Script
-        const createId = (prefix: string = 'node') => `${prefix}_${Math.random().toString(36).substr(2, 9)}`;
-        
-        const hierarchyFn = new Function('templates', 'createId', `
+      // 2. Execute Hierarchy Script
+      const createId = (prefix: string = 'node') => `${prefix}_${Math.random().toString(36).substr(2, 9)}`;
+
+      const hierarchyFn = new Function('templates', 'createId', `
             ${hierarchyScript}
         `);
 
-        const result = hierarchyFn(templates, createId);
+      const result = hierarchyFn(templates, createId);
 
-        if (!result || !result.nodes || !result.rootId) {
-            throw new Error("Hierarchy script must return an object with { nodes, rootId }.");
-        }
+      if (!result || !result.nodes || !result.rootId) {
+        throw new Error("Hierarchy script must return an object with { nodes, rootId }.");
+      }
 
-        // 3. Validation
-        if (!result.nodes[result.rootId]) {
-            throw new Error(`Root ID '${result.rootId}' not found in nodes.`);
-        }
+      // 3. Validation
+      if (!result.nodes[result.rootId]) {
+        throw new Error(`Root ID '${result.rootId}' not found in nodes.`);
+      }
 
-        // 4. Import
-        onImport({
-            nodes: result.nodes,
-            rootId: result.rootId,
-            templates: templates
-        });
-        setSuccess(true);
-        setTimeout(() => {
-            setSuccess(false);
-            onClose();
-        }, 1500);
+      // 4. Import
+      onImport({
+        nodes: result.nodes,
+        rootId: result.rootId,
+        templates: templates
+      });
+      setSuccess(true);
+      setTimeout(() => {
+        setSuccess(false);
+        onClose();
+      }, 1500);
 
     } catch (e: any) {
-        console.error("Generator Error:", e);
-        setError(e.message || "Unknown error occurred during generation.");
+      console.error("Generator Error:", e);
+      setError(e.message || "Unknown error occurred during generation.");
     }
   };
 
   return (
     <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center backdrop-blur-sm p-4">
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-6xl h-[90vh] flex flex-col overflow-hidden animate-in fade-in zoom-in duration-200">
-         {/* Header */}
-         <div className="flex justify-between items-center p-4 border-b bg-slate-50">
-            <div className="flex items-center gap-3">
-                <div className="p-2 bg-purple-100 text-purple-600 rounded-lg">
-                    <Network size={20} />
-                </div>
-                <div>
-                    <h2 className="text-xl font-bold text-slate-800">Hierarchy Generator</h2>
-                    <p className="text-xs text-slate-500">Programmatically generate nodes and templates using JavaScript.</p>
-                </div>
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-[95vw] h-[90vh] flex flex-col overflow-hidden animate-in fade-in zoom-in duration-200">
+        {/* Header */}
+        <div className="flex justify-between items-center p-4 border-b bg-slate-50">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-purple-100 text-purple-600 rounded-lg">
+              <Network size={20} />
             </div>
-            <div className="flex gap-2">
-                <button onClick={onClose} className="p-2 hover:bg-slate-200 rounded-full text-slate-500 transition-colors">
-                    <X className="w-5 h-5" />
-                </button>
+            <div>
+              <h2 className="text-xl font-bold text-slate-800">Hierarchy Generator</h2>
+              <p className="text-xs text-slate-500">Programmatically generate nodes and templates using JavaScript.</p>
             </div>
-         </div>
+          </div>
 
-         {/* Toolbar */}
-         <div className="flex items-center justify-between px-4 py-2 border-b bg-white">
-            <div className="flex gap-2">
-                <button 
-                    onClick={() => setActiveTab('templates')}
-                    className={clsx(
-                        "flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-all",
-                        activeTab === 'templates' ? "bg-indigo-50 text-indigo-700 ring-1 ring-indigo-200" : "text-slate-600 hover:bg-slate-50"
-                    )}
-                >
-                    <LayoutTemplate size={16} /> 1. Define Templates
-                </button>
-                <div className="text-slate-300 self-center">→</div>
-                <button 
-                    onClick={() => setActiveTab('hierarchy')}
-                    className={clsx(
-                        "flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-all",
-                        activeTab === 'hierarchy' ? "bg-purple-50 text-purple-700 ring-1 ring-purple-200" : "text-slate-600 hover:bg-slate-50"
-                    )}
-                >
-                    <Network size={16} /> 2. Build Hierarchy
-                </button>
+          {/* Preset Selector */}
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 bg-white border border-slate-200 rounded-lg px-3 py-2 shadow-sm">
+              <Sparkles size={16} className="text-amber-500" />
+              <span className="text-xs text-slate-500 font-medium">Preset:</span>
+              <select
+                value={selectedPreset}
+                onChange={(e) => loadPreset(e.target.value)}
+                className="text-sm font-medium text-slate-700 bg-transparent border-none focus:outline-none cursor-pointer"
+              >
+                {GENERATOR_PRESETS.map(preset => (
+                  <option key={preset.id} value={preset.id}>
+                    {preset.name} - {preset.description}
+                  </option>
+                ))}
+              </select>
             </div>
-            
-            <div className="flex items-center gap-3">
-                {error && <span className="text-red-600 text-xs flex items-center gap-1 font-medium"><AlertTriangle size={14} /> {error}</span>}
-                {success && <span className="text-green-600 text-xs flex items-center gap-1 font-medium"><CheckCircle2 size={14} /> Generated Successfully!</span>}
-                
-                <button onClick={() => {
-                    if(confirm("Reset scripts to default?")) {
-                        setTemplateScript(DEFAULT_TEMPLATES_SCRIPT);
-                        setHierarchyScript(DEFAULT_HIERARCHY_SCRIPT);
-                    }
-                }} className="text-xs text-slate-400 hover:text-slate-600 flex items-center gap-1 px-2">
-                    <RotateCcw size={12} /> Reset
-                </button>
-                
-                <button 
-                    onClick={runGenerator}
-                    className="flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-bold shadow-sm transition-all hover:shadow hover:-translate-y-0.5"
-                >
-                    <Play size={16} fill="currentColor" /> Run Generator
-                </button>
-            </div>
-         </div>
 
-         {/* Editor Area */}
-         <div className="flex-1 flex overflow-hidden relative bg-[#1e1e1e]">
-            {activeTab === 'templates' && (
-                <SimpleEditor value={templateScript} onChange={setTemplateScript} />
-            )}
-            {activeTab === 'hierarchy' && (
-                <SimpleEditor value={hierarchyScript} onChange={setHierarchyScript} />
-            )}
-         </div>
+            <button onClick={onClose} className="p-2 hover:bg-slate-200 rounded-full text-slate-500 transition-colors">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+        </div>
+
+        {/* Toolbar */}
+        <div className="flex items-center justify-between px-4 py-2 border-b bg-white">
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2 text-sm text-slate-600">
+              <LayoutTemplate size={16} className="text-indigo-500" />
+              <span className="font-medium">Templates</span>
+              <span className="text-slate-300 mx-1">+</span>
+              <Network size={16} className="text-purple-500" />
+              <span className="font-medium">Hierarchy</span>
+            </div>
+
+            {/* Font Size Controls */}
+            <div className="flex items-center gap-1 border-l border-slate-200 pl-4">
+              <span className="text-xs text-slate-400 mr-1">Font:</span>
+              <button
+                onClick={() => setFontSize(Math.max(8, fontSize - 1))}
+                className="p-1 hover:bg-slate-100 rounded text-slate-500"
+                title="Decrease font size"
+              >
+                <Minus size={14} />
+              </button>
+              <span className="text-xs text-slate-600 w-6 text-center">{fontSize}</span>
+              <button
+                onClick={() => setFontSize(Math.min(20, fontSize + 1))}
+                className="p-1 hover:bg-slate-100 rounded text-slate-500"
+                title="Increase font size"
+              >
+                <Plus size={14} />
+              </button>
+            </div>
+
+            {/* Word Wrap Toggle */}
+            <button
+              onClick={() => setWordWrap(!wordWrap)}
+              className={`flex items-center gap-1 px-2 py-1 rounded text-xs ${wordWrap ? 'bg-indigo-50 text-indigo-600' : 'bg-slate-100 text-slate-500'}`}
+              title="Toggle word wrap"
+            >
+              <WrapText size={14} />
+              <span>Wrap</span>
+            </button>
+          </div>
+
+          <div className="flex items-center gap-3">
+            {error && <span className="text-red-600 text-xs flex items-center gap-1 font-medium"><AlertTriangle size={14} /> {error}</span>}
+            {success && <span className="text-green-600 text-xs flex items-center gap-1 font-medium"><CheckCircle2 size={14} /> Generated Successfully!</span>}
+
+            <button onClick={() => {
+              if (confirm("Reset scripts to current preset?")) {
+                loadPreset(selectedPreset);
+              }
+            }} className="text-xs text-slate-400 hover:text-slate-600 flex items-center gap-1 px-2">
+              <RotateCcw size={12} /> Reset
+            </button>
+
+            <button
+              onClick={runGenerator}
+              className="flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-bold shadow-sm transition-all hover:shadow hover:-translate-y-0.5"
+            >
+              <Play size={16} fill="currentColor" /> Run Generator
+            </button>
+          </div>
+        </div>
+
+        {/* Side-by-Side Editor Area */}
+        <div className="flex-1 flex overflow-hidden relative">
+          {/* Templates Editor */}
+          <div className="flex-1 flex flex-col border-r-4 border-slate-500">
+            <div className="px-3 py-1.5 bg-[#252526] border-b border-slate-700 flex items-center gap-2">
+              <LayoutTemplate size={14} className="text-indigo-400" />
+              <span className="text-xs font-medium text-slate-300">1. Define Templates</span>
+            </div>
+            <div className="flex-1 bg-[#1e1e1e]">
+              <SimpleEditor value={templateScript} onChange={setTemplateScript} fontSize={fontSize} wordWrap={wordWrap} />
+            </div>
+          </div>
+
+          {/* Hierarchy Editor */}
+          <div className="flex-1 flex flex-col">
+            <div className="px-3 py-1.5 bg-[#252526] border-b border-slate-700 flex items-center gap-2">
+              <Network size={14} className="text-purple-400" />
+              <span className="text-xs font-medium text-slate-300">2. Build Hierarchy</span>
+            </div>
+            <div className="flex-1 bg-[#1e1e1e]">
+              <SimpleEditor value={hierarchyScript} onChange={setHierarchyScript} fontSize={fontSize} wordWrap={wordWrap} />
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );
