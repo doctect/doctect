@@ -1,7 +1,7 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { AppState, RM_PP_WIDTH, RM_PP_HEIGHT, A4_WIDTH, A4_HEIGHT } from '../types';
-import { X, Play, AlertTriangle, CheckCircle2, RotateCcw, LayoutTemplate, Network, Sparkles, Minus, Plus, WrapText } from 'lucide-react';
+import { X, Play, AlertTriangle, CheckCircle2, RotateCcw, LayoutTemplate, Network, Sparkles, Minus, Plus, WrapText, HelpCircle } from 'lucide-react';
 import { HighlightedCode } from './HighlightedCode';
 import { GENERATOR_PRESETS } from './generatorPresets';
 
@@ -66,6 +66,108 @@ const SimpleEditor: React.FC<SimpleEditorProps> = ({ value, onChange, fontSize =
         autoComplete="off"
         autoCorrect="off"
       />
+    </div>
+  );
+};
+
+// Tooltip component for helpful info
+interface InfoTooltipProps {
+  content: React.ReactNode;
+  position?: 'above' | 'below' | 'left';
+  title?: string;
+  pinnedPosition?: { bottom?: number; right?: number; left?: number; top?: number };
+  defaultPinned?: boolean;
+}
+
+const InfoTooltip: React.FC<InfoTooltipProps> = ({ content, position = 'above', title, pinnedPosition, defaultPinned = false }) => {
+  const [isHovered, setIsHovered] = useState(false);
+  const [isPinned, setIsPinned] = useState(!!pinnedPosition && defaultPinned);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const [tooltipStyle, setTooltipStyle] = useState<React.CSSProperties>({});
+
+  const isVisible = isHovered || isPinned;
+
+  useEffect(() => {
+    if (isVisible && buttonRef.current) {
+      const rect = buttonRef.current.getBoundingClientRect();
+      const tooltipWidth = 280;
+
+      let style: React.CSSProperties = {
+        position: 'fixed',
+        zIndex: 9999,
+        width: tooltipWidth,
+      };
+
+      if (isPinned && pinnedPosition) {
+        // Use context-specific pinned position
+        if (pinnedPosition.bottom !== undefined) style.bottom = pinnedPosition.bottom;
+        if (pinnedPosition.right !== undefined) style.right = pinnedPosition.right;
+        if (pinnedPosition.left !== undefined) style.left = pinnedPosition.left;
+        if (pinnedPosition.top !== undefined) style.top = pinnedPosition.top;
+      } else if (position === 'above') {
+        style.left = Math.max(8, Math.min(window.innerWidth - tooltipWidth - 8, rect.left + rect.width / 2 - tooltipWidth / 2));
+        style.bottom = window.innerHeight - rect.top + 8;
+      } else if (position === 'below') {
+        style.left = Math.max(8, Math.min(window.innerWidth - tooltipWidth - 8, rect.left + rect.width / 2 - tooltipWidth / 2));
+        style.top = rect.bottom + 8;
+      } else if (position === 'left') {
+        style.right = window.innerWidth - rect.left + 8;
+        style.top = rect.top;
+      }
+
+      setTooltipStyle(style);
+    }
+  }, [isVisible, isPinned, position, pinnedPosition]);
+
+  const canPin = !!pinnedPosition;
+
+  const handleClick = () => {
+    if (canPin) {
+      setIsPinned(!isPinned);
+    }
+  };
+
+  const handleClose = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setIsPinned(false);
+  };
+
+  return (
+    <div className="relative inline-flex items-center">
+      <button
+        ref={buttonRef}
+        onMouseEnter={() => setIsHovered(true)}
+        onMouseLeave={() => setIsHovered(false)}
+        onClick={handleClick}
+        className={`p-0.5 transition-colors ${isPinned ? 'text-amber-400' : 'text-slate-400 hover:text-slate-200'}`}
+        title={canPin ? "Click to pin this help" : undefined}
+      >
+        <HelpCircle size={14} />
+      </button>
+      {isVisible && (
+        <div
+          style={tooltipStyle}
+          className={`p-3 bg-slate-800 text-white text-xs rounded-lg shadow-xl border ${isPinned ? 'border-amber-500' : 'border-slate-600'}`}
+        >
+          {isPinned && (
+            <div className="flex justify-between items-center mb-2 pb-2 border-b border-slate-600">
+              <span className="font-semibold text-amber-400">{title || 'Quick Reference'}</span>
+              <button
+                onClick={handleClose}
+                className="text-slate-400 hover:text-white"
+              >
+                <X size={14} />
+              </button>
+            </div>
+          )}
+          {content}
+          {!isPinned && canPin && (
+            <div className="mt-2 pt-2 border-t border-slate-600 text-slate-400 text-[10px]">
+              Click to pin this help panel
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 };
@@ -1503,6 +1605,17 @@ export const HierarchyGeneratorModal: React.FC<HierarchyGeneratorModalProps> = (
                   </option>
                 ))}
               </select>
+              <InfoTooltip position="left" title="Presets" content={
+                <div className="space-y-2">
+                  <p className="font-semibold">Choose a starting template</p>
+                  <ul className="space-y-1">
+                    <li><strong>Blank</strong> - Empty project to start fresh</li>
+                    <li><strong>Simple</strong> - Basic book with chapters</li>
+                    <li><strong>Notebook</strong> - Sections with pages</li>
+                    <li><strong>2026 Planner</strong> - Full year planner</li>
+                  </ul>
+                </div>
+              } />
             </div>
 
             <button onClick={onClose} className="p-2 hover:bg-slate-200 rounded-full text-slate-500 transition-colors">
@@ -1581,6 +1694,19 @@ export const HierarchyGeneratorModal: React.FC<HierarchyGeneratorModalProps> = (
             <div className="px-3 py-1.5 bg-[#252526] border-b border-slate-700 flex items-center gap-2">
               <LayoutTemplate size={14} className="text-indigo-400" />
               <span className="text-xs font-medium text-slate-300">1. Define Templates</span>
+              <InfoTooltip position="below" title="Template Structure" pinnedPosition={{ bottom: 80, left: 40 }} defaultPinned={true} content={
+                <div className="space-y-2">
+                  <p className="font-semibold">Templates define page layouts</p>
+                  <p>Each template has:</p>
+                  <ul className="list-disc list-inside space-y-1 ml-1">
+                    <li><strong>id</strong> - unique identifier</li>
+                    <li><strong>name</strong> - display name</li>
+                    <li><strong>width/height</strong> - page dimensions</li>
+                    <li><strong>elements</strong> - shapes, text, grids (can be <code className="bg-slate-700 px-1 rounded">[]</code> for manual design)</li>
+                  </ul>
+                  <p className="text-slate-400 pt-1">Use <code className="bg-slate-700 px-1 rounded">RM_PP_WIDTH</code> and <code className="bg-slate-700 px-1 rounded">RM_PP_HEIGHT</code> for reMarkable dimensions.</p>
+                </div>
+              } />
             </div>
             <div className="flex-1 bg-[#1e1e1e]">
               <SimpleEditor value={templateScript} onChange={setTemplateScript} fontSize={fontSize} wordWrap={wordWrap} />
@@ -1592,6 +1718,20 @@ export const HierarchyGeneratorModal: React.FC<HierarchyGeneratorModalProps> = (
             <div className="px-3 py-1.5 bg-[#252526] border-b border-slate-700 flex items-center gap-2">
               <Network size={14} className="text-purple-400" />
               <span className="text-xs font-medium text-slate-300">2. Build Hierarchy</span>
+              <InfoTooltip position="below" title="Node Structure" pinnedPosition={{ bottom: 80, right: 40 }} defaultPinned={true} content={
+                <div className="space-y-2">
+                  <p className="font-semibold">Nodes are your pages/content</p>
+                  <p>Each node has:</p>
+                  <ul className="list-disc list-inside space-y-1 ml-1">
+                    <li><strong>id</strong> - unique ID (use <code className="bg-slate-700 px-1 rounded">createId()</code>)</li>
+                    <li><strong>parentId</strong> - parent node ID (null for root)</li>
+                    <li><strong>type</strong> - must match a template id</li>
+                    <li><strong>title</strong> - page title</li>
+                    <li><strong>data</strong> - page-specific values (e.g., date, month, numbers) that appear in template text using {"{{field_name}}"}</li>
+                    <li><strong>children</strong> - array of child node IDs</li>
+                  </ul>
+                </div>
+              } />
             </div>
             <div className="flex-1 bg-[#1e1e1e]">
               <SimpleEditor value={hierarchyScript} onChange={setHierarchyScript} fontSize={fontSize} wordWrap={wordWrap} />
