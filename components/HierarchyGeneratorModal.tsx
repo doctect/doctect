@@ -1,9 +1,10 @@
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { AppState, RM_PP_WIDTH, RM_PP_HEIGHT, A4_WIDTH, A4_HEIGHT } from '../types';
-import { X, Play, AlertTriangle, CheckCircle2, RotateCcw, LayoutTemplate, Network, Sparkles, Minus, Plus, WrapText, HelpCircle } from 'lucide-react';
+import { X, Play, AlertTriangle, CheckCircle2, RotateCcw, LayoutTemplate, Network, Sparkles, Minus, Plus, WrapText, HelpCircle, Book, ChevronDown, ChevronUp, Copy, Check } from 'lucide-react';
 import { HighlightedCode } from './HighlightedCode';
 import { GENERATOR_PRESETS } from './generatorPresets';
+import { FONTS } from '../constants/editor';
 
 interface HierarchyGeneratorModalProps {
   isOpen: boolean;
@@ -169,6 +170,313 @@ const InfoTooltip: React.FC<InfoTooltipProps> = ({ content, position = 'above', 
         </div>
       )}
     </div>
+  );
+};
+
+// Copy button component
+const CopyButton: React.FC<{ text: string }> = ({ text }) => {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = async () => {
+    await navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <button
+      onClick={handleCopy}
+      className="flex items-center gap-1 px-2 py-1 text-xs bg-slate-700 hover:bg-slate-600 rounded transition-colors"
+    >
+      {copied ? <Check size={12} className="text-green-400" /> : <Copy size={12} />}
+      {copied ? 'Copied!' : 'Copy'}
+    </button>
+  );
+};
+
+// LLM Prompt for generating scripts
+const getLLMPrompt = (fonts: { value: string, label: string }[]) => {
+  const fontList = fonts.map(f => `"${f.label}"`).join(', ');
+
+  return `You are helping a user create scripts for a document generator tool. The tool creates hierarchical documents with templates and nodes.
+
+## Template Schema
+Each template defines a page layout:
+\`\`\`javascript
+{
+  id: "template_id",      // unique identifier
+  name: "Display Name",   // shown in UI
+  width: 509,             // page width in pixels (RM_PP_WIDTH = 509)
+  height: 679,            // page height in pixels (RM_PP_HEIGHT = 679)
+  elements: []            // array of elements (see Element Types below)
+}
+\`\`\`
+
+## Element Types
+Each element MUST have these required base properties:
+\`\`\`javascript
+{
+  id: "unique_id",        // unique within template
+  type: "rect",           // "rect" | "ellipse" | "text" | "triangle" | "line" | "grid"
+  x: 0,                   // x position (pixels)
+  y: 0,                   // y position (pixels)  
+  w: 100,                 // width (pixels)
+  h: 50,                  // height (pixels)
+  rotation: 0,            // rotation in degrees
+  fill: "#ffffff",        // fill color (hex or "none")
+  stroke: "#000000",      // stroke color (hex or "none")
+  strokeWidth: 1,         // stroke width (pixels)
+  opacity: 1              // 0 to 1
+}
+\`\`\`
+
+### Rectangle (type: "rect")
+All base properties + optional:
+\`\`\`javascript
+{
+  borderRadius: 0,                    // corner radius
+  borderStyle: "solid",               // "solid" | "dashed" | "dotted" | "none"
+  fillType: "solid",                  // "solid" | "pattern"
+  patternType: "lines-h",             // "lines-h" | "lines-v" | "lines-d" | "dots"
+  patternSpacing: 5,                  // spacing between pattern elements
+  patternWeight: 1                    // pattern line width or dot size
+}
+\`\`\`
+
+### Ellipse (type: "ellipse")
+Same as rectangle properties.
+
+### Triangle (type: "triangle")
+Same as rectangle properties.
+
+### Line (type: "line")
+All base properties + optional:
+\`\`\`javascript
+{
+  flip: false                         // false = \\, true = /
+}
+\`\`\`
+
+### Text (type: "text")
+All base properties + required text properties:
+\`\`\`javascript
+{
+  text: "Sample Text",                // the text content (can use {{bindings}})
+  fontSize: 16,                       // font size in pixels
+  fontFamily: "Inter",                // MUST be one of: ${fontList}
+  textColor: "#000000",               // text color (separate from fill)
+  fontWeight: "normal",               // "normal" | "bold"
+  fontStyle: "normal",                // "normal" | "italic"
+  textDecoration: "none",             // "none" | "underline" | "line-through"
+  align: "left",                      // "left" | "center" | "right"
+  verticalAlign: "top",               // "top" | "middle" | "bottom"
+  autoWidth: false                    // if true, width adjusts to content
+}
+\`\`\`
+
+### Grid (type: "grid")
+Grids display child node data in a table-like layout. Each cell shows data from one child node.
+The grid iterates over the current node's children (or a specific node's children) and renders them in cells.
+
+- **w and h** define ONE CELL's dimensions (the grid auto-expands based on cols and number of children)
+- **sourceType: "current"** uses children of the node this template is applied to
+- **sourceType: "specific"** uses children of a specific node ID
+- **displayField** determines what text appears in each cell (e.g., "title" shows child.data.title)
+
+All base properties + required gridConfig:
+\`\`\`javascript
+{
+  gridConfig: {
+    cols: 3,                          // number of columns (rows auto-calculated)
+    gapX: 2,                          // horizontal gap between cells (pixels)
+    gapY: 2,                          // vertical gap between cells (pixels)
+    sourceType: "current",            // "current" = children of this node, "specific" = children of sourceId
+    sourceId: "",                     // node ID if sourceType is "specific"
+    displayField: "title",            // which node.data field to show (e.g., "title", "day", "month")
+    offsetStart: 0,                   // number of empty cells before first item
+    dataSliceStart: 0,                // skip first N children
+    dataSliceCount: 31                // only show this many children (e.g., 31 for days in month)
+  }
+}
+\`\`\`
+
+Example: A monthly calendar grid with 7 columns (days of week), showing each day's "day" field:
+\`\`\`javascript
+{
+  id: "calendar_grid",
+  type: "grid",
+  x: 10, y: 50, w: 65, h: 65,       // each cell is 65x65
+  rotation: 0,
+  fill: "none",
+  stroke: "#cccccc",
+  strokeWidth: 1,
+  opacity: 1,
+  gridConfig: {
+    cols: 7,
+    gapX: 2,
+    gapY: 2,
+    sourceType: "current",
+    displayField: "day"
+  }
+}
+\`\`\`
+
+## Node Schema  
+Each node is a page in the document:
+\`\`\`javascript
+{
+  id: "unique_id",        // use createId('prefix') to generate
+  parentId: "parent_id",  // null for root node
+  type: "template_id",    // must match a template id
+  title: "Page Title",    // displayed in tree view
+  data: {                 // custom fields for {{bindings}} in template text
+    field_name: "value"
+  },
+  children: []            // array of child node IDs
+}
+\`\`\`
+
+## Available Constants
+- RM_PP_WIDTH = 509 (reMarkable Paper Pro width)
+- RM_PP_HEIGHT = 679 (reMarkable Paper Pro height)
+- A4_WIDTH = 595
+- A4_HEIGHT = 842
+
+## Helper Functions
+- createId('prefix') - generates unique IDs like "prefix_abc123xyz"
+
+## Output Format
+Return TWO scripts:
+
+1. **Templates Script** - Must return an object of templates:
+\`\`\`javascript
+const templates = { ... };
+return templates;
+\`\`\`
+
+2. **Hierarchy Script** - Must return { nodes, rootId }:
+\`\`\`javascript
+const nodes = {};
+const rootId = 'root';
+// Create nodes...
+return { nodes, rootId };
+\`\`\`
+
+Now please generate scripts for: [DESCRIBE YOUR DOCUMENT STRUCTURE HERE]`;
+};
+
+
+// Generator Help Panel component
+const GeneratorHelpPanel: React.FC<{ isOpen: boolean; onToggle: () => void }> = ({ isOpen, onToggle }) => {
+  const [activeTab, setActiveTab] = useState<'prompt' | 'schema'>('prompt');
+
+  // Dynamic prompt with fonts
+  const promptText = useMemo(() => getLLMPrompt(FONTS), []);
+
+  return (
+    <div className="border-t border-slate-300">
+      <button
+        onClick={onToggle}
+        className="w-full flex items-center justify-between px-4 py-2 bg-slate-100 hover:bg-slate-200 transition-colors"
+      >
+        <div className="flex items-center gap-2 text-sm font-medium text-slate-700">
+          <Book size={16} className="text-indigo-500" />
+          LLM Helper & Schema Documentation
+        </div>
+        {isOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+      </button>
+
+      {isOpen && (
+        <div className="bg-slate-50 border-t border-slate-200">
+          {/* Tabs */}
+          <div className="flex border-b border-slate-200">
+            <button
+              onClick={() => setActiveTab('prompt')}
+              className={`px-4 py-2 text-sm font-medium ${activeTab === 'prompt' ? 'text-indigo-600 border-b-2 border-indigo-600' : 'text-slate-500 hover:text-slate-700'}`}
+            >
+              LLM Prompt
+            </button>
+            <button
+              onClick={() => setActiveTab('schema')}
+              className={`px-4 py-2 text-sm font-medium ${activeTab === 'schema' ? 'text-indigo-600 border-b-2 border-indigo-600' : 'text-slate-500 hover:text-slate-700'}`}
+            >
+              Schema Reference
+            </button>
+          </div>
+
+          <div className="p-4 max-h-[70vh] overflow-auto">
+            {activeTab === 'prompt' && (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-sm text-slate-600">
+                    Copy this prompt to your favorite LLM (ChatGPT, Claude, etc.) to generate custom scripts:
+                  </p>
+                  <CopyButton text={promptText} />
+                </div>
+                <pre className="p-3 bg-slate-800 text-slate-200 text-xs rounded-lg overflow-auto max-h-[60vh]">
+                  {promptText}
+                </pre>
+              </div>
+            )}
+
+            {activeTab === 'schema' && (
+              <div className="space-y-4 text-sm">
+                <div>
+                  <h4 className="font-semibold text-slate-800 mb-2">Template Properties</h4>
+                  <table className="w-full text-xs">
+                    <thead className="bg-slate-200">
+                      <tr>
+                        <th className="text-left p-2">Property</th>
+                        <th className="text-left p-2">Type</th>
+                        <th className="text-left p-2">Description</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr className="border-b"><td className="p-2 font-mono">id</td><td className="p-2">string</td><td className="p-2">Unique template identifier</td></tr>
+                      <tr className="border-b"><td className="p-2 font-mono">name</td><td className="p-2">string</td><td className="p-2">Display name in UI</td></tr>
+                      <tr className="border-b"><td className="p-2 font-mono">width</td><td className="p-2">number</td><td className="p-2">Page width in pixels</td></tr>
+                      <tr className="border-b"><td className="p-2 font-mono">height</td><td className="p-2">number</td><td className="p-2">Page height in pixels</td></tr>
+                      <tr><td className="p-2 font-mono">elements</td><td className="p-2">array</td><td className="p-2">Shapes, text, grids (can be [])</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+
+                <div>
+                  <h4 className="font-semibold text-slate-800 mb-2">Node Properties</h4>
+                  <table className="w-full text-xs">
+                    <thead className="bg-slate-200">
+                      <tr>
+                        <th className="text-left p-2">Property</th>
+                        <th className="text-left p-2">Type</th>
+                        <th className="text-left p-2">Description</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr className="border-b"><td className="p-2 font-mono">id</td><td className="p-2">string</td><td className="p-2">Unique ID (use createId())</td></tr>
+                      <tr className="border-b"><td className="p-2 font-mono">parentId</td><td className="p-2">string|null</td><td className="p-2">Parent node ID</td></tr>
+                      <tr className="border-b"><td className="p-2 font-mono">type</td><td className="p-2">string</td><td className="p-2">Must match a template id</td></tr>
+                      <tr className="border-b"><td className="p-2 font-mono">title</td><td className="p-2">string</td><td className="p-2">Page title</td></tr>
+                      <tr className="border-b"><td className="p-2 font-mono">data</td><td className="p-2">object</td><td className="p-2">Custom fields for {"{{bindings}}"}</td></tr>
+                      <tr><td className="p-2 font-mono">children</td><td className="p-2">string[]</td><td className="p-2">Child node IDs</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+
+                <div>
+                  <h4 className="font-semibold text-slate-800 mb-2">Constants</h4>
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div className="bg-slate-200 p-2 rounded"><code>RM_PP_WIDTH</code> = 509</div>
+                    <div className="bg-slate-200 p-2 rounded"><code>RM_PP_HEIGHT</code> = 679</div>
+                    <div className="bg-slate-200 p-2 rounded"><code>A4_WIDTH</code> = 595</div>
+                    <div className="bg-slate-200 p-2 rounded"><code>A4_HEIGHT</code> = 842</div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div >
   );
 };
 
@@ -1486,6 +1794,7 @@ export const HierarchyGeneratorModal: React.FC<HierarchyGeneratorModalProps> = (
   const [success, setSuccess] = useState<boolean>(false);
   const [fontSize, setFontSize] = useState<number>(12);
   const [wordWrap, setWordWrap] = useState<boolean>(true);
+  const [isHelpOpen, setIsHelpOpen] = useState<boolean>(false);
 
   const loadPreset = (presetId: string) => {
     const preset = GENERATOR_PRESETS.find(p => p.id === presetId);
@@ -1694,7 +2003,7 @@ export const HierarchyGeneratorModal: React.FC<HierarchyGeneratorModalProps> = (
             <div className="px-3 py-1.5 bg-[#252526] border-b border-slate-700 flex items-center gap-2">
               <LayoutTemplate size={14} className="text-indigo-400" />
               <span className="text-xs font-medium text-slate-300">1. Define Templates</span>
-              <InfoTooltip position="below" title="Template Structure" pinnedPosition={{ bottom: 80, left: 40 }} defaultPinned={true} content={
+              <InfoTooltip position="below" title="Template Structure" pinnedPosition={{ bottom: 200, left: 40 }} defaultPinned={true} content={
                 <div className="space-y-2">
                   <p className="font-semibold">Templates define page layouts</p>
                   <p>Each template has:</p>
@@ -1718,7 +2027,7 @@ export const HierarchyGeneratorModal: React.FC<HierarchyGeneratorModalProps> = (
             <div className="px-3 py-1.5 bg-[#252526] border-b border-slate-700 flex items-center gap-2">
               <Network size={14} className="text-purple-400" />
               <span className="text-xs font-medium text-slate-300">2. Build Hierarchy</span>
-              <InfoTooltip position="below" title="Node Structure" pinnedPosition={{ bottom: 80, right: 40 }} defaultPinned={true} content={
+              <InfoTooltip position="below" title="Node Structure" pinnedPosition={{ bottom: 200, right: 40 }} defaultPinned={true} content={
                 <div className="space-y-2">
                   <p className="font-semibold">Nodes are your pages/content</p>
                   <p>Each node has:</p>
@@ -1738,6 +2047,9 @@ export const HierarchyGeneratorModal: React.FC<HierarchyGeneratorModalProps> = (
             </div>
           </div>
         </div>
+
+        {/* Help Panel */}
+        <GeneratorHelpPanel isOpen={isHelpOpen} onToggle={() => setIsHelpOpen(!isHelpOpen)} />
       </div>
     </div>
   );

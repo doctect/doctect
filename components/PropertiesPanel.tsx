@@ -60,15 +60,20 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({
         }
     };
 
-    if (!template) return <div className="p-4 text-slate-400">Select a template</div>;
-
+    // Hooks must be called before any early returns
     const handleUpdate = useCallback((updates: Partial<TemplateElement>) => {
-        onUpdateElement(selectedElements[0].id, updates);
+        if (selectedElements.length > 0) {
+            onUpdateElement(selectedElements[0].id, updates);
+        }
     }, [onUpdateElement, selectedElements]);
 
     const handleOpenNodeSelector = useCallback((mode: 'grid_source' | 'link_element') => {
-        onOpenNodeSelector(mode, selectedElements[0].id);
+        if (selectedElements.length > 0) {
+            onOpenNodeSelector(mode, selectedElements[0].id);
+        }
     }, [onOpenNodeSelector, selectedElements]);
+
+    if (!template) return <div className="p-4 text-slate-400">Select a template</div>;
 
     return (
         <div className="flex flex-col h-full overflow-y-auto bg-white border-l" data-prevent-finish-edit="true">
