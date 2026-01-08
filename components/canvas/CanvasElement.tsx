@@ -452,7 +452,7 @@ export const CanvasElement: React.FC<CanvasElementProps> = (props) => {
                             ...getBackgroundStyle(element),
                             borderRadius: element.borderRadius || 0,
                             display: 'flex',
-                            justifyContent: element.align === 'center' ? 'center' : element.align === 'right' ? 'flex-end' : 'flex-start',
+                            justifyContent: element.align === 'left' ? 'flex-start' : element.align === 'right' ? 'flex-end' : 'center',
                             alignItems: element.verticalAlign === 'top' ? 'flex-start' : element.verticalAlign === 'bottom' ? 'flex-end' : 'center',
                             fontSize: element.fontSize || 12,
                             color: element.textColor || '#000',
@@ -564,7 +564,7 @@ export const CanvasElement: React.FC<CanvasElementProps> = (props) => {
                     height: '100%', // Required for vertical alignment to work
                     minWidth: '100%', // At least cover element width, but can grow for overflow
                     overflow: 'visible', // Allow text to visually overflow
-                    justifyContent: element.align === 'center' ? 'center' : element.align === 'right' ? 'flex-end' : 'flex-start',
+                    justifyContent: element.align === 'left' ? 'flex-start' : element.align === 'right' ? 'flex-end' : 'center',
                     alignItems: element.verticalAlign === 'top' ? 'flex-start' : element.verticalAlign === 'bottom' ? 'flex-end' : 'center',
                     color: element.textColor,
                     fontFamily: fontFamily,
@@ -574,7 +574,7 @@ export const CanvasElement: React.FC<CanvasElementProps> = (props) => {
                     fontStyle: element.fontStyle,
                     textDecoration: element.textDecoration,
                     textDecorationColor: element.textColor,
-                    textAlign: element.align || 'left',
+                    textAlign: element.align || 'center',
                     whiteSpace: element.autoWidth ? 'pre' : 'pre-wrap',
                     pointerEvents: 'auto',
                     zIndex: 2,

@@ -2,6 +2,7 @@
 
 import { jsPDF } from "jspdf";
 import { AppState, AppNode, PageTemplate, TemplateElement, RM_PP_WIDTH, RM_PP_HEIGHT, TraversalStep } from "../types";
+import { FONTS } from "../constants/editor";
 
 const DEBUG_PDF = false; // Set to true to see debug visuals
 
@@ -600,6 +601,18 @@ const drawPattern = (doc: jsPDF, type: string, x: number, y: number, w: number, 
 
 const applyFont = (doc: jsPDF, el: TemplateElement) => {
     let family = el.fontFamily || 'helvetica';
+
+    // Normalize family name: If it's a label (e.g. "Playfair Display"), convert to value (e.g. "playfair-display")
+    if (!FONT_URLS[family]) {
+        const found = FONTS.find(f => f.label === family);
+        if (found) family = found.value;
+        else {
+            // Try lowercased fallback if exact label match fails
+            const lower = family.toLowerCase().replace(/\s+/g, '-');
+            if (FONT_URLS[lower]) family = lower;
+        }
+    }
+
     let style = 'normal';
 
     // Check if it's a custom loaded font
@@ -749,7 +762,15 @@ export const generatePDF = async (state: AppState) => {
     Object.values(state.templates).forEach(tpl => {
         tpl.elements.forEach(el => {
             if (el.fontFamily) {
-                usedFamilies.add(el.fontFamily);
+                let fam = el.fontFamily;
+                // Normalize label -> value
+                const found = FONTS.find(f => f.label === fam);
+                if (found) fam = found.value;
+                else {
+                    const lower = fam.toLowerCase().replace(/\s+/g, '-');
+                    if (FONT_URLS[lower]) fam = lower;
+                }
+                usedFamilies.add(fam);
             }
         });
     });
@@ -778,7 +799,6 @@ export const generatePDF = async (state: AppState) => {
                     const fileName = `${family}-${variant}.ttf`;
                     doc.addFileToVFS(fileName, binaryStr);
                     doc.addFont(fileName, family, variant);
-                    console.log(`[PDFService] Successfully registered font: ${family} (${variant})`);
                 } catch (err) {
                     console.error(`[PDFService] Error loading font ${family} ${variant}:`, err);
                 }
@@ -1052,8 +1072,8 @@ export const generatePDF = async (state: AppState) => {
                 // Fix: If offset is negative, shift it into the grid by adding columns
                 if (offset < 0) offset += safeCols;
 
-                const sGapX = Number(gapX) ?? 10;
-                const sGapY = Number(gapY) ?? 10;
+                const sGapX = Number(gapX) || 10;
+                const sGapY = Number(gapY) || 10;
 
                 const cellW = w;
                 const cellH = h;
@@ -1153,7 +1173,12 @@ export const generatePDF = async (state: AppState) => {
                         if (el.align === 'left') textX = cellX + 4;
                         if (el.align === 'right') textX = cellX + cellW - 4;
 
-                        doc.text(String(txt), textX, textY + yOffset, { align: el.align || 'center', baseline: baseline });
+                        try {
+                            doc.text(String(txt), textX, textY + yOffset, { align: el.align || 'center', baseline: baseline });
+                        } catch (err) {
+                            console.error(`[PDFService] Grid doc.text CRASH args:`, { txt, textX, textY, align: el.align || 'center', baseline });
+                            throw err;
+                        }
                     }
 
                     // Link logic inside grid (Only support links if not rotated for simplicity, or calc new AABB)

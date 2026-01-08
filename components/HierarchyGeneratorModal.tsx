@@ -293,31 +293,81 @@ All base properties + required gridConfig:
     sourceType: "current",            // "current" = children of this node, "specific" = children of sourceId
     sourceId: "",                     // node ID if sourceType is "specific"
     displayField: "title",            // which node.data field to show (e.g., "title", "day", "month")
-    offsetStart: 0,                   // number of empty cells before first item
+    displayField: "title",            // which node.data field to show (e.g., "title", "day", "month")
+    
+    // --- OFFSET CONFIGURATION ---
+    // Offsets effectively add "empty cells" before the first child is rendered.
+    // 1. Static Mode: Hardcoded number of empty cells.
+    offsetMode: "static", 
+    offsetStart: 0, 
+
+    // 2. Dynamic Mode: Reads offset from the data of the FIRST CHILD item.
+    // Why? For a monthly calendar, the "Month" node doesn't know when it starts.
+    // But the first "Day" node can carry that info (e.g. day.data.startWeekday).
+    // The grid inspects the first child, reads 'offsetField', and uses that value.
+    // offsetMode: "dynamic",
+    // offsetField: "startWeekday",      // e.g. 0=Sun, 1=Mon...
+    // offsetAdjustment: 0,              // optional add/subtract
+    
     dataSliceStart: 0,                // skip first N children
     dataSliceCount: 31                // only show this many children (e.g., 31 for days in month)
   }
 }
 \`\`\`
 
-Example: A monthly calendar grid with 7 columns (days of week), showing each day's "day" field:
+Example: A monthly calendar grid with specific start day (dynamic offset):
 \`\`\`javascript
 {
-  id: "calendar_grid",
+  id: "cal_grid",
   type: "grid",
-  x: 10, y: 50, w: 65, h: 65,       // each cell is 65x65
-  rotation: 0,
-  fill: "none",
-  stroke: "#cccccc",
-  strokeWidth: 1,
-  opacity: 1,
   gridConfig: {
     cols: 7,
-    gapX: 2,
-    gapY: 2,
-    sourceType: "current",
-    displayField: "day"
+    // "offset" field in Month node data stores weekday of 1st (0=Sun, 1=Mon...).
+    // This shifts the first cell (Day 1) to the correct column.
+    offsetMode: "dynamic",
+    offsetField: "startWeekday", 
+    offsetAdjustment: 0 
   }
+}
+\`\`\`
+
+### Link Targets
+Elements can trigger navigation when clicked. Use \`linkTarget\` and \`linkValue\`:
+\`\`\`javascript
+{
+  type: "rect",
+  // ...base props...
+  
+  // OPTION 1: Go to Parent
+  linkTarget: "parent",
+
+  // OPTION 2: Go to Nth Child
+  linkTarget: "child_index",
+  linkValue: "0",                   // "0" = first child, "1" = second child
+
+  // OPTION 3: Go to Sibling (Next/Prev Page)
+  linkTarget: "sibling",
+  linkValue: "1",                   // "1" = next sibling, "-1" = previous sibling
+
+  // OPTION 4: Go to Ancestor (Up N levels)
+  linkTarget: "ancestor",
+  linkValue: "2",                   // "1" = parent (same as "parent"), "2" = grandparent
+
+  // OPTION 5: Go to Referrer (Backlink)
+  // If this node is a reference (pointer) node, go to the page that references it.
+  // Useful for "Back to Week" buttons on Daily pages.
+  linkTarget: "referrer",
+
+  // OPTION 6: Go to Child's Referrer
+  // Find a node that references the Nth child of this page.
+  // Useful for "Go to Weekly View" from a Month page (finding the Week that references Day 1).
+  linkTarget: "child_referrer",
+  linkValue: "0",                   // Index of child to check (e.g. 0 = Day 1)
+  linkReferrerParentType: "tpl_week", // Only find referrers whose parent is this template type
+
+  // OPTION 7: Specific Node
+  linkTarget: "specific_node",
+  linkValue: "target_node_id"
 }
 \`\`\`
 
@@ -336,6 +386,21 @@ Each node is a page in the document:
 }
 \`\`\`
 
+## Reference Nodes (Shared Children)
+You can link multiple parents to the same child node (e.g., A "Daily" page can be a child of both "Weekly" and "Monthly" pages).
+To do this, create a "pointer" node in the second parent's children list that references the original node's ID.
+
+\`\`\`javascript
+{
+  id: "pointer_id",       // unique ID for this pointer
+  parentId: "week_1",     // parent (e.g., Week 1)
+  referenceId: "day_1",   // ID of the ACTUAL node (e.g., Day 1 created under Month)
+  type: "day_template",   // same as original
+  title: "Day 1",         // same as original
+  children: []            // usually empty for pointers
+}
+\`\`\`
+
 ## Available Constants
 - RM_PP_WIDTH = 509 (reMarkable Paper Pro width)
 - RM_PP_HEIGHT = 679 (reMarkable Paper Pro height)
@@ -343,7 +408,7 @@ Each node is a page in the document:
 - A4_HEIGHT = 842
 
 ## Helper Functions
-- createId('prefix') - generates unique IDs like "prefix_abc123xyz"
+- \`createId('prefix')\` is provided in the scope. DO NOT define it yourself. Use it to generate unique IDs like "prefix_abc123xyz".
 
 ## Output Format
 Return TWO scripts:
@@ -1836,8 +1901,13 @@ export const HierarchyGeneratorModal: React.FC<HierarchyGeneratorModalProps> = (
         throw new Error("Template script must return an object where keys are template IDs.");
       }
 
-      // Auto-generate IDs for elements if missing to prevent selection issues
+      // Re-key templates by their ID to ensure consistency and auto-generate element IDs
+      const normalizedTemplates: any = {};
+
       Object.values(templates).forEach((tpl: any) => {
+        if (!tpl.id) return;
+
+        // Auto-generate element IDs
         if (tpl.elements && Array.isArray(tpl.elements)) {
           tpl.elements.forEach((el: any, idx: number) => {
             if (!el.id) {
@@ -1845,6 +1915,8 @@ export const HierarchyGeneratorModal: React.FC<HierarchyGeneratorModalProps> = (
             }
           });
         }
+
+        normalizedTemplates[tpl.id] = tpl;
       });
 
       // 2. Execute Hierarchy Script
@@ -1854,7 +1926,7 @@ export const HierarchyGeneratorModal: React.FC<HierarchyGeneratorModalProps> = (
             ${hierarchyScript}
         `);
 
-      const result = hierarchyFn(templates, createId);
+      const result = hierarchyFn(normalizedTemplates, createId);
 
       if (!result || !result.nodes || !result.rootId) {
         throw new Error("Hierarchy script must return an object with { nodes, rootId }.");
@@ -1869,7 +1941,7 @@ export const HierarchyGeneratorModal: React.FC<HierarchyGeneratorModalProps> = (
       onImport({
         nodes: result.nodes,
         rootId: result.rootId,
-        templates: templates
+        templates: normalizedTemplates
       });
       setSuccess(true);
       setTimeout(() => {
