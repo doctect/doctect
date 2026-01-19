@@ -9,7 +9,7 @@ import { DeleteConfirmModal } from './DeleteConfirmModal';
 import { HierarchyGeneratorModal } from './HierarchyGeneratorModal';
 import { generatePDF } from '../services/pdfService';
 import { migrateState } from '../services/migration';
-import { Download, Code, Undo2, Redo2, Loader2 } from 'lucide-react';
+import { Download, Code, Undo2, Redo2, Loader2, Contrast } from 'lucide-react';
 import { EditorToolbar } from './EditorToolbar';
 import { saveCustomPreset } from '../services/presets';
 import { SavePresetModal } from './SavePresetModal';
@@ -580,13 +580,15 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, initial
         }
     };
 
+    const [exportGreyscale, setExportGreyscale] = useState(false);
+
     const handleExportPDF = async () => {
         setIsExporting(true);
         // Allow UI update before freezing
         setTimeout(async () => {
             try {
-                await generatePDF(state);
-                trackEvent('pdf_exported', { projectId: projectId, pageCount: Object.keys(state.templates).length });
+                await generatePDF(state, { isGreyscale: exportGreyscale });
+                trackEvent('pdf_exported', { projectId: projectId, pageCount: Object.keys(state.templates).length, isGreyscale: exportGreyscale });
             } catch (e) {
                 console.error(e);
                 alert("Failed to export PDF");
@@ -647,17 +649,31 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, initial
                     </div>
                     <button onClick={() => setState(s => ({ ...s, showJsonModal: true }))} className="p-1 px-2 text-slate-600 hover:bg-slate-100 rounded flex items-center gap-2 text-xs font-medium"><Code size={14} /> JSON</button>
                     <div className="h-4 w-px bg-slate-300 mx-1 self-center"></div>
-                    <button
-                        onClick={handleExportPDF}
-                        disabled={isExporting}
-                        className={clsx(
-                            "text-blue-600 hover:bg-blue-50 px-2 py-1 rounded flex items-center gap-2 text-xs font-bold transition-all disabled:opacity-50 disabled:cursor-wait",
-                            isExporting && "bg-blue-50"
-                        )}
-                    >
-                        {isExporting ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
-                        {isExporting ? "Generating..." : "Export PDF"}
-                    </button>
+
+                    <div className="flex items-center gap-1 bg-slate-50 border border-slate-200 rounded-md p-1 pl-1">
+                        <button
+                            onClick={() => setExportGreyscale(!exportGreyscale)}
+                            className={clsx(
+                                "p-1.5 rounded transition-all mr-1 focus:outline-none focus:ring-1 focus:ring-blue-500",
+                                exportGreyscale ? "bg-blue-100 text-blue-600" : "text-slate-400 hover:text-slate-600 hover:bg-slate-200"
+                            )}
+                            title={exportGreyscale ? "Greyscale Export: ON" : "Greyscale Export: OFF"}
+                        >
+                            <Contrast size={14} />
+                        </button>
+
+                        <button
+                            onClick={handleExportPDF}
+                            disabled={isExporting}
+                            className={clsx(
+                                "text-white bg-blue-600 hover:bg-blue-700 px-3 py-1 rounded flex items-center gap-2 text-xs font-bold transition-all disabled:opacity-50 disabled:cursor-wait shadow-sm",
+                                isExporting && "opacity-75"
+                            )}
+                        >
+                            {isExporting ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+                            {isExporting ? "Generating..." : "Export PDF"}
+                        </button>
+                    </div>
                 </div>
             </div>
 

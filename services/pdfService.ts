@@ -565,6 +565,14 @@ const drawDotsOptimized = (doc: jsPDF, x: number, y: number, w: number, h: numbe
     }
 };
 
+const hexToGreyscale = (hex: string): { r: number, g: number, b: number } | null => {
+    const rgb = hexToRgb(hex);
+    if (!rgb) return null;
+    // Luminance formula
+    const y = Math.round(0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b);
+    return { r: y, g: y, b: y };
+};
+
 const drawPattern = (doc: jsPDF, type: string, x: number, y: number, w: number, h: number, color: string, spacing: number = 4, weight: number = 0.5) => {
     const rgb = hexToRgb(color);
     if (!rgb) return;
@@ -711,7 +719,11 @@ const traverseGridData = (
     return traverseGridData(nextLevelNodes, steps, depth + 1, nodes);
 };
 
-export const generatePDF = async (state: AppState) => {
+interface GeneratePDFOptions {
+    isGreyscale?: boolean;
+}
+
+export const generatePDF = async (state: AppState, options: GeneratePDFOptions = {}) => {
     const pageMap = new Map<string, number>();
     const pageNodes: string[] = [];
 
@@ -1194,8 +1206,8 @@ export const generatePDF = async (state: AppState) => {
             }
 
             // Standard Shapes & Text
-            const fillRgb = hexToRgb(el.fill);
-            const strokeRgb = hexToRgb(el.stroke);
+            const fillRgb = options.isGreyscale ? hexToGreyscale(el.fill) : hexToRgb(el.fill);
+            const strokeRgb = options.isGreyscale ? hexToGreyscale(el.stroke) : hexToRgb(el.stroke);
             const strokeWidth = Number(el.strokeWidth) || 0;
             const radius = Number(el.borderRadius) || 0;
 
@@ -1225,7 +1237,14 @@ export const generatePDF = async (state: AppState) => {
             if (el.fillType === 'pattern' && el.patternType && el.fill) {
                 doc.saveGraphicsState();
                 clipToShape(doc, el.type, lx, ly + yOffset, w, h, radius, 0);
-                drawPattern(doc, el.patternType, lx, ly + yOffset, w, h, el.fill, Number(el.patternSpacing), Number(el.patternWeight));
+                // For patterns, if greyscale, we might want to convert the pattern fill color too
+                // Since drawPattern uses fill hex directly, let's fix that or convert hex if needed
+                let patternFill = el.fill;
+                if (options.isGreyscale && patternFill) {
+                    const g = hexToGreyscale(patternFill);
+                    if (g) patternFill = '#' + ((1 << 24) + (g.r << 16) + (g.g << 8) + g.b).toString(16).slice(1).toUpperCase();
+                }
+                drawPattern(doc, el.patternType, lx, ly + yOffset, w, h, patternFill, Number(el.patternSpacing), Number(el.patternWeight));
                 doc.restoreGraphicsState();
 
                 if (strokeRgb && strokeWidth > 0 && el.borderStyle !== 'none') {
@@ -1333,7 +1352,7 @@ export const generatePDF = async (state: AppState) => {
 
                 if (el.textDecoration === 'underline') {
                     // Set underline color to match text color
-                    const underlineRgb = hexToRgb(el.textColor || '#000000');
+                    const underlineRgb = options.isGreyscale ? hexToGreyscale(el.textColor || '#000000') : hexToRgb(el.textColor || '#000000');
                     if (underlineRgb) {
                         doc.setDrawColor(underlineRgb.r, underlineRgb.g, underlineRgb.b);
                     }
