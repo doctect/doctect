@@ -584,7 +584,7 @@ export const CanvasElement: React.FC<CanvasElementProps> = (props) => {
                 </div>
             )}
 
-            {selected && <div className="absolute -inset-px border border-blue-500 pointer-events-none z-10" />}
+            {selected && <div className="absolute -inset-1 border border-blue-500 pointer-events-none z-10 rounded-md" />}
             {showHandles && <SelectionHandles element={element} />}
         </div>
     );
