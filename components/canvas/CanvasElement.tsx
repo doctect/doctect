@@ -1,7 +1,7 @@
 
 import React from 'react';
 import { TemplateElement, AppNode, TraversalStep } from '../../types';
-import { SelectionHandles } from './SelectionHandles';
+
 
 // Font family mapping for CSS (defined outside component for performance)
 const FONT_FAMILY_MAP: Record<string, string> = {
@@ -465,8 +465,7 @@ export const CanvasElement: React.FC<CanvasElementProps> = (props) => {
                         }}><span className="truncate" style={{ padding: '0 1px' }}>{label}</span></div>
                     );
                 })}
-                {selected && <div className="absolute -inset-px border border-blue-500 pointer-events-none z-10" />}
-                {showHandles && <SelectionHandles element={element} />}
+
             </div>
         );
     }
@@ -481,7 +480,7 @@ export const CanvasElement: React.FC<CanvasElementProps> = (props) => {
                         <line x1="0" y1="0" x2="100%" y2="100%" stroke={element.stroke || 'none'} strokeWidth={element.strokeWidth} strokeDasharray={element.borderStyle === 'dashed' ? '5,5' : element.borderStyle === 'dotted' ? '2,2' : ''} />
                     )}
                 </svg>
-                {showHandles && <SelectionHandles element={element} />}
+
             </div>
         );
     }
@@ -533,8 +532,7 @@ export const CanvasElement: React.FC<CanvasElementProps> = (props) => {
                     </div>
                 )}
 
-                {selected && <div className="absolute -inset-px border border-blue-500 pointer-events-none z-10" />}
-                {showHandles && <SelectionHandles element={element} />}
+
             </div>
         );
     }
@@ -584,8 +582,7 @@ export const CanvasElement: React.FC<CanvasElementProps> = (props) => {
                 </div>
             )}
 
-            {selected && <div className="absolute -inset-1 border border-blue-500 pointer-events-none z-10 rounded-md" />}
-            {showHandles && <SelectionHandles element={element} />}
+
         </div>
     );
 };

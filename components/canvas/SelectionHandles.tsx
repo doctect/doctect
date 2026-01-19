@@ -5,7 +5,7 @@ import { RotateCw } from 'lucide-react';
 
 export const SelectionHandles: React.FC<{ element: TemplateElement }> = ({ element }) => {
     return (
-        <>
+        <div className="pointer-events-auto">
             {/* Standard Resize Handles (Not for lines) */}
             {element.type !== 'line' && (
                 <>
@@ -57,6 +57,6 @@ export const SelectionHandles: React.FC<{ element: TemplateElement }> = ({ eleme
             </div>
             {/* Connection Line to Rotate Handle */}
             <div className="absolute left-1/2 -top-10 h-10 w-px bg-blue-500 z-10 -translate-x-1/2 pointer-events-none" />
-        </>
+        </div>
     );
 };

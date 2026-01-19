@@ -5,6 +5,7 @@ import { AppState, TemplateElement, PageTemplate, AppNode, TraversalStep } from 
 import clsx from 'clsx';
 import { CanvasElement } from './canvas/CanvasElement';
 import { OverlayTextEditor } from './canvas/OverlayTextEditor';
+import { SelectionHandles } from './canvas/SelectionHandles';
 
 interface CanvasProps {
     template: PageTemplate;
@@ -224,7 +225,31 @@ export const Canvas: React.FC<CanvasProps> = ({
 
             const displayCount = items.length > 0 ? items.length : 6;
             const colCount = Math.max(1, cols || 3);
-            const rowCount = Math.max(1, Math.ceil((displayCount + (el.gridConfig.offsetStart || 0)) / colCount));
+
+            // Calculate Offset (Logic synced from CanvasElement)
+            let offset = el.gridConfig.offsetStart || 0;
+            const { offsetMode, offsetField, offsetAdjustment } = el.gridConfig;
+
+            if (offsetMode === 'dynamic' && offsetField && items.length > 0) {
+                const firstId = items[0];
+                let firstNode = nodes[firstId];
+                if (firstNode && firstNode.referenceId && nodes[firstNode.referenceId]) {
+                    firstNode = nodes[firstNode.referenceId];
+                }
+
+                if (firstNode && firstNode.data && firstNode.data[offsetField]) {
+                    const parsed = parseInt(firstNode.data[offsetField], 10);
+                    if (!isNaN(parsed)) {
+                        offset = parsed + (offsetAdjustment || 0);
+                    }
+                }
+            }
+
+            if (offset < 0) {
+                offset += colCount;
+            }
+
+            const rowCount = Math.max(1, Math.ceil((displayCount + offset) / colCount));
 
             const totalW = colCount * el.w + (colCount - 1) * (gapX || 0);
             const totalH = rowCount * el.h + (rowCount - 1) * (gapY || 0);
@@ -874,6 +899,38 @@ export const Canvas: React.FC<CanvasProps> = ({
                             }
                             return null;
                         })()}
+
+                        {/* Selection Overlay - Rendered on top to prevent occlusion */}
+                        {selectedElementIds.map(id => {
+                            const el = elements.find(e => e.id === id);
+                            if (!el) return null;
+                            const bounds = getElementBounds(el);
+
+                            // Lines don't use the standard box, they handle their own selection visual via handles
+                            const showBorder = el.type !== 'line';
+
+                            return (
+                                <div
+                                    key={id}
+                                    className="absolute pointer-events-none z-[100]"
+                                    style={{
+                                        left: el.x,
+                                        top: el.y,
+                                        width: bounds.w,
+                                        height: bounds.h,
+                                        transform: `rotate(${el.rotation || 0}deg)`
+                                    }}
+                                >
+                                    {/* Selection Border (4px padded, rounded) */}
+                                    {showBorder && (
+                                        <div className="absolute -inset-1 border border-blue-500 rounded-md" />
+                                    )}
+
+                                    {/* Handles (Use existing component, it has pointer-events-auto) */}
+                                    {selectedElementIds.length === 1 && <SelectionHandles element={el} />}
+                                </div>
+                            );
+                        })}
 
                         {renderCreationPreview()}
 
