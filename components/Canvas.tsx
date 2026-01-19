@@ -819,8 +819,8 @@ export const Canvas: React.FC<CanvasProps> = ({
 
         if (tool === 'ellipse' || tool === 'circle') {
             return (
-                <div className="absolute border-2 border-blue-500 bg-blue-500/20 rounded-full"
-                    style={{ left: x, top: y, width: w, height: h, zIndex: 999 }}
+                <div className="absolute border-2 border-blue-500 bg-blue-500/20"
+                    style={{ left: x, top: y, width: w, height: h, zIndex: 999, borderRadius: '50%' }}
                 />
             );
         }
