@@ -733,7 +733,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, initial
                     />
                     <PropertiesPanel
                         state={state}
-                        onUpdateElement={handleUpdateElement}
+                        onUpdateElements={(els, save) => handleUpdateTemplateElements(els, save)}
                         onUpdateNode={handleUpdateNode}
                         onDeleteElements={(ids) => { saveToHistory(); handleDeleteElements(ids); }}
                         onOpenNodeSelector={(mode, elId) => setState(s => ({ ...s, showNodeSelector: true, nodeSelectorMode: mode, editingElementId: elId }))}

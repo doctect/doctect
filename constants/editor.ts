@@ -2,6 +2,9 @@
 
 export const UNIT_CONVERSION = { 'pt': 1, 'px': 1, 'in': 72, 'mm': 2.83465 };
 
+export const RM_PP_WIDTH = 509;
+export const RM_PP_HEIGHT = 679;
+
 export const FONTS = [
   { value: 'allura', label: 'Allura' },
   { value: 'amatic-sc', label: 'Amatic SC' },

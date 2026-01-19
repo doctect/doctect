@@ -124,6 +124,67 @@ export const Canvas: React.FC<CanvasProps> = ({
     // Inline Editing State
     const [editingElementId, setEditingElementId] = useState<string | null>(null);
 
+    // Group Transform State
+    const initialGroupElements = useRef<TemplateElement[]>([]);
+    const initialGroupBoundsRef = useRef<TemplateElement | null>(null); // For rotating group visualization
+    const [persistentGroupRotation, setPersistentGroupRotation] = useState(0);
+
+    // Reset persistent rotation when selection changes
+    useEffect(() => {
+        setPersistentGroupRotation(0);
+        initialGroupBoundsRef.current = null; // Clear this too to be safe
+    }, [selectedElementIds.join(',')]);
+
+    const getGroupBounds = (ids: string[]) => {
+        if (ids.length === 0) return null;
+        // Even for single items in a group selection, we might want consistent logic, but single works fine.
+
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        // ... (rest of logic same)
+
+        ids.forEach(id => {
+            const el = elements.find(e => e.id === id);
+            if (!el) return;
+
+            // Calculate corners of rotated element
+            const cx = el.x + el.w / 2;
+            const cy = el.y + el.h / 2;
+            const r = el.rotation || 0;
+
+            const corners = [
+                { x: el.x, y: el.y },
+                { x: el.x + el.w, y: el.y },
+                { x: el.x + el.w, y: el.y + el.h },
+                { x: el.x, y: el.y + el.h }
+            ];
+
+            corners.forEach(p => {
+                const rotated = rotatePoint(p.x, p.y, cx, cy, r);
+                minX = Math.min(minX, rotated.x);
+                maxX = Math.max(maxX, rotated.x);
+                minY = Math.min(minY, rotated.y);
+                maxY = Math.max(maxY, rotated.y);
+            });
+        });
+
+        if (minX === Infinity) return null;
+
+        return {
+            id: 'selection-group',
+            type: 'group' as const, // Cast to any to satisfy TemplateElement type constraint slightly loosely or use a compatible object
+            x: minX,
+            y: minY,
+            w: maxX - minX,
+            h: maxY - minY,
+            rotation: 0,
+            zIndex: 9999
+        } as unknown as TemplateElement;
+    };
+
+    const groupBounds = React.useMemo(() => {
+        return selectedElementIds.length > 1 ? getGroupBounds(selectedElementIds) : null;
+    }, [selectedElementIds, elements]); // Recalculate when selection or elements change
+
 
     // Dynamic Grid Calculation
     const effectiveGridSize = React.useMemo(() => {
@@ -277,6 +338,57 @@ export const Canvas: React.FC<CanvasProps> = ({
         return () => window.removeEventListener('keydown', handleKeyDown);
     }, []);
 
+    // Helper to calculate visual bounds handling persistent rotation
+    const calculateVisualGroupBounds = (currentGroupBounds: TemplateElement, rotation: number) => {
+        const cx = currentGroupBounds.x + currentGroupBounds.w / 2;
+        const cy = currentGroupBounds.y + currentGroupBounds.h / 2;
+
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+
+        selectedElementIds.forEach(id => {
+            const el = elements.find(e => e.id === id);
+            if (!el) return;
+            const elCx = el.x + el.w / 2;
+            const elCy = el.y + el.h / 2;
+            const corners = [
+                { x: el.x, y: el.y },
+                { x: el.x + el.w, y: el.y },
+                { x: el.x + el.w, y: el.y + el.h },
+                { x: el.x, y: el.y + el.h }
+            ];
+            const r = el.rotation || 0;
+            const worldCorners = corners.map(p => rotatePoint(p.x, p.y, elCx, elCy, r));
+
+            worldCorners.forEach(p => {
+                const unrotated = rotatePoint(p.x, p.y, cx, cy, -rotation);
+                minX = Math.min(minX, unrotated.x);
+                maxX = Math.max(maxX, unrotated.x);
+                minY = Math.min(minY, unrotated.y);
+                maxY = Math.max(maxY, unrotated.y);
+            });
+        });
+
+        if (minX !== Infinity) {
+            const uw = maxX - minX;
+            const uh = maxY - minY;
+            const uCx = minX + uw / 2;
+            const uCy = minY + uh / 2;
+            const center = rotatePoint(uCx, uCy, cx, cy, rotation);
+
+            return {
+                id: 'selection-group',
+                type: 'group' as any,
+                x: center.x - uw / 2,
+                y: center.y - uh / 2,
+                w: uw,
+                h: uh,
+                rotation: rotation,
+                zIndex: 9999
+            } as any;
+        }
+        return currentGroupBounds;
+    };
+
     const handleMouseDown = (e: MouseEvent) => {
         // Reset history save flag for new interactions
         hasSavedHistory.current = false;
@@ -311,35 +423,71 @@ export const Canvas: React.FC<CanvasProps> = ({
             const targetEl = e.target as HTMLElement;
             const clickedId = targetEl.closest('[data-element-id]')?.getAttribute('data-element-id');
 
-            // Check for Rotation Handle
-            if (targetEl.closest('[data-rotate-handle]') && selectedElementIds.length === 1) {
-                const el = elements.find(e => e.id === selectedElementIds[0]);
-                if (el) {
+            // Check for Rotation Handle - allow for single or group
+            if (targetEl.closest('[data-rotate-handle]')) {
+                if (selectedElementIds.length > 1 && groupBounds) {
+                    // Group Rotation
                     setIsRotating(true);
-                    setInitialRotation(el.rotation || 0);
+
+                    // Snapshot initial states for all selected elements
+                    initialGroupElements.current = elements.filter(el => selectedElementIds.includes(el.id));
+
+                    let initialBounds = groupBounds;
+                    // IF we have persistent rotation, use the VISUAL bounds as initial, not the AABB
+                    if (persistentGroupRotation !== 0) {
+                        initialBounds = calculateVisualGroupBounds(groupBounds, persistentGroupRotation);
+                    }
+                    initialGroupBoundsRef.current = initialBounds;
+
+                    // Calculate initial mouse angle for delta rotation
+                    const cx = initialBounds.x + initialBounds.w / 2;
+                    const cy = initialBounds.y + initialBounds.h / 2;
+                    const radians = Math.atan2(coords.y - cy, coords.x - cx);
+                    const startDegrees = radians * (180 / Math.PI) + 90;
+                    setInitialRotation(startDegrees);
+
+                } else if (selectedElementIds.length === 1) {
+                    const el = elements.find(e => e.id === selectedElementIds[0]);
+                    if (el) {
+                        setIsRotating(true);
+                        setInitialRotation(el.rotation || 0);
+                    }
                 }
                 e.stopPropagation();
                 return;
             }
 
-            // Check for Resize Handle
-            if (targetEl.hasAttribute('data-resize-handle') && selectedElementIds.length === 1) {
+            // Check for Resize Handle - allow for single or group
+            if (targetEl.hasAttribute('data-resize-handle')) {
                 const handle = targetEl.getAttribute('data-resize-handle');
-                const el = elements.find(e => e.id === selectedElementIds[0]);
-                if (handle && el) {
+
+                if (selectedElementIds.length > 1 && groupBounds && handle) {
+                    // Group Resizing
                     setIsResizing(true);
                     setResizeHandle(handle);
                     setDragStart(coords);
+                    setInitialResizeState(groupBounds); // Use group bounds as the resizing target
 
-                    let { x, y, w, h } = el;
-                    // For Grid, resize using the bounding box, not the single cell
-                    if (el.type === 'grid' && el.gridConfig) {
-                        const bounds = getElementBounds(el);
-                        w = bounds.w;
-                        h = bounds.h;
+                    // Snapshot initial states
+                    initialGroupElements.current = elements.filter(el => selectedElementIds.includes(el.id));
+                }
+                else if (selectedElementIds.length === 1) {
+                    const el = elements.find(e => e.id === selectedElementIds[0]);
+                    if (handle && el) {
+                        setIsResizing(true);
+                        setResizeHandle(handle);
+                        setDragStart(coords);
+
+                        let { x, y, w, h } = el;
+                        // For Grid, resize using the bounding box, not the single cell
+                        if (el.type === 'grid' && el.gridConfig) {
+                            const bounds = getElementBounds(el);
+                            w = bounds.w;
+                            h = bounds.h;
+                        }
+
+                        setInitialResizeState({ x, y, w, h, flip: el.flip, rotation: el.rotation });
                     }
-
-                    setInitialResizeState({ x, y, w, h, flip: el.flip, rotation: el.rotation });
                 }
                 e.stopPropagation();
                 return;
@@ -404,37 +552,76 @@ export const Canvas: React.FC<CanvasProps> = ({
             return;
         }
 
-        if (isRotating && selectedElementIds.length === 1) {
+        if (isRotating) {
             if (!hasSavedHistory.current) {
                 onInteractionStart();
                 hasSavedHistory.current = true;
             }
 
-            const el = elements.find(e => e.id === selectedElementIds[0]);
-            if (!el) return;
+            // Group Rotation
+            if (selectedElementIds.length > 1 && initialGroupBoundsRef.current) {
+                const initialBounds = initialGroupBoundsRef.current;
+                const cx = initialBounds.x + initialBounds.w / 2;
+                const cy = initialBounds.y + initialBounds.h / 2;
+                const radians = Math.atan2(coords.y - cy, coords.x - cx);
+                let degrees = radians * (180 / Math.PI) + 90;
 
-            // Calculate center of element
-            const cx = el.x + el.w / 2;
-            const cy = el.y + el.h / 2;
+                if (e.shiftKey) { degrees = Math.round(degrees / 15) * 15; }
 
-            // Calculate angle from center to mouse
-            const radians = Math.atan2(coords.y - cy, coords.x - cx);
-            let degrees = radians * (180 / Math.PI) + 90; // +90 to align with top handle
+                const delta = degrees - initialRotation;
 
-            if (snapToGrid) {
-                // Magnetic snap to cardinals (0, 90, 180, 270) with 10 degree threshold
-                const cardinals = [0, 90, 180, 270, 360];
-                const normalized = (degrees % 360 + 360) % 360;
-                const closest = cardinals.find(c => Math.abs(c - normalized) < 10);
-                if (closest !== undefined) {
-                    degrees = closest;
-                }
-            } else if (e.shiftKey) {
-                degrees = Math.round(degrees / 15) * 15;
+                // Apply rotation to all elements relative to group center
+                const updatedElements = elements.map(item => {
+                    const initial = initialGroupElements.current.find(i => i.id === item.id);
+                    if (!initial) return item;
+
+                    // 1. Rotate the center of the element around group center
+                    const elCx = initial.x + initial.w / 2;
+                    const elCy = initial.y + initial.h / 2;
+
+                    // Rotate by DELTA
+                    const rotatedCenter = rotatePoint(elCx, elCy, cx, cy, delta);
+
+                    // 2. Add delta to element's initial rotation
+                    return {
+                        ...item,
+                        x: rotatedCenter.x - initial.w / 2,
+                        y: rotatedCenter.y - initial.h / 2,
+                        rotation: (initial.rotation || 0) + delta
+                    };
+                });
+                onUpdateElements(updatedElements, false);
+                return;
             }
 
-            onUpdateElements(elements.map(item => item.id === el.id ? { ...item, rotation: degrees } : item), false);
-            return;
+            // Single Element Rotation
+            else if (selectedElementIds.length === 1) {
+                const el = elements.find(e => e.id === selectedElementIds[0]);
+                if (!el) return;
+
+                // Calculate center of element
+                const cx = el.x + el.w / 2;
+                const cy = el.y + el.h / 2;
+
+                // Calculate angle from center to mouse
+                const radians = Math.atan2(coords.y - cy, coords.x - cx);
+                let degrees = radians * (180 / Math.PI) + 90; // +90 to align with top handle
+
+                if (snapToGrid) {
+                    // Magnetic snap to cardinals (0, 90, 180, 270) with 10 degree threshold
+                    const cardinals = [0, 90, 180, 270, 360];
+                    const normalized = (degrees % 360 + 360) % 360;
+                    const closest = cardinals.find(c => Math.abs(c - normalized) < 10);
+                    if (closest !== undefined) {
+                        degrees = closest;
+                    }
+                } else if (e.shiftKey) {
+                    degrees = Math.round(degrees / 15) * 15;
+                }
+
+                onUpdateElements(elements.map(item => item.id === el.id ? { ...item, rotation: degrees } : item), false);
+                return;
+            }
         }
 
         if (isDragging && Object.keys(initialPositions).length > 0) {
@@ -462,9 +649,8 @@ export const Canvas: React.FC<CanvasProps> = ({
                 hasSavedHistory.current = true;
             }
 
-            const elId = selectedElementIds[0];
-            const el = elements.find(e => e.id === elId);
-            if (!el) return;
+            // Identify Resizing Target (Group or Single)
+            const isGroup = selectedElementIds.length > 1;
 
             let { x: startX, y: startY, w: startW, h: startH, rotation: startRot } = initialResizeState;
             const angle = startRot || 0;
@@ -487,9 +673,13 @@ export const Canvas: React.FC<CanvasProps> = ({
                 localDy = Math.round(localDy / effectiveGridSize) * effectiveGridSize;
             }
 
-            // --- Line Specific Resizing (Point-to-Point) ---
-            // Lines handle rotation freely, so we use world-space math
-            if (el.type === 'line' && (resizeHandle === 'start' || resizeHandle === 'end')) {
+            // --- Single Line Resizing ---
+            if (!isGroup && elements.find(e => e.id === selectedElementIds[0])?.type === 'line' && (resizeHandle === 'start' || resizeHandle === 'end')) {
+                // (Existing line resize logic preserved below...)
+                const elId = selectedElementIds[0];
+                const el = elements.find(e => e.id === elId);
+                if (!el) return;
+
                 const { flip, rotation } = initialResizeState;
                 const angle = rotation || 0;
                 const cx = startX + startW / 2;
@@ -531,7 +721,7 @@ export const Canvas: React.FC<CanvasProps> = ({
                 return;
             }
 
-            // --- Standard & Grid Resizing Logic ---
+            // --- Standard / Group Resizing Logic ---
             let newW = startW;
             let newH = startH;
             let deltaX_local = 0; // Shift of top-left corner in local space
@@ -555,18 +745,12 @@ export const Canvas: React.FC<CanvasProps> = ({
                 deltaY_local = startH - newH;
             }
 
-            // Calculate New World Center
-            // 1. Center shift in local space
-            //    The old center was at (startW/2, startH/2) relative to old top-left.
-            //    The new center is at (newW/2, newH/2) relative to new top-left.
-            //    New Top-Left is at (deltaX_local, deltaY_local) relative to old top-left.
-            //    So new center relative to old top-left is (deltaX_local + newW/2, deltaY_local + newH/2).
-            //    Shift = NewCenter_rel_OldTL - OldCenter_rel_OldTL
+            // Calculate New World Bounds (Target)
+            // Center shift in local space
             const midShiftX = (deltaX_local + newW / 2) - (startW / 2);
             const midShiftY = (deltaY_local + newH / 2) - (startH / 2);
 
-            // 2. Rotate this shift to World Space
-            //    Rotate by +angle
+            // Rotate shift to World Space (if group is rotated, though group bounds usually 0 rot)
             const radPos = toRad(angle);
             const cosPos = Math.cos(radPos);
             const sinPos = Math.sin(radPos);
@@ -574,70 +758,118 @@ export const Canvas: React.FC<CanvasProps> = ({
             const worldShiftX = midShiftX * cosPos - midShiftY * sinPos;
             const worldShiftY = midShiftX * sinPos + midShiftY * cosPos;
 
-            // 3. New World Center
             const oldCenterWorldX = startX + startW / 2;
             const oldCenterWorldY = startY + startH / 2;
 
             const newCenterWorldX = oldCenterWorldX + worldShiftX;
             const newCenterWorldY = oldCenterWorldY + worldShiftY;
 
-            // 4. Final Top-Left (which defines x,y props)
             const finalX = newCenterWorldX - newW / 2;
             const finalY = newCenterWorldY - newH / 2;
 
-            // Update Grid Config if applicable
-            if (el.type === 'grid' && el.gridConfig) {
-                const { cols, gapX, gapY, sourceType, sourceId, dataSliceStart, dataSliceCount, traversalPath } = el.gridConfig;
+            if (isGroup) {
+                // Apply proportional scaling to all elements
+                const scaleX = newW / startW;
+                const scaleY = newH / startH;
 
-                // Recalculate item count to determine row count correctly
-                let items: any[] = [];
+                const updatedElements = elements.map(el => {
+                    const initial = initialGroupElements.current.find(i => i.id === el.id);
+                    if (!initial) return el; // Don't touch non-selected
 
-                let roots: string[] = [];
-                if (sourceType === 'current') {
-                    if (nodes[currentNodeId]) roots = [currentNodeId];
-                } else if (sourceType === 'specific' && sourceId) {
-                    if (nodes[sourceId]) roots = [sourceId];
-                }
+                    // Calculate relative position normalized to old group
+                    const relX = (initial.x - startX) / startW;
+                    const relY = (initial.y - startY) / startH;
+                    // const relW = initial.w / startW; // Not needed for scaling
+                    // const relH = initial.h / startH; // Not needed for scaling
 
-                if (traversalPath && traversalPath.length > 0) {
-                    items = traverseGridData(roots, traversalPath, 0, nodes);
-                } else {
-                    if (roots.length > 0 && nodes[roots[0]]) {
-                        items = nodes[roots[0]].children || [];
-                    }
-                }
-
-                // Apply Slice
-                const start = dataSliceStart || 0;
-                const limit = dataSliceCount;
-                if (start > 0 || limit !== undefined) {
-                    const end = limit !== undefined ? start + limit : undefined;
-                    items = items.slice(start, end);
-                }
-
-                const displayCount = items.length > 0 ? items.length : 6;
-                const colCount = Math.max(1, cols || 3);
-                const rowCount = Math.max(1, Math.ceil((displayCount + (el.gridConfig.offsetStart || 0)) / colCount));
-
-                // newW is the TOTAL width. Convert to Cell W.
-                // TotalW = cols * cellW + (cols-1)*gap
-                // cellW = (TotalW - (cols-1)*gap) / cols
-                const newCellW = (newW - ((colCount - 1) * (gapX || 0))) / colCount;
-                const newCellH = (newH - ((rowCount - 1) * (gapY || 0))) / rowCount;
-
-                onUpdateElements(elements.map(item => item.id === elId ? {
-                    ...item, x: finalX, y: finalY, w: newCellW, h: newCellH
-                } : item), false);
+                    // Project to new group
+                    return {
+                        ...el,
+                        x: finalX + relX * newW,
+                        y: finalY + relY * newH,
+                        w: initial.w * scaleX,
+                        h: initial.h * scaleY,
+                        autoWidth: el.type === 'text' ? false : el.autoWidth
+                    };
+                });
+                onUpdateElements(updatedElements, false);
             } else {
-                onUpdateElements(elements.map(item => item.id === elId ? {
-                    ...item, x: finalX, y: finalY, w: newW, h: newH,
-                    autoWidth: item.type === 'text' ? false : item.autoWidth
-                } : item), false);
+                // Single Element Update
+                const elId = selectedElementIds[0];
+                const el = elements.find(e => e.id === elId);
+                if (!el) return;
+
+                // Update Grid Config if applicable
+                if (el.type === 'grid' && el.gridConfig) {
+                    const { cols, gapX, gapY, sourceType, sourceId, dataSliceStart, dataSliceCount, traversalPath } = el.gridConfig;
+
+                    // Recalculate item count to determine row count correctly
+                    let items: any[] = [];
+
+                    let roots: string[] = [];
+                    if (sourceType === 'current') {
+                        if (nodes[currentNodeId]) roots = [currentNodeId];
+                    } else if (sourceType === 'specific' && sourceId) {
+                        if (nodes[sourceId]) roots = [sourceId];
+                    }
+
+                    if (traversalPath && traversalPath.length > 0) {
+                        items = traverseGridData(roots, traversalPath, 0, nodes);
+                    } else {
+                        if (roots.length > 0 && nodes[roots[0]]) {
+                            items = nodes[roots[0]].children || [];
+                        }
+                    }
+
+                    // Apply Slice
+                    const start = dataSliceStart || 0;
+                    const limit = dataSliceCount;
+                    if (start > 0 || limit !== undefined) {
+                        const end = limit !== undefined ? start + limit : undefined;
+                        items = items.slice(start, end);
+                    }
+
+                    const displayCount = items.length > 0 ? items.length : 6;
+                    const colCount = Math.max(1, cols || 3);
+                    const rowCount = Math.max(1, Math.ceil((displayCount + (el.gridConfig.offsetStart || 0)) / colCount));
+
+                    // newW is the TOTAL width. Convert to Cell W.
+                    // TotalW = cols * cellW + (cols-1)*gap
+                    // cellW = (TotalW - (cols-1)*gap) / cols
+                    const newCellW = (newW - ((colCount - 1) * (gapX || 0))) / colCount;
+                    const newCellH = (newH - ((rowCount - 1) * (gapY || 0))) / rowCount;
+
+                    onUpdateElements(elements.map(item => item.id === elId ? {
+                        ...item, x: finalX, y: finalY, w: newCellW, h: newCellH
+                    } : item), false);
+                } else {
+                    onUpdateElements(elements.map(item => item.id === elId ? {
+                        ...item, x: finalX, y: finalY, w: newW, h: newH,
+                        autoWidth: item.type === 'text' ? false : item.autoWidth
+                    } : item), false);
+                }
             }
         }
     };
 
-    const handleMouseUp = () => {
+    const handleMouseUp = (e: MouseEvent) => {
+        if (isRotating && selectedElementIds.length > 1 && initialGroupBoundsRef.current) {
+            const coords = getMouseCoords(e);
+            const initialBounds = initialGroupBoundsRef.current;
+            const cx = initialBounds.x + initialBounds.w / 2;
+            const cy = initialBounds.y + initialBounds.h / 2;
+            const radians = Math.atan2(coords.y - cy, coords.x - cx);
+            let degrees = radians * (180 / Math.PI) + 90;
+            if (e.shiftKey) { degrees = Math.round(degrees / 15) * 15; }
+
+            // Initial relative rotation was 0 for group, so we add to the group's starting rotation
+            // Use delta from initial interaction start
+            const delta = degrees - initialRotation;
+            const finalRotation = (initialBounds.rotation || 0) + delta;
+            // console.log("DEBUG: Setting persistent rotation to", finalRotation);
+            setPersistentGroupRotation(finalRotation);
+        }
+        setIsRotating(false);
         if (newShapeStart && newShapeCurrent) {
             let x = Math.min(newShapeStart.x, newShapeCurrent.x);
             let y = Math.min(newShapeStart.y, newShapeCurrent.y);
@@ -883,6 +1115,69 @@ export const Canvas: React.FC<CanvasProps> = ({
                                 isEditing={editingElementId === el.id}
                             />
                         ))}
+
+                        {/* Group Selection Overlay */}
+                        {(() => {
+                            let visualBounds = groupBounds;
+                            // 1. Rotation Interaction: Use initial snapshot + delta
+                            if (isRotating && selectedElementIds.length > 1 && initialGroupBoundsRef.current && initialGroupElements.current.length > 0) {
+                                const firstCurrent = elements.find(e => e.id === selectedElementIds[0]);
+                                const firstInitial = initialGroupElements.current.find(e => e.id === selectedElementIds[0]);
+                                if (firstCurrent && firstInitial) {
+                                    // Valid delta calculation based on element update
+                                    const delta = (firstCurrent.rotation || 0) - (firstInitial.rotation || 0);
+                                    visualBounds = {
+                                        ...initialGroupBoundsRef.current,
+                                        rotation: (initialGroupBoundsRef.current.rotation || 0) + delta
+                                    };
+                                }
+                            }
+                            // 2. Persistent Rotation (Static): Use helper
+                            else if (selectedElementIds.length > 1 && persistentGroupRotation !== 0 && groupBounds) {
+                                const vb = calculateVisualGroupBounds(groupBounds, persistentGroupRotation);
+                                if (vb) visualBounds = vb;
+                            }
+
+                            if (selectedElementIds.length > 1 && visualBounds) {
+                                const PADDING = 16;
+                                const offsetBounds = {
+                                    x: visualBounds.x - PADDING / 2,
+                                    y: visualBounds.y - PADDING / 2,
+                                    w: visualBounds.w + PADDING,
+                                    h: visualBounds.h + PADDING,
+                                    rotation: visualBounds.rotation
+                                };
+
+                                return (
+                                    <>
+                                        <div
+                                            className="absolute border border-blue-500 pointer-events-none"
+                                            style={{
+                                                left: offsetBounds.x,
+                                                top: offsetBounds.y,
+                                                width: offsetBounds.w,
+                                                height: offsetBounds.h,
+                                                transform: `rotate(${offsetBounds.rotation || 0}deg)`,
+                                                zIndex: 9999
+                                            }}
+                                        />
+                                        <div style={{
+                                            position: 'absolute',
+                                            left: offsetBounds.x,
+                                            top: offsetBounds.y,
+                                            width: offsetBounds.w,
+                                            height: offsetBounds.h,
+                                            transform: `rotate(${offsetBounds.rotation || 0}deg)`,
+                                            zIndex: 10000,
+                                            pointerEvents: 'none' // Let clicks pass through to container, handles capture events themselves
+                                        }}>
+                                            <SelectionHandles element={{ ...visualBounds, ...offsetBounds, id: 'group-handles', type: 'group' } as any} />
+                                        </div>
+                                    </>
+                                );
+                            }
+                            return null;
+                        })()}
 
                         {editingElementId && (() => {
                             const el = elements.find(e => e.id === editingElementId);

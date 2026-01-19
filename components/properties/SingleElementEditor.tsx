@@ -1,8 +1,7 @@
 
-
 import React, { useState } from 'react';
 import { AppNode, AppState, TemplateElement, TraversalStep } from '../../types';
-import { Grid3X3, ArrowLeft, Palette, Type, MousePointer2, Bold, Italic, Underline, ArrowUp, ArrowDown, Plus, AlignLeft, AlignCenter, AlignRight, AlignStartVertical, AlignEndVertical, AlignCenterVertical, Trash2, Layers, Network } from 'lucide-react';
+import { Grid3X3, ArrowLeft, Palette, Type, MousePointer2, Bold, Italic, Underline, ArrowUp, ArrowDown, Plus, AlignLeft, AlignCenter, AlignRight, AlignStartVertical, AlignEndVertical, AlignCenterVertical, Trash2, Layers, Network, Trash, Settings2, RectangleHorizontal, RectangleVertical, Share2, Link2, ChevronUp, ChevronDown } from 'lucide-react';
 import { ChildIndexSelector } from './ChildIndexSelector';
 import { BORDER_STYLES, FONTS } from '../../constants/editor';
 import clsx from 'clsx';
@@ -124,6 +123,113 @@ const SmartValueInput: React.FC<{
                     </datalist>
                 </div>
             )}
+        </div>
+    );
+};
+
+const SmartInput = ({
+    label,
+    value,
+    onChange,
+    onNudge,
+    min,
+    max,
+    step = 1,
+    className = ""
+}: {
+    label: string,
+    value: number | string | undefined,
+    onChange: (val: number) => void,
+    onNudge: (delta: number) => void,
+    min?: number,
+    max?: number,
+    step?: number,
+    className?: string
+}) => {
+    // Helper to safely parse input
+    const displayValue = (value === '' || value === 'Mixed' || value === undefined || isNaN(Number(value))) ? '' : value;
+
+    const handleKeyDown = (e: React.KeyboardEvent) => {
+        if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            onNudge(step);
+        } else if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            onNudge(-step);
+        }
+    };
+
+    // Repeat logic
+    const intervalRef = React.useRef<NodeJS.Timeout | null>(null);
+    const timeoutRef = React.useRef<NodeJS.Timeout | null>(null);
+    const onNudgeRef = React.useRef(onNudge);
+
+    // Keep ref updated
+    React.useEffect(() => {
+        onNudgeRef.current = onNudge;
+    }, [onNudge]);
+
+    const stopRepeat = () => {
+        if (intervalRef.current) clearInterval(intervalRef.current);
+        if (timeoutRef.current) clearTimeout(timeoutRef.current);
+        intervalRef.current = null;
+        timeoutRef.current = null;
+    };
+
+    const startRepeat = (direction: 'up' | 'down') => {
+        stopRepeat();
+        const delta = direction === 'up' ? step : -step;
+
+        // Immediate action
+        onNudgeRef.current(delta);
+
+        // Delay then repeat
+        timeoutRef.current = setTimeout(() => {
+            intervalRef.current = setInterval(() => {
+                onNudgeRef.current(delta);
+            }, 50); // Speed of repeat
+        }, 300); // Initial delay before repeat
+    };
+
+    // Cleanup on unmount
+    React.useEffect(() => stopRepeat, []);
+
+    return (
+        <div className={`relative group ${className}`}>
+            <label className="text-[10px] text-slate-400 block mb-0.5">{label}</label>
+            <div className="relative">
+                <input
+                    type="number"
+                    value={displayValue}
+                    onChange={(e) => onChange(parseFloat(e.target.value))}
+                    onKeyDown={handleKeyDown}
+                    className="w-full border rounded px-1 text-sm py-1 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none pr-5"
+                    placeholder="Mixed"
+                    min={min}
+                    max={max}
+                    step={step}
+                />
+                <div className="absolute right-0.5 top-0.5 bottom-0.5 flex flex-col justify-center opacity-0 group-hover:opacity-100 transition-opacity bg-white border-l px-0.5">
+                    <button
+                        className="h-2.5 flex items-center justify-center hover:bg-slate-100 active:bg-slate-200 text-slate-500 rounded-sm"
+                        onMouseDown={() => startRepeat('up')}
+                        onMouseUp={stopRepeat}
+                        onMouseLeave={stopRepeat}
+                        tabIndex={-1}
+                    >
+                        <ChevronUp size={10} />
+                    </button>
+                    <button
+                        className="h-2.5 flex items-center justify-center hover:bg-slate-100 active:bg-slate-200 text-slate-500 rounded-sm"
+                        onMouseDown={() => startRepeat('down')}
+                        onMouseUp={stopRepeat}
+                        onMouseLeave={stopRepeat}
+                        tabIndex={-1}
+                    >
+                        <ChevronDown size={10} />
+                    </button>
+                </div>
+            </div>
         </div>
     );
 };
@@ -309,6 +415,11 @@ export const SingleElementEditor: React.FC<SingleElementEditorProps> = ({ elemen
         </div>
     );
 
+    const safeVal = (val: any) => {
+        if (val === 'Mixed' || val === undefined || val === null || isNaN(Number(val))) return '';
+        return Math.round(Number(val));
+    };
+
     return (
         <div className="space-y-4 pb-10">
             {/* Grid Config */}
@@ -316,14 +427,14 @@ export const SingleElementEditor: React.FC<SingleElementEditorProps> = ({ elemen
                 <div className="space-y-2 bg-indigo-50 p-2 rounded border border-indigo-100">
                     <label className="text-xs font-semibold text-indigo-700 uppercase flex items-center gap-1"><Grid3X3 size={12} /> Grid Configuration</label>
                     <div className="grid grid-cols-3 gap-1">
-                        <div><label className="text-[10px] text-slate-500">Cols</label><input type="number" min="1" value={element.gridConfig.cols} onChange={e => onUpdate({ gridConfig: { ...element.gridConfig!, cols: parseInt(e.target.value) } })} className="w-full border rounded px-1 text-sm" /></div>
-                        <div><label className="text-[10px] text-slate-500">Gap X</label><input type="number" min="0" value={element.gridConfig.gapX} onChange={e => onUpdate({ gridConfig: { ...element.gridConfig!, gapX: parseInt(e.target.value) } })} className="w-full border rounded px-1 text-sm" /></div>
-                        <div><label className="text-[10px] text-slate-500">Gap Y</label><input type="number" min="0" value={element.gridConfig.gapY} onChange={e => onUpdate({ gridConfig: { ...element.gridConfig!, gapY: parseInt(e.target.value) } })} className="w-full border rounded px-1 text-sm" /></div>
+                        <div><label className="text-[10px] text-slate-500">Cols</label><input type="number" min="1" value={safeVal(element.gridConfig.cols)} onChange={e => onUpdate({ gridConfig: { ...element.gridConfig!, cols: parseInt(e.target.value) } })} className="w-full border rounded px-1 text-sm" /></div>
+                        <div><label className="text-[10px] text-slate-500">Gap X</label><input type="number" min="0" value={safeVal(element.gridConfig.gapX)} onChange={e => onUpdate({ gridConfig: { ...element.gridConfig!, gapX: parseInt(e.target.value) } })} className="w-full border rounded px-1 text-sm" /></div>
+                        <div><label className="text-[10px] text-slate-500">Gap Y</label><input type="number" min="0" value={safeVal(element.gridConfig.gapY)} onChange={e => onUpdate({ gridConfig: { ...element.gridConfig!, gapY: parseInt(e.target.value) } })} className="w-full border rounded px-1 text-sm" /></div>
                     </div>
                     <div>
                         <label className="text-[10px] text-slate-500">Source</label>
                         <div className="flex items-center gap-1">
-                            <select className="flex-1 text-xs border rounded py-1 px-1 bg-white" value={element.gridConfig.sourceType} onChange={e => onUpdate({ gridConfig: { ...element.gridConfig!, sourceType: e.target.value as any } })}>
+                            <select className="flex-1 text-xs border rounded py-1 px-1 bg-white" value={element.gridConfig.sourceType === 'Mixed' ? '' : element.gridConfig.sourceType} onChange={e => onUpdate({ gridConfig: { ...element.gridConfig!, sourceType: e.target.value as any } })}>
                                 <option value="current">Children of Current Page</option>
                                 <option value="specific">Children of Specific Page...</option>
                             </select>
@@ -466,20 +577,56 @@ export const SingleElementEditor: React.FC<SingleElementEditorProps> = ({ elemen
             <div>
                 <label className="text-xs font-semibold text-slate-500 uppercase block mb-1">Geometry</label>
                 <div className="grid grid-cols-4 gap-2">
-                    <div><label className="text-[10px] text-slate-400">X</label><input type="number" value={Math.round(element.x)} onChange={e => onUpdate({ x: parseInt(e.target.value) })} className="w-full border rounded px-1 text-sm" /></div>
-                    <div><label className="text-[10px] text-slate-400">Y</label><input type="number" value={Math.round(element.y)} onChange={e => onUpdate({ y: parseInt(e.target.value) })} className="w-full border rounded px-1 text-sm" /></div>
-                    <div><label className="text-[10px] text-slate-400">W</label><input type="number" value={Math.round(element.w)} onChange={e => onUpdate({ w: parseInt(e.target.value) })} className="w-full border rounded px-1 text-sm" /></div>
-                    <div><label className="text-[10px] text-slate-400">H</label><input type="number" value={Math.round(element.h)} onChange={e => onUpdate({ h: parseInt(e.target.value) })} className="w-full border rounded px-1 text-sm" /></div>
-                    <div><label className="text-[10px] text-slate-400">Rot</label><input type="number" value={Math.round(element.rotation || 0)} onChange={e => onUpdate({ rotation: parseInt(e.target.value) })} className="w-full border rounded px-1 text-sm" /></div>
+                    <SmartInput
+                        label="X"
+                        value={element.x}
+                        onChange={v => onUpdate({ x: v })}
+                        onNudge={d => onUpdate(prev => ({ x: (Number(prev.x) || 0) + d }))}
+                    />
+                    <SmartInput
+                        label="Y"
+                        value={element.y}
+                        onChange={v => onUpdate({ y: v })}
+                        onNudge={d => onUpdate(prev => ({ y: (Number(prev.y) || 0) + d }))}
+                    />
+                    <SmartInput
+                        label="W"
+                        value={element.w}
+                        onChange={v => onUpdate({ w: v })}
+                        onNudge={d => onUpdate(prev => ({ w: Math.max(1, (Number(prev.w) || 0) + d) }))}
+                        min={1}
+                    />
+                    <SmartInput
+                        label="H"
+                        value={element.h}
+                        onChange={v => onUpdate({ h: v })}
+                        onNudge={d => onUpdate(prev => ({ h: Math.max(1, (Number(prev.h) || 0) + d) }))}
+                        min={1}
+                    />
+                    <SmartInput
+                        label="Rot"
+                        value={element.rotation}
+                        onChange={v => onUpdate({ rotation: v })}
+                        onNudge={d => onUpdate(prev => ({ rotation: (Number(prev.rotation) || 0) + d }))}
+                    />
 
                     <div className="col-span-2 flex items-end gap-1">
-                        <div className="flex-1">
-                            <label className="text-[10px] text-slate-400">Z-Index</label>
-                            <input type="number" value={element.zIndex || 0} onChange={e => onUpdate({ zIndex: parseInt(e.target.value) })} className="w-full border rounded px-1 text-sm" />
-                        </div>
+                        <SmartInput
+                            label="Z-Index"
+                            value={element.zIndex}
+                            onChange={v => onUpdate({ zIndex: v })}
+                            onNudge={d => onUpdate(prev => ({ zIndex: (Number(prev.zIndex) || 0) + d }))}
+                            className="flex-1"
+                        />
                         <div className="flex gap-0.5">
-                            <button onClick={() => onUpdate({ zIndex: (element.zIndex || 0) + 1 })} className="p-1 hover:bg-slate-100 rounded text-slate-600" title="Bring Forward"><ArrowUp size={14} /></button>
-                            <button onClick={() => onUpdate({ zIndex: (element.zIndex || 0) - 1 })} className="p-1 hover:bg-slate-100 rounded text-slate-600" title="Send Backward"><ArrowDown size={14} /></button>
+                            <button onClick={() => {
+                                // console.log("DEBUG: Custom Up Clicked");
+                                onUpdate(prev => ({ zIndex: (Number(prev.zIndex) || 0) + 1 }));
+                            }} className="p-1 hover:bg-slate-100 rounded text-slate-600" title="Bring Forward"><ArrowUp size={14} /></button>
+                            <button onClick={() => {
+                                // console.log("DEBUG: Custom Down Clicked");
+                                onUpdate(prev => ({ zIndex: (Number(prev.zIndex) || 0) - 1 }));
+                            }} className="p-1 hover:bg-slate-100 rounded text-slate-600" title="Send Backward"><ArrowDown size={14} /></button>
                         </div>
                     </div>
                 </div>
@@ -497,26 +644,27 @@ export const SingleElementEditor: React.FC<SingleElementEditorProps> = ({ elemen
                             <input
                                 type="color"
                                 className="w-6 h-6 p-0 border-0 rounded overflow-hidden cursor-pointer"
-                                value={element.fill || '#ffffff'}
-                                onClick={() => { if (!element.fill) onUpdate({ fill: '#ffffff' }); }}
+                                value={element.fill === 'Mixed' ? '#000000' : (element.fill || '#ffffff')} // Use black if mixed, or visually indicate mixed elsewhere
+
                                 onInput={e => onUpdate({ fill: (e.target as HTMLInputElement).value })}
                             />
-                            {!element.fill && (
+                            {(!element.fill || element.fill === 'Mixed') && element.fill !== 'Mixed' && (
                                 <div className="absolute inset-0 pointer-events-none flex items-center justify-center bg-white bg-opacity-50 rounded">
                                     <div className="w-4 h-0.5 bg-red-500 rotate-45" />
                                 </div>
                             )}
+                            {element.fill === 'Mixed' && <div className="absolute inset-0 pointer-events-none flex items-center justify-center text-[8px]">?</div>}
                         </div>
                         <button
-                            onClick={() => element.fill && onUpdate({ fill: '' })}
-                            className={`text-xs px-1 font-bold ${element.fill ? 'text-red-500 hover:text-red-700 cursor-pointer' : 'text-gray-300 cursor-default'}`}
+                            onClick={() => (element.fill && element.fill !== 'Mixed') && onUpdate({ fill: '' })}
+                            className={`text-xs px-1 font-bold ${element.fill && element.fill !== 'Mixed' ? 'text-red-500 hover:text-red-700 cursor-pointer' : 'text-gray-300 cursor-default'}`}
                             title={element.fill ? 'Clear fill color' : 'No fill to clear'}
                         >
                             ✕
                         </button>
                         <select
                             className="flex-1 text-xs border rounded bg-white"
-                            value={element.fillType || 'solid'}
+                            value={element.fillType === 'Mixed' ? '' : (element.fillType || 'solid')}
                             onChange={e => {
                                 const newType = e.target.value as any;
                                 const updates: Partial<TemplateElement> = { fillType: newType };
@@ -528,6 +676,7 @@ export const SingleElementEditor: React.FC<SingleElementEditorProps> = ({ elemen
                         >
                             <option value="solid">Solid Color</option>
                             <option value="pattern">Pattern</option>
+                            {element.fillType === 'Mixed' && <option value="" disabled>Mixed</option>}
                         </select>
                     </div>
                 </div>
@@ -539,14 +688,21 @@ export const SingleElementEditor: React.FC<SingleElementEditorProps> = ({ elemen
                             <option value="dots">Dots</option>
                         </select>
                         <div className="grid grid-cols-2 gap-2">
-                            <div>
-                                <label className="text-[10px] text-slate-400 block mb-0.5">Gap</label>
-                                <input type="number" className="w-full border rounded px-1 text-xs py-1" value={element.patternSpacing || 10} onChange={e => onUpdate({ patternSpacing: parseInt(e.target.value) })} />
-                            </div>
-                            <div>
-                                <label className="text-[10px] text-slate-400 block mb-0.5">Weight</label>
-                                <input type="number" className="w-full border rounded px-1 text-xs py-1" value={element.patternWeight || 1} onChange={e => onUpdate({ patternWeight: parseFloat(e.target.value) })} />
-                            </div>
+                            <SmartInput
+                                label="Gap"
+                                value={element.patternSpacing}
+                                onChange={v => onUpdate({ patternSpacing: v })}
+                                onNudge={d => onUpdate(prev => ({ patternSpacing: Math.max(1, (Number(prev.patternSpacing) || 10) + d) }))}
+                                min={1}
+                            />
+                            <SmartInput
+                                label="Weight"
+                                value={element.patternWeight}
+                                onChange={v => onUpdate({ patternWeight: v })}
+                                onNudge={d => onUpdate(prev => ({ patternWeight: Math.max(0.1, (Number(prev.patternWeight) || 1) + (d * 0.1)) }))}
+                                step={0.1}
+                                min={0.1}
+                            />
                         </div>
                     </div>
                 )}
@@ -559,24 +715,25 @@ export const SingleElementEditor: React.FC<SingleElementEditorProps> = ({ elemen
                             <input
                                 type="color"
                                 className="w-6 h-6 p-0 border-0 rounded overflow-hidden cursor-pointer"
-                                value={element.stroke || '#000000'}
-                                onClick={() => { if (!element.stroke) onUpdate({ stroke: '#000000' }); }}
+                                value={element.stroke === 'Mixed' ? '#000000' : (element.stroke || '#000000')}
+
                                 onInput={e => onUpdate({ stroke: (e.target as HTMLInputElement).value })}
                             />
-                            {!element.stroke && (
+                            {(!element.stroke || element.stroke === 'Mixed') && element.stroke !== 'Mixed' && (
                                 <div className="absolute inset-0 pointer-events-none flex items-center justify-center bg-white bg-opacity-50 rounded">
                                     <div className="w-4 h-0.5 bg-red-500 rotate-45" />
                                 </div>
                             )}
+                            {element.stroke === 'Mixed' && <div className="absolute inset-0 pointer-events-none flex items-center justify-center text-[8px]">?</div>}
                         </div>
                         <button
-                            onClick={() => element.stroke && onUpdate({ stroke: '' })}
-                            className={`text-xs px-1 font-bold ${element.stroke ? 'text-red-500 hover:text-red-700 cursor-pointer' : 'text-gray-300 cursor-default'}`}
+                            onClick={() => (element.stroke && element.stroke !== 'Mixed') && onUpdate({ stroke: '' })}
+                            className={`text-xs px-1 font-bold ${element.stroke && element.stroke !== 'Mixed' ? 'text-red-500 hover:text-red-700 cursor-pointer' : 'text-gray-300 cursor-default'}`}
                             title={element.stroke ? 'Clear stroke color' : 'No stroke to clear'}
                         >
                             ✕
                         </button>
-                        <input type="number" min="0" className="w-12 border rounded px-1 text-xs" placeholder="W" value={element.strokeWidth}
+                        <input type="number" min="0" className="w-12 border rounded px-1 text-xs" placeholder="W" value={safeVal(element.strokeWidth)}
                             onChange={e => {
                                 const val = Number(e.target.value);
                                 const updates: Partial<TemplateElement> = { strokeWidth: val };
@@ -596,7 +753,7 @@ export const SingleElementEditor: React.FC<SingleElementEditorProps> = ({ elemen
                 <div className="flex gap-2">
                     <div className="flex-1">
                         <label className="text-[10px] text-slate-400">Opacity</label>
-                        <input type="range" min="0" max="1" step="0.1" className="w-full" value={element.opacity ?? 1} onChange={e => onUpdate({ opacity: parseFloat(e.target.value) })} />
+                        <input type="range" min="0" max="1" step="0.1" className="w-full" value={element.opacity === 'Mixed' ? 1 : (element.opacity ?? 1)} onChange={e => onUpdate({ opacity: parseFloat(e.target.value) })} />
                     </div>
                     <div className="w-16">
                         <label className="text-[10px] text-slate-400">Radius</label>
