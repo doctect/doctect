@@ -277,8 +277,11 @@ All base properties + required text properties:
 ### Grid (type: "grid")
 Grids display child node data in a table-like layout. Each cell shows data from one child node.
 The grid iterates over the current node's children (or a specific node's children) and renders them in cells.
+*IMPORTANT* remember the grid width and height are for a single cell of the grid, make sure to not set it too large
+otherwise the grid will go off screen, keep a sense of the cell layout in mind when setting the per cell width and height.
 
 - **w and h** define ONE CELL's dimensions (the grid auto-expands based on cols and number of children)
+ If you have a sense of how wide the final grid will be, make sure to divide it by the number of columns and rows to get the size of one cell.
 - **sourceType: "current"** uses children of the node this template is applied to
 - **sourceType: "specific"** uses children of a specific node ID
 - **displayField** determines what text appears in each cell (e.g., "title" shows child.data.title)
@@ -287,7 +290,7 @@ All base properties + required gridConfig:
 \`\`\`javascript
 {
   gridConfig: {
-    cols: 3,                          // number of columns (rows auto-calculated)
+    cols: 3,                          // number of columns (rows auto-calculated) remember to use this in width calculation as width is one cell's width and not the overall grid width
     gapX: 2,                          // horizontal gap between cells (pixels)
     gapY: 2,                          // vertical gap between cells (pixels)
     sourceType: "current",            // "current" = children of this node, "specific" = children of sourceId
