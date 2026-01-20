@@ -562,7 +562,22 @@ export const Canvas: React.FC<CanvasProps> = ({
                     setIsResizing(true);
                     setResizeHandle(handle);
                     setDragStart(coords);
-                    initialResizeStateRef.current = groupBounds; // Use group bounds as the resizing target
+
+                    // Use visual bounds if group has persistent rotation, otherwise use AABB
+                    let resizeBounds = groupBounds;
+                    if (persistentGroupRotation !== 0) {
+                        const visualBounds = getRotatedGroupBounds(
+                            elements.filter(el => selectedElementIds.includes(el.id)),
+                            persistentGroupRotation
+                        );
+                        if (visualBounds) {
+                            resizeBounds = {
+                                ...groupBounds,
+                                ...visualBounds
+                            } as any;
+                        }
+                    }
+                    initialResizeStateRef.current = resizeBounds;
 
                     // Snapshot initial states
                     initialGroupElements.current = elements.filter(el => selectedElementIds.includes(el.id));

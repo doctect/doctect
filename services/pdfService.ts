@@ -959,9 +959,11 @@ export const generatePDF = async (state: AppState, options: GeneratePDFOptions =
             const hasRotation = angle !== 0;
             const hasTransform = hasOpacity || hasRotation;
 
-            // Calculate absolute center
-            const cx = x + w / 2;
-            const cy = y + h / 2;
+            // Calculate rotation pivot using transformOrigin if set, otherwise default to center
+            const ox = el.transformOrigin ? el.transformOrigin.x : 0.5;
+            const oy = el.transformOrigin ? el.transformOrigin.y : 0.5;
+            const cx = x + w * ox;
+            const cy = y + h * oy;
 
             // Drawing Coordinates
             let lx = x;
@@ -998,9 +1000,9 @@ export const generatePDF = async (state: AppState, options: GeneratePDFOptions =
 
                     (doc as any).internal.write(matrixStr);
 
-                    // Local Drawing Bounds: Center is now (0,0)
-                    lx = -w / 2;
-                    ly = -h / 2;
+                    // Local Drawing Bounds: Pivot is now (0,0), so element top-left is at (-w*ox, -h*oy)
+                    lx = -w * ox;
+                    ly = -h * oy;
 
                     // Apply offset to neutralize jsPDF's Y-flip logic inside drawing commands
                     yOffset = pageHeight;
