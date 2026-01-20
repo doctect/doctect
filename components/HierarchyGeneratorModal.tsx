@@ -430,6 +430,51 @@ const rootId = 'root';
 return { nodes, rootId };
 \`\`\`
 
+## Variants (Multi-Device Support)
+Variants allow you to maintain multiple template sets for different device sizes while sharing the same node hierarchy.
+
+### State Structure
+\`\`\`javascript
+{
+  variants: {
+    "variant_id_1": {
+      id: "variant_id_1",
+      name: "reMarkable Paper Pro",
+      templates: { /* template objects */ }
+    },
+    "variant_id_2": {
+      id: "variant_id_2", 
+      name: "iPad A4",
+      templates: { /* different template objects with different dimensions */ }
+    }
+  },
+  activeVariantId: "variant_id_1"
+}
+\`\`\`
+
+### Key Concepts
+- **Shared Hierarchy**: All variants use the same node structure (nodes, rootId)
+- **Separate Templates**: Each variant has its own set of templates with potentially different dimensions, layouts, and styling
+- **Active Variant**: Only one variant is active at a time for editing and PDF export
+- **Template IDs**: Node \`type\` fields reference template IDs which should exist in ALL variants
+
+### Script Output with Variants
+If generating for multi-device support, return templates organized by variant:
+\`\`\`javascript
+// Templates Script can return either:
+// 1. Flat templates object (will be wrapped in a default variant)
+return { template1: {...}, template2: {...} };
+
+// 2. Full variants structure
+return {
+  variants: {
+    remarkable: { id: 'remarkable', name: 'reMarkable PP', templates: {...} },
+    ipad: { id: 'ipad', name: 'iPad A4', templates: {...} }
+  },
+  activeVariantId: 'remarkable'
+};
+\`\`\`
+
 Now please generate scripts for: [DESCRIBE YOUR DOCUMENT STRUCTURE HERE]`;
 };
 

@@ -755,7 +755,7 @@ export const generatePDF = async (state: AppState, options: GeneratePDFOptions =
     if (pageNodes.length > 0) {
         const firstNode = state.nodes[pageNodes[0]];
         if (firstNode) {
-            const tpl = state.templates[firstNode.type];
+            const tpl = state.variants[state.activeVariantId]?.templates[firstNode.type];
             if (tpl) {
                 initialFormat = [tpl.width, tpl.height];
                 initialOrientation = tpl.width > tpl.height ? "landscape" : "portrait";
@@ -771,7 +771,7 @@ export const generatePDF = async (state: AppState, options: GeneratePDFOptions =
 
     // --- FONT LOADING START ---
     const usedFamilies = new Set<string>();
-    Object.values(state.templates).forEach(tpl => {
+    Object.values(state.variants[state.activeVariantId]?.templates || {}).forEach(tpl => {
         tpl.elements.forEach(el => {
             if (el.fontFamily) {
                 let fam = el.fontFamily;
@@ -825,7 +825,7 @@ export const generatePDF = async (state: AppState, options: GeneratePDFOptions =
 
     pageNodes.forEach((nodeId, index) => {
         const node = state.nodes[nodeId];
-        const template = state.templates[node.type];
+        const template = state.variants[state.activeVariantId]?.templates[node.type];
 
         if (!template) {
             if (index > 0) doc.addPage();

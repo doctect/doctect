@@ -26,7 +26,7 @@ export const NodeProperties: React.FC<NodePropertiesProps> = ({ node, state, onU
             <div className="mt-3 space-y-3">
                 <div className="bg-indigo-50 p-3 rounded border border-indigo-100 text-sm">
                     <div className="flex items-center gap-2 text-indigo-700 font-bold mb-1">
-                        <Link size={14}/> Reference Node
+                        <Link size={14} /> Reference Node
                     </div>
                     <p className="text-slate-600 mb-2">
                         This node links to <span className="font-mono bg-white px-1 rounded">{state.nodes[node.referenceId]?.title || 'Unknown'}</span>.
@@ -35,7 +35,7 @@ export const NodeProperties: React.FC<NodePropertiesProps> = ({ node, state, onU
             </div>
         );
     }
-    
+
     // Safety check: ensure node.data exists
     const data = node.data || {};
 
@@ -50,7 +50,7 @@ export const NodeProperties: React.FC<NodePropertiesProps> = ({ node, state, onU
                 <label className="text-xs font-semibold text-slate-500 uppercase">Assigned Template</label>
                 <select className="w-full border rounded px-2 py-1 text-sm mt-1 bg-white"
                     value={node.type} onChange={(e) => onUpdateNode(node.id, { type: e.target.value })}>
-                    {Object.values(state.templates).map(t => (
+                    {Object.values(state.variants[state.activeVariantId]?.templates || {}).map((t: any) => (
                         <option key={t.id} value={t.id}>{t.name}</option>
                     ))}
                 </select>
@@ -58,21 +58,21 @@ export const NodeProperties: React.FC<NodePropertiesProps> = ({ node, state, onU
 
             <div className="pt-2 border-t mt-2">
                 <div className="flex justify-between items-center mb-2">
-                <label className="text-xs font-semibold text-slate-500 uppercase">Data Fields</label>
-                <button onClick={() => setIsAddingField(true)} className="text-[10px] text-blue-600 hover:underline flex items-center gap-1">
-                    <Plus size={10} /> Add
-                </button>
+                    <label className="text-xs font-semibold text-slate-500 uppercase">Data Fields</label>
+                    <button onClick={() => setIsAddingField(true)} className="text-[10px] text-blue-600 hover:underline flex items-center gap-1">
+                        <Plus size={10} /> Add
+                    </button>
                 </div>
-                
+
                 {isAddingField && (
                     <div className="mb-2 p-2 bg-slate-100 rounded border border-slate-200">
-                        <input 
-                        autoFocus
-                        placeholder="Field Name" 
-                        className="w-full border rounded px-1 py-1 text-xs mb-1"
-                        value={newFieldName}
-                        onChange={e => setNewFieldName(e.target.value)}
-                        onKeyDown={e => e.key === 'Enter' && handleAddField()}
+                        <input
+                            autoFocus
+                            placeholder="Field Name"
+                            className="w-full border rounded px-1 py-1 text-xs mb-1"
+                            value={newFieldName}
+                            onChange={e => setNewFieldName(e.target.value)}
+                            onKeyDown={e => e.key === 'Enter' && handleAddField()}
                         />
                         <div className="flex gap-1 justify-end">
                             <button onClick={() => setIsAddingField(false)} className="text-[10px] text-slate-500 hover:text-slate-700 px-1">Cancel</button>
@@ -82,32 +82,32 @@ export const NodeProperties: React.FC<NodePropertiesProps> = ({ node, state, onU
                 )}
 
                 <div className="space-y-2">
-                {Object.entries(data).map(([key, val]) => (
-                    <div key={key}>
-                        <div className="flex justify-between items-center">
-                            <label className="text-[10px] text-slate-500">{key}</label>
-                            <button 
-                                onClick={() => {
-                                    const newData = {...data};
-                                    delete newData[key];
-                                    onUpdateNode(node.id, { data: newData });
-                                }}
-                                className="text-slate-400 hover:text-red-500 p-0.5"
-                                title="Delete Field"
-                            >
-                                <X size={10} />
-                            </button>
+                    {Object.entries(data).map(([key, val]) => (
+                        <div key={key}>
+                            <div className="flex justify-between items-center">
+                                <label className="text-[10px] text-slate-500">{key}</label>
+                                <button
+                                    onClick={() => {
+                                        const newData = { ...data };
+                                        delete newData[key];
+                                        onUpdateNode(node.id, { data: newData });
+                                    }}
+                                    className="text-slate-400 hover:text-red-500 p-0.5"
+                                    title="Delete Field"
+                                >
+                                    <X size={10} />
+                                </button>
+                            </div>
+                            <input
+                                className="w-full border rounded px-2 py-1 text-xs bg-white"
+                                value={val}
+                                onChange={(e) => onUpdateNode(node.id, { data: { ...data, [key]: e.target.value } })}
+                            />
                         </div>
-                        <input 
-                            className="w-full border rounded px-2 py-1 text-xs bg-white" 
-                            value={val}
-                            onChange={(e) => onUpdateNode(node.id, { data: { ...data, [key]: e.target.value } })}
-                        />
-                    </div>
-                ))}
-                {Object.keys(data).length === 0 && !isAddingField && (
-                    <div className="text-[10px] text-slate-400 italic">No custom data fields.</div>
-                )}
+                    ))}
+                    {Object.keys(data).length === 0 && !isAddingField && (
+                        <div className="text-[10px] text-slate-400 italic">No custom data fields.</div>
+                    )}
                 </div>
             </div>
         </div>

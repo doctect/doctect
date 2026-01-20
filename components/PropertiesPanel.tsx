@@ -19,11 +19,11 @@ interface PropertiesPanelProps {
 }
 
 export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({ state, onUpdateElements, onUpdateNode, onDeleteElements, onOpenNodeSelector, onUpdateTemplate }) => {
-    const { nodes, selectedNodeId, viewMode, selectedElementIds, templates, selectedTemplateId } = state;
+    const { nodes, selectedNodeId, viewMode, selectedElementIds, variants, activeVariantId, selectedTemplateId } = state;
     const node = nodes[selectedNodeId];
     const isHierarchyMode = viewMode === 'hierarchy';
 
-    const template = templates[selectedTemplateId];
+    const template = variants[activeVariantId]?.templates[selectedTemplateId];
 
     // Derived selected elements
     const selectedElements = React.useMemo(() => {

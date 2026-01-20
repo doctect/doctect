@@ -138,10 +138,15 @@ export const JsonModal: React.FC<JsonModalProps> = ({ isOpen, onClose, currentSt
 
     const handleAddNode = () => {
         const id = `node_${Math.random().toString(36).substr(2, 6)}`;
+        // Get first template from first variant
+        const activeVariantId = jsonObject.activeVariantId || Object.keys(jsonObject.variants || {})[0];
+        const firstTemplate = activeVariantId && jsonObject.variants?.[activeVariantId]?.templates
+            ? Object.keys(jsonObject.variants[activeVariantId].templates)[0] || 'unknown'
+            : 'unknown';
         const newNode = {
             id,
             parentId: null,
-            type: Object.keys(jsonObject.templates || {})[0] || 'unknown',
+            type: firstTemplate,
             title: 'New Node',
             data: {},
             children: []
@@ -155,7 +160,7 @@ export const JsonModal: React.FC<JsonModalProps> = ({ isOpen, onClose, currentSt
         setTimeout(() => setSuccessMsg(null), 2000);
     };
 
-    const handleAddTemplate = () => {
+    const handleAddTemplate = (variantId: string) => {
         const id = `tpl_${Math.random().toString(36).substr(2, 6)}`;
         const newTpl = {
             id,
@@ -164,11 +169,39 @@ export const JsonModal: React.FC<JsonModalProps> = ({ isOpen, onClose, currentSt
             height: 842,
             elements: []
         };
+        // Add template to the specified variant
+        if (variantId && jsonObject.variants?.[variantId]) {
+            setJsonObject((prev: any) => ({
+                ...prev,
+                variants: {
+                    ...prev.variants,
+                    [variantId]: {
+                        ...prev.variants[variantId],
+                        templates: {
+                            ...prev.variants[variantId].templates,
+                            [id]: newTpl
+                        }
+                    }
+                }
+            }));
+            setSuccessMsg(`Template added to ${jsonObject.variants[variantId].name || variantId}`);
+            setScrollToId(id);
+            setTimeout(() => setSuccessMsg(null), 2000);
+        }
+    };
+
+    const handleAddVariant = () => {
+        const id = `variant_${Math.random().toString(36).substr(2, 6)}`;
+        const newVariant = {
+            id,
+            name: 'New Variant',
+            templates: {}
+        };
         setJsonObject((prev: any) => ({
             ...prev,
-            templates: { ...prev.templates, [id]: newTpl }
+            variants: { ...prev.variants, [id]: newVariant }
         }));
-        setSuccessMsg("Template added");
+        setSuccessMsg("Variant added");
         setScrollToId(id);
         setTimeout(() => setSuccessMsg(null), 2000);
     };
@@ -182,8 +215,11 @@ export const JsonModal: React.FC<JsonModalProps> = ({ isOpen, onClose, currentSt
                 finalState = jsonObject;
             }
 
-            if (!finalState.nodes || !finalState.templates || !finalState.rootId) {
-                throw new Error("Missing required properties (nodes, templates, or rootId)");
+            // Accept either old templates or new variants format
+            const hasTemplates = finalState.templates && typeof finalState.templates === 'object';
+            const hasVariants = finalState.variants && typeof finalState.variants === 'object';
+            if (!finalState.nodes || !finalState.rootId || (!hasTemplates && !hasVariants)) {
+                throw new Error("Missing required properties (nodes, rootId, and templates or variants)");
             }
 
             // Migrate to current schema version
@@ -337,33 +373,52 @@ export const JsonModal: React.FC<JsonModalProps> = ({ isOpen, onClose, currentSt
                                     </div>
                                 </div>
 
-                                {/* TEMPLATES SECTION */}
+                                {/* VARIANTS SECTION */}
                                 <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
                                     <div className="bg-slate-50 border-b border-slate-200 px-4 py-3 flex justify-between items-center">
                                         <h3 className="font-bold text-slate-700 flex items-center gap-2">
                                             <Copy size={18} className="text-indigo-500" />
-                                            Templates
+                                            Variants
                                             <span className="text-xs font-normal text-slate-400 bg-white px-2 py-0.5 rounded border ml-2">
-                                                {Object.keys(jsonObject.templates || {}).length}
+                                                {Object.keys(jsonObject.variants || {}).length}
                                             </span>
                                         </h3>
-                                        <button onClick={handleAddTemplate} className="flex items-center gap-1 text-xs bg-indigo-600 text-white px-3 py-1.5 rounded hover:bg-indigo-700 transition-colors shadow-sm">
-                                            <Plus size={14} /> Add Template
+                                        <button onClick={handleAddVariant} className="flex items-center gap-1 text-xs bg-indigo-600 text-white px-3 py-1.5 rounded hover:bg-indigo-700 transition-colors shadow-sm">
+                                            <Plus size={14} /> Add Variant
                                         </button>
                                     </div>
                                     <div className="divide-y divide-slate-100">
-                                        {jsonObject.templates && Object.entries(jsonObject.templates).map(([key, val]: [string, any]) => (
-                                            <MainCollectionItem
-                                                key={key}
-                                                id={key}
-                                                data={val}
-                                                primaryKey="name"
-                                                icon={<Copy size={16} />}
-                                                path={['templates', key]}
-                                                onUpdate={handleVisualUpdate}
-                                                onAdd={handleVisualAdd}
-                                                onDelete={handleVisualDelete}
-                                            />
+                                        {jsonObject.variants && Object.entries(jsonObject.variants).map(([variantId, variant]: [string, any]) => (
+                                            <div key={variantId} id={`item-${variantId}`} className="transition-colors">
+                                                <div className="px-4 py-3 bg-indigo-50/50 border-b border-indigo-100 flex items-center justify-between">
+                                                    <div className="flex items-center gap-2">
+                                                        <Copy size={16} className="text-indigo-500" />
+                                                        <span className="font-medium text-indigo-700">{variant.name || variantId}</span>
+                                                        <span className="text-xs text-indigo-400">({Object.keys(variant.templates || {}).length} templates)</span>
+                                                        {jsonObject.activeVariantId === variantId && (
+                                                            <span className="text-[10px] bg-green-100 text-green-700 px-1.5 py-0.5 rounded font-medium">Active</span>
+                                                        )}
+                                                    </div>
+                                                    <div className="flex items-center gap-2">
+                                                        <button
+                                                            onClick={() => handleAddTemplate(variantId)}
+                                                            className="flex items-center gap-1 text-[10px] bg-white border border-indigo-200 text-indigo-600 px-2 py-1 rounded hover:bg-indigo-50 transition-colors"
+                                                        >
+                                                            <Plus size={12} /> Add Template
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                                <MainCollectionItem
+                                                    id={variantId}
+                                                    data={variant}
+                                                    primaryKey="name"
+                                                    icon={<Copy size={16} />}
+                                                    path={['variants', variantId]}
+                                                    onUpdate={handleVisualUpdate}
+                                                    onAdd={handleVisualAdd}
+                                                    onDelete={handleVisualDelete}
+                                                />
+                                            </div>
                                         ))}
                                     </div>
                                 </div>
@@ -373,7 +428,7 @@ export const JsonModal: React.FC<JsonModalProps> = ({ isOpen, onClose, currentSt
                                     <h3 className="font-bold text-slate-700 mb-4 flex items-center gap-2"><MoreHorizontal size={18} /> Other Settings</h3>
                                     <div className="space-y-1">
                                         {Object.entries(jsonObject).map(([key, val]) => {
-                                            if (key === 'nodes' || key === 'templates') return null;
+                                            if (key === 'nodes' || key === 'variants') return null;
                                             return (
                                                 <JsonTreeItem
                                                     key={key}

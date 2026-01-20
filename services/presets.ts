@@ -66,19 +66,26 @@ export const getCustomPresets = (): PresetDefinition[] => {
 
 // Helper to hydrate the loaded JSON into a full AppState
 const loadPreset = (data: any): AppState => {
-    // Basic validation
-    if (!data.nodes || !data.templates || !data.rootId) {
+    // Basic validation - accept either old templates format or new variants format
+    const hasTemplates = data.templates && typeof data.templates === 'object';
+    const hasVariants = data.variants && typeof data.variants === 'object';
+    if (!data.nodes || (!hasTemplates && !hasVariants) || !data.rootId) {
         console.error("Invalid preset data:", data);
         throw new Error("Preset data is missing required fields");
     }
 
-    const baseState: AppState = {
+    // Determine first template ID for selectedTemplateId
+    const firstTemplateId = hasVariants
+        ? Object.keys(data.variants[Object.keys(data.variants)[0]]?.templates || {})[0] || 'default'
+        : Object.keys(data.templates)[0] || 'year';
+
+    // Build base state - let migration handle conversion from templates to variants
+    const baseState: any = {
         nodes: data.nodes,
         rootId: data.rootId,
-        templates: data.templates,
         viewMode: 'hierarchy',
         selectedNodeId: data.rootId,
-        selectedTemplateId: Object.keys(data.templates)[0] || 'year',
+        selectedTemplateId: firstTemplateId,
         selectedElementIds: [],
         scale: 0.8,
         tool: 'select',
@@ -91,8 +98,17 @@ const loadPreset = (data: any): AppState => {
         snapToGrid: false,
         showGrid: false,
         clipboard: [],
-        schemaVersion: CURRENT_SCHEMA_VERSION
     };
+
+    // Pass through templates or variants as-is - migration will handle conversion
+    if (hasTemplates) {
+        baseState.templates = data.templates;
+        baseState.schemaVersion = 3; // Force v3 -> v4 migration
+    } else {
+        baseState.variants = data.variants;
+        baseState.activeVariantId = data.activeVariantId || Object.keys(data.variants)[0];
+        baseState.schemaVersion = CURRENT_SCHEMA_VERSION;
+    }
 
     // Migrate to ensure all elements have required fields
     return migrateState(baseState);

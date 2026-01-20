@@ -16,7 +16,7 @@ import { AppState } from '../types';
 /**
  * Current schema version. Increment this when making breaking changes.
  */
-export const CURRENT_SCHEMA_VERSION = 3;
+export const CURRENT_SCHEMA_VERSION = 4;
 
 /**
  * Migration v0 → v1
@@ -112,6 +112,11 @@ export function migrateState(state: any): AppState {
         version = 3;
     }
 
+    if (version < 4) {
+        migratedState = migrateV3ToV4(migratedState);
+        version = 4;
+    }
+
     console.log(`[Migration] Migration complete. Now at v${CURRENT_SCHEMA_VERSION}`);
 
     return migratedState as AppState;
@@ -129,6 +134,33 @@ function migrateV2ToV3(state: any): any {
     const migrated = JSON.parse(JSON.stringify(state));
     // Field is optional, no data transformation needed
     migrated.schemaVersion = 3;
+    return migrated;
+}
+
+/**
+ * Migration v3 → v4
+ * 
+ * Changes:
+ * - Converts flat `templates` to `variants` structure
+ * - Creates a "Default" variant containing existing templates
+ * - Adds `activeVariantId` field
+ */
+function migrateV3ToV4(state: any): any {
+    console.log('[Migration] Applying v3 → v4: Converting to variant structure');
+    const migrated = JSON.parse(JSON.stringify(state));
+
+    // Create default variant from existing templates
+    const defaultVariant = {
+        id: 'default',
+        name: 'Default',
+        templates: migrated.templates || {}
+    };
+
+    migrated.variants = { default: defaultVariant };
+    migrated.activeVariantId = 'default';
+    delete migrated.templates;  // Remove old field
+
+    migrated.schemaVersion = 4;
     return migrated;
 }
 

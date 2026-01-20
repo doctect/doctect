@@ -41,6 +41,13 @@ The most powerful tool for planner creation.
 *   Generates optimized PDFs directly in the browser using `jsPDF`.
 *   Supports custom page sizes (A4, A5, reMarkable Paper Pro, Boox Note Air, etc.).
 
+### 📱 Multi-Device Variants
+*   **Variants**: Maintain multiple template sets for different device sizes (e.g., reMarkable, iPad, A4).
+*   **Shared Hierarchy**: All variants share the same node/page structure.
+*   **Quick Switching**: Easily switch between variants using the sidebar dropdown.
+*   **Variant Management**: Add, rename, duplicate, and delete variants from the UI.
+*   **Device-Specific PDF Export**: Export PDFs tailored to each device's dimensions.
+
 ---
 
 ## 🚀 Getting Started
@@ -118,6 +125,24 @@ const rootId = 'root';
 // ... logic to loop 365 times and create nodes ...
 return { nodes, rootId };
 ```
+
+### 5. Working with Variants
+
+Variants let you maintain different template designs for different device sizes while keeping the same page hierarchy.
+
+**Switch Variants**: In Templates mode, use the dropdown at the top of the sidebar.
+
+**Add Variant**: Click the + button next to the dropdown.
+
+**Rename/Duplicate/Delete**: Use the icon buttons next to the dropdown (hover for tooltips).
+
+**Key Concept**: All variants share the same nodes. When you switch variants, the same pages render using different templates suited for that device size.
+
+**Example Workflow**:
+1. Create your initial templates for reMarkable Paper Pro (509×679)
+2. Click + to add a new variant, rename it to "iPad A4"
+3. Adjust template dimensions and layouts for A4 (595×842)
+4. Export PDFs for each device by switching variants
 
 ---
 

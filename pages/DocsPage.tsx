@@ -69,6 +69,7 @@ export const DocsPage: React.FC = () => {
                      <NavLink id="interface">Interface Overview</NavLink>
                      <NavLink id="grids">Dynamic Grids</NavLink>
                      <NavLink id="linking">Smart Linking</NavLink>
+                     <NavLink id="variants">Multi-Device Variants</NavLink>
                   </Section>
                   <Section title="Advanced Tools">
                      <NavLink id="referencing">Reference Fields</NavLink>
@@ -196,7 +197,7 @@ export const DocsPage: React.FC = () => {
                            <div className="p-4 bg-slate-100 rounded-xl text-slate-600 mt-1"><Layers size={28} /></div>
                            <div>
                               <strong className="block text-slate-900 text-xl mb-3">Sidebar (Left)</strong>
-                              <p className="mt-0">Switch between <strong>Hierarchy Mode</strong> (managing your page structure) and <strong>Templates Mode</strong> (managing your designs). Hover over nodes for actions like Add, Edit, or Delete.</p>
+                              <p className="mt-0">Switch between <strong>Hierarchy Mode</strong> and <strong>Templates Mode</strong>. In Templates Mode, use the dropdown at the top to manage <strong>Variants</strong> (e.g., A4 vs reMarkable). Hover over nodes for actions.</p>
                            </div>
                         </li>
                         <li className="flex gap-6 items-start">
@@ -272,6 +273,38 @@ export const DocsPage: React.FC = () => {
                            </tbody>
                         </table>
                      </div>
+                  </section>
+
+                  <section id="variants">
+                     <h2><span className="flex items-center gap-4"><Layers className="text-blue-500" size={32} /> Multi-Device Variants</span></h2>
+                     <p>
+                        Variants allow you to maintain multiple template sets for different device sizes (e.g., reMarkable Paper Pro, iPad, A4) while sharing a single page hierarchy.
+                     </p>
+
+                     <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-6 mb-8">
+                        <h4 className="font-bold text-indigo-900 text-lg mb-2">Why Variants?</h4>
+                        <p className="text-indigo-800 m-0">
+                           Instead of duplicating your entire project to change the page size, you simply add a new Variant.
+                           Your nodes (dates, titles, structure) stay the same, but the visual layout (CSS/coordinates) switches instantly.
+                        </p>
+                     </div>
+
+                     <h3>Managing Variants</h3>
+                     <p>
+                        In the <strong>Sidebar (Templates Mode)</strong>, use the controls at the top:
+                     </p>
+                     <ul className="list-disc pl-5 mt-4 space-y-2 text-slate-700">
+                        <li><strong>Dropdown</strong>: Switch the active variant to view/edit templates for that specific device size.</li>
+                        <li><strong><Zap size={16} className="inline text-slate-400" /> Actions</strong>: Use the inline buttons to Rename, Duplicate, or Delete variants.</li>
+                     </ul>
+
+                     <h3 className="mt-8">Workflow</h3>
+                     <ol className="list-decimal pl-5 mt-4 space-y-4 text-slate-700">
+                        <li><strong>Design First Variant</strong>: Create your templates for your primary device (e.g., reMarkable Paper Pro).</li>
+                        <li><strong>Duplicate</strong>: Click the Copy/Duplicate button on the variant. Name it "iPad A4".</li>
+                        <li><strong>Resize & Reflow</strong>: Switch to the new variant. Your templates now exist as copies. Change their dimensions and move elements to fit the new screen size.</li>
+                        <li><strong>Export</strong>: When you generate a PDF, it uses the currently active variant's dimensions.</li>
+                     </ol>
                   </section>
 
                   <section id="referencing">

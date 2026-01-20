@@ -399,7 +399,7 @@ export const SingleElementEditor: React.FC<SingleElementEditorProps> = ({ elemen
                 <label className="text-[9px] text-slate-400">Parent Type (Optional)</label>
                 <select className="w-full border rounded px-1 text-xs bg-white" value={refType} onChange={e => setRefType(e.target.value)}>
                     <option value="">Any</option>
-                    {Object.values(state.templates).map(t => (
+                    {Object.values(state.variants[state.activeVariantId]?.templates || {}).map((t: any) => (
                         <option key={t.id} value={t.id}>{t.name}</option>
                     ))}
                 </select>
@@ -1005,7 +1005,7 @@ export const SingleElementEditor: React.FC<SingleElementEditorProps> = ({ elemen
                             <label className="text-[10px] text-slate-400">Filter by Parent Template (Optional)</label>
                             <select className="w-full border rounded px-2 py-1 text-xs bg-white" value={element.linkReferrerParentType || ''} onChange={e => onUpdate({ linkReferrerParentType: e.target.value })}>
                                 <option value="">Any Template</option>
-                                {Object.values(state.templates).map(t => (
+                                {Object.values(state.variants[state.activeVariantId]?.templates || {}).map((t: any) => (
                                     <option key={t.id} value={t.id}>{t.name}</option>
                                 ))}
                             </select>

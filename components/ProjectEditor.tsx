@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { AppState, AppNode, TemplateElement, PageTemplate, RM_PP_WIDTH, RM_PP_HEIGHT } from '../types';
+import { AppState, AppNode, TemplateElement, PageTemplate, Variant, RM_PP_WIDTH, RM_PP_HEIGHT } from '../types';
 import { Sidebar } from './Sidebar';
 import { Canvas } from './Canvas';
 import { PropertiesPanel } from './PropertiesPanel';
@@ -17,8 +17,8 @@ import clsx from 'clsx';
 import { trackEvent } from '../services/analytics';
 
 interface HistoryState {
-    past: { nodes: Record<string, AppNode>, templates: Record<string, PageTemplate> }[];
-    future: { nodes: Record<string, AppNode>, templates: Record<string, PageTemplate> }[];
+    past: { nodes: Record<string, AppNode>, variants: Record<string, Variant> }[];
+    future: { nodes: Record<string, AppNode>, variants: Record<string, Variant> }[];
 }
 
 interface ProjectEditorProps {
@@ -71,12 +71,12 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, initial
     const saveToHistory = useCallback(() => {
         historyRef.current.past.push({
             nodes: JSON.parse(JSON.stringify(state.nodes)),
-            templates: JSON.parse(JSON.stringify(state.templates))
+            variants: JSON.parse(JSON.stringify(state.variants))
         });
         // Limit history size to 50
         if (historyRef.current.past.length > 50) historyRef.current.past.shift();
         historyRef.current.future = [];
-    }, [state.nodes, state.templates]);
+    }, [state.nodes, state.variants]);
 
     const undo = useCallback(() => {
         if (historyRef.current.past.length === 0) return;
@@ -85,11 +85,11 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, initial
         if (previous) {
             historyRef.current.future.push({
                 nodes: JSON.parse(JSON.stringify(state.nodes)),
-                templates: JSON.parse(JSON.stringify(state.templates))
+                variants: JSON.parse(JSON.stringify(state.variants))
             });
-            setState(s => ({ ...s, nodes: previous.nodes, templates: previous.templates, selectedElementIds: [] }));
+            setState(s => ({ ...s, nodes: previous.nodes, variants: previous.variants, selectedElementIds: [] }));
         }
-    }, [state.nodes, state.templates]);
+    }, [state.nodes, state.variants]);
 
     const redo = useCallback(() => {
         if (historyRef.current.future.length === 0) return;
@@ -98,11 +98,11 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, initial
         if (next) {
             historyRef.current.past.push({
                 nodes: JSON.parse(JSON.stringify(state.nodes)),
-                templates: JSON.parse(JSON.stringify(state.templates))
+                variants: JSON.parse(JSON.stringify(state.variants))
             });
-            setState(s => ({ ...s, nodes: next.nodes, templates: next.templates, selectedElementIds: [] }));
+            setState(s => ({ ...s, nodes: next.nodes, variants: next.variants, selectedElementIds: [] }));
         }
-    }, [state.nodes, state.templates]);
+    }, [state.nodes, state.variants]);
 
     // Panel Resizing Logic
     useEffect(() => {
@@ -254,11 +254,16 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, initial
     }, [state, undo, redo, saveToHistory, isActive, showScriptGenModal, showSavePresetModal]);
 
 
+    // Helper: Get templates from active variant
+    const getActiveTemplates = useCallback((): Record<string, PageTemplate> => {
+        return state.variants[state.activeVariantId]?.templates || {};
+    }, [state.variants, state.activeVariantId]);
+
     const getCurrentTemplate = (): PageTemplate | null => {
         let targetTemplateId = state.selectedTemplateId;
         if (state.viewMode === 'hierarchy') targetTemplateId = state.nodes[state.selectedNodeId]?.type;
         if (!targetTemplateId) return null;
-        return state.templates[targetTemplateId];
+        return getActiveTemplates()[targetTemplateId];
     };
 
     const handleDuplicate = () => {
@@ -322,12 +327,13 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, initial
         saveToHistory();
         const newId = Math.random().toString(36).substr(2, 9);
         const parentNode = parentId ? state.nodes[parentId] : null;
+        const activeTemplates = getActiveTemplates();
         let newType = 'day_view';
-        if (state.templates['day_view']) {
+        if (activeTemplates['day_view']) {
             if (parentNode?.type === 'year_view') newType = 'month_view';
             if (!parentNode) newType = 'year_view';
         } else {
-            newType = Object.keys(state.templates)[0];
+            newType = Object.keys(activeTemplates)[0];
         }
 
         const newNode: AppNode = { id: newId, parentId, type: newType, title: 'New Page', data: {}, children: [] };
@@ -387,32 +393,44 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, initial
 
             idsToDelete.forEach(nodeId => { delete nextNodes[nodeId]; });
 
-            const nextTemplates = { ...prev.templates };
-            Object.keys(nextTemplates).forEach(tplId => {
-                const tpl = nextTemplates[tplId];
-                let tplChanged = false;
-                const newElements = tpl.elements.map(el => {
-                    let elChanged = false;
-                    let newEl = { ...el };
-                    if (newEl.type === 'grid' && newEl.gridConfig?.sourceType === 'specific' && newEl.gridConfig.sourceId && idsToDelete.has(newEl.gridConfig.sourceId)) {
-                        newEl.gridConfig = { ...newEl.gridConfig, sourceType: 'current', sourceId: undefined };
-                        elChanged = true;
+            // Clean up templates in all variants when nodes are deleted
+            const nextVariants = { ...prev.variants };
+            Object.keys(nextVariants).forEach(variantId => {
+                const variant = nextVariants[variantId];
+                const nextTemplates = { ...variant.templates };
+                let variantChanged = false;
+                Object.keys(nextTemplates).forEach(tplId => {
+                    const tpl = nextTemplates[tplId];
+                    let tplChanged = false;
+                    const newElements = tpl.elements.map(el => {
+                        let elChanged = false;
+                        let newEl = { ...el };
+                        if (newEl.type === 'grid' && newEl.gridConfig?.sourceType === 'specific' && newEl.gridConfig.sourceId && idsToDelete.has(newEl.gridConfig.sourceId)) {
+                            newEl.gridConfig = { ...newEl.gridConfig, sourceType: 'current', sourceId: undefined };
+                            elChanged = true;
+                        }
+                        if (newEl.linkTarget === 'specific_node' && newEl.linkValue && idsToDelete.has(newEl.linkValue)) {
+                            newEl.linkTarget = 'none';
+                            newEl.linkValue = undefined;
+                            elChanged = true;
+                        }
+                        if (elChanged) tplChanged = true;
+                        return newEl;
+                    });
+                    if (tplChanged) {
+                        nextTemplates[tplId] = { ...tpl, elements: newElements };
+                        variantChanged = true;
                     }
-                    if (newEl.linkTarget === 'specific_node' && newEl.linkValue && idsToDelete.has(newEl.linkValue)) {
-                        newEl.linkTarget = 'none';
-                        newEl.linkValue = undefined;
-                        elChanged = true;
-                    }
-                    if (elChanged) tplChanged = true;
-                    return newEl;
                 });
-                if (tplChanged) nextTemplates[tplId] = { ...tpl, elements: newElements };
+                if (variantChanged) {
+                    nextVariants[variantId] = { ...variant, templates: nextTemplates };
+                }
             });
 
             let newSelectedId = prev.selectedNodeId;
             if (idsToDelete.has(newSelectedId) || !nextNodes[newSelectedId]) newSelectedId = prev.rootId;
 
-            return { ...prev, nodes: nextNodes, templates: nextTemplates, selectedNodeId: newSelectedId, selectedElementIds: [] };
+            return { ...prev, nodes: nextNodes, variants: nextVariants, selectedNodeId: newSelectedId, selectedElementIds: [] };
         });
 
         setDeleteConfirmState({ isOpen: false, nodeId: null });
@@ -438,23 +456,117 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, initial
         saveToHistory();
         const newId = `tpl_${Math.random().toString(36).substr(2, 6)}`;
         const newTemplate: PageTemplate = { id: newId, name: 'New Template', width: RM_PP_WIDTH, height: RM_PP_HEIGHT, elements: [] };
-        setState(prev => ({ ...prev, templates: { ...prev.templates, [newId]: newTemplate }, selectedTemplateId: newId }));
+        setState(prev => {
+            const activeVariant = prev.variants[prev.activeVariantId];
+            const updatedVariant = { ...activeVariant, templates: { ...activeVariant.templates, [newId]: newTemplate } };
+            return { ...prev, variants: { ...prev.variants, [prev.activeVariantId]: updatedVariant }, selectedTemplateId: newId };
+        });
+    };
+
+    const handleAddVariant = () => {
+        saveToHistory();
+        const newId = `variant_${Math.random().toString(36).substr(2, 6)}`;
+        // Create a new variant with a copy of the first template from active variant as a starting point
+        const activeTemplates = getActiveTemplates();
+        const firstTemplateId = Object.keys(activeTemplates)[0];
+        const newVariant: Variant = {
+            id: newId,
+            name: `New Variant`,
+            templates: firstTemplateId ? { [firstTemplateId]: { ...activeTemplates[firstTemplateId], elements: [] } } : {}
+        };
+        setState(prev => ({
+            ...prev,
+            variants: { ...prev.variants, [newId]: newVariant },
+            activeVariantId: newId,
+            selectedTemplateId: Object.keys(newVariant.templates)[0] || prev.selectedTemplateId
+        }));
+    };
+
+    const handleSelectVariant = (variantId: string) => {
+        if (!state.variants[variantId]) return;
+        const firstTemplateId = Object.keys(state.variants[variantId].templates)[0];
+        setState(prev => ({
+            ...prev,
+            activeVariantId: variantId,
+            selectedTemplateId: firstTemplateId || prev.selectedTemplateId,
+            selectedElementIds: []
+        }));
+    };
+
+    const handleRenameVariant = (variantId: string, name: string) => {
+        if (!state.variants[variantId]) return;
+        saveToHistory();
+        setState(prev => ({
+            ...prev,
+            variants: {
+                ...prev.variants,
+                [variantId]: { ...prev.variants[variantId], name }
+            }
+        }));
+    };
+
+    const handleDeleteVariant = (variantId: string) => {
+        if (Object.keys(state.variants).length <= 1) {
+            alert("Cannot delete the last variant.");
+            return;
+        }
+        saveToHistory();
+        const remainingVariants = { ...state.variants };
+        delete remainingVariants[variantId];
+        const newActiveId = Object.keys(remainingVariants)[0];
+        const firstTemplateId = Object.keys(remainingVariants[newActiveId].templates)[0];
+        setState(prev => ({
+            ...prev,
+            variants: remainingVariants,
+            activeVariantId: newActiveId,
+            selectedTemplateId: firstTemplateId || prev.selectedTemplateId,
+            selectedElementIds: []
+        }));
+    };
+
+    const handleDuplicateVariant = (variantId: string) => {
+        if (!state.variants[variantId]) return;
+        saveToHistory();
+        const sourceVariant = state.variants[variantId];
+        const newId = `variant_${Math.random().toString(36).substr(2, 6)}`;
+        const newVariant: Variant = {
+            id: newId,
+            name: `${sourceVariant.name} (Copy)`,
+            templates: JSON.parse(JSON.stringify(sourceVariant.templates)) // Deep copy templates
+        };
+        setState(prev => ({
+            ...prev,
+            variants: { ...prev.variants, [newId]: newVariant },
+            activeVariantId: newId,
+            selectedTemplateId: Object.keys(newVariant.templates)[0] || prev.selectedTemplateId
+        }));
     };
     const handleDeleteTemplate = (id: string) => {
-        if (Object.keys(state.templates).length <= 1) return alert("Cannot delete the last template.");
+        const activeTemplates = getActiveTemplates();
+        if (Object.keys(activeTemplates).length <= 1) return alert("Cannot delete the last template.");
         saveToHistory();
         setState(prev => {
-            const nextTemplates = { ...prev.templates }; delete nextTemplates[id];
-            return { ...prev, templates: nextTemplates, selectedTemplateId: Object.keys(nextTemplates)[0] };
+            const activeVariant = prev.variants[prev.activeVariantId];
+            const nextTemplates = { ...activeVariant.templates }; delete nextTemplates[id];
+            const updatedVariant = { ...activeVariant, templates: nextTemplates };
+            return { ...prev, variants: { ...prev.variants, [prev.activeVariantId]: updatedVariant }, selectedTemplateId: Object.keys(nextTemplates)[0] };
         });
     };
     const handleUpdateTemplateName = (id: string, name: string) => {
         saveToHistory();
-        setState(prev => ({ ...prev, templates: { ...prev.templates, [id]: { ...prev.templates[id], name } } }));
+        setState(prev => {
+            const activeVariant = prev.variants[prev.activeVariantId];
+            const updatedVariant = { ...activeVariant, templates: { ...activeVariant.templates, [id]: { ...activeVariant.templates[id], name } } };
+            return { ...prev, variants: { ...prev.variants, [prev.activeVariantId]: updatedVariant } };
+        });
     };
     const handleUpdateTemplate = (id: string, updates: Partial<PageTemplate>) => {
         saveToHistory();
-        setState(prev => ({ ...prev, templates: { ...prev.templates, [id]: { ...prev.templates[id], ...updates } } }));
+        setState(prev => {
+            const activeVariant = prev.variants[prev.activeVariantId];
+            const updatedVariant = { ...activeVariant, templates: { ...activeVariant.templates, [id]: { ...activeVariant.templates[id], ...updates } } };
+            return { ...prev, variants: { ...prev.variants, [prev.activeVariantId]: updatedVariant } };
+        });
     };
 
     const handleUpdateTemplateElements = (newElements: TemplateElement[], shouldSaveHistory = true) => {
@@ -465,14 +577,19 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, initial
             targetTemplateId = currentNode.type;
         }
         if (shouldSaveHistory) saveToHistory();
-        setState(prev => ({ ...prev, templates: { ...prev.templates, [targetTemplateId]: { ...prev.templates[targetTemplateId], elements: newElements } } }));
+        setState(prev => {
+            const activeVariant = prev.variants[prev.activeVariantId];
+            const updatedVariant = { ...activeVariant, templates: { ...activeVariant.templates, [targetTemplateId]: { ...activeVariant.templates[targetTemplateId], elements: newElements } } };
+            return { ...prev, variants: { ...prev.variants, [prev.activeVariantId]: updatedVariant } };
+        });
     };
 
     const handleDeleteElements = (ids: string[]) => {
         let targetTemplateId = state.selectedTemplateId;
         if (state.viewMode === 'hierarchy') targetTemplateId = state.nodes[state.selectedNodeId]?.type;
         if (!targetTemplateId) return;
-        const currentTemplate = state.templates[targetTemplateId];
+        const activeTemplates = getActiveTemplates();
+        const currentTemplate = activeTemplates[targetTemplateId];
         const newElements = currentTemplate.elements.filter(el => !ids.includes(el.id));
         handleUpdateTemplateElements(newElements, false);
         setState(prev => ({ ...prev, selectedElementIds: [] }));
@@ -483,17 +600,21 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, initial
         if (state.viewMode === 'hierarchy') targetTemplateId = state.nodes[state.selectedNodeId]?.type;
         if (!targetTemplateId) return;
         saveToHistory();
-        const tpl = state.templates[targetTemplateId];
+        const activeTemplates = getActiveTemplates();
+        const tpl = activeTemplates[targetTemplateId];
         const newElements = tpl.elements.map(el => el.id === id ? { ...el, ...updates } : el);
         handleUpdateTemplateElements(newElements, false);
     };
 
-    const handleImportGenerated = (newState: Partial<AppState>) => {
+    const handleImportGenerated = (newState: Partial<AppState> & { templates?: Record<string, PageTemplate> }) => {
         console.group("ProjectEditor: Import Debug");
         try {
             if (!newState) throw new Error("Import state is null or undefined");
             if (!newState.nodes || typeof newState.nodes !== 'object') throw new Error("Import Error: 'nodes' must be a valid object");
-            if (!newState.templates || typeof newState.templates !== 'object') throw new Error("Import Error: 'templates' must be a valid object");
+            // Accept either old format (templates) or new format (variants)
+            const hasTemplates = newState.templates && typeof newState.templates === 'object';
+            const hasVariants = newState.variants && typeof newState.variants === 'object';
+            if (!hasTemplates && !hasVariants) throw new Error("Import Error: 'templates' or 'variants' must be provided");
             if (!newState.rootId) throw new Error("Import Error: 'rootId' is missing");
 
             const cleanNodes: Record<string, AppNode> = {};
@@ -510,12 +631,16 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, initial
                 }
             }
 
-            const cleanTemplates: Record<string, PageTemplate> = {};
-            for (const key in newState.templates) {
-                if (Object.prototype.hasOwnProperty.call(newState.templates, key)) {
-                    const tpl = newState.templates[key];
-                    if (tpl && typeof tpl === 'object') {
-                        cleanTemplates[key] = tpl;
+            // Clean templates if provided (old format), else use variants
+            let cleanTemplates: Record<string, PageTemplate> | undefined;
+            if (hasTemplates && newState.templates) {
+                cleanTemplates = {};
+                for (const key in newState.templates) {
+                    if (Object.prototype.hasOwnProperty.call(newState.templates, key)) {
+                        const tpl = newState.templates[key];
+                        if (tpl && typeof tpl === 'object') {
+                            cleanTemplates[key] = tpl;
+                        }
                     }
                 }
             }
@@ -526,18 +651,27 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, initial
             if (!cleanNodes[newRootId]) throw new Error(`Root node '${newRootId}' missing from generated nodes.`);
 
             // Build a partial state and migrate it to ensure schema compatibility
-            const stateToMigrate = {
+            // If old format with templates, migration will convert to variants
+            const stateToMigrate: any = {
                 ...state,
                 nodes: cleanNodes,
-                templates: cleanTemplates,
                 rootId: newRootId,
             };
+            if (cleanTemplates) {
+                stateToMigrate.templates = cleanTemplates;
+                delete stateToMigrate.variants; // Remove variants so migration creates from templates
+                stateToMigrate.schemaVersion = 3; // Force migration from v3 to v4
+            } else if (newState.variants) {
+                stateToMigrate.variants = newState.variants;
+                stateToMigrate.activeVariantId = newState.activeVariantId || Object.keys(newState.variants)[0];
+            }
             const migratedState = migrateState(stateToMigrate);
 
             setState(s => ({
                 ...s,
                 nodes: migratedState.nodes,
-                templates: migratedState.templates,
+                variants: migratedState.variants,
+                activeVariantId: migratedState.activeVariantId,
                 rootId: migratedState.rootId,
                 schemaVersion: migratedState.schemaVersion,
                 selectedNodeId: newRootId,
@@ -588,7 +722,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, initial
         setTimeout(async () => {
             try {
                 await generatePDF(state, { isGreyscale: exportGreyscale });
-                trackEvent('pdf_exported', { projectId: projectId, pageCount: Object.keys(state.templates).length, isGreyscale: exportGreyscale });
+                trackEvent('pdf_exported', { projectId: projectId, pageCount: Object.keys(getActiveTemplates()).length, isGreyscale: exportGreyscale });
             } catch (e) {
                 console.error(e);
                 alert("Failed to export PDF");
@@ -599,7 +733,8 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, initial
     };
 
     const currentTemplateId = state.viewMode === 'hierarchy' ? state.nodes[state.selectedNodeId]?.type : state.selectedTemplateId;
-    const currentTemplate = state.templates[currentTemplateId] || Object.values(state.templates)[0];
+    const activeTemplateMap = getActiveTemplates();
+    const currentTemplate = activeTemplateMap[currentTemplateId] || Object.values(activeTemplateMap)[0];
 
     // Compute the effective node ID for preview/context
     // In hierarchy mode: use the selected node
@@ -691,6 +826,11 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, initial
                         onAddTemplate={handleAddTemplate}
                         onDeleteTemplate={handleDeleteTemplate}
                         onUpdateTemplateName={handleUpdateTemplateName}
+                        onSelectVariant={handleSelectVariant}
+                        onAddVariant={handleAddVariant}
+                        onRenameVariant={handleRenameVariant}
+                        onDeleteVariant={handleDeleteVariant}
+                        onDuplicateVariant={handleDuplicateVariant}
                     />
                     <div
                         className="absolute right-0 top-0 bottom-0 w-1 hover:bg-blue-400 cursor-col-resize z-30 transition-colors"
@@ -772,9 +912,10 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, initial
                     if (state.nodeSelectorMode === 'create_reference') {
                         handleCreateReference(nodeId);
                     } else if (state.editingElementId) {
+                        const activeTemplates = getActiveTemplates();
                         const templateToUpdate = state.viewMode === 'hierarchy'
-                            ? state.templates[state.nodes[state.selectedNodeId].type]
-                            : state.templates[state.selectedTemplateId];
+                            ? activeTemplates[state.nodes[state.selectedNodeId].type]
+                            : activeTemplates[state.selectedTemplateId];
 
                         const newElements = templateToUpdate.elements.map(el => {
                             if (el.id === state.editingElementId) {

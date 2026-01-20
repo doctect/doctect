@@ -90,10 +90,17 @@ export interface PageTemplate {
   elements: TemplateElement[];
 }
 
+export interface Variant {
+  id: string;
+  name: string;
+  templates: Record<string, PageTemplate>;
+}
+
 export interface AppState {
   nodes: Record<string, AppNode>;
   rootId: string;
-  templates: Record<string, PageTemplate>;
+  variants: Record<string, Variant>;
+  activeVariantId: string;
 
   // UI State
   viewMode: 'hierarchy' | 'templates';
