@@ -4,6 +4,21 @@ This document tracks changes to the AppState JSON schema used by the project.
 
 ---
 
+## Version 3
+**Date:** 2026-01-19
+
+### Changes
+- Added `transformOrigin?: { x: number, y: number }` to `TemplateElement`
+
+### Purpose
+Allows customizing the center of rotation for individual elements. Stored as normalized coordinates (0-1), where `{x: 0.5, y: 0.5}` is the center.
+
+### Migration Notes
+- Default value for existing elements is `{ x: 0.5, y: 0.5 }` (Center)
+- No breaking changes; optional field.
+
+---
+
 ## Version 2
 **Date:** 2026-01-07
 

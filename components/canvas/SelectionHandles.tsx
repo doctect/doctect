@@ -45,6 +45,20 @@ export const SelectionHandles: React.FC<{ element: TemplateElement }> = ({ eleme
                 </>
             )}
 
+            {/* Pivot/Anchor Point (Transform Origin) - Only show for single selection (real/group) */}
+            <div
+                data-pivot-handle
+                className="absolute w-3 h-3 bg-white border border-blue-500 rounded-full cursor-crosshair z-30 flex items-center justify-center shadow-sm"
+                title="Transform Origin"
+                style={{
+                    left: `${(element.transformOrigin?.x ?? 0.5) * 100}%`,
+                    top: `${(element.transformOrigin?.y ?? 0.5) * 100}%`,
+                    transform: 'translate(-50%, -50%)'
+                }}
+            >
+                <div className="w-1 h-1 bg-blue-500 rounded-full" />
+            </div>
+
             {/* Rotation Handle with larger Hit Box */}
             <div
                 data-rotate-handle

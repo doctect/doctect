@@ -43,6 +43,7 @@ export interface TemplateElement {
   w: number;
   h: number; // For grid, w/h now represent ONE CELL dimensions
   rotation: number;
+  transformOrigin?: { x: number, y: number }; // Normalized coordinates (0-1). Default { x: 0.5, y: 0.5 }
   zIndex?: number;
   flip?: boolean; // For lines: false = \, true = /
 

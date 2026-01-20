@@ -16,7 +16,7 @@ import { AppState } from '../types';
 /**
  * Current schema version. Increment this when making breaking changes.
  */
-export const CURRENT_SCHEMA_VERSION = 2;
+export const CURRENT_SCHEMA_VERSION = 3;
 
 /**
  * Migration v0 → v1
@@ -107,15 +107,29 @@ export function migrateState(state: any): AppState {
         version = 2;
     }
 
-    // Future migrations go here:
-    // if (version < 3) {
-    //     migratedState = migrateV2ToV3(migratedState);
-    //     version = 3;
-    // }
+    if (version < 3) {
+        migratedState = migrateV2ToV3(migratedState);
+        version = 3;
+    }
 
     console.log(`[Migration] Migration complete. Now at v${CURRENT_SCHEMA_VERSION}`);
 
     return migratedState as AppState;
+}
+
+/**
+ * Migration v2 → v3
+ * 
+ * Changes:
+ * - Adds `transformOrigin` support (optional)
+ * - Bumps schema version
+ */
+function migrateV2ToV3(state: any): any {
+    console.log('[Migration] Applying v2 → v3: Bumping version for transform origin support');
+    const migrated = JSON.parse(JSON.stringify(state));
+    // Field is optional, no data transformation needed
+    migrated.schemaVersion = 3;
+    return migrated;
 }
 
 /**

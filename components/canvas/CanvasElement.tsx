@@ -356,13 +356,21 @@ export const CanvasElement: React.FC<CanvasElementProps> = (props) => {
     const bounds = getElementBounds(element);
     const style: React.CSSProperties = {
         position: 'absolute',
-        left: element.x, top: element.y,
+        left: 0,
+        top: 0,
         width: bounds.w,
         height: bounds.h,
-        transform: `rotate(${element.rotation || 0}deg)`,
+        transform: `translate(${element.x}px, ${element.y}px) rotate(${element.rotation || 0}deg)`,
+        transformOrigin: element.transformOrigin ? `${element.transformOrigin.x * bounds.w}px ${element.transformOrigin.y * bounds.h}px` : 'center',
         opacity: element.opacity,
         zIndex: element.zIndex || 0,
         pointerEvents: (tool === 'select') ? 'auto' : 'none',
+        // Apply flip if needed (scaleX/Y) - wait, flip is usually separate or part of transform?
+        // Looking at previous code, flip wasn't in the main transform here?
+        // Ah, flip logic might be inside specific renderers or I missed it.
+        // Let's check if I missed 'flip'.
+        // Original code: `transform: rotate(...)`. Flip wasn't there.
+        // So just translate + rotate.
         whiteSpace: element.autoWidth ? 'pre' : undefined,
         minWidth: element.autoWidth ? 20 : undefined,
         minHeight: element.autoWidth ? 20 : undefined,

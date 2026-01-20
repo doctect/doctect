@@ -75,6 +75,61 @@ const traverseGridData = (
     return traverseGridData(nextLevelNodes, steps, depth + 1, nodes);
 };
 
+// Helper: Calculate the "Visual" bounds of a group if it were rotated by 'rotation'.
+// This finds the tightest box that, when rotated by 'rotation', encloses the elements.
+const getRotatedGroupBounds = (elements: TemplateElement[], rotation: number) => {
+    if (elements.length === 0) return null;
+
+    // Robust Strategy: Un-rotate all points around (0,0) to find the aligned box in the un-rotated frame.
+    // Then place that box back in the world.
+
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+
+    elements.forEach(el => {
+        // 1. Get Element World Corners
+        const ox = el.transformOrigin ? el.transformOrigin.x : 0.5;
+        const oy = el.transformOrigin ? el.transformOrigin.y : 0.5;
+        const anchorX = el.x + el.w * ox;
+        const anchorY = el.y + el.h * oy;
+        const corners = [
+            { x: el.x, y: el.y },
+            { x: el.x + el.w, y: el.y },
+            { x: el.x + el.w, y: el.y + el.h },
+            { x: el.x, y: el.y + el.h }
+        ].map(p => rotatePoint(p.x, p.y, anchorX, anchorY, el.rotation || 0));
+
+        // 2. Un-rotate around (0,0)
+        corners.forEach(p => {
+            const up = rotatePoint(p.x, p.y, 0, 0, -rotation);
+            minX = Math.min(minX, up.x);
+            minY = Math.min(minY, up.y);
+            maxX = Math.max(maxX, up.x);
+            maxY = Math.max(maxY, up.y);
+        });
+    });
+
+    const uW = maxX - minX;
+    const uH = maxY - minY;
+
+    // Center of the un-rotated box
+    const uCx = minX + uW / 2;
+    const uCy = minY + uH / 2;
+
+    // 3. Rotate the center back
+    const finalCenter = rotatePoint(uCx, uCy, 0, 0, rotation);
+
+    const result = {
+        x: finalCenter.x - uW / 2,
+        y: finalCenter.y - uH / 2,
+        w: uW,
+        h: uH,
+        rotation: rotation
+    };
+
+    return result;
+};
+
+
 export const Canvas: React.FC<CanvasProps> = ({
     template,
     elements,
@@ -99,6 +154,8 @@ export const Canvas: React.FC<CanvasProps> = ({
     const [isResizing, setIsResizing] = useState(false);
     const [isRotating, setIsRotating] = useState(false);
     const [isPanning, setIsPanning] = useState(false);
+    const [isDraggingPivot, setIsDraggingPivot] = useState(false);
+    const [temporaryGroupPivot, setTemporaryGroupPivot] = useState<{ x: number, y: number } | null>(null); // Visual only pivot for groups
     const hasSavedHistory = useRef(false);
 
     // Drag State
@@ -108,8 +165,8 @@ export const Canvas: React.FC<CanvasProps> = ({
 
     // Resize State
     const [resizeHandle, setResizeHandle] = useState<string | null>(null);
-    const [initialResizeState, setInitialResizeState] = useState<{ x: number, y: number, w: number, h: number, flip?: boolean, rotation?: number } | null>(null);
-
+    const initialResizeStateRef = useRef<any>(null); // For resize start state
+    const initialGroupPivotRef = useRef<{ x: number, y: number } | null>(null); // To track pivot movement during drag
     // Rotation State
     const [initialRotation, setInitialRotation] = useState<number>(0);
 
@@ -129,10 +186,11 @@ export const Canvas: React.FC<CanvasProps> = ({
     const initialGroupBoundsRef = useRef<TemplateElement | null>(null); // For rotating group visualization
     const [persistentGroupRotation, setPersistentGroupRotation] = useState(0);
 
-    // Reset persistent rotation when selection changes
+    // Reset persistent rotation and pivots when selection changes
     useEffect(() => {
         setPersistentGroupRotation(0);
-        initialGroupBoundsRef.current = null; // Clear this too to be safe
+        initialGroupBoundsRef.current = null;
+        setTemporaryGroupPivot(null); // Reset group pivot
     }, [selectedElementIds.join(',')]);
 
     const getGroupBounds = (ids: string[]) => {
@@ -147,8 +205,10 @@ export const Canvas: React.FC<CanvasProps> = ({
             if (!el) return;
 
             // Calculate corners of rotated element
-            const cx = el.x + el.w / 2;
-            const cy = el.y + el.h / 2;
+            const ox = el.transformOrigin ? el.transformOrigin.x : 0.5;
+            const oy = el.transformOrigin ? el.transformOrigin.y : 0.5;
+            const cx = el.x + el.w * ox;
+            const cy = el.y + el.h * oy;
             const r = el.rotation || 0;
 
             const corners = [
@@ -423,7 +483,34 @@ export const Canvas: React.FC<CanvasProps> = ({
             const targetEl = e.target as HTMLElement;
             const clickedId = targetEl.closest('[data-element-id]')?.getAttribute('data-element-id');
 
-            // Check for Rotation Handle - allow for single or group
+            // Check for Pivot Handle (Transform Origin)
+            if (targetEl.closest('[data-pivot-handle]')) {
+                setIsDraggingPivot(true);
+                setDragStart(coords); // Track mouse start
+
+                // Snapshot initial states
+                // We use initialGroupElements even for single element to store the snapshot
+                initialGroupElements.current = elements.filter(el => selectedElementIds.includes(el.id));
+
+                if (selectedElementIds.length > 1) {
+                    // For group, we just initialize/confirm the pivot
+                    // If no explicit pivot yet, start at center
+                    // ... existing logic ...
+                    if (!temporaryGroupPivot && groupBounds) {
+                        setTemporaryGroupPivot({
+                            x: groupBounds.x + groupBounds.w / 2,
+                            y: groupBounds.y + groupBounds.h / 2
+                        });
+                    }
+                } else if (selectedElementIds.length === 1) {
+                    // Single element persistence handled in Move
+                }
+
+                e.stopPropagation();
+                return;
+            }
+
+            // Check for Rotation Handle
             if (targetEl.closest('[data-rotate-handle]')) {
                 if (selectedElementIds.length > 1 && groupBounds) {
                     // Group Rotation
@@ -435,15 +522,24 @@ export const Canvas: React.FC<CanvasProps> = ({
                     let initialBounds = groupBounds;
                     // IF we have persistent rotation, use the VISUAL bounds as initial, not the AABB
                     if (persistentGroupRotation !== 0) {
-                        initialBounds = calculateVisualGroupBounds(groupBounds, persistentGroupRotation);
+                        const vb = getRotatedGroupBounds(initialGroupElements.current, persistentGroupRotation);
+                        if (vb) initialBounds = { ...initialBounds, ...vb };
                     }
                     initialGroupBoundsRef.current = initialBounds;
 
                     // Calculate initial mouse angle for delta rotation
                     const cx = initialBounds.x + initialBounds.w / 2;
                     const cy = initialBounds.y + initialBounds.h / 2;
-                    const radians = Math.atan2(coords.y - cy, coords.x - cx);
+                    // Fix: Use pivot if it exists for initial angle too!
+                    let pivotX = cx, pivotY = cy;
+                    if (temporaryGroupPivot) {
+                        pivotX = temporaryGroupPivot.x;
+                        pivotY = temporaryGroupPivot.y;
+                    }
+
+                    const radians = Math.atan2(coords.y - pivotY, coords.x - pivotX);
                     const startDegrees = radians * (180 / Math.PI) + 90;
+
                     setInitialRotation(startDegrees);
 
                 } else if (selectedElementIds.length === 1) {
@@ -466,7 +562,7 @@ export const Canvas: React.FC<CanvasProps> = ({
                     setIsResizing(true);
                     setResizeHandle(handle);
                     setDragStart(coords);
-                    setInitialResizeState(groupBounds); // Use group bounds as the resizing target
+                    initialResizeStateRef.current = groupBounds; // Use group bounds as the resizing target
 
                     // Snapshot initial states
                     initialGroupElements.current = elements.filter(el => selectedElementIds.includes(el.id));
@@ -486,7 +582,7 @@ export const Canvas: React.FC<CanvasProps> = ({
                             h = bounds.h;
                         }
 
-                        setInitialResizeState({ x, y, w, h, flip: el.flip, rotation: el.rotation });
+                        initialResizeStateRef.current = { x, y, w, h, flip: el.flip, rotation: el.rotation };
                     }
                 }
                 e.stopPropagation();
@@ -513,6 +609,9 @@ export const Canvas: React.FC<CanvasProps> = ({
                     }
                 });
                 setInitialPositions(initialPos);
+
+                // Fix: Snapshot pivot loop
+                initialGroupPivotRef.current = temporaryGroupPivot;
 
                 setIsDragging(true);
                 setDragStart(coords);
@@ -543,6 +642,62 @@ export const Canvas: React.FC<CanvasProps> = ({
             return;
         }
 
+        if (isDraggingPivot) {
+            if (!hasSavedHistory.current) {
+                onInteractionStart();
+                hasSavedHistory.current = true;
+            }
+
+            // Group Pivot Drag (Visual Only)
+            if (selectedElementIds.length > 1) {
+                setTemporaryGroupPivot({ x: coords.x, y: coords.y });
+            }
+            // Single Element Pivot Drag (Persistent)
+            else if (selectedElementIds.length === 1) {
+                // Use IO snapshot to prevent error accumulation
+                const initialEl = initialGroupElements.current.find(e => e.id === selectedElementIds[0]);
+
+                if (initialEl) {
+                    // Calculate based on INITIAL state + CURRENT mouse position
+                    // We want to move the pivot to 'coords'
+                    // We want the element to visually stay exactly where it was in the snapshot.
+
+                    // 1. Where was the Top-Left of the element in World Space INITIALLY?
+                    let initialPivot = { x: initialEl.x + initialEl.w / 2, y: initialEl.y + initialEl.h / 2 };
+                    if (initialEl.transformOrigin) {
+                        initialPivot = {
+                            x: initialEl.x + initialEl.w * initialEl.transformOrigin.x,
+                            y: initialEl.y + initialEl.h * initialEl.transformOrigin.y
+                        };
+                    }
+
+                    // Initial World Top-Left
+                    const worldTL = rotatePoint(initialEl.x, initialEl.y, initialPivot.x, initialPivot.y, initialEl.rotation || 0);
+
+                    // 2. We want to find a NEW (x, y) for the unrotated box such that:
+                    // Rotate(newX, newY, Mouse, rotation) == worldTL
+                    // So: (newX, newY) = Rotate(worldTL, Mouse, -rotation)
+
+                    const newUnrotatedTL = rotatePoint(worldTL.x, worldTL.y, coords.x, coords.y, -(initialEl.rotation || 0));
+
+                    const newX = newUnrotatedTL.x;
+                    const newY = newUnrotatedTL.y;
+
+                    // 3. Transform Origin is relative to this new box
+                    const relX = (coords.x - newX) / initialEl.w;
+                    const relY = (coords.y - newY) / initialEl.h;
+
+                    onUpdateElements(elements.map(item => item.id === initialEl.id ? {
+                        ...item,
+                        x: newX,
+                        y: newY,
+                        transformOrigin: { x: relX, y: relY }
+                    } : item), false);
+                }
+            }
+            return;
+        }
+
         if (isSelecting) {
             const x = Math.min(dragStart.x, coords.x);
             const y = Math.min(dragStart.y, coords.y);
@@ -561,32 +716,62 @@ export const Canvas: React.FC<CanvasProps> = ({
             // Group Rotation
             if (selectedElementIds.length > 1 && initialGroupBoundsRef.current) {
                 const initialBounds = initialGroupBoundsRef.current;
-                const cx = initialBounds.x + initialBounds.w / 2;
-                const cy = initialBounds.y + initialBounds.h / 2;
+
+                // Use Temporary Pivot if available, else Bounds Center
+                let cx = initialBounds.x + initialBounds.w / 2;
+                let cy = initialBounds.y + initialBounds.h / 2;
+                if (temporaryGroupPivot) {
+                    cx = temporaryGroupPivot.x;
+                    cy = temporaryGroupPivot.y;
+                }
+
                 const radians = Math.atan2(coords.y - cy, coords.x - cx);
-                let degrees = radians * (180 / Math.PI) + 90;
+                const rawMouseDegrees = radians * (180 / Math.PI) + 90;
 
-                if (e.shiftKey) { degrees = Math.round(degrees / 15) * 15; }
+                // Calculate Raw Projected Rotation
+                // Final = StartGroupRot + (MouseCurrent - MouseStart)
+                const startGroupRotation = initialBounds.rotation || 0;
+                const rawDelta = rawMouseDegrees - initialRotation;
+                let finalRotation = startGroupRotation + rawDelta;
 
-                const delta = degrees - initialRotation;
+                if (snapToGrid) {
+                    // Snap the RESULTING rotation to cardinals
+                    const cardinals = [0, 90, 180, 270, 360];
+                    const normalized = (finalRotation % 360 + 360) % 360;
+                    const closest = cardinals.find(c => Math.abs(c - normalized) < 10);
+                    if (closest !== undefined) {
+                        finalRotation = closest === 360 ? 0 : closest;
+                    }
+                } else if (e.shiftKey) {
+                    finalRotation = Math.round(finalRotation / 15) * 15;
+                }
 
-                // Apply rotation to all elements relative to group center
+                // Recalculate Delta based on the Snapped Final Rotation
+                const delta = finalRotation - startGroupRotation;
+
+                // Apply rotation to all elements relative to pivot (Group Center or Custom)
                 const updatedElements = elements.map(item => {
                     const initial = initialGroupElements.current.find(i => i.id === item.id);
                     if (!initial) return item;
 
-                    // 1. Rotate the center of the element around group center
-                    const elCx = initial.x + initial.w / 2;
-                    const elCy = initial.y + initial.h / 2;
+                    // Robust "World Anchor" Rotation Logic
+                    // 1. Determine the Element's Anchor Point (Transform Origin) in Initial World Space
+                    const ox = initial.transformOrigin ? initial.transformOrigin.x : 0.5;
+                    const oy = initial.transformOrigin ? initial.transformOrigin.y : 0.5;
 
-                    // Rotate by DELTA
-                    const rotatedCenter = rotatePoint(elCx, elCy, cx, cy, delta);
+                    const initialAnchorX = initial.x + initial.w * ox;
+                    const initialAnchorY = initial.y + initial.h * oy;
 
-                    // 2. Add delta to element's initial rotation
+                    // 2. Rotate this Anchor Point around the Group Pivot by delta
+                    const rotatedAnchor = rotatePoint(initialAnchorX, initialAnchorY, cx, cy, delta);
+
+                    // 3. Calculate new Top-Left (x, y) such that the Anchor lands at rotatedAnchor
+                    // x + w * ox = rotatedAnchor.x  =>  x = rotatedAnchor.x - w * ox
+
                     return {
                         ...item,
-                        x: rotatedCenter.x - initial.w / 2,
-                        y: rotatedCenter.y - initial.h / 2,
+                        x: rotatedAnchor.x - initial.w * ox,
+                        y: rotatedAnchor.y - initial.h * oy,
                         rotation: (initial.rotation || 0) + delta
                     };
                 });
@@ -599,11 +784,20 @@ export const Canvas: React.FC<CanvasProps> = ({
                 const el = elements.find(e => e.id === selectedElementIds[0]);
                 if (!el) return;
 
-                // Calculate center of element
-                const cx = el.x + el.w / 2;
-                const cy = el.y + el.h / 2;
+                // Calculate Center of Rotation (Default Center or Custom TransformOrigin)
+                let cx = el.x + el.w / 2;
+                let cy = el.y + el.h / 2;
 
-                // Calculate angle from center to mouse
+                if (el.transformOrigin) {
+                    // Calculate absolute position of transform origin
+                    // With CSS transform-origin, the rotation happens around this point.
+                    // The 'x' and 'y' of the element define the unrotated top-left.
+                    // So this point is stationary relative to the element's position.
+                    cx = el.x + el.w * el.transformOrigin.x;
+                    cy = el.y + el.h * el.transformOrigin.y;
+                }
+
+                // Calculate angle from Pivot to Mouse
                 const radians = Math.atan2(coords.y - cy, coords.x - cx);
                 let degrees = radians * (180 / Math.PI) + 90; // +90 to align with top handle
 
@@ -642,8 +836,16 @@ export const Canvas: React.FC<CanvasProps> = ({
                 return el;
             });
             onUpdateElements(updatedElements, false);
+
+            // Fix: Move custom pivot along with the group
+            if (initialGroupPivotRef.current) {
+                setTemporaryGroupPivot({
+                    x: initialGroupPivotRef.current.x + dx,
+                    y: initialGroupPivotRef.current.y + dy
+                });
+            }
         }
-        else if (isResizing && initialResizeState && resizeHandle) {
+        else if (isResizing && initialResizeStateRef.current && resizeHandle) {
             if (!hasSavedHistory.current) {
                 onInteractionStart();
                 hasSavedHistory.current = true;
@@ -652,7 +854,7 @@ export const Canvas: React.FC<CanvasProps> = ({
             // Identify Resizing Target (Group or Single)
             const isGroup = selectedElementIds.length > 1;
 
-            let { x: startX, y: startY, w: startW, h: startH, rotation: startRot } = initialResizeState;
+            let { x: startX, y: startY, w: startW, h: startH, rotation: startRot } = initialResizeStateRef.current;
             const angle = startRot || 0;
 
             // 1. Calculate Screen Delta
@@ -680,7 +882,7 @@ export const Canvas: React.FC<CanvasProps> = ({
                 const el = elements.find(e => e.id === elId);
                 if (!el) return;
 
-                const { flip, rotation } = initialResizeState;
+                const { flip, rotation } = initialResizeStateRef.current;
                 const angle = rotation || 0;
                 const cx = startX + startW / 2;
                 const cy = startY + startH / 2;
@@ -854,22 +1056,71 @@ export const Canvas: React.FC<CanvasProps> = ({
 
     const handleMouseUp = (e: MouseEvent) => {
         if (isRotating && selectedElementIds.length > 1 && initialGroupBoundsRef.current) {
-            const coords = getMouseCoords(e);
-            const initialBounds = initialGroupBoundsRef.current;
-            const cx = initialBounds.x + initialBounds.w / 2;
-            const cy = initialBounds.y + initialBounds.h / 2;
-            const radians = Math.atan2(coords.y - cy, coords.x - cx);
-            let degrees = radians * (180 / Math.PI) + 90;
-            if (e.shiftKey) { degrees = Math.round(degrees / 15) * 15; }
-
             // Initial relative rotation was 0 for group, so we add to the group's starting rotation
             // Use delta from initial interaction start
-            const delta = degrees - initialRotation;
-            const finalRotation = (initialBounds.rotation || 0) + delta;
-            // console.log("DEBUG: Setting persistent rotation to", finalRotation);
+            const coords = getMouseCoords(e);
+            const initialBounds = initialGroupBoundsRef.current;
+
+            // Consolidate pivot logic: Use custom pivot if available, else bounds center
+            let cx = initialBounds.x + initialBounds.w / 2;
+            let cy = initialBounds.y + initialBounds.h / 2;
+            if (temporaryGroupPivot) {
+                cx = temporaryGroupPivot.x;
+                cy = temporaryGroupPivot.y;
+            }
+
+            // Re-calculate basic angles (same as move)
+            const radians = Math.atan2(coords.y - cy, coords.x - cx);
+            const rawMouseDegrees = radians * (180 / Math.PI) + 90;
+
+            const startGroupRotation = initialBounds.rotation || 0;
+            const rawDelta = rawMouseDegrees - initialRotation;
+            let finalRotation = startGroupRotation + rawDelta;
+
+            if (snapToGrid) {
+                const cardinals = [0, 90, 180, 270, 360];
+                const normalized = (finalRotation % 360 + 360) % 360;
+                const closest = cardinals.find(c => Math.abs(c - normalized) < 10);
+                if (closest !== undefined) {
+                    finalRotation = closest === 360 ? 0 : closest;
+                }
+            } else if (e.shiftKey) {
+                finalRotation = Math.round(finalRotation / 15) * 15;
+            }
+
+            const delta = finalRotation - startGroupRotation;
+
+            // CRITICAL FIX: Ensure elements are updated to match this final rotation exactly
+            // This prevents stale element state from causing bounding box drift
+
+            const updatedElements = elements.map(item => {
+                const initial = initialGroupElements.current.find(i => i.id === item.id);
+                if (!initial) return item;
+
+                // 1. Determine the Element's Anchor Point (Transform Origin) in Initial World Space
+                const ox = initial.transformOrigin ? initial.transformOrigin.x : 0.5;
+                const oy = initial.transformOrigin ? initial.transformOrigin.y : 0.5;
+
+                const initialAnchorX = initial.x + initial.w * ox;
+                const initialAnchorY = initial.y + initial.h * oy;
+
+                // 2. Rotate this Anchor Point around the Group Pivot by delta
+                const rotatedAnchor = rotatePoint(initialAnchorX, initialAnchorY, cx, cy, delta);
+
+                // 3. Calculate new Top-Left (x, y)
+                return {
+                    ...item,
+                    x: rotatedAnchor.x - initial.w * ox,
+                    y: rotatedAnchor.y - initial.h * oy,
+                    rotation: (initial.rotation || 0) + delta
+                };
+            });
+            onUpdateElements(updatedElements, true); // Save history
+
             setPersistentGroupRotation(finalRotation);
         }
         setIsRotating(false);
+        // setTemporaryGroupPivot(null); // Fix: Don't clear pivot on release, keep it for next rotation
         if (newShapeStart && newShapeCurrent) {
             let x = Math.min(newShapeStart.x, newShapeCurrent.x);
             let y = Math.min(newShapeStart.y, newShapeCurrent.y);
@@ -1002,12 +1253,13 @@ export const Canvas: React.FC<CanvasProps> = ({
         setIsDragging(false);
         setIsResizing(false);
         setIsRotating(false);
+        setIsDraggingPivot(false);
         setIsSelecting(false);
         setIsPanning(false);
         setSelectionBox(null);
         setResizeHandle(null);
         setInitialPositions({});
-        setInitialResizeState(null);
+        initialResizeStateRef.current = null;
         setPanStart(null);
     };
 
@@ -1126,17 +1378,112 @@ export const Canvas: React.FC<CanvasProps> = ({
                                 if (firstCurrent && firstInitial) {
                                     // Valid delta calculation based on element update
                                     const delta = (firstCurrent.rotation || 0) - (firstInitial.rotation || 0);
+
+                                    // Rotate the Group Center around the PIVOT by delta
+                                    const initial = initialGroupBoundsRef.current;
+
+                                    // Determine Pivot (Same logic as rotation handler)
+                                    let cx = initial.x + initial.w / 2;
+                                    let cy = initial.y + initial.h / 2;
+                                    if (temporaryGroupPivot) {
+                                        cx = temporaryGroupPivot.x;
+                                        cy = temporaryGroupPivot.y;
+                                    }
+
+                                    // Rotate the INITIAL CENTER around the PIVOT
+                                    const initialCenter = { x: initial.x + initial.w / 2, y: initial.y + initial.h / 2 };
+                                    const newCenter = rotatePoint(initialCenter.x, initialCenter.y, cx, cy, delta);
+
                                     visualBounds = {
-                                        ...initialGroupBoundsRef.current,
-                                        rotation: (initialGroupBoundsRef.current.rotation || 0) + delta
+                                        ...initial,
+                                        x: newCenter.x - initial.w / 2,
+                                        y: newCenter.y - initial.h / 2,
+                                        rotation: (initial.rotation || 0) + delta
                                     };
                                 }
                             }
-                            // 2. Persistent Rotation (Static): Use helper
-                            else if (selectedElementIds.length > 1 && persistentGroupRotation !== 0 && groupBounds) {
-                                const vb = calculateVisualGroupBounds(groupBounds, persistentGroupRotation);
+                            // 2. Persistent Rotation (Static): Calculate Tight Bounds
+                            else if (selectedElementIds.length > 1 && persistentGroupRotation !== 0) {
+                                const vb = getRotatedGroupBounds(elements.filter(e => selectedElementIds.includes(e.id)), persistentGroupRotation);
                                 if (vb) visualBounds = vb;
                             }
+                            /*
+                            else if (selectedElementIds.length > 1 && persistentGroupRotation !== 0) {
+                                // around the center of the current AABB, find the bounds of those un-rotated points,
+                                // and then rotate that box back.
+
+                                // 1. Current AABB (to find pivot/center)
+                                const currentAABB = groupBounds; // Standard AABB of rotated elements
+                                if (currentAABB) {
+                                    const cx = currentAABB.x + currentAABB.w / 2;
+                                    const cy = currentAABB.y + currentAABB.h / 2;
+
+                                    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+
+                                    const selectedEls = elements.filter(e => selectedElementIds.includes(e.id));
+
+                                    selectedEls.forEach(el => {
+                                        // Get corners of the element in world space
+                                        const elBounds = getElementBounds(el);
+                                        // Element corners (considering its own rotation)
+                                        // We need absolute world coordinates of the 4 corners
+                                        // Visual Center
+                                        const elOx = el.transformOrigin ? el.transformOrigin.x : 0.5;
+                                        const elOy = el.transformOrigin ? el.transformOrigin.y : 0.5;
+                                        const anchorX = el.x + el.w * elOx;
+                                        const anchorY = el.y + el.h * elOy;
+
+                                        // Corners relative to anchor unrotated
+                                        // TL: (el.x, el.y)
+                                        // Just use rotatePoint for each corner around Anchor
+                                        const corners = [
+                                            { x: el.x, y: el.y },
+                                            { x: el.x + el.w, y: el.y },
+                                            { x: el.x + el.w, y: el.y + el.h },
+                                            { x: el.x, y: el.y + el.h }
+                                        ].map(p => rotatePoint(p.x, p.y, anchorX, anchorY, el.rotation || 0));
+
+                                        // Now Un-Rotate these world corners around the Group Center by -persistentGroupRotation
+                                        corners.forEach(p => {
+                                            const unrotated = rotatePoint(p.x, p.y, cx, cy, -persistentGroupRotation);
+                                            minX = Math.min(minX, unrotated.x);
+                                            minY = Math.min(minY, unrotated.y);
+                                            maxX = Math.max(maxX, unrotated.x);
+                                            maxY = Math.max(maxY, unrotated.y);
+                                        });
+                                    });
+
+                                    if (minX !== Infinity) {
+                                        visualBounds = {
+                                            x: minX,
+                                            y: minY,
+                                            w: maxX - minX,
+                                            h: maxY - minY,
+                                            rotation: persistentGroupRotation
+                                        };
+
+                                        // Re-center the box?
+                                        // The unrotated box is at (minX, minY).
+                                        // We rotate it around (cx, cy).
+                                        // Wait. We unrotated around (cx, cy).
+                                        // So we should rotate the CENTER of the new box around (cx, cy) to find its final position?
+                                        // Or does transform: rotate handle it?
+                                        // transform: translate(Box.x, Box.y) rotate(R).
+                                        // Rotate(R) rotates around the box center (by default 50% 50% or if we set transformOrigin).
+
+                                        // My logic used cx, cy (Center of AABB) as the pivot for unrotation.
+                                        // The Unrotated Box has center:
+                                        const unrotatedCx = minX + (maxX - minX) / 2;
+                                        const unrotatedCy = minY + (maxY - minY) / 2;
+
+                                        // We need to place the Final Box such that its Center is at:
+                                        // Rotate(unrotatedCenter, cx, cy, persistentRotation).
+
+                                        const reRotatedCenter = rotatePoint(unrotatedCx, unrotatedCy, cx, cy, persistentGroupRotation);
+
+                                        visualBounds.x = reRotatedCenter.x - visualBounds.w / 2;
+                                        visualBounds.y = reRotatedCenter.y - visualBounds.h / 2;
+                            */
 
                             if (selectedElementIds.length > 1 && visualBounds) {
                                 const PADDING = 16;
@@ -1148,30 +1495,60 @@ export const Canvas: React.FC<CanvasProps> = ({
                                     rotation: visualBounds.rotation
                                 };
 
+                                // Calculate Group Pivot relative to Visual Bounds
+                                let pivotX = 0.5;
+                                let pivotY = 0.5;
+                                if (temporaryGroupPivot) {
+                                    // Project world pivot into rotated local space of visual bounds?
+                                    // Actually SelectionHandles renders pivot based on percentage of bounding box.
+                                    // If we are rotating, the box rotates. 
+                                    // temporaryGroupPivot is World Coords.
+
+                                    // Unrotate pivot relative to box center to get "local" bounds position?
+                                    // No, transformOrigin is relative to the unrotated box top-left.
+
+                                    const cx = visualBounds.x + visualBounds.w / 2;
+                                    const cy = visualBounds.y + visualBounds.h / 2;
+                                    const r = visualBounds.rotation || 0;
+
+                                    // Unrotate the pivot point to find where it sits in the unrotated box frame
+                                    const unrotatedPivot = rotatePoint(temporaryGroupPivot.x, temporaryGroupPivot.y, cx, cy, -r);
+
+                                    // Fix: Calculate relative to OFFSET BOUNDS (Padded), which is what SelectionHandles uses
+                                    pivotX = (unrotatedPivot.x - offsetBounds.x) / offsetBounds.w;
+                                    pivotY = (unrotatedPivot.y - offsetBounds.y) / offsetBounds.h;
+                                }
+
                                 return (
                                     <>
                                         <div
                                             className="absolute border border-blue-500 pointer-events-none"
                                             style={{
-                                                left: offsetBounds.x,
-                                                top: offsetBounds.y,
+                                                left: 0,
+                                                top: 0,
                                                 width: offsetBounds.w,
                                                 height: offsetBounds.h,
-                                                transform: `rotate(${offsetBounds.rotation || 0}deg)`,
+                                                transform: `translate(${offsetBounds.x}px, ${offsetBounds.y}px) rotate(${offsetBounds.rotation || 0}deg)`,
                                                 zIndex: 9999
                                             }}
                                         />
                                         <div style={{
                                             position: 'absolute',
-                                            left: offsetBounds.x,
-                                            top: offsetBounds.y,
+                                            left: 0,
+                                            top: 0,
                                             width: offsetBounds.w,
                                             height: offsetBounds.h,
-                                            transform: `rotate(${offsetBounds.rotation || 0}deg)`,
+                                            transform: `translate(${offsetBounds.x}px, ${offsetBounds.y}px) rotate(${offsetBounds.rotation || 0}deg)`,
                                             zIndex: 10000,
                                             pointerEvents: 'none' // Let clicks pass through to container, handles capture events themselves
                                         }}>
-                                            <SelectionHandles element={{ ...visualBounds, ...offsetBounds, id: 'group-handles', type: 'group' } as any} />
+                                            <SelectionHandles element={{
+                                                ...visualBounds,
+                                                ...offsetBounds,
+                                                id: 'group-handles',
+                                                type: 'group',
+                                                transformOrigin: { x: pivotX, y: pivotY }
+                                            } as any} />
                                         </div>
                                     </>
                                 );
@@ -1209,11 +1586,12 @@ export const Canvas: React.FC<CanvasProps> = ({
                                     key={id}
                                     className="absolute pointer-events-none z-[100]"
                                     style={{
-                                        left: el.x,
-                                        top: el.y,
+                                        left: 0,
+                                        top: 0,
                                         width: bounds.w,
                                         height: bounds.h,
-                                        transform: `rotate(${el.rotation || 0}deg)`
+                                        transform: `translate(${el.x}px, ${el.y}px) rotate(${el.rotation || 0}deg)`,
+                                        transformOrigin: el.transformOrigin ? `${el.transformOrigin.x * bounds.w}px ${el.transformOrigin.y * bounds.h}px` : 'center'
                                     }}
                                 >
                                     {/* Selection Border (4px padded, rounded) */}
