@@ -32,3 +32,6 @@ reports/
 coverage/
 *.xlsx
 .~lock.*
+
+# Git worktrees for isolated feature work
+.worktrees/
