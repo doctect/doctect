@@ -328,7 +328,7 @@ git commit -m "feat(server): dialect-agnostic query adapter and run-once migrati
 - Modify: `package.json` (add `supertest` devDependency)
 
 **Interfaces:**
-- Produces: `createApp() => Express` from `server/app.js`; `getAuthForRequest(req)` from `server/authRequest.js`; test helpers `initTestApp() => Promise<Express>` and `signUpUser(app, {email, username}) => Promise<string /* cookie header */>` from `tests/unit/server/helpers.js`.
+- Produces: `createApp() => Express` from `server/app.js`; `getAuthForRequest(req)` from `server/authRequest.js`; test helpers `initTestApp() => Promise<Express>`, `signUpUser(app, {email, username}) => Promise<string /* cookie header */>`, `minimalState(title?) => AppState`, and `PNG_1X1` (a valid 1x1 PNG data URL) from `tests/unit/server/helpers.js`. Every later server test file imports its fixtures from this one shared module — never from another `*.test.js` file (see the note in Step 2 below).
 - Consumes: `runMigrations`, `query` (Task 1).
 
 - [ ] **Step 1: Install supertest**
@@ -362,6 +362,23 @@ export const signUpUser = async (app, { email, username }) => {
     if (res.status !== 200) throw new Error(`sign-up failed: ${res.status} ${JSON.stringify(res.body)}`);
     return res.headers['set-cookie'].map(c => c.split(';')[0]).join('; ');
 };
+
+// Shared fixtures. IMPORTANT: keep these in this plain (non-`.test.js`) helper module,
+// never export fixtures from a `*.test.js` file and import them into another `*.test.js`
+// file — Vitest gives each test file its own isolated module graph, so importing a
+// named export from another spec file re-evaluates that file's module top-to-bottom,
+// silently re-registering (and re-running) its entire describe/it suite a second time
+// under the importing file. Always add shared test fixtures here instead.
+export const minimalState = (title = 'Root') => ({
+    nodes: { root: { id: 'root', parentId: null, type: 'page', title, data: {}, children: [] } },
+    rootId: 'root',
+    variants: { default: { id: 'default', name: 'Default', templates: { page: { id: 'page', name: 'Page', width: 500, height: 700, elements: [] } } } },
+    activeVariantId: 'default',
+    schemaVersion: 7
+});
+
+// Valid 1x1 transparent PNG data URL, used by every publish-related test.
+export const PNG_1X1 = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
 ```
 
 Note: `username` in the sign-up body is ignored until Task 4 adds the plugin — better-auth drops unknown fields, so this helper works from now on.
@@ -1242,15 +1259,7 @@ git commit -m "feat(server): structural AppState validator with size caps"
 // @vitest-environment node
 import { describe, it, expect, beforeAll } from 'vitest';
 import request from 'supertest';
-import { initTestApp, signUpUser } from './helpers.js';
-
-export const minimalState = (title = 'Root') => ({
-    nodes: { root: { id: 'root', parentId: null, type: 'page', title, data: {}, children: [] } },
-    rootId: 'root',
-    variants: { default: { id: 'default', name: 'Default', templates: { page: { id: 'page', name: 'Page', width: 500, height: 700, elements: [] } } } },
-    activeVariantId: 'default',
-    schemaVersion: 7
-});
+import { initTestApp, signUpUser, minimalState } from './helpers.js';
 
 let app, cookieA, cookieB;
 beforeAll(async () => {
@@ -1913,11 +1922,7 @@ Ships: publish a cloud project (metadata + thumbnails) to a public gallery brows
 // @vitest-environment node
 import { describe, it, expect, beforeAll } from 'vitest';
 import request from 'supertest';
-import { initTestApp, signUpUser } from './helpers.js';
-import { minimalState } from './projects.test.js';
-
-// Valid 1x1 transparent PNG
-export const PNG_1X1 = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+import { initTestApp, signUpUser, minimalState, PNG_1X1 } from './helpers.js';
 
 let app, cookie, projectId;
 beforeAll(async () => {
@@ -1968,8 +1973,6 @@ describe('publishing', () => {
     });
 });
 ```
-
-Note: export `minimalState` from `projects.test.js` (already done in Task 8's test file — it uses `export const minimalState`).
 
 - [ ] **Step 3: Run test to verify it fails**
 
@@ -2096,9 +2099,7 @@ git commit -m "feat(server): publish/unpublish with validated thumbnail storage"
 // @vitest-environment node
 import { describe, it, expect, beforeAll } from 'vitest';
 import request from 'supertest';
-import { initTestApp, signUpUser } from './helpers.js';
-import { minimalState } from './projects.test.js';
-import { PNG_1X1 } from './publish.test.js';
+import { initTestApp, signUpUser, minimalState, PNG_1X1 } from './helpers.js';
 
 let app, cookie, publicId, privateId;
 beforeAll(async () => {
@@ -2941,9 +2942,7 @@ git commit -m "feat(client): public gallery browse/detail with open-in-editor im
 // @vitest-environment node
 import { describe, it, expect, beforeAll } from 'vitest';
 import request from 'supertest';
-import { initTestApp, signUpUser } from './helpers.js';
-import { minimalState } from './projects.test.js';
-import { PNG_1X1 } from './publish.test.js';
+import { initTestApp, signUpUser, minimalState, PNG_1X1 } from './helpers.js';
 
 let app;
 beforeAll(async () => {
@@ -3154,9 +3153,7 @@ git commit -m "test(e2e): publish and browse gallery happy path"
 // @vitest-environment node
 import { describe, it, expect, beforeAll } from 'vitest';
 import request from 'supertest';
-import { initTestApp, signUpUser } from './helpers.js';
-import { minimalState } from './projects.test.js';
-import { PNG_1X1 } from './publish.test.js';
+import { initTestApp, signUpUser, minimalState, PNG_1X1 } from './helpers.js';
 
 let app, ownerCookie, forkerCookie, publicId, privateId;
 beforeAll(async () => {
@@ -3791,9 +3788,7 @@ git commit -m "feat(shared): applyChangeSet merge application"
 // @vitest-environment node
 import { describe, it, expect, beforeAll } from 'vitest';
 import request from 'supertest';
-import { initTestApp, signUpUser } from './helpers.js';
-import { minimalState } from './projects.test.js';
-import { PNG_1X1 } from './publish.test.js';
+import { initTestApp, signUpUser, minimalState, PNG_1X1 } from './helpers.js';
 
 const stateWithDayName = (dayName) => {
     const s = minimalState();
