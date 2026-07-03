@@ -1,16 +1,23 @@
 import express from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { toNodeHandler } from 'better-auth/node';
 import { getAuthForRequest, isHostAllowed } from './authRequest.js';
 import { logEvent, getStats } from './db.js';
+import { checkOrigin, writeLimiter, requireAdmin } from './middleware/guards.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export const createApp = () => {
     const app = express();
     app.set('trust proxy', 1);
+
+    app.use(helmet({
+        contentSecurityPolicy: false, // SPA loads Google Fonts + inline styles; CSP tuning is a deferred follow-up
+        crossOriginEmbedderPolicy: false
+    }));
 
     const trustedOrigins = (process.env.TRUSTED_ORIGINS || 'http://localhost:3000,http://localhost:3001')
         .split(',').map(o => o.trim()).filter(Boolean);
@@ -34,19 +41,8 @@ export const createApp = () => {
 
     app.use(express.json({ limit: '8mb' }));
 
-    const requireAdmin = async (req, res, next) => {
-        try {
-            const auth = getAuthForRequest(req);
-            const session = await auth.api.getSession({ headers: req.headers });
-            if (!session || !session.user) return res.status(401).json({ error: 'Unauthorized' });
-            if (session.user.role !== 'admin') return res.status(403).json({ error: 'Forbidden: Admins only' });
-            req.user = session.user;
-            next();
-        } catch (error) {
-            console.error('Auth Error:', error);
-            res.status(500).json({ error: 'Internal Server Error' });
-        }
-    };
+    app.use('/api', checkOrigin);
+    app.use('/api', writeLimiter);
 
     app.post('/api/track', async (req, res) => {
         const { type, payload } = req.body;

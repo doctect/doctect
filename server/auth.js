@@ -5,7 +5,8 @@ import db, { makeUserAdmin } from "./db.js";
 
 const defaultTrustedOrigins = [
     process.env.CLIENT_URL || "http://localhost:3000",
-    ...(process.env.TRUSTED_ORIGINS ? process.env.TRUSTED_ORIGINS.split(/[,|]/) : [])
+    "http://localhost:3001",
+    ...(process.env.TRUSTED_ORIGINS ? process.env.TRUSTED_ORIGINS.split(/[,|]/).map(o => o.trim()).filter(Boolean) : [])
 ];
 
 export const createAuth = (config = {}) => {
@@ -25,6 +26,11 @@ export const createAuth = (config = {}) => {
             admin()
         ],
         trustedOrigins: defaultTrustedOrigins,
+        rateLimit: {
+            enabled: true,
+            window: 60,
+            max: 20
+        },
         logger: {
             verbose: true,
             disabled: false
