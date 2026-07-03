@@ -8,12 +8,19 @@ export const LoginPage = () => {
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [name, setName] = useState('');
+    const [username, setUsername] = useState('');
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const navigate = useNavigate();
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
+
+        if (!isLogin && !/^[a-zA-Z0-9_]{3,30}$/.test(username)) {
+            setError('Username must be 3-30 characters and contain only letters, numbers, and underscores.');
+            return;
+        }
+
         setLoading(true);
         setError(null);
 
@@ -35,7 +42,8 @@ export const LoginPage = () => {
                     email,
                     password,
                     name,
-                }, {
+                    username,
+                } as any, {
                     onSuccess: () => {
                         navigate('/analytics');
                     },
@@ -75,6 +83,20 @@ export const LoginPage = () => {
                                 className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                                 required
                             />
+                        </div>
+                    )}
+
+                    {!isLogin && (
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">Username</label>
+                            <input
+                                type="text"
+                                value={username}
+                                onChange={(e) => setUsername(e.target.value)}
+                                className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                required
+                            />
+                            <p className="text-xs text-gray-500 mt-1">3–30 chars, letters/numbers/underscores. Shown publicly on the gallery.</p>
                         </div>
                     )}
 

@@ -11,6 +11,7 @@ import { Square, Home, Github } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import clsx from 'clsx';
 import { trackEvent } from '../services/analytics';
+import { AccountMenu } from '../components/AccountMenu';
 
 interface Project {
     id: string;
@@ -199,6 +200,7 @@ export function EditorPage() {
                 </div>
 
                 <div className="flex items-center gap-3 hidden sm:flex">
+                    <AccountMenu />
                     <a href="https://github.com/doctect/doctect" target="_blank" rel="noopener noreferrer" className="text-slate-400 hover:text-slate-900 transition-colors" title="View on GitHub">
                         <Github size={18} />
                     </a>
