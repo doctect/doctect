@@ -68,5 +68,18 @@ export const migrations = [
                 timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         `
+    },
+    {
+        id: '003_username',
+        pg: `
+            ALTER TABLE "user" ADD COLUMN IF NOT EXISTS username TEXT;
+            ALTER TABLE "user" ADD COLUMN IF NOT EXISTS "displayUsername" TEXT;
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_user_username ON "user"(username)
+        `,
+        sqlite: `
+            ALTER TABLE "user" ADD COLUMN username TEXT;
+            ALTER TABLE "user" ADD COLUMN "displayUsername" TEXT;
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_user_username ON "user"(username)
+        `
     }
 ];

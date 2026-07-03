@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import { betterAuth } from "better-auth";
-import { admin } from "better-auth/plugins";
+import { admin, username } from "better-auth/plugins";
 import db, { makeUserAdmin } from "./db.js";
 
 const defaultTrustedOrigins = [
@@ -23,7 +23,8 @@ export const createAuth = (config = {}) => {
             }
         },
         plugins: [
-            admin()
+            admin(),
+            username({ minUsernameLength: 3, maxUsernameLength: 30 })
         ],
         trustedOrigins: defaultTrustedOrigins,
         rateLimit: {
