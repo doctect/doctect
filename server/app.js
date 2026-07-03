@@ -7,6 +7,7 @@ import { toNodeHandler } from 'better-auth/node';
 import { getAuthForRequest, isHostAllowed } from './authRequest.js';
 import { logEvent, getStats } from './db.js';
 import { checkOrigin, writeLimiter, requireAdmin } from './middleware/guards.js';
+import meRouter from './routes/me.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -63,6 +64,8 @@ export const createApp = () => {
             res.status(500).json({ error: 'Failed to fetch stats' });
         }
     });
+
+    app.use(meRouter);
 
     const distPath = path.join(__dirname, '../dist');
     app.use(express.static(distPath));
