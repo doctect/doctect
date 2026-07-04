@@ -4,9 +4,11 @@ export const API_BASE: string = (import.meta as any).env?.VITE_API_BASE || '';
 
 export class ApiError extends Error {
     status: number;
-    constructor(status: number, message: string) {
+    code?: string;
+    constructor(status: number, message: string, code?: string) {
         super(message);
         this.status = status;
+        this.code = code;
     }
 }
 
@@ -18,7 +20,7 @@ async function api<T>(path: string, opts: RequestInit = {}): Promise<T> {
     });
     let body: any = null;
     try { body = await res.json(); } catch { /* non-JSON */ }
-    if (!res.ok) throw new ApiError(res.status, body?.error || `Request failed (${res.status})`);
+    if (!res.ok) throw new ApiError(res.status, body?.error || `Request failed (${res.status})`, body?.code);
     return body as T;
 }
 
