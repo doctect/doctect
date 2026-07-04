@@ -12,6 +12,11 @@ router.get('/api/thumbnails/:thumbId', async (req, res) => {
     res.set('Content-Type', rows[0].mime)
         .set('X-Content-Type-Options', 'nosniff')
         .set('Cache-Control', 'public, max-age=86400')
+        // These are already-public, unauthenticated images meant to be embedded from the
+        // client origin (which may differ from the API origin — see VITE_API_BASE). Helmet's
+        // app-wide default (same-origin) would otherwise block <img> tags from loading them
+        // cross-origin.
+        .set('Cross-Origin-Resource-Policy', 'cross-origin')
         .send(img);
 });
 
