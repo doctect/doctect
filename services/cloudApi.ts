@@ -31,6 +31,15 @@ export interface CloudProject {
 }
 export interface CommitMeta { id: string; parentCommitId: string | null; message: string; schemaVersion: number | null; createdBy: string | null; createdAt: string; }
 
+export interface GalleryItem {
+    id: string; name: string; description: string; tags: string[]; author: string;
+    forkCount: number; downloadCount: number; updatedAt: string; thumbnailId: string | null;
+}
+export interface GalleryDetail extends Omit<GalleryItem, 'thumbnailId'> {
+    ownerId: string; headCommitId: string | null; thumbnailIds: string[];
+    forkedFrom: { projectId: string; name: string; author: string } | null;
+}
+
 export const cloudApi = {
     me: async (): Promise<MeUser | null> =>
         (await api<{ user: MeUser | null }>('/api/me')).user,
@@ -55,4 +64,23 @@ export const cloudApi = {
 
     unpublish: (projectId: string) =>
         api<{ project: CloudProject }>(`/api/projects/${projectId}/unpublish`, { method: 'POST' }),
+
+    gallery: (params: { q?: string; sort?: 'recent' | 'popular'; page?: number } = {}) => {
+        const qs = new URLSearchParams();
+        if (params.q) qs.set('q', params.q);
+        if (params.sort) qs.set('sort', params.sort);
+        if (params.page) qs.set('page', String(params.page));
+        return api<{ items: GalleryItem[]; page: number; hasMore: boolean }>(`/api/gallery?${qs}`);
+    },
+    galleryDetail: async (id: string) =>
+        (await api<{ project: GalleryDetail }>(`/api/gallery/${id}`)).project,
+    galleryState: (id: string) =>
+        api<{ name: string; state: any }>(`/api/gallery/${id}/state`),
+    report: (id: string, reason: string) =>
+        api<{ success: boolean }>(`/api/gallery/${id}/report`, { method: 'POST', body: JSON.stringify({ reason }) }),
+
+    // Temporary stub: the server endpoint lands in Task 19 (Phase 4). Signature is final;
+    // calling this before then will 404, which callers must surface via the existing error state.
+    fork: (projectId: string) =>
+        api<{ project: CloudProject }>(`/api/projects/${projectId}/fork`, { method: 'POST' }),
 };

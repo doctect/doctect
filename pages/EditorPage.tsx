@@ -3,6 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { AppState } from '../types';
 import { createPlannerProject, createBlankProject, createNotebookProject, ProjectPreset, getCustomPresets } from '../services/presets';
 import { migrateState } from '../services/migration';
+import { consumeImport } from '../services/importProject';
 import { ProjectEditor } from '../components/ProjectEditor';
 import { TabBar } from '../components/TabBar';
 import { NewProjectModal } from '../components/NewProjectModal';
@@ -75,6 +76,24 @@ export function EditorPage() {
             setActiveProjectId('proj_1');
         }
     }, [projects, activeProjectId]);
+
+    // Consume a staged import from the gallery (set by stageImport before navigating here)
+    useEffect(() => {
+        const pending = consumeImport();
+        if (!pending) return;
+        const newId = `proj_${Date.now()}`;
+        const newProject: Project = {
+            id: newId,
+            name: pending.name,
+            initialState: migrateState(pending.state),
+            cloud: pending.cloud,
+            revision: 0
+        };
+        setProjects(prev => [...prev, newProject]);
+        setActiveProjectId(newId);
+        trackEvent('project_imported_from_gallery', { name: pending.name });
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
     const handleCreateProject = (preset: ProjectPreset) => {
         let newState: AppState;
@@ -225,6 +244,9 @@ export function EditorPage() {
                     <a href="https://github.com/doctect/doctect" target="_blank" rel="noopener noreferrer" className="text-slate-400 hover:text-slate-900 transition-colors" title="View on GitHub">
                         <Github size={18} />
                     </a>
+                    <Link to="/gallery" className="text-xs font-medium text-slate-500 hover:text-blue-600">
+                        Gallery
+                    </Link>
                     <Link to="/docs" className="text-xs font-medium text-slate-500 hover:text-blue-600">
                         Docs
                     </Link>

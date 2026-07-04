@@ -37,6 +37,7 @@ export const LandingPage: React.FC = () => {
              <Github size={20} />
           </a>
           <Link to="/docs" className="text-sm font-medium text-slate-600 hover:text-blue-600 transition-colors">Documentation</Link>
+          <Link to="/gallery" className="text-sm font-medium text-slate-600 hover:text-blue-600 transition-colors">Gallery</Link>
           <AccountMenu />
           <Link to="/app" className="bg-slate-900 text-white px-5 py-2.5 rounded-lg text-sm font-medium hover:bg-slate-800 transition-all shadow-lg shadow-slate-900/10 hover:shadow-slate-900/20 hover:-translate-y-0.5">
             Launch App
