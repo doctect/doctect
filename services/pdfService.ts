@@ -1747,6 +1747,9 @@ export const generatePDF = async (state: AppState, options: GeneratePDFOptions =
  * download itself — see `downloadVariantsZip` for that.
  */
 export const generateVariantsZip = async (state: AppState, projectName: string): Promise<Blob> => {
+    if (!state.variants || Object.keys(state.variants).length === 0) {
+        throw new Error('This project has no variants to export.');
+    }
     const zip = new JSZip();
     const usedNames = new Set<string>();
     for (const variantId of Object.keys(state.variants)) {

@@ -24,6 +24,11 @@ describe('generateVariantsZip', () => {
         expect(String.fromCharCode(...bytes.slice(0, 5))).toBe('%PDF-');
     });
 
+    it('throws a clear error instead of silently producing an empty zip when there are no variants', async () => {
+        const emptyState: any = { ...twoVariantState, variants: {} };
+        await expect(generateVariantsZip(emptyState, 'Empty')).rejects.toThrow(/no variants/i);
+    });
+
     it('sanitizes filesystem-unsafe characters and dedupes names that would collide', async () => {
         const collidingState: any = {
             ...twoVariantState,
