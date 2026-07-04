@@ -154,5 +154,27 @@ export const migrations = [
             );
             CREATE INDEX IF NOT EXISTS idx_thumbnails_project ON thumbnails(project_id)
         `
+    },
+    {
+        id: '006_merge_requests',
+        pg: `
+            CREATE TABLE IF NOT EXISTS merge_requests (
+                id TEXT PRIMARY KEY,
+                source_project_id TEXT NOT NULL,
+                source_commit_id TEXT NOT NULL,
+                target_project_id TEXT NOT NULL,
+                base_commit_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'open',
+                created_by TEXT NOT NULL,
+                resolved_by TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                resolved_at TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_mr_target ON merge_requests(target_project_id);
+            CREATE INDEX IF NOT EXISTS idx_mr_author ON merge_requests(created_by)
+        `
+        // sqlite: same DDL works on better-sqlite3 (TIMESTAMP degrades to NUMERIC affinity) — no override needed.
     }
 ];

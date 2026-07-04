@@ -10,6 +10,7 @@ import { checkOrigin, writeLimiter, requireAdmin } from './middleware/guards.js'
 import meRouter from './routes/me.js';
 import projectsRouter from './routes/projects.js';
 import galleryRouter from './routes/gallery.js';
+import mergeRequestsRouter from './routes/mergeRequests.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -70,6 +71,7 @@ export const createApp = () => {
     app.use(meRouter);
     app.use(projectsRouter);
     app.use(galleryRouter);
+    app.use(mergeRequestsRouter);
 
     const distPath = path.join(__dirname, '../dist');
     app.use(express.static(distPath));
