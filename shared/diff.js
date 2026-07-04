@@ -55,3 +55,72 @@ export const computeChangeSet = (base, side) => {
     }
     return cs;
 };
+
+const touchedTemplates = (cs, vid) => new Set([
+    ...(cs.templatesAdded[vid] || []),
+    ...(cs.templatesModified[vid] || []),
+    ...(cs.templatesRemoved[vid] || [])
+]);
+
+const variantTouched = (cs, vid) =>
+    touchedTemplates(cs, vid).size > 0 || Object.prototype.hasOwnProperty.call(cs.variantsRenamed, vid);
+
+/**
+ * @typedef {Object} Conflict
+ * @property {'nodes'|'variant'|'template'} kind
+ * @property {string} [variantId]
+ * @property {string} [templateId]
+ * @property {string} description
+ */
+
+/** @returns {{source: ChangeSet, target: ChangeSet, conflicts: Conflict[]}} */
+export const threeWayDiff = (base, source, target) => {
+    const src = computeChangeSet(base, source);
+    const tgt = computeChangeSet(base, target);
+    const conflicts = [];
+
+    if (src.nodesChanged && tgt.nodesChanged &&
+        !eq({ nodes: source.nodes, rootId: source.rootId }, { nodes: target.nodes, rootId: target.rootId })) {
+        conflicts.push({ kind: 'nodes', description: 'Both projects changed the page hierarchy differently' });
+    }
+
+    for (const vid of src.variantsAdded) {
+        if (tgt.variantsAdded.includes(vid) && !eq(source.variants[vid], target.variants[vid])) {
+            conflicts.push({ kind: 'variant', variantId: vid, description: `Variant "${vid}" was added on both sides with different content` });
+        }
+    }
+    for (const vid of Object.keys(src.variantsRenamed)) {
+        if (vid in tgt.variantsRenamed && src.variantsRenamed[vid] !== tgt.variantsRenamed[vid]) {
+            conflicts.push({ kind: 'variant', variantId: vid, description: `Variant "${vid}" was renamed differently on both sides` });
+        }
+    }
+    for (const vid of src.variantsRemoved) {
+        if (variantTouched(tgt, vid)) {
+            conflicts.push({ kind: 'variant', variantId: vid, description: `Variant "${vid}" was removed in the fork but modified upstream` });
+        }
+    }
+    for (const vid of tgt.variantsRemoved) {
+        if (variantTouched(src, vid)) {
+            conflicts.push({ kind: 'variant', variantId: vid, description: `Variant "${vid}" was removed upstream but modified in the fork` });
+        }
+    }
+
+    const vids = new Set([
+        ...Object.keys(src.templatesAdded), ...Object.keys(src.templatesModified), ...Object.keys(src.templatesRemoved),
+        ...Object.keys(tgt.templatesAdded), ...Object.keys(tgt.templatesModified), ...Object.keys(tgt.templatesRemoved)
+    ]);
+    for (const vid of vids) {
+        const srcSet = touchedTemplates(src, vid);
+        const tgtSet = touchedTemplates(tgt, vid);
+        for (const tid of srcSet) {
+            if (!tgtSet.has(tid)) continue;
+            const sVal = source.variants[vid]?.templates?.[tid];
+            const tVal = target.variants[vid]?.templates?.[tid];
+            if (!eq(sVal, tVal)) {
+                conflicts.push({ kind: 'template', variantId: vid, templateId: tid, description: `Template "${tid}" in variant "${vid}" was changed on both sides` });
+            }
+        }
+    }
+
+    return { source: src, target: tgt, conflicts };
+};

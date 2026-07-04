@@ -1,7 +1,7 @@
 // tests/unit/shared/diff.test.js
 // @vitest-environment node
 import { describe, it, expect } from 'vitest';
-import { stableStringify, computeChangeSet } from '../../../shared/diff.js';
+import { stableStringify, computeChangeSet, threeWayDiff } from '../../../shared/diff.js';
 
 const mkState = () => ({
     nodes: { root: { id: 'root', parentId: null, type: 'day', title: 'Root', data: {}, children: [] } },
@@ -71,5 +71,57 @@ describe('computeChangeSet', () => {
         side.variants.rm.templates.day = { elements: t.elements, height: t.height, width: t.width, name: t.name, id: t.id };
         const cs = computeChangeSet(mkState(), side);
         expect(cs.templatesModified).toEqual({});
+    });
+});
+
+describe('threeWayDiff', () => {
+    it('no conflicts when sides touch different templates', () => {
+        const base = mkState();
+        const source = clone(base); source.variants.rm.templates.day.name = 'Day v2';
+        const target = clone(base); target.variants.rm.templates.week.name = 'Week v2';
+        const d = threeWayDiff(base, source, target);
+        expect(d.conflicts).toEqual([]);
+        expect(d.source.templatesModified).toEqual({ rm: ['day'] });
+    });
+
+    it('flags same-template conflicts', () => {
+        const base = mkState();
+        const source = clone(base); source.variants.rm.templates.day.name = 'Source Day';
+        const target = clone(base); target.variants.rm.templates.day.name = 'Target Day';
+        const d = threeWayDiff(base, source, target);
+        expect(d.conflicts.some(c => c.kind === 'template' && c.templateId === 'day')).toBe(true);
+    });
+
+    it('does not flag identical convergent edits', () => {
+        const base = mkState();
+        const source = clone(base); source.variants.rm.templates.day.name = 'Same';
+        const target = clone(base); target.variants.rm.templates.day.name = 'Same';
+        expect(threeWayDiff(base, source, target).conflicts).toEqual([]);
+    });
+
+    it('flags nodes conflicts only when both changed differently', () => {
+        const base = mkState();
+        const source = clone(base); source.nodes.root.title = 'S';
+        const target = clone(base); target.nodes.root.title = 'T';
+        expect(threeWayDiff(base, source, target).conflicts.some(c => c.kind === 'nodes')).toBe(true);
+
+        const target2 = clone(base); target2.nodes.root.title = 'S';
+        expect(threeWayDiff(base, source, target2).conflicts).toEqual([]);
+    });
+
+    it('flags variant removed vs modified', () => {
+        const base = mkState();
+        const source = clone(base); delete source.variants.rm;
+        const target = clone(base); target.variants.rm.templates.day.name = 'Edited';
+        const d = threeWayDiff(base, source, target);
+        expect(d.conflicts.some(c => c.kind === 'variant' && c.variantId === 'rm')).toBe(true);
+    });
+
+    it('flags variant added on both sides with different content', () => {
+        const base = mkState();
+        const source = clone(base); source.variants.ipad = { id: 'ipad', name: 'iPad', templates: {} };
+        const target = clone(base); target.variants.ipad = { id: 'ipad', name: 'iPad Pro', templates: {} };
+        const d = threeWayDiff(base, source, target);
+        expect(d.conflicts.some(c => c.kind === 'variant' && c.variantId === 'ipad')).toBe(true);
     });
 });
