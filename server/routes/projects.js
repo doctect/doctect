@@ -198,4 +198,27 @@ router.post('/api/projects/:id/unpublish', requireAuth, loadProject(true), async
     res.json({ project: projectDto(await getProjectRow(req.project.id)) });
 });
 
+router.post('/api/projects/:id/fork', requireAuth, loadProject(false), async (req, res) => {
+    const src = req.project;
+    if (!src.head_commit_id) return res.status(400).json({ error: 'Source project has no content' });
+    const headRows = await query('SELECT state_json FROM commits WHERE id = $1', [src.head_commit_id]);
+    if (!headRows[0]) return res.status(404).json({ error: 'Source commit not found' });
+
+    const forkId = randomUUID();
+    await query(
+        `INSERT INTO projects (id, owner_id, name, description, tags, forked_from_project_id, forked_from_commit_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [forkId, req.user.id, src.name, src.description, src.tags, src.id, src.head_commit_id]
+    );
+    await insertCommit({
+        projectId: forkId,
+        parentCommitId: null,
+        message: `Fork of "${src.name}"`,
+        state: JSON.parse(headRows[0].state_json),
+        userId: req.user.id
+    });
+    await query('UPDATE projects SET fork_count = fork_count + 1 WHERE id = $1', [src.id]);
+    res.status(201).json({ project: projectDto(await getProjectRow(forkId)) });
+});
+
 export default router;
