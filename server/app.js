@@ -76,7 +76,11 @@ export const createApp = () => {
     const distPath = path.join(__dirname, '../dist');
     app.use(express.static(distPath));
     app.get(/.*/, (req, res) => {
-        res.sendFile(path.join(distPath, 'index.html'));
+        // Must pass a relative filename + { root } rather than an absolute path: express@5.2.1's
+        // res.sendFile() 404s on a bare absolute path here even when the file exists, silently
+        // breaking every hard/direct load (deep link, bookmark, refresh) of any non-root client
+        // route in production. { root } is also express's own recommended sendFile pattern.
+        res.sendFile('index.html', { root: distPath });
     });
 
     return app;
