@@ -5,6 +5,7 @@ import { useSession } from '../../lib/auth-client';
 import { cloudApi, ApiError } from '../../services/cloudApi';
 import { AppState } from '../../types';
 import { HistoryModal } from './HistoryModal';
+import { PublishModal } from './PublishModal';
 import type { Project } from '../../pages/EditorPage';
 
 interface CloudMenuProps {
@@ -19,6 +20,7 @@ export function CloudMenu({ project, onLinkCloud, onRestoreState }: CloudMenuPro
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [showHistory, setShowHistory] = useState(false);
+    const [showPublish, setShowPublish] = useState(false);
     const ref = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
@@ -73,7 +75,13 @@ export function CloudMenu({ project, onLinkCloud, onRestoreState }: CloudMenuPro
                                     <History size={12} /> Version history
                                 </button>
                             )}
-                            {/* Publish (Task 15) and Propose changes (Task 26) buttons are appended here in later tasks */}
+                            {project.cloud && (
+                                <button onClick={() => { setShowPublish(true); setOpen(false); }}
+                                    className="w-full text-left flex items-center gap-1.5 px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50">
+                                    <Globe size={12} /> Publish to gallery…
+                                </button>
+                            )}
+                            {/* Propose changes (Task 26) button is appended here in a later task */}
                             {error && <div className="px-3 py-1.5 text-xs text-red-600">{error}</div>}
                         </>
                     )}
@@ -85,6 +93,11 @@ export function CloudMenu({ project, onLinkCloud, onRestoreState }: CloudMenuPro
                     onRestore={(state) => { onRestoreState(state); setShowHistory(false); }}
                     onClose={() => setShowHistory(false)}
                 />
+            )}
+            {showPublish && project.cloud && (
+                <PublishModal project={project} cloudProjectId={project.cloud.projectId}
+                    onClose={() => setShowPublish(false)}
+                    onPublished={() => { setShowPublish(false); window.alert('Published! View it in the Gallery.'); }} />
             )}
         </div>
     );

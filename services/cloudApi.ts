@@ -49,4 +49,10 @@ export const cloudApi = {
 
     getCommit: async (projectId: string, commitId: string) =>
         (await api<{ commit: { id: string; message: string; createdAt: string; state: any } }>(`/api/projects/${projectId}/commits/${commitId}`)).commit,
+
+    publish: (projectId: string, args: { description: string; tags: string[]; thumbnails: string[] }) =>
+        api<{ project: CloudProject & { thumbnailIds: string[] } }>(`/api/projects/${projectId}/publish`, { method: 'POST', body: JSON.stringify(args) }),
+
+    unpublish: (projectId: string) =>
+        api<{ project: CloudProject }>(`/api/projects/${projectId}/unpublish`, { method: 'POST' }),
 };
