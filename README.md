@@ -48,6 +48,13 @@ The most powerful tool for planner creation.
 *   **Variant Management**: Add, rename, duplicate, and delete variants from the UI.
 *   **Device-Specific PDF Export**: Export PDFs tailored to each device's dimensions.
 
+### ☁️ Cloud, Gallery & Merge Requests
+*   **Optional Accounts**: Sign in to back any project with cloud-saved version history — entirely opt-in; local `localStorage` projects work exactly as before.
+*   **Version History**: Every cloud save is an immutable, restorable commit — never a silent overwrite.
+*   **Public Gallery**: Publish a project with rendered preview thumbnails; anyone can browse, search, and clone it into their own editor without an account.
+*   **Fork & Propose**: Fork a public project into your own private copy, edit it, and open a Merge Request to propose your changes back upstream.
+*   **Conflict-Aware Merging**: Merge Requests compute a structured three-way diff and refuse to merge whenever both sides touched the same template or page hierarchy.
+
 ---
 
 ## 🚀 Getting Started

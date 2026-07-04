@@ -45,6 +45,12 @@ For ease of reading, the documentation is split into specialized deep-dives.
     *   Modifying Application State & Migrations
     *   Debugging Tips
 
+8.  **[Cloud, Gallery & Merge Requests](8-cloud-and-gallery.md)**
+    *   Local-First + Explicit Sync Model
+    *   Publishing, Forking, and the Public Gallery
+    *   Merge Request Lifecycle & Conflict Rules
+    *   API Surface, Environment Variables & Security Model
+
 ## 🧩 Component Deep Dives
 
 To understand the React architectural layer, review the following component breakdowns:
