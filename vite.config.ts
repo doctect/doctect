@@ -23,7 +23,13 @@ export default defineConfig(({ mode }) => {
       globals: true,
       environment: 'jsdom',
       setupFiles: './tests/setup.ts',
-      exclude: ['node_modules', 'tests/e2e/**'],
+      // '**/node_modules/**' (not just the bare 'node_modules' segment) so vitest doesn't
+      // recurse into a nested checkout's own node_modules - e.g. a git worktree living under
+      // .worktrees/ is a real, traversable directory on disk with its own full node_modules,
+      // and without the '**/' prefix a plain 'node_modules' pattern only reliably excludes the
+      // top-level one. '.worktrees/**' is an explicit belt-and-suspenders exclude for the same
+      // reason: worktrees also duplicate this project's own tests/** at a nested path.
+      exclude: ['**/node_modules/**', '.worktrees/**', 'tests/e2e/**'],
     }
   };
 });

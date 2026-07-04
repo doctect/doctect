@@ -19,6 +19,17 @@ export const initTestApp = async () => {
         process.env.SQLITE_PATH = path.join(os.tmpdir(), `doctect-app-${Date.now()}-${Math.random().toString(36).slice(2)}.db`);
     }
     delete process.env.DATABASE_URL;
+    // Force test-safe values for every env var the server reads directly for origin/host
+    // checks, regardless of whatever real .env file might already sit in the current working
+    // directory (e.g. a developer's own local production-deploy config, which sets
+    // TRUSTED_ORIGINS/CLIENT_URL to real deployed URLs, not localhost). server/auth.js imports
+    // 'dotenv/config' at its top, which loads process.cwd()'s .env unconditionally - without
+    // forcing these here, running the suite from a directory that happens to already have such
+    // a .env makes origin-check tests fail for reasons that have nothing to do with the code
+    // under test. This mirrors the SQLITE_PATH/DATABASE_URL isolation immediately above.
+    process.env.TRUSTED_ORIGINS = 'http://localhost:3000,http://localhost:3001';
+    process.env.CLIENT_URL = 'http://localhost:3000';
+    delete process.env.ALLOWED_HOSTS;
     const { runMigrations } = await import('../../../server/migrations.js');
     await runMigrations();
     const { createApp } = await import('../../../server/app.js');
