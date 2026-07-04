@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams, useLocation } from 'react-router-dom';
 import { ArrowLeft, GitFork, Download, Flag, ExternalLink } from 'lucide-react';
 import { cloudApi, GalleryDetail, ApiError, API_BASE, MergeRequestDto } from '../services/cloudApi';
 import { stageImport } from '../services/importProject';
+import { downloadVariantsZip } from '../services/pdfService';
 import { useSession } from '../lib/auth-client';
 import { AccountMenu } from '../components/AccountMenu';
 
@@ -53,6 +54,19 @@ export function GalleryDetailPage() {
         } catch (e) { setError(e instanceof ApiError ? e.message : 'Fork failed'); setBusy(null); }
     };
 
+    const downloadAllVariants = async () => {
+        if (!id || !project) return;
+        setBusy('download');
+        try {
+            const res = await cloudApi.galleryState(id);
+            await downloadVariantsZip(res.state, res.name);
+        } catch {
+            setError('Could not generate the PDF download');
+        } finally {
+            setBusy(null);
+        }
+    };
+
     const report = async () => {
         const reason = window.prompt('Why are you reporting this project?');
         if (!reason || !id) return;
@@ -99,6 +113,10 @@ export function GalleryDetailPage() {
                         <button onClick={openInEditor} disabled={busy !== null}
                             className="flex items-center justify-center gap-1.5 bg-blue-600 text-white rounded-lg px-4 py-2 text-sm font-medium disabled:opacity-50">
                             <ExternalLink size={14} /> {busy === 'open' ? 'Loading…' : 'Open in editor'}
+                        </button>
+                        <button onClick={downloadAllVariants} disabled={busy !== null}
+                            className="flex items-center justify-center gap-1.5 border border-slate-300 rounded-lg px-4 py-2 text-sm font-medium text-slate-700 disabled:opacity-50">
+                            <Download size={14} /> {busy === 'download' ? 'Generating…' : 'Download all variants (.zip)'}
                         </button>
                         {session?.user ? (
                             <button onClick={fork} disabled={busy !== null}
