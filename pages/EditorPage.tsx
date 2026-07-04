@@ -12,11 +12,14 @@ import { Link } from 'react-router-dom';
 import clsx from 'clsx';
 import { trackEvent } from '../services/analytics';
 import { AccountMenu } from '../components/AccountMenu';
+import { CloudMenu } from '../components/cloud/CloudMenu';
 
-interface Project {
+export interface Project {
     id: string;
     name: string;
     initialState: AppState;
+    cloud?: { projectId: string; lastSyncedCommitId: string };
+    revision?: number;
 }
 
 export function EditorPage() {
@@ -176,7 +179,18 @@ export function EditorPage() {
         setProjects(prev => prev.map(p => p.id === id ? { ...p, initialState: state } : p));
     };
 
+    const handleLinkCloud = (id: string, cloud: { projectId: string; lastSyncedCommitId: string }) => {
+        setProjects(prev => prev.map(p => p.id === id ? { ...p, cloud } : p));
+    };
+
+    const handleRestoreState = (id: string, state: AppState) => {
+        setProjects(prev => prev.map(p => p.id === id
+            ? { ...p, initialState: state, revision: (p.revision || 0) + 1 }
+            : p));
+    };
+
     const closingProject = closingProjectId ? projects.find(p => p.id === closingProjectId) : null;
+    const activeProject = projects.find(p => p.id === activeProjectId);
 
     return (
         <div className="flex flex-col h-screen w-screen overflow-hidden bg-slate-200">
@@ -201,6 +215,13 @@ export function EditorPage() {
 
                 <div className="flex items-center gap-3 hidden sm:flex">
                     <AccountMenu />
+                    {activeProject && (
+                        <CloudMenu
+                            project={activeProject}
+                            onLinkCloud={(cloud) => handleLinkCloud(activeProject.id, cloud)}
+                            onRestoreState={(state) => handleRestoreState(activeProject.id, state)}
+                        />
+                    )}
                     <a href="https://github.com/doctect/doctect" target="_blank" rel="noopener noreferrer" className="text-slate-400 hover:text-slate-900 transition-colors" title="View on GitHub">
                         <Github size={18} />
                     </a>
@@ -214,7 +235,7 @@ export function EditorPage() {
             <div className="flex-1 relative overflow-hidden bg-slate-100">
                 {projects.map(project => (
                     <div
-                        key={project.id}
+                        key={`${project.id}:${project.revision || 0}`}
                         className={clsx(
                             "absolute inset-0 w-full h-full",
                             project.id === activeProjectId ? "z-10 opacity-100" : "z-0 opacity-0 pointer-events-none"
