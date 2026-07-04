@@ -79,8 +79,8 @@ export const cloudApi = {
     report: (id: string, reason: string) =>
         api<{ success: boolean }>(`/api/gallery/${id}/report`, { method: 'POST', body: JSON.stringify({ reason }) }),
 
-    // Temporary stub: the server endpoint lands in Task 19 (Phase 4). Signature is final;
-    // calling this before then will 404, which callers must surface via the existing error state.
+    // Forks a public project into a new private project owned by the caller, seeded from
+    // its head commit. Server endpoint implemented in Task 19 (Phase 4).
     fork: (projectId: string) =>
         api<{ project: CloudProject }>(`/api/projects/${projectId}/fork`, { method: 'POST' }),
 };

@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { Cloud, History, UploadCloud, Globe, GitPullRequest } from 'lucide-react';
 import { useSession } from '../../lib/auth-client';
-import { cloudApi, ApiError } from '../../services/cloudApi';
+import { cloudApi, ApiError, CloudProject } from '../../services/cloudApi';
 import { AppState } from '../../types';
 import { HistoryModal } from './HistoryModal';
 import { PublishModal } from './PublishModal';
@@ -21,6 +21,7 @@ export function CloudMenu({ project, onLinkCloud, onRestoreState }: CloudMenuPro
     const [error, setError] = useState<string | null>(null);
     const [showHistory, setShowHistory] = useState(false);
     const [showPublish, setShowPublish] = useState(false);
+    const [cloudProject, setCloudProject] = useState<CloudProject | null>(null);
     const ref = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
@@ -30,6 +31,12 @@ export function CloudMenu({ project, onLinkCloud, onRestoreState }: CloudMenuPro
         document.addEventListener('mousedown', onClick);
         return () => document.removeEventListener('mousedown', onClick);
     }, []);
+
+    useEffect(() => {
+        if (open && project.cloud && !cloudProject) {
+            cloudApi.getProject(project.cloud.projectId).then(setCloudProject).catch(() => {});
+        }
+    }, [open, project.cloud, cloudProject]);
 
     const saveToCloud = async () => {
         const message = window.prompt('Describe this save (commit message):', project.cloud ? 'Update' : 'Initial save');
@@ -74,6 +81,12 @@ export function CloudMenu({ project, onLinkCloud, onRestoreState }: CloudMenuPro
                                     className="w-full text-left flex items-center gap-1.5 px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50">
                                     <History size={12} /> Version history
                                 </button>
+                            )}
+                            {cloudProject?.forkedFromProjectId && (
+                                <Link to={`/gallery/${cloudProject.forkedFromProjectId}`}
+                                    className="block px-3 py-1.5 text-[11px] text-slate-400 hover:bg-slate-50">
+                                    ↳ forked from upstream — view source
+                                </Link>
                             )}
                             {project.cloud && (
                                 <button onClick={() => { setShowPublish(true); setOpen(false); }}
