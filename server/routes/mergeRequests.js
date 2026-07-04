@@ -2,8 +2,9 @@ import { Router } from 'express';
 import { randomUUID } from 'crypto';
 import { query } from '../db.js';
 import { requireAuth } from '../middleware/guards.js';
-import { getProjectRow, loadProject } from './projects.js';
-import { threeWayDiff } from '../../shared/diff.js';
+import { getProjectRow, loadProject, insertCommit } from './projects.js';
+import { threeWayDiff, applyChangeSet } from '../../shared/diff.js';
+import { validateAppState } from '../validateAppState.js';
 
 const router = Router();
 
@@ -146,6 +147,47 @@ router.get('/api/merge-requests/:id', requireAuth, loadMrForParticipant, async (
         sourceState: computed.sourceState,
         targetState: computed.targetState
     });
+});
+
+router.post('/api/merge-requests/:id/merge', requireAuth, loadMrForParticipant, async (req, res) => {
+    const mr = req.mr;
+    if (!req.isTargetOwner) return res.status(403).json({ error: 'Only the upstream owner can merge' });
+    if (mr.status === 'merged' || mr.status === 'closed') {
+        return res.status(409).json({ error: `Merge request is already ${mr.status}` });
+    }
+    const computed = await computeMrDiff(mr);
+    if (computed.error) return res.status(409).json({ error: computed.error });
+    if (computed.diff.conflicts.length > 0) {
+        await query(`UPDATE merge_requests SET status = 'conflicted' WHERE id = $1`, [mr.id]);
+        return res.status(409).json({ error: 'Merge request has conflicts', conflicts: computed.diff.conflicts });
+    }
+    const base = await getCommitState(mr.base_commit_id);
+    const merged = applyChangeSet(base.state, computed.sourceState, computed.targetState);
+    const v = validateAppState(merged);
+    if (!v.ok) return res.status(409).json({ error: `Merged state failed validation: ${v.error}` });
+
+    const users = await query('SELECT username FROM "user" WHERE id = $1', [mr.created_by]);
+    const target = await getProjectRow(mr.target_project_id);
+    const commitId = await insertCommit({
+        projectId: target.id,
+        parentCommitId: target.head_commit_id,
+        message: `Merge: ${mr.title} (from @${users[0]?.username ?? 'unknown'})`,
+        state: merged,
+        userId: req.user.id
+    });
+    await query(
+        `UPDATE merge_requests SET status = 'merged', resolved_by = $1, resolved_at = CURRENT_TIMESTAMP WHERE id = $2`,
+        [req.user.id, mr.id]);
+    res.json({ mergeRequest: await mrDto(await getMrRow(mr.id)), commit: { id: commitId } });
+});
+
+router.post('/api/merge-requests/:id/close', requireAuth, loadMrForParticipant, async (req, res) => {
+    const mr = req.mr;
+    if (mr.status === 'merged') return res.status(409).json({ error: 'Already merged' });
+    await query(
+        `UPDATE merge_requests SET status = 'closed', resolved_by = $1, resolved_at = CURRENT_TIMESTAMP WHERE id = $2`,
+        [req.user.id, mr.id]);
+    res.json({ mergeRequest: await mrDto(await getMrRow(mr.id)) });
 });
 
 export default router;
