@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { signIn, signUp } from '../lib/auth-client';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { Loader2 } from 'lucide-react';
 
 export const LoginPage = () => {
@@ -12,6 +12,8 @@ export const LoginPage = () => {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const navigate = useNavigate();
+    const location = useLocation();
+    const from = (location.state as { from?: string } | null)?.from;
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -31,7 +33,7 @@ export const LoginPage = () => {
                     password,
                 }, {
                     onSuccess: () => {
-                        navigate('/analytics');
+                        navigate(from ?? '/app', { replace: true });
                     },
                     onError: (ctx) => {
                         setError(ctx.error.message);
@@ -45,7 +47,7 @@ export const LoginPage = () => {
                     username,
                 } as any, {
                     onSuccess: () => {
-                        navigate('/analytics');
+                        navigate(from ?? '/app', { replace: true });
                     },
                     onError: (ctx) => {
                         setError(ctx.error.message);
@@ -145,7 +147,7 @@ export const LoginPage = () => {
                         onClick={async () => {
                             await signIn.social({
                                 provider: "google",
-                                callbackURL: window.location.origin + "/analytics"
+                                callbackURL: window.location.origin + (from ?? '/app')
                             });
                         }}
                         className="w-full flex items-center justify-center gap-2 border border-gray-300 bg-white text-gray-700 py-2 rounded-md hover:bg-gray-50 transition-colors font-medium text-sm"

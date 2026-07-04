@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useLocation } from 'react-router-dom';
 import { ArrowLeft, GitFork, Download, Flag, ExternalLink } from 'lucide-react';
 import { cloudApi, GalleryDetail, ApiError, API_BASE, MergeRequestDto } from '../services/cloudApi';
 import { stageImport } from '../services/importProject';
@@ -9,6 +9,7 @@ import { AccountMenu } from '../components/AccountMenu';
 export function GalleryDetailPage() {
     const { id } = useParams<{ id: string }>();
     const navigate = useNavigate();
+    const location = useLocation();
     const { data: session } = useSession();
     const [project, setProject] = useState<GalleryDetail | null>(null);
     const [error, setError] = useState<string | null>(null);
@@ -105,7 +106,7 @@ export function GalleryDetailPage() {
                                 <GitFork size={14} /> {busy === 'fork' ? 'Forking…' : 'Fork this project'}
                             </button>
                         ) : (
-                            <Link to="/login" className="text-center text-xs text-slate-500 hover:text-blue-600">Sign in to fork</Link>
+                            <Link to="/login" state={{ from: location.pathname }} className="text-center text-xs text-slate-500 hover:text-blue-600">Sign in to fork</Link>
                         )}
                         <button onClick={report} className="flex items-center justify-center gap-1 text-[11px] text-slate-400 hover:text-red-600 mt-2">
                             <Flag size={11} /> Report

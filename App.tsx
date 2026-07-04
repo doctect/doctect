@@ -49,11 +49,12 @@ function PageTracker() {
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
   const { data: session, isPending, error } = useSession();
+  const location = useLocation();
 
   if (isPending) return <div className="p-10 flex justify-center"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div></div>;
 
   if (!session) {
-    return <Navigate to="/login" />;
+    return <Navigate to="/login" state={{ from: location.pathname }} />;
   }
 
   // Optional: Check strictly for admin role if the backend enforces it, 

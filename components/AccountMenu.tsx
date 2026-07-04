@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { User, LogOut, Image } from 'lucide-react';
 import { useSession, signOut } from '../lib/auth-client';
 
@@ -7,6 +7,7 @@ export function AccountMenu() {
     const { data: session, isPending } = useSession();
     const [open, setOpen] = useState(false);
     const ref = useRef<HTMLDivElement>(null);
+    const location = useLocation();
 
     useEffect(() => {
         const onClick = (e: MouseEvent) => {
@@ -18,7 +19,7 @@ export function AccountMenu() {
 
     if (isPending) return null;
     if (!session?.user) {
-        return <Link to="/login" className="text-xs font-medium text-slate-500 hover:text-blue-600">Sign in</Link>;
+        return <Link to="/login" state={{ from: location.pathname }} className="text-xs font-medium text-slate-500 hover:text-blue-600">Sign in</Link>;
     }
     const username = (session.user as any).username || session.user.name;
     return (
