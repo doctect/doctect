@@ -47,6 +47,13 @@ export const requireAdmin = async (req, res, next) => {
     });
 };
 
+export const requireUsername = (req, res, next) => {
+    if (!req.user?.username) {
+        return res.status(403).json({ error: 'Set a public username before using cloud/gallery features.', code: 'USERNAME_REQUIRED' });
+    }
+    next();
+};
+
 export const writeLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     max: 200,

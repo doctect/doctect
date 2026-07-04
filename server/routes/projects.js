@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { randomUUID } from 'crypto';
 import { query } from '../db.js';
-import { requireAuth, optionalAuth } from '../middleware/guards.js';
+import { requireAuth, optionalAuth, requireUsername } from '../middleware/guards.js';
 import { validateAppState } from '../validateAppState.js';
 
 const router = Router();
@@ -47,7 +47,7 @@ export const insertCommit = async ({ projectId, parentCommitId, message, state, 
 const cleanName = (name) => (typeof name === 'string' ? name.trim().slice(0, 100) : '');
 const cleanMessage = (m) => (typeof m === 'string' && m.trim() ? m.trim().slice(0, 500) : 'Update');
 
-router.post('/api/projects', requireAuth, async (req, res) => {
+router.post('/api/projects', requireAuth, requireUsername, async (req, res) => {
     const { name, state, message } = req.body || {};
     const n = cleanName(name);
     if (!n) return res.status(400).json({ error: 'name is required (max 100 chars)' });
@@ -109,7 +109,7 @@ router.delete('/api/projects/:id', requireAuth, loadProject(true), async (req, r
     res.json({ success: true });
 });
 
-router.post('/api/projects/:id/commits', requireAuth, loadProject(true), async (req, res) => {
+router.post('/api/projects/:id/commits', requireAuth, requireUsername, loadProject(true), async (req, res) => {
     const { state, message } = req.body || {};
     const v = validateAppState(state);
     if (!v.ok) return res.status(400).json({ error: `invalid state: ${v.error}` });
@@ -167,7 +167,7 @@ export const getThumbnailIds = async (projectId) => {
     return rows.map(r => r.id);
 };
 
-router.post('/api/projects/:id/publish', requireAuth, loadProject(true), async (req, res) => {
+router.post('/api/projects/:id/publish', requireAuth, requireUsername, loadProject(true), async (req, res) => {
     const { description, tags, thumbnails } = req.body || {};
     if (!Array.isArray(thumbnails) || thumbnails.length < 1 || thumbnails.length > 4) {
         return res.status(400).json({ error: 'thumbnails must contain 1-4 images' });
@@ -198,7 +198,7 @@ router.post('/api/projects/:id/unpublish', requireAuth, loadProject(true), async
     res.json({ project: projectDto(await getProjectRow(req.project.id)) });
 });
 
-router.post('/api/projects/:id/fork', requireAuth, loadProject(false), async (req, res) => {
+router.post('/api/projects/:id/fork', requireAuth, requireUsername, loadProject(false), async (req, res) => {
     const src = req.project;
     if (!src.head_commit_id) return res.status(400).json({ error: 'Source project has no content' });
     const headRows = await query('SELECT state_json FROM commits WHERE id = $1', [src.head_commit_id]);

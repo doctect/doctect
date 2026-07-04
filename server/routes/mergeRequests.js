@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { randomUUID } from 'crypto';
 import { query } from '../db.js';
-import { requireAuth } from '../middleware/guards.js';
+import { requireAuth, requireUsername } from '../middleware/guards.js';
 import { getProjectRow, loadProject, insertCommit } from './projects.js';
 import { threeWayDiff, applyChangeSet } from '../../shared/diff.js';
 import { validateAppState } from '../validateAppState.js';
@@ -60,7 +60,7 @@ export const computeMrDiff = async (mr) => {
     };
 };
 
-router.post('/api/merge-requests', requireAuth, async (req, res) => {
+router.post('/api/merge-requests', requireAuth, requireUsername, async (req, res) => {
     const { sourceProjectId, title, description } = req.body || {};
     const t = typeof title === 'string' ? title.trim().slice(0, 200) : '';
     if (!t) return res.status(400).json({ error: 'title is required' });

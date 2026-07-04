@@ -44,6 +44,14 @@ export const signUpUser = async (app, { email, username }) => {
     return res.headers['set-cookie'].map(c => c.split(';')[0]).join('; ');
 };
 
+export const signUpUserNoUsername = async (app, { email, name }) => {
+    const res = await request(app)
+        .post('/api/auth/sign-up/email')
+        .send({ email, password: 'password1234', name });
+    if (res.status !== 200) throw new Error(`sign-up failed: ${res.status} ${JSON.stringify(res.body)}`);
+    return res.headers['set-cookie'].map(c => c.split(';')[0]).join('; ');
+};
+
 // Shared fixtures. IMPORTANT: keep these in this plain (non-`.test.js`) helper module,
 // never export fixtures from a `*.test.js` file and import them into another `*.test.js`
 // file — Vitest gives each test file its own isolated module graph, so importing a
