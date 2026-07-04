@@ -2,6 +2,7 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest';
 import { stableStringify, computeChangeSet, threeWayDiff } from '../../../shared/diff.js';
+import { applyChangeSet } from '../../../shared/diff.js';
 
 const mkState = () => ({
     nodes: { root: { id: 'root', parentId: null, type: 'day', title: 'Root', data: {}, children: [] } },
@@ -123,5 +124,54 @@ describe('threeWayDiff', () => {
         const target = clone(base); target.variants.ipad = { id: 'ipad', name: 'iPad Pro', templates: {} };
         const d = threeWayDiff(base, source, target);
         expect(d.conflicts.some(c => c.kind === 'variant' && c.variantId === 'ipad')).toBe(true);
+    });
+});
+
+describe('applyChangeSet', () => {
+    it('applies template edits and additions onto target', () => {
+        const base = mkState();
+        const source = clone(base);
+        source.variants.rm.templates.day.name = 'Fancy Day';
+        source.variants.ipad = { id: 'ipad', name: 'iPad', templates: {} };
+        const target = clone(base);
+        target.variants.rm.templates.week.name = 'Upstream Week'; // target's own change is preserved
+        target.activeVariantId = 'rm';
+
+        const merged = applyChangeSet(base, source, target);
+        expect(merged.variants.rm.templates.day.name).toBe('Fancy Day');
+        expect(merged.variants.rm.templates.week.name).toBe('Upstream Week');
+        expect(merged.variants.ipad.name).toBe('iPad');
+        expect(merged.activeVariantId).toBe('rm');
+    });
+
+    it('applies removals and repairs activeVariantId', () => {
+        const base = mkState();
+        base.variants.extra = { id: 'extra', name: 'Extra', templates: {} };
+        const source = clone(base);
+        delete source.variants.extra;
+        delete source.variants.rm.templates.week;
+        const target = clone(base);
+        target.activeVariantId = 'extra';
+
+        const merged = applyChangeSet(base, source, target);
+        expect(merged.variants.extra).toBeUndefined();
+        expect(merged.variants.rm.templates.week).toBeUndefined();
+        expect(merged.variants[merged.activeVariantId]).toBeDefined();
+    });
+
+    it('applies node changes when only source changed them', () => {
+        const base = mkState();
+        const source = clone(base);
+        source.nodes.child = { id: 'child', parentId: 'root', type: 'day', title: 'Child', data: {}, children: [] };
+        source.nodes.root.children = ['child'];
+        const merged = applyChangeSet(base, source, clone(base));
+        expect(merged.nodes.child.title).toBe('Child');
+    });
+
+    it('applies variant renames', () => {
+        const base = mkState();
+        const source = clone(base); source.variants.rm.name = 'RM Pro Max';
+        const merged = applyChangeSet(base, source, clone(base));
+        expect(merged.variants.rm.name).toBe('RM Pro Max');
     });
 });

@@ -124,3 +124,37 @@ export const threeWayDiff = (base, source, target) => {
 
     return { source: src, target: tgt, conflicts };
 };
+
+/**
+ * Applies source's changes (relative to base) on top of target.
+ * PRECONDITION: threeWayDiff(base, source, target).conflicts is empty.
+ * @returns merged full state (target clone + source changes)
+ */
+export const applyChangeSet = (base, source, target) => {
+    const merged = clone(target);
+    const cs = computeChangeSet(base, source);
+
+    if (cs.nodesChanged) {
+        merged.nodes = clone(source.nodes);
+        merged.rootId = source.rootId;
+    }
+    for (const vid of cs.variantsAdded) merged.variants[vid] = clone(source.variants[vid]);
+    for (const vid of cs.variantsRemoved) delete merged.variants[vid];
+    for (const [vid, newName] of Object.entries(cs.variantsRenamed)) {
+        if (merged.variants[vid]) merged.variants[vid].name = newName;
+    }
+    const applyTemplates = (map, fn) => {
+        for (const [vid, tids] of Object.entries(map)) {
+            if (!merged.variants[vid]) continue;
+            for (const tid of tids) fn(vid, tid);
+        }
+    };
+    applyTemplates(cs.templatesAdded, (vid, tid) => { merged.variants[vid].templates[tid] = clone(source.variants[vid].templates[tid]); });
+    applyTemplates(cs.templatesModified, (vid, tid) => { merged.variants[vid].templates[tid] = clone(source.variants[vid].templates[tid]); });
+    applyTemplates(cs.templatesRemoved, (vid, tid) => { delete merged.variants[vid].templates[tid]; });
+
+    if (!merged.variants[merged.activeVariantId]) {
+        merged.activeVariantId = Object.keys(merged.variants)[0];
+    }
+    return merged;
+};
