@@ -724,25 +724,26 @@ interface GeneratePDFOptions {
     isGreyscale?: boolean;
     variantId?: string;
     projectName?: string;
+    output?: 'save' | 'arraybuffer';
 }
 
-export const generatePDF = async (state: AppState, options: GeneratePDFOptions = {}) => {
-    const pageMap = new Map<string, number>();
+export const computePageOrder = (state: AppState): string[] => {
     const pageNodes: string[] = [];
-
     const traverse = (nodeId: string) => {
         const node = state.nodes[nodeId];
         if (!node) return;
-
         if (!node.referenceId) {
             pageNodes.push(nodeId);
-            pageMap.set(nodeId, pageNodes.length);
-            if (node.children) {
-                node.children.forEach(childId => traverse(childId));
-            }
+            if (node.children) node.children.forEach(childId => traverse(childId));
         }
     };
     if (state.rootId) traverse(state.rootId);
+    return pageNodes;
+};
+
+export const generatePDF = async (state: AppState, options: GeneratePDFOptions = {}) => {
+    const pageNodes = computePageOrder(state);
+    const pageMap = new Map<string, number>(pageNodes.map((id, i) => [id, i + 1]));
 
     const resolvePage = (id: string): number | undefined => {
         if (pageMap.has(id)) return pageMap.get(id);
@@ -1732,6 +1733,9 @@ export const generatePDF = async (state: AppState, options: GeneratePDFOptions =
         }
     }
 
+    if (options.output === 'arraybuffer') {
+        return doc.output('arraybuffer');
+    }
     const vName = state.variants[targetVariantId]?.name || 'export';
     doc.save(`${options.projectName || 'project'}_${vName}.pdf`);
 };
