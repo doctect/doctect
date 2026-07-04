@@ -2,6 +2,7 @@
 
 import { jsPDF } from "jspdf";
 import { svg2pdf } from "svg2pdf.js";
+import JSZip from "jszip";
 import { AppState, AppNode, PageTemplate, TemplateElement, RM_PP_WIDTH, RM_PP_HEIGHT, TraversalStep } from "../types";
 import { FONTS } from "../constants/editor";
 
@@ -1738,4 +1739,40 @@ export const generatePDF = async (state: AppState, options: GeneratePDFOptions =
     }
     const vName = state.variants[targetVariantId]?.name || 'export';
     doc.save(`${options.projectName || 'project'}_${vName}.pdf`);
+};
+
+/**
+ * Renders one PDF per variant in `state.variants` (reusing the existing `generatePDF`
+ * arraybuffer mode) and packages them into a single zip archive. Does not trigger a
+ * download itself — see `downloadVariantsZip` for that.
+ */
+export const generateVariantsZip = async (state: AppState, projectName: string): Promise<Blob> => {
+    const zip = new JSZip();
+    const usedNames = new Set<string>();
+    for (const variantId of Object.keys(state.variants)) {
+        const variant = state.variants[variantId];
+        const buffer = (await generatePDF(state, { variantId, projectName, output: 'arraybuffer' })) as ArrayBuffer;
+        let fileName = (variant.name || variantId).replace(/[\\/:*?"<>|]+/g, '_').trim() || variantId;
+        if (usedNames.has(fileName)) {
+            let n = 2;
+            while (usedNames.has(`${fileName}_${n}`)) n++;
+            fileName = `${fileName}_${n}`;
+        }
+        usedNames.add(fileName);
+        zip.file(`${fileName}.pdf`, buffer);
+    }
+    return zip.generateAsync({ type: 'blob' });
+};
+
+/** Generates the zip (see `generateVariantsZip`) and triggers a single browser download of it. */
+export const downloadVariantsZip = async (state: AppState, projectName: string): Promise<void> => {
+    const blob = await generateVariantsZip(state, projectName);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${projectName.replace(/\s+/g, '_')}_all_variants.zip`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
 };
