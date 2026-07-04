@@ -115,5 +115,44 @@ export const migrations = [
             CREATE INDEX IF NOT EXISTS idx_commits_project ON commits(project_id)
         `
         // sqlite: same DDL works on better-sqlite3 — no override needed.
+    },
+    {
+        id: '005_thumbnails_reports',
+        pg: `
+            CREATE TABLE IF NOT EXISTS thumbnails (
+                id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                position INTEGER NOT NULL DEFAULT 0,
+                mime TEXT NOT NULL,
+                image BYTEA NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS reports (
+                id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL,
+                reporter_user_id TEXT,
+                reason TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_thumbnails_project ON thumbnails(project_id)
+        `,
+        sqlite: `
+            CREATE TABLE IF NOT EXISTS thumbnails (
+                id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                position INTEGER NOT NULL DEFAULT 0,
+                mime TEXT NOT NULL,
+                image BLOB NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS reports (
+                id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL,
+                reporter_user_id TEXT,
+                reason TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_thumbnails_project ON thumbnails(project_id)
+        `
     }
 ];

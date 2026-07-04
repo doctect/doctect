@@ -143,4 +143,59 @@ router.get('/api/projects/:id/commits/:commitId', optionalAuth, loadProject(fals
     res.json({ commit: { id: rows[0].id, message: rows[0].message, createdAt: rows[0].created_at, state: JSON.parse(rows[0].state_json) } });
 });
 
+const MAX_THUMB_BYTES = 300 * 1024;
+const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+export const parseThumbnail = (dataUrl) => {
+    if (typeof dataUrl !== 'string') return null;
+    const m = /^data:image\/(webp|png);base64,([A-Za-z0-9+/=]+)$/.exec(dataUrl);
+    if (!m) return null;
+    let buf;
+    try { buf = Buffer.from(m[2], 'base64'); } catch { return null; }
+    if (buf.length === 0 || buf.length > MAX_THUMB_BYTES) return null;
+    const isPng = buf.length > 8 && buf.subarray(0, 8).equals(PNG_MAGIC);
+    const isWebp = buf.length > 12
+        && buf.subarray(0, 4).toString('ascii') === 'RIFF'
+        && buf.subarray(8, 12).toString('ascii') === 'WEBP';
+    if (m[1] === 'png' && !isPng) return null;
+    if (m[1] === 'webp' && !isWebp) return null;
+    return { buf, mime: `image/${m[1]}` };
+};
+
+export const getThumbnailIds = async (projectId) => {
+    const rows = await query('SELECT id FROM thumbnails WHERE project_id = $1 ORDER BY position', [projectId]);
+    return rows.map(r => r.id);
+};
+
+router.post('/api/projects/:id/publish', requireAuth, loadProject(true), async (req, res) => {
+    const { description, tags, thumbnails } = req.body || {};
+    if (!Array.isArray(thumbnails) || thumbnails.length < 1 || thumbnails.length > 4) {
+        return res.status(400).json({ error: 'thumbnails must contain 1-4 images' });
+    }
+    const parsed = thumbnails.map(parseThumbnail);
+    if (parsed.some(p => p === null)) {
+        return res.status(400).json({ error: 'thumbnails must be valid webp/png data URLs under 300KB' });
+    }
+    if (!Array.isArray(tags) || tags.length > 10 || tags.some(x => typeof x !== 'string' || x.length > 30)) {
+        return res.status(400).json({ error: 'tags must be up to 10 strings of max 30 chars' });
+    }
+    const d = String(description ?? '').slice(0, 2000);
+
+    await query('DELETE FROM thumbnails WHERE project_id = $1', [req.project.id]);
+    for (let i = 0; i < parsed.length; i++) {
+        await query('INSERT INTO thumbnails (id, project_id, position, mime, image) VALUES ($1, $2, $3, $4, $5)',
+            [randomUUID(), req.project.id, i, parsed[i].mime, parsed[i].buf]);
+    }
+    await query(`UPDATE projects SET visibility = 'public', description = $1, tags = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3`,
+        [d, JSON.stringify(tags), req.project.id]);
+
+    const row = await getProjectRow(req.project.id);
+    res.json({ project: { ...projectDto(row), thumbnailIds: await getThumbnailIds(row.id) } });
+});
+
+router.post('/api/projects/:id/unpublish', requireAuth, loadProject(true), async (req, res) => {
+    await query(`UPDATE projects SET visibility = 'private' WHERE id = $1`, [req.project.id]);
+    res.json({ project: projectDto(await getProjectRow(req.project.id)) });
+});
+
 export default router;
