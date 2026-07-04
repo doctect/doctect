@@ -40,6 +40,23 @@ export interface GalleryDetail extends Omit<GalleryItem, 'thumbnailId'> {
     forkedFrom: { projectId: string; name: string; author: string } | null;
 }
 
+export interface MergeRequestDto {
+    id: string; sourceProjectId: string; sourceProjectName: string; sourceCommitId: string;
+    targetProjectId: string; targetProjectName: string; baseCommitId: string;
+    title: string; description: string; status: 'open' | 'merged' | 'closed' | 'conflicted';
+    createdBy: string; authorUsername: string | null; createdAt: string; resolvedAt: string | null;
+}
+export interface ChangeSetDto {
+    variantsAdded: string[]; variantsRemoved: string[]; variantsRenamed: Record<string, string>;
+    templatesAdded: Record<string, string[]>; templatesModified: Record<string, string[]>; templatesRemoved: Record<string, string[]>;
+    nodesChanged: boolean;
+}
+export interface MrDetail {
+    mergeRequest: MergeRequestDto;
+    diff: { source: ChangeSetDto; target: ChangeSetDto; conflicts: { kind: string; variantId?: string; templateId?: string; description: string }[] } | null;
+    sourceState: any; targetState: any;
+}
+
 export const cloudApi = {
     me: async (): Promise<MeUser | null> =>
         (await api<{ user: MeUser | null }>('/api/me')).user,
@@ -83,4 +100,14 @@ export const cloudApi = {
     // its head commit. Server endpoint implemented in Task 19 (Phase 4).
     fork: (projectId: string) =>
         api<{ project: CloudProject }>(`/api/projects/${projectId}/fork`, { method: 'POST' }),
+
+    createMergeRequest: (args: { sourceProjectId: string; title: string; description?: string }) =>
+        api<{ mergeRequest: MergeRequestDto }>('/api/merge-requests', { method: 'POST', body: JSON.stringify(args) }),
+    listIncomingMrs: async (projectId: string) =>
+        (await api<{ mergeRequests: MergeRequestDto[] }>(`/api/projects/${projectId}/merge-requests`)).mergeRequests,
+    listMyMrs: async () =>
+        (await api<{ mergeRequests: MergeRequestDto[] }>('/api/merge-requests/mine')).mergeRequests,
+    getMr: (id: string) => api<MrDetail>(`/api/merge-requests/${id}`),
+    mergeMr: (id: string) => api<{ mergeRequest: MergeRequestDto; commit: { id: string } }>(`/api/merge-requests/${id}/merge`, { method: 'POST' }),
+    closeMr: (id: string) => api<{ mergeRequest: MergeRequestDto }>(`/api/merge-requests/${id}/close`, { method: 'POST' }),
 };

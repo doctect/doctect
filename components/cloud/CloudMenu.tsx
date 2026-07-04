@@ -6,6 +6,7 @@ import { cloudApi, ApiError, CloudProject } from '../../services/cloudApi';
 import { AppState } from '../../types';
 import { HistoryModal } from './HistoryModal';
 import { PublishModal } from './PublishModal';
+import { ProposeChangesModal } from './ProposeChangesModal';
 import type { Project } from '../../pages/EditorPage';
 
 interface CloudMenuProps {
@@ -21,6 +22,7 @@ export function CloudMenu({ project, onLinkCloud, onRestoreState }: CloudMenuPro
     const [error, setError] = useState<string | null>(null);
     const [showHistory, setShowHistory] = useState(false);
     const [showPublish, setShowPublish] = useState(false);
+    const [showPropose, setShowPropose] = useState(false);
     const [cloudProject, setCloudProject] = useState<CloudProject | null>(null);
     const ref = useRef<HTMLDivElement>(null);
 
@@ -94,7 +96,12 @@ export function CloudMenu({ project, onLinkCloud, onRestoreState }: CloudMenuPro
                                     <Globe size={12} /> Publish to gallery…
                                 </button>
                             )}
-                            {/* Propose changes (Task 26) button is appended here in a later task */}
+                            {cloudProject?.forkedFromProjectId && (
+                                <button onClick={() => { setShowPropose(true); setOpen(false); }}
+                                    className="w-full text-left flex items-center gap-1.5 px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50">
+                                    <GitPullRequest size={12} /> Propose changes to upstream…
+                                </button>
+                            )}
                             {error && <div className="px-3 py-1.5 text-xs text-red-600">{error}</div>}
                         </>
                     )}
@@ -111,6 +118,9 @@ export function CloudMenu({ project, onLinkCloud, onRestoreState }: CloudMenuPro
                 <PublishModal project={project} cloudProjectId={project.cloud.projectId}
                     onClose={() => setShowPublish(false)}
                     onPublished={() => { setShowPublish(false); window.alert('Published! View it in the Gallery.'); }} />
+            )}
+            {showPropose && project.cloud && (
+                <ProposeChangesModal sourceProjectId={project.cloud.projectId} onClose={() => setShowPropose(false)} />
             )}
         </div>
     );

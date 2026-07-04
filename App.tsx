@@ -8,6 +8,7 @@ import { LoginPage } from './pages/LoginPage';
 import { GalleryPage } from './pages/GalleryPage';
 import { GalleryDetailPage } from './pages/GalleryDetailPage';
 import { ProfilePage } from './pages/ProfilePage';
+import { MergeRequestPage } from './pages/MergeRequestPage';
 import { trackEvent } from './services/analytics';
 import { useSession } from './lib/auth-client';
 import { Navigate } from 'react-router-dom';
@@ -24,6 +25,7 @@ function App() {
         <Route path="/gallery" element={<GalleryPage />} />
         <Route path="/gallery/:id" element={<GalleryDetailPage />} />
         <Route path="/u/:username" element={<ProfilePage />} />
+        <Route path="/mr/:id" element={<MergeRequestPage />} />
         <Route
           path="/analytics"
           element={

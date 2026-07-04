@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, GitFork, Download, Flag, ExternalLink } from 'lucide-react';
-import { cloudApi, GalleryDetail, ApiError, API_BASE } from '../services/cloudApi';
+import { cloudApi, GalleryDetail, ApiError, API_BASE, MergeRequestDto } from '../services/cloudApi';
 import { stageImport } from '../services/importProject';
 import { useSession } from '../lib/auth-client';
 import { AccountMenu } from '../components/AccountMenu';
@@ -13,11 +13,19 @@ export function GalleryDetailPage() {
     const [project, setProject] = useState<GalleryDetail | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [busy, setBusy] = useState<string | null>(null);
+    const [mrs, setMrs] = useState<MergeRequestDto[]>([]);
+    // `isOwner` must be hooked in above any early return (hooks can't run conditionally), so it's
+    // computed null-safely here rather than after the `!project` guard below.
+    const isOwner = !!(session?.user && project && (session.user as any).id === project.ownerId);
 
     useEffect(() => {
         if (!id) return;
         cloudApi.galleryDetail(id).then(setProject).catch(e => setError(e instanceof ApiError ? e.message : 'Not found'));
     }, [id]);
+
+    useEffect(() => {
+        if (isOwner && id) cloudApi.listIncomingMrs(id).then(setMrs).catch(() => {});
+    }, [isOwner, id]);
 
     const openInEditor = async () => {
         if (!id) return;
@@ -53,7 +61,6 @@ export function GalleryDetailPage() {
 
     if (error) return <div className="p-10 text-sm text-red-600">{error} — <Link className="text-blue-600" to="/gallery">back to gallery</Link></div>;
     if (!project) return <div className="p-10 text-sm text-slate-400">Loading…</div>;
-    const isOwner = session?.user && (session.user as any).id === project.ownerId;
 
     return (
         <div className="min-h-screen bg-slate-50">
@@ -104,7 +111,19 @@ export function GalleryDetailPage() {
                             <Flag size={11} /> Report
                         </button>
                     </div>
-                    {/* Merge request list for owners is added in Task 26 */}
+                    {isOwner && mrs.length > 0 && (
+                        <div className="mt-8">
+                            <h2 className="text-sm font-semibold text-slate-700 mb-2">Merge requests</h2>
+                            <div className="border rounded-lg divide-y bg-white">
+                                {mrs.map(mr => (
+                                    <Link key={mr.id} to={`/mr/${mr.id}`} className="flex items-center justify-between px-3 py-2 text-xs hover:bg-slate-50">
+                                        <span className="truncate">{mr.title} <span className="text-slate-400">by {mr.authorUsername}</span></span>
+                                        <span className="text-[10px] uppercase font-semibold text-slate-500">{mr.status}</span>
+                                    </Link>
+                                ))}
+                            </div>
+                        </div>
+                    )}
                 </div>
             </main>
         </div>
