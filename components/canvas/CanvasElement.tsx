@@ -1,5 +1,6 @@
 
 import React from 'react';
+import DOMPurify from 'dompurify';
 import { TemplateElement, AppNode, TraversalStep } from '../../types';
 
 
@@ -677,6 +678,17 @@ export const CanvasElement: React.FC<CanvasElementProps> = (props) => {
             .replace(/width="[^"]*"/, '')
             .replace(/height="[^"]*"/, '');
 
+        // Security: svgContent is untrusted user-supplied content (it can arrive from
+        // another user's published gallery project via "Open in editor", fork, or a
+        // merge-request preview). Sanitize with DOMPurify's svg/svgFilters profile —
+        // this strips <script> tags and event-handler attributes (onload, etc.) while
+        // preserving legitimate SVG shapes/paths/styling — as the FINAL step before
+        // this string is ever passed to dangerouslySetInnerHTML.
+        const sanitizedSvgMarkup = DOMPurify.sanitize(
+            svgMarkup.replace(/<svg/, '<svg width="100%" height="100%"'),
+            { USE_PROFILES: { svg: true, svgFilters: true } }
+        );
+
         return (
             <div key={element.id} data-element-id={element.id} className="absolute group" style={style} onDoubleClick={props.onDoubleClick}>
                 <div
@@ -687,10 +699,7 @@ export const CanvasElement: React.FC<CanvasElementProps> = (props) => {
                         pointerEvents: 'none',
                     }}
                     dangerouslySetInnerHTML={{
-                        __html: svgMarkup.replace(
-                            /<svg/,
-                            '<svg width="100%" height="100%"'
-                        )
+                        __html: sanitizedSvgMarkup
                     }}
                 />
             </div>
