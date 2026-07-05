@@ -10,6 +10,7 @@ import { GalleryDetailPage } from './pages/GalleryDetailPage';
 import { ProfilePage } from './pages/ProfilePage';
 import { MergeRequestPage } from './pages/MergeRequestPage';
 import { WelcomePage } from './pages/WelcomePage';
+import { AccountSettingsPage } from './pages/AccountSettingsPage';
 import { trackEvent } from './services/analytics';
 import { useSession } from './lib/auth-client';
 import { Navigate } from 'react-router-dom';
@@ -40,6 +41,14 @@ function App() {
           element={
             <AuthGuard>
               <WelcomePage />
+            </AuthGuard>
+          }
+        />
+        <Route
+          path="/account"
+          element={
+            <AuthGuard>
+              <AccountSettingsPage />
             </AuthGuard>
           }
         />
