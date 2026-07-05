@@ -31,7 +31,11 @@ export function UsernameForm({ initialValue = '', submitLabel = 'Save', onSucces
             try {
                 const res = await authClient.isUsernameAvailable({ username: value });
                 if (checkToken.current !== token) return;
-                setAvailability(res.data?.available ? 'available' : 'taken');
+                if (res.error || res.data == null) {
+                    setAvailability('unknown');
+                } else {
+                    setAvailability(res.data.available ? 'available' : 'taken');
+                }
             } catch {
                 if (checkToken.current !== token) return;
                 setAvailability('unknown');
@@ -61,8 +65,9 @@ export function UsernameForm({ initialValue = '', submitLabel = 'Save', onSucces
 
     return (
         <form onSubmit={handleSubmit} className="space-y-2">
-            <label className="block text-sm font-medium text-gray-700 mb-1">Username</label>
+            <label htmlFor="username-form-input" className="block text-sm font-medium text-gray-700 mb-1">Username</label>
             <input
+                id="username-form-input"
                 type="text"
                 value={value}
                 onChange={(e) => setValue(e.target.value)}

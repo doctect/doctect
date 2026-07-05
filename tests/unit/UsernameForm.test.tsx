@@ -61,4 +61,19 @@ describe('UsernameForm', () => {
         render(<UsernameForm initialValue="current_handle" onSuccess={vi.fn()} />);
         expect(screen.getByDisplayValue('current_handle')).toBeInTheDocument();
     });
+
+    it('associates the label with the input for accessibility', () => {
+        render(<UsernameForm onSuccess={vi.fn()} />);
+        expect(screen.getByLabelText('Username')).toBe(screen.getByPlaceholderText('e.g. planner_pro'));
+    });
+
+    it('does not treat a service error from the availability check as "taken"', async () => {
+        mockIsUsernameAvailable.mockResolvedValue({ data: null, error: { message: 'server error' } });
+        render(<UsernameForm onSuccess={vi.fn()} />);
+        fireEvent.change(screen.getByPlaceholderText('e.g. planner_pro'), { target: { value: 'brand_new' } });
+        await waitFor(() => expect(screen.getByText('Checking availability…')).toBeInTheDocument());
+        await waitFor(() => expect(screen.queryByText('Checking availability…')).not.toBeInTheDocument());
+        expect(screen.queryByText('✗ Already taken')).not.toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Save' })).not.toBeDisabled();
+    });
 });
