@@ -1,16 +1,19 @@
 import React, { useEffect, useState } from 'react';
-import { X, RotateCcw } from 'lucide-react';
+import { X, RotateCcw, ExternalLink } from 'lucide-react';
 import { cloudApi, CommitMeta, ApiError } from '../../services/cloudApi';
 import { migrateState } from '../../services/migration';
 import { AppState } from '../../types';
 
-interface HistoryModalProps {
-    cloudProjectId: string;
-    onRestore: (state: AppState) => void;
-    onClose: () => void;
-}
+type HistoryModalProps =
+    { cloudProjectId: string; onClose: () => void } &
+    (
+        | { mode?: 'restore'; onRestore: (state: AppState) => void }
+        | { mode: 'clone'; onClone: (args: { state: AppState }) => void }
+    );
 
-export function HistoryModal({ cloudProjectId, onRestore, onClose }: HistoryModalProps) {
+export function HistoryModal(props: HistoryModalProps) {
+    const { cloudProjectId, onClose } = props;
+    const isClone = props.mode === 'clone';
     const [commits, setCommits] = useState<CommitMeta[] | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [busyId, setBusyId] = useState<string | null>(null);
@@ -21,14 +24,25 @@ export function HistoryModal({ cloudProjectId, onRestore, onClose }: HistoryModa
             .catch(e => setError(e instanceof ApiError ? e.message : 'Failed to load history'));
     }, [cloudProjectId]);
 
-    const restore = async (commitId: string) => {
-        if (!window.confirm('Replace the current editor contents with this version? (Unsaved local changes will be lost — your cloud history is untouched.)')) return;
+    const select = async (commitId: string) => {
+        // Restoring overwrites whatever's currently open in the editor, so it gets a confirm
+        // dialog; cloning always creates a brand-new local project and touches nothing the
+        // viewer already has open, so it doesn't need one.
+        if (props.mode !== 'clone' && !window.confirm('Replace the current editor contents with this version? (Unsaved local changes will be lost — your cloud history is untouched.)')) return;
         setBusyId(commitId); setError(null);
         try {
             const commit = await cloudApi.getCommit(cloudProjectId, commitId);
-            onRestore(migrateState(commit.state));
+            if (props.mode === 'clone') {
+                // No migrateState here: EditorPage already runs migrateState exactly once when
+                // it consumes a staged import (see consumeImport() in pages/EditorPage.tsx),
+                // matching how GalleryDetailPage's existing openInEditor/fork handlers already
+                // pass raw state into stageImport without migrating it themselves.
+                props.onClone({ state: commit.state });
+            } else {
+                props.onRestore(migrateState(commit.state));
+            }
         } catch (e) {
-            setError(e instanceof ApiError ? e.message : 'Restore failed');
+            setError(e instanceof ApiError ? e.message : (props.mode === 'clone' ? 'Could not open this version' : 'Restore failed'));
         } finally {
             setBusyId(null);
         }
@@ -52,9 +66,10 @@ export function HistoryModal({ cloudProjectId, onRestore, onClose }: HistoryModa
                                 </div>
                                 <div className="text-[10px] text-slate-400">{new Date(c.createdAt).toLocaleString()}</div>
                             </div>
-                            <button disabled={busyId !== null} onClick={() => restore(c.id)}
+                            <button disabled={busyId !== null} onClick={() => select(c.id)}
                                 className="flex items-center gap-1 text-[11px] text-blue-600 hover:text-blue-800 disabled:opacity-50 flex-shrink-0">
-                                <RotateCcw size={11} /> {busyId === c.id ? 'Loading…' : 'Restore'}
+                                {isClone ? <ExternalLink size={11} /> : <RotateCcw size={11} />}
+                                {' '}{busyId === c.id ? 'Loading…' : (isClone ? 'Open in editor' : 'Restore')}
                             </button>
                         </div>
                     ))}
