@@ -1455,12 +1455,15 @@ redirects to /welcome (as a fallback) on a USERNAME_REQUIRED rejection."
 - Create: `tests/e2e/username_identity.spec.js`
 - Modify: `tests/e2e/gallery.spec.js`
 - Modify: `tests/e2e/merge_requests.spec.js`
+- Modify: `tests/e2e/fork.spec.js`
 
 **Interfaces:**
 - Consumes: everything from Tasks 1–8, exercised through a real browser against a real (locally-run) server.
 - Produces: nothing consumed by later tasks (this is the last task).
 
-- [ ] **Step 1: Fix the two stale `/analytics` assertions**
+**Correction found during execution (2026-07-04):** the original plan text below only named `gallery.spec.js` and `merge_requests.spec.js` for the stale `/analytics` cleanup. Actually running the pre-existing e2e suite as a baseline check before dispatching this task showed `tests/e2e/fork.spec.js` has the exact same stale assertion (confirmed via a real, reproducible `TimeoutError: page.waitForURL: Timeout 15000ms exceeded ... waiting for navigation to "**/analytics" ... navigated to "http://localhost:3000/app"` failure) — a plan gap, not a new bug. It needs the identical fix, at two call sites (both `pageA` and `pageB`'s sign-up flows).
+
+- [ ] **Step 1: Fix the stale `/analytics` assertions (3 files, 4 call sites)**
 
 In `tests/e2e/gallery.spec.js`, change:
 ```js
@@ -1480,7 +1483,24 @@ to:
     await page.waitForURL('**/app', { timeout: 15000 });
 ```
 
-These were stale from before the earlier "sign-in returns to where you came from" fix (current `LoginPage.tsx` defaults to `/app`, not `/analytics`, when there's no `from` state — which is the case for a fresh `/login` visit in both of these specs).
+In `tests/e2e/fork.spec.js`, change **both** occurrences (User A's sign-up around line 31, and User B's sign-up around line 79):
+```js
+        await pageA.waitForURL('**/analytics', { timeout: 15000 });
+```
+to:
+```js
+        await pageA.waitForURL('**/app', { timeout: 15000 });
+```
+and:
+```js
+        await pageB.waitForURL('**/analytics', { timeout: 15000 });
+```
+to:
+```js
+        await pageB.waitForURL('**/app', { timeout: 15000 });
+```
+
+These were stale from before the earlier "sign-in returns to where you came from" fix (current `LoginPage.tsx` defaults to `/app`, not `/analytics`, when there's no `from` state — which is the case for a fresh `/login` visit in all three of these specs).
 
 - [ ] **Step 2: Write the new E2E spec**
 
@@ -1614,7 +1634,7 @@ test.describe('Username identity', () => {
 
 - [ ] **Step 3: Run the new and modified E2E specs**
 
-Run: `npx playwright test tests/e2e/username_identity.spec.js tests/e2e/gallery.spec.js tests/e2e/merge_requests.spec.js`
+Run: `npx playwright test tests/e2e/username_identity.spec.js tests/e2e/gallery.spec.js tests/e2e/merge_requests.spec.js tests/e2e/fork.spec.js`
 Expected: PASS (all specs). This boots the real dev server (`npm run dev`, per `playwright.config.cjs`'s `webServer`) and runs against real Chromium/Firefox/WebKit.
 
 - [ ] **Step 4: Run the complete test suite (unit + e2e) once, end to end**
@@ -1625,7 +1645,7 @@ Expected: PASS across the board — this is the final regression check before co
 - [ ] **Step 5: Commit**
 
 ```bash
-git add tests/e2e/username_identity.spec.js tests/e2e/gallery.spec.js tests/e2e/merge_requests.spec.js
+git add tests/e2e/username_identity.spec.js tests/e2e/gallery.spec.js tests/e2e/merge_requests.spec.js tests/e2e/fork.spec.js
 git commit -m "test(e2e): cover the username-change and no-username-forces-/welcome flows
 
 Also fixes two stale waitForURL('**/analytics') assertions left over
