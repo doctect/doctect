@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { User, LogOut, Image } from 'lucide-react';
+import { User, LogOut, Image, Settings } from 'lucide-react';
 import { useSession, signOut } from '../lib/auth-client';
 
 export function AccountMenu() {
@@ -21,7 +21,9 @@ export function AccountMenu() {
     if (!session?.user) {
         return <Link to="/login" state={{ from: location.pathname }} className="text-xs font-medium text-slate-500 hover:text-blue-600">Sign in</Link>;
     }
-    const username = (session.user as any).username || session.user.name;
+    const username = (session.user as any).username as string | null;
+    const profileTo = username ? `/u/${username}` : '/welcome';
+    const profileState = username ? undefined : { from: location.pathname };
     return (
         <div className="relative" ref={ref}>
             <button
@@ -29,12 +31,13 @@ export function AccountMenu() {
                 className="flex items-center gap-1.5 text-xs font-medium text-slate-600 hover:text-blue-600"
                 title="Account"
             >
-                <User size={14} /> <span className="hidden md:inline">{username}</span>
+                <User size={14} /> <span className="hidden md:inline">{username || 'Set username'}</span>
             </button>
             {open && (
                 <div className="absolute right-0 top-7 bg-white border border-slate-200 rounded-lg shadow-lg py-1 z-50 min-w-[160px]">
-                    <Link to={`/u/${username}`} onClick={() => setOpen(false)} className="block px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50">My profile</Link>
+                    <Link to={profileTo} state={profileState} onClick={() => setOpen(false)} className="block px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50">My profile</Link>
                     <Link to="/gallery" onClick={() => setOpen(false)} className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50"><Image size={12} /> Gallery</Link>
+                    <Link to="/account" onClick={() => setOpen(false)} className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50"><Settings size={12} /> Account settings</Link>
                     <button onClick={() => { setOpen(false); signOut(); }} className="w-full text-left flex items-center gap-1.5 px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50">
                         <LogOut size={12} /> Sign out
                     </button>
