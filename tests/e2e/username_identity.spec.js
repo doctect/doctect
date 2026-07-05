@@ -1,0 +1,124 @@
+
+import { test, expect } from '@playwright/test';
+
+// The API server (server/index.js) listens on a different origin than the Vite
+// dev server that Playwright's baseURL points at (see .env: VITE_API_BASE).
+const API_BASE = 'http://localhost:3001';
+
+const unique = Date.now();
+
+const PNG_1X1 = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+const minimalState = {
+    nodes: { root: { id: 'root', parentId: null, type: 'page', title: 'Root', data: {}, children: [] } },
+    rootId: 'root',
+    variants: { default: { id: 'default', name: 'Default', templates: { page: { id: 'page', name: 'Page', width: 500, height: 700, elements: [] } } } },
+    activeVariantId: 'default',
+    schemaVersion: 7,
+};
+
+test.describe('Username identity', () => {
+    test('changing username via Account settings updates the profile and gallery author', async ({ page }) => {
+        test.setTimeout(120000);
+        page.on('dialog', dialog => dialog.accept(dialog.type() === 'prompt' ? 'Initial save' : undefined));
+
+        const oldUsername = `old_handle_${unique}`;
+        const newUsername = `new_handle_${unique}`;
+
+        await page.goto('/login');
+        await page.getByRole('button', { name: 'Sign Up' }).click();
+        await page.locator('label:text-is("Name") + input').fill('Identity Tester');
+        await page.locator('label:text-is("Username") + input').fill(oldUsername);
+        await page.locator('input[type="email"]').fill(`identity${unique}@test.dev`);
+        await page.locator('input[type="password"]').fill('password1234');
+        await page.getByRole('button', { name: 'Sign Up' }).click();
+        await page.waitForURL('**/app', { timeout: 15000 });
+
+        // Save + publish the default project.
+        await page.getByTitle('Cloud').click();
+        await Promise.all([
+            page.waitForResponse(res => res.url().includes('/api/projects') && res.request().method() === 'POST'),
+            page.getByRole('button', { name: 'Save to cloud (new)' }).click(),
+        ]);
+        await page.getByTitle('Cloud').click();
+        await page.getByRole('button', { name: /publish to gallery/i }).click();
+        await page.getByPlaceholder('What is this planner for?').fill(`Identity test planner ${unique}`);
+        const [publishRes] = await Promise.all([
+            page.waitForResponse(res => res.url().includes('/publish') && res.request().method() === 'POST', { timeout: 60000 }),
+            page.getByRole('button', { name: /^publish$/i }).click(),
+        ]);
+        expect(publishRes.ok()).toBeTruthy();
+        await expect(page.getByRole('heading', { name: /publish to gallery/i })).toBeHidden({ timeout: 10000 });
+
+        // Gallery card shows the original username.
+        await page.goto('/gallery');
+        await expect(page.getByText(`by ${oldUsername}`)).toBeVisible({ timeout: 10000 });
+
+        // Old profile works and lists the project.
+        await page.goto(`/u/${oldUsername}`);
+        await expect(page.getByRole('heading', { name: oldUsername })).toBeVisible({ timeout: 10000 });
+        await expect(page.getByText('Blank Project')).toBeVisible();
+
+        // Change username via Account settings.
+        await page.goto('/account');
+        await page.getByPlaceholder('e.g. planner_pro').fill(newUsername);
+        await page.getByRole('button', { name: 'Save changes' }).click();
+        await expect(page.getByText('Username updated.')).toBeVisible({ timeout: 10000 });
+
+        // Old profile URL now 404s.
+        const oldProfileRes = await page.request.get(`${API_BASE}/api/users/${oldUsername}`);
+        expect(oldProfileRes.status()).toBe(404);
+
+        // New profile works and lists the project.
+        await page.goto(`/u/${newUsername}`);
+        await expect(page.getByRole('heading', { name: newUsername })).toBeVisible({ timeout: 10000 });
+        await expect(page.getByText('Blank Project')).toBeVisible();
+
+        // Gallery card now shows the new username.
+        await page.goto('/gallery');
+        await expect(page.getByText(`by ${newUsername}`)).toBeVisible({ timeout: 10000 });
+    });
+
+    test('a session with no username is redirected to /welcome before it can fork, and continues afterward', async ({ browser }) => {
+        test.setTimeout(60000);
+
+        // Upstream project + owner, set up entirely via direct API calls (no UI needed for this side).
+        const ownerCtx = await browser.newContext();
+        const ownerSignup = await ownerCtx.request.post(`${API_BASE}/api/auth/sign-up/email`, {
+            data: { email: `owner${unique}@test.dev`, password: 'password1234', name: 'Owner', username: `owner_${unique}` },
+        });
+        expect(ownerSignup.ok()).toBeTruthy();
+        const createRes = await ownerCtx.request.post(`${API_BASE}/api/projects`, {
+            data: { name: 'Upstream For Fork Test', state: minimalState },
+        });
+        expect(createRes.ok()).toBeTruthy();
+        const projectId = (await createRes.json()).project.id;
+        const publishRes = await ownerCtx.request.post(`${API_BASE}/api/projects/${projectId}/publish`, {
+            data: { description: '', tags: [], thumbnails: [PNG_1X1] },
+        });
+        expect(publishRes.ok()).toBeTruthy();
+        await ownerCtx.close();
+
+        // The actual subject: a session with NO username, created directly via the API --
+        // this is exactly what Google OAuth sign-in produces in production (no username ever collected).
+        const ctx = await browser.newContext();
+        const page = await ctx.newPage();
+        const signupRes = await page.request.post(`${API_BASE}/api/auth/sign-up/email`, {
+            data: { email: `nouser${unique}@test.dev`, password: 'password1234', name: 'No Username Person' },
+        });
+        expect(signupRes.ok()).toBeTruthy();
+
+        await page.goto(`/gallery/${projectId}`);
+        await expect(page.getByText('Set a username to fork')).toBeVisible({ timeout: 10000 });
+        await page.getByText('Set a username to fork').click();
+        await page.waitForURL('**/welcome', { timeout: 10000 });
+
+        await page.getByPlaceholder('e.g. planner_pro').fill(`forker_${unique}`);
+        await page.getByRole('button', { name: 'Continue' }).click();
+
+        // Continues on to the original destination (the gallery detail page it came from).
+        await page.waitForURL(`**/gallery/${projectId}`, { timeout: 10000 });
+        await expect(page.getByRole('button', { name: /fork this project/i })).toBeVisible({ timeout: 10000 });
+
+        await ctx.close();
+    });
+});

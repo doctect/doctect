@@ -15,7 +15,7 @@ const signUp = async (page, { name, username, email }) => {
     await page.locator('input[type="email"]').fill(email);
     await page.locator('input[type="password"]').fill('password1234');
     await page.getByRole('button', { name: 'Sign Up' }).click();
-    await page.waitForURL('**/analytics', { timeout: 15000 });
+    await page.waitForURL('**/app', { timeout: 15000 });
 };
 
 // Draws a rectangle on the active project's canvas, mutating its currently active

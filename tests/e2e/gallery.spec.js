@@ -27,7 +27,7 @@ test.describe('Gallery', () => {
         await page.locator('input[type="password"]').fill('password1234');
         // Now the submit button reads "Sign Up" (the toggle now reads "Sign In").
         await page.getByRole('button', { name: 'Sign Up' }).click();
-        await page.waitForURL('**/analytics', { timeout: 15000 });
+        await page.waitForURL('**/app', { timeout: 15000 });
 
         // 2. Save the default "Blank Project" (auto-loaded for a fresh session) to the cloud.
         await page.goto('/app');

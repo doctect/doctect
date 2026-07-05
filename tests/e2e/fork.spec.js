@@ -28,7 +28,7 @@ test.describe('Fork', () => {
         await pageA.locator('input[type="email"]').fill(`usera${unique}@test.dev`);
         await pageA.locator('input[type="password"]').fill('password1234');
         await pageA.getByRole('button', { name: 'Sign Up' }).click();
-        await pageA.waitForURL('**/analytics', { timeout: 15000 });
+        await pageA.waitForURL('**/app', { timeout: 15000 });
 
         await pageA.goto('/app');
         await pageA.getByTitle('Cloud').click();
@@ -76,7 +76,7 @@ test.describe('Fork', () => {
         await pageB.locator('input[type="email"]').fill(`userb${unique}@test.dev`);
         await pageB.locator('input[type="password"]').fill('password1234');
         await pageB.getByRole('button', { name: 'Sign Up' }).click();
-        await pageB.waitForURL('**/analytics', { timeout: 15000 });
+        await pageB.waitForURL('**/app', { timeout: 15000 });
 
         // B opens the gallery detail page for A's published project and forks it.
         // (GalleryDetailPage's <h1> shows the project *name*, which stays as the
