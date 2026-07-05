@@ -14,7 +14,7 @@ export function WelcomePage() {
     if (isPending || !session?.user) {
         return <div className="p-10 flex justify-center"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div></div>;
     }
-    if ((session.user as any).username) {
+    if (session.user.username) {
         return <Navigate to={from ?? '/gallery'} replace />;
     }
 

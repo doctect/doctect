@@ -78,7 +78,7 @@ export function CloudMenu({ project, onLinkCloud, onRestoreState }: CloudMenuPro
                         <Link to="/login" state={{ from: location.pathname }} className="block px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50">
                             Sign in to save to cloud
                         </Link>
-                    ) : !(session.user as any).username ? (
+                    ) : !session.user.username ? (
                         <Link to="/welcome" state={{ from: location.pathname }} className="block px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50">
                             Set a username to use cloud features
                         </Link>

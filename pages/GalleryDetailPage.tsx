@@ -127,7 +127,7 @@ export function GalleryDetailPage() {
                         </button>
                         {!session?.user ? (
                             <Link to="/login" state={{ from: location.pathname }} className="text-center text-xs text-slate-500 hover:text-blue-600">Sign in to fork</Link>
-                        ) : !(session.user as any).username ? (
+                        ) : !session.user.username ? (
                             <Link to="/welcome" state={{ from: location.pathname }} className="text-center text-xs text-slate-500 hover:text-blue-600">Set a username to fork</Link>
                         ) : (
                             <button onClick={fork} disabled={busy !== null}

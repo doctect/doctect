@@ -21,7 +21,7 @@ export function AccountMenu() {
     if (!session?.user) {
         return <Link to="/login" state={{ from: location.pathname }} className="text-xs font-medium text-slate-500 hover:text-blue-600">Sign in</Link>;
     }
-    const username = (session.user as any).username as string | null;
+    const username = session.user.username as string | null;
     const profileTo = username ? `/u/${username}` : '/welcome';
     const profileState = username ? undefined : { from: location.pathname };
     return (

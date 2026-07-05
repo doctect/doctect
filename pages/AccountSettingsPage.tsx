@@ -14,7 +14,7 @@ export function AccountSettingsPage() {
         return <div className="p-10 flex justify-center"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div></div>;
     }
 
-    const user = session.user as any;
+    const user = session.user;
 
     return (
         <div className="min-h-screen bg-slate-50">
