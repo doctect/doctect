@@ -18,5 +18,8 @@ describe('GET /api/me', () => {
         expect(res.status).toBe(200);
         expect(res.body.user.username).toBe('me_user');
         expect(res.body.user.email).toBe('me@test.dev');
+        // The account's real `name` field is never intended to be public and no client
+        // code reads it off this endpoint — it must not leak into the API response.
+        expect(res.body.user.name).toBeUndefined();
     });
 });

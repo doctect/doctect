@@ -6,7 +6,7 @@ import { AccountMenu } from '../components/AccountMenu';
 
 export function ProfilePage() {
     const { username } = useParams<{ username: string }>();
-    const [data, setData] = useState<{ user: { username: string; name: string; createdAt: string }; projects: GalleryItem[] } | null>(null);
+    const [data, setData] = useState<{ user: { username: string; createdAt: string }; projects: GalleryItem[] } | null>(null);
     const [error, setError] = useState<string | null>(null);
 
     useEffect(() => {

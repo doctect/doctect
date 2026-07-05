@@ -6,13 +6,15 @@ const router = Router();
 
 router.get('/api/me', optionalAuth, (req, res) => {
     if (!req.user) return res.json({ user: null });
-    const { id, email, name, username, role } = req.user;
-    res.json({ user: { id, email, name, username: username ?? null, role: role ?? null } });
+    // Deliberately excludes the account's real `name` field: it's the signup "Name" field,
+    // never intended to be public, and no client code reads it off this endpoint.
+    const { id, email, username, role } = req.user;
+    res.json({ user: { id, email, username: username ?? null, role: role ?? null } });
 });
 
 router.get('/api/users/:username', async (req, res) => {
     const uname = String(req.params.username).toLowerCase();
-    const users = await query('SELECT id, name, username, "createdAt" FROM "user" WHERE username = $1', [uname]);
+    const users = await query('SELECT id, username, "createdAt" FROM "user" WHERE username = $1', [uname]);
     if (!users[0]) return res.status(404).json({ error: 'User not found' });
     const rows = await query(
         `SELECT p.id, p.name, p.description, p.tags, p.fork_count, p.download_count, p.updated_at,
@@ -20,7 +22,9 @@ router.get('/api/users/:username', async (req, res) => {
          FROM projects p WHERE p.owner_id = $1 AND p.visibility = 'public' ORDER BY p.updated_at DESC LIMIT 100`,
         [users[0].id]);
     res.json({
-        user: { username: users[0].username, name: users[0].name, createdAt: users[0].createdAt },
+        // Public, unauthenticated endpoint — anyone can call this for any known/guessed
+        // username. Deliberately excludes the account's real `name` field (see /api/me above).
+        user: { username: users[0].username, createdAt: users[0].createdAt },
         projects: rows.map(r => ({
             id: r.id, name: r.name, description: r.description, tags: JSON.parse(r.tags || '[]'),
             author: users[0].username, forkCount: r.fork_count, downloadCount: r.download_count,

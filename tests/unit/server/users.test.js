@@ -21,6 +21,10 @@ describe('GET /api/users/:username', () => {
         expect(res.status).toBe(200);
         expect(res.body.user.username).toBe('profiled');
         expect(res.body.projects.map(p => p.name)).toEqual(['Profile Planner']);
+        // This is a public, unauthenticated endpoint — anyone can call it for any known/guessed
+        // username. The account's real `name` field is never intended to be public and must
+        // not leak here.
+        expect(res.body.user.name).toBeUndefined();
     });
     it('404s unknown users', async () => {
         const res = await request(app).get('/api/users/ghost_user');
