@@ -9,6 +9,7 @@ import { GalleryPage } from './pages/GalleryPage';
 import { GalleryDetailPage } from './pages/GalleryDetailPage';
 import { ProfilePage } from './pages/ProfilePage';
 import { MergeRequestPage } from './pages/MergeRequestPage';
+import { WelcomePage } from './pages/WelcomePage';
 import { trackEvent } from './services/analytics';
 import { useSession } from './lib/auth-client';
 import { Navigate } from 'react-router-dom';
@@ -31,6 +32,14 @@ function App() {
           element={
             <AuthGuard>
               <AnalyticsDashboard />
+            </AuthGuard>
+          }
+        />
+        <Route
+          path="/welcome"
+          element={
+            <AuthGuard>
+              <WelcomePage />
             </AuthGuard>
           }
         />
