@@ -51,7 +51,14 @@ export function GalleryDetailPage() {
                 cloud: { projectId: res.project.id, lastSyncedCommitId: commit.id }
             });
             navigate('/app');
-        } catch (e) { setError(e instanceof ApiError ? e.message : 'Fork failed'); setBusy(null); }
+        } catch (e) {
+            if (e instanceof ApiError && e.code === 'USERNAME_REQUIRED') {
+                navigate('/welcome', { state: { from: location.pathname } });
+                return;
+            }
+            setError(e instanceof ApiError ? e.message : 'Fork failed');
+            setBusy(null);
+        }
     };
 
     const downloadAllVariants = async () => {
@@ -118,13 +125,15 @@ export function GalleryDetailPage() {
                             className="flex items-center justify-center gap-1.5 border border-slate-300 rounded-lg px-4 py-2 text-sm font-medium text-slate-700 disabled:opacity-50">
                             <Download size={14} /> {busy === 'download' ? 'Generating…' : 'Download all variants (.zip)'}
                         </button>
-                        {session?.user ? (
+                        {!session?.user ? (
+                            <Link to="/login" state={{ from: location.pathname }} className="text-center text-xs text-slate-500 hover:text-blue-600">Sign in to fork</Link>
+                        ) : !(session.user as any).username ? (
+                            <Link to="/welcome" state={{ from: location.pathname }} className="text-center text-xs text-slate-500 hover:text-blue-600">Set a username to fork</Link>
+                        ) : (
                             <button onClick={fork} disabled={busy !== null}
                                 className="flex items-center justify-center gap-1.5 border border-slate-300 rounded-lg px-4 py-2 text-sm font-medium text-slate-700 disabled:opacity-50">
                                 <GitFork size={14} /> {busy === 'fork' ? 'Forking…' : 'Fork this project'}
                             </button>
-                        ) : (
-                            <Link to="/login" state={{ from: location.pathname }} className="text-center text-xs text-slate-500 hover:text-blue-600">Sign in to fork</Link>
                         )}
                         <button onClick={report} className="flex items-center justify-center gap-1 text-[11px] text-slate-400 hover:text-red-600 mt-2">
                             <Flag size={11} /> Report
