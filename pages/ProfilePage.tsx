@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom';
 import { ArrowLeft, User, Square, GitFork, Download } from 'lucide-react';
 import { GalleryItem, API_BASE } from '../services/cloudApi';
 import { AccountMenu } from '../components/AccountMenu';
+import { GalleryLink } from '../components/gallery/GalleryLink';
 
 export function ProfilePage() {
     const { username } = useParams<{ username: string }>();
@@ -36,7 +37,7 @@ export function ProfilePage() {
                 </div>
                 <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
                     {data.projects.map(item => (
-                        <Link key={item.id} to={`/gallery/${item.id}`} className="bg-white border rounded-xl overflow-hidden hover:shadow-md transition-shadow">
+                        <GalleryLink key={item.id} projectId={item.id} className="bg-white border rounded-xl overflow-hidden hover:shadow-md transition-shadow">
                             <div className="aspect-[3/4] bg-slate-100 flex items-center justify-center">
                                 {item.thumbnailId
                                     ? <img src={`${API_BASE}/api/thumbnails/${item.thumbnailId}`} alt={item.name} className="w-full h-full object-contain" loading="lazy" />
@@ -49,7 +50,7 @@ export function ProfilePage() {
                                     <span className="flex items-center gap-0.5"><Download size={10} /> {item.downloadCount}</span>
                                 </div>
                             </div>
-                        </Link>
+                        </GalleryLink>
                     ))}
                 </div>
                 {data.projects.length === 0 && <div className="text-sm text-slate-400 text-center py-16">No published projects yet.</div>}

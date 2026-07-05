@@ -4,6 +4,7 @@ import { GitFork, Download, Flag, ExternalLink, History } from 'lucide-react';
 import { API_BASE } from '../../services/cloudApi';
 import { HistoryModal } from '../cloud/HistoryModal';
 import { UseGalleryDetailResult } from '../../hooks/useGalleryDetail';
+import { GalleryLink } from './GalleryLink';
 
 export function GalleryDetailBody({ detail }: { detail: UseGalleryDetailResult }) {
     const {
@@ -27,8 +28,8 @@ export function GalleryDetailBody({ detail }: { detail: UseGalleryDetailResult }
                 </div>
                 {project.forkedFrom && (
                     <div className="text-xs text-slate-400 mt-1">
-                        forked from <Link to={`/gallery/${project.forkedFrom.projectId}`} className="text-blue-600 hover:underline">
-                            {project.forkedFrom.author}/{project.forkedFrom.name}</Link>
+                        forked from <GalleryLink projectId={project.forkedFrom.projectId} className="text-blue-600 hover:underline">
+                            {project.forkedFrom.author}/{project.forkedFrom.name}</GalleryLink>
                     </div>
                 )}
                 <p className="text-sm text-slate-600 mt-4 whitespace-pre-wrap">{project.description}</p>

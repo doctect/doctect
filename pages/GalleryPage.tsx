@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { Search, Square, GitFork, Download } from 'lucide-react';
 import { cloudApi, GalleryItem, API_BASE } from '../services/cloudApi';
 import { AccountMenu } from '../components/AccountMenu';
+import { GalleryLink } from '../components/gallery/GalleryLink';
 
 export function GalleryPage() {
     const [items, setItems] = useState<GalleryItem[]>([]);
@@ -45,7 +46,7 @@ export function GalleryPage() {
                 {error && <div className="text-sm text-red-600">{error}</div>}
                 <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
                     {items.map(item => (
-                        <Link key={item.id} to={`/gallery/${item.id}`} className="bg-white border rounded-xl overflow-hidden hover:shadow-md transition-shadow">
+                        <GalleryLink key={item.id} projectId={item.id} className="bg-white border rounded-xl overflow-hidden hover:shadow-md transition-shadow">
                             <div className="aspect-[3/4] bg-slate-100 flex items-center justify-center">
                                 {item.thumbnailId
                                     ? <img src={`${API_BASE}/api/thumbnails/${item.thumbnailId}`} alt={item.name} className="w-full h-full object-contain" loading="lazy" />
@@ -59,7 +60,7 @@ export function GalleryPage() {
                                     <span className="flex items-center gap-0.5"><Download size={10} /> {item.downloadCount}</span>
                                 </div>
                             </div>
-                        </Link>
+                        </GalleryLink>
                     ))}
                 </div>
                 {items.length === 0 && !error && <div className="text-sm text-slate-400 text-center py-16">Nothing here yet. Publish the first project!</div>}

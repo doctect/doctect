@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import { ArrowLeft, GitMerge, XCircle, AlertTriangle, Eye } from 'lucide-react';
 import { cloudApi, MrDetail, ChangeSetDto, ApiError } from '../services/cloudApi';
 import { AccountMenu } from '../components/AccountMenu';
+import { GalleryLink } from '../components/gallery/GalleryLink';
 import { computePageOrder } from '../services/pdfService';
 import { generateThumbnails } from '../services/thumbnailService';
 import { migrateState } from '../services/migration';
@@ -92,9 +93,9 @@ export function MergeRequestPage() {
     return (
         <div className="min-h-screen bg-slate-50">
             <header className="h-14 bg-white border-b flex items-center px-6 gap-4">
-                <Link to={`/gallery/${mr.targetProjectId}`} className="flex items-center gap-1 text-sm text-slate-600 hover:text-blue-600">
+                <GalleryLink projectId={mr.targetProjectId} className="flex items-center gap-1 text-sm text-slate-600 hover:text-blue-600">
                     <ArrowLeft size={14} /> {mr.targetProjectName}
-                </Link>
+                </GalleryLink>
                 <div className="flex-1" />
                 <AccountMenu />
             </header>
