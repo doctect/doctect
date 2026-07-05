@@ -1,5 +1,6 @@
 import React from 'react';
 import { BrowserRouter, Routes, Route, useLocation } from 'react-router-dom';
+import type { Location } from 'react-router-dom';
 import { LandingPage } from './pages/LandingPage';
 import { EditorPage } from './pages/EditorPage';
 import { DocsPage } from './pages/DocsPage';
@@ -7,6 +8,7 @@ import { AnalyticsDashboard } from './pages/AnalyticsDashboard';
 import { LoginPage } from './pages/LoginPage';
 import { GalleryPage } from './pages/GalleryPage';
 import { GalleryDetailPage } from './pages/GalleryDetailPage';
+import { GalleryDetailModal } from './components/gallery/GalleryDetailModal';
 import { ProfilePage } from './pages/ProfilePage';
 import { MergeRequestPage } from './pages/MergeRequestPage';
 import { WelcomePage } from './pages/WelcomePage';
@@ -19,7 +21,18 @@ function App() {
   return (
     <BrowserRouter>
       <PageTracker />
-      <Routes>
+      <AppRoutes />
+    </BrowserRouter>
+  );
+}
+
+function AppRoutes() {
+  const location = useLocation();
+  const backgroundLocation = (location.state as { backgroundLocation?: Location } | null)?.backgroundLocation;
+
+  return (
+    <>
+      <Routes location={backgroundLocation || location}>
         <Route path="/" element={<LandingPage />} />
         <Route path="/app" element={<EditorPage />} />
         <Route path="/docs" element={<DocsPage />} />
@@ -53,7 +66,12 @@ function App() {
           }
         />
       </Routes>
-    </BrowserRouter>
+      {backgroundLocation && (
+        <Routes>
+          <Route path="/gallery/:id" element={<GalleryDetailModal />} />
+        </Routes>
+      )}
+    </>
   );
 }
 
