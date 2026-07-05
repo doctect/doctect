@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Link, useLocation } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { Cloud, History, UploadCloud, Globe, GitPullRequest } from 'lucide-react';
 import { useSession } from '../../lib/auth-client';
 import { cloudApi, ApiError, CloudProject } from '../../services/cloudApi';
@@ -26,6 +26,7 @@ export function CloudMenu({ project, onLinkCloud, onRestoreState }: CloudMenuPro
     const [cloudProject, setCloudProject] = useState<CloudProject | null>(null);
     const ref = useRef<HTMLDivElement>(null);
     const location = useLocation();
+    const navigate = useNavigate();
 
     useEffect(() => {
         const onClick = (e: MouseEvent) => {
@@ -55,6 +56,10 @@ export function CloudMenu({ project, onLinkCloud, onRestoreState }: CloudMenuPro
             }
             setOpen(false);
         } catch (e) {
+            if (e instanceof ApiError && e.code === 'USERNAME_REQUIRED') {
+                navigate('/welcome', { state: { from: location.pathname } });
+                return;
+            }
             setError(e instanceof ApiError ? e.message : 'Save failed');
         } finally {
             setBusy(false);
@@ -72,6 +77,10 @@ export function CloudMenu({ project, onLinkCloud, onRestoreState }: CloudMenuPro
                     {!session?.user ? (
                         <Link to="/login" state={{ from: location.pathname }} className="block px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50">
                             Sign in to save to cloud
+                        </Link>
+                    ) : !(session.user as any).username ? (
+                        <Link to="/welcome" state={{ from: location.pathname }} className="block px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50">
+                            Set a username to use cloud features
                         </Link>
                     ) : (
                         <>
