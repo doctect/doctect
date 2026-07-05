@@ -39,6 +39,10 @@ test.describe('Username identity', () => {
             page.waitForResponse(res => res.url().includes('/api/projects') && res.request().method() === 'POST'),
             page.getByRole('button', { name: 'Save to cloud (new)' }).click(),
         ]);
+        // CloudMenu's dropdown only closes once the save actually resolves (setOpen(false)
+        // runs after the awaited create call) -- wait for that before reopening it, otherwise
+        // a still-open menu would just toggle shut instead of opening for the next click.
+        await expect(page.getByRole('button', { name: 'Save to cloud (new)' })).toBeHidden();
         await page.getByTitle('Cloud').click();
         await page.getByRole('button', { name: /publish to gallery/i }).click();
         await page.getByPlaceholder('What is this planner for?').fill(`Identity test planner ${unique}`);
