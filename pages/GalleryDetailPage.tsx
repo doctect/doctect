@@ -1,11 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams, useLocation } from 'react-router-dom';
-import { ArrowLeft, GitFork, Download, Flag, ExternalLink } from 'lucide-react';
+import { ArrowLeft, GitFork, Download, Flag, ExternalLink, History } from 'lucide-react';
 import { cloudApi, GalleryDetail, ApiError, API_BASE, MergeRequestDto } from '../services/cloudApi';
 import { stageImport } from '../services/importProject';
 import { downloadVariantsZip } from '../services/pdfService';
 import { useSession } from '../lib/auth-client';
 import { AccountMenu } from '../components/AccountMenu';
+import { HistoryModal } from '../components/cloud/HistoryModal';
 
 export function GalleryDetailPage() {
     const { id } = useParams<{ id: string }>();
@@ -16,6 +17,7 @@ export function GalleryDetailPage() {
     const [error, setError] = useState<string | null>(null);
     const [busy, setBusy] = useState<string | null>(null);
     const [mrs, setMrs] = useState<MergeRequestDto[]>([]);
+    const [showHistory, setShowHistory] = useState(false);
     // `isOwner` must be hooked in above any early return (hooks can't run conditionally), so it's
     // computed null-safely here rather than after the `!project` guard below.
     const isOwner = !!(session?.user && project && (session.user as any).id === project.ownerId);
@@ -125,6 +127,10 @@ export function GalleryDetailPage() {
                             className="flex items-center justify-center gap-1.5 border border-slate-300 rounded-lg px-4 py-2 text-sm font-medium text-slate-700 disabled:opacity-50">
                             <Download size={14} /> {busy === 'download' ? 'Generating…' : 'Download all variants (.zip)'}
                         </button>
+                        <button onClick={() => setShowHistory(true)} disabled={busy !== null}
+                            className="flex items-center justify-center gap-1.5 border border-slate-300 rounded-lg px-4 py-2 text-sm font-medium text-slate-700 disabled:opacity-50">
+                            <History size={14} /> Version history
+                        </button>
                         {!session?.user ? (
                             <Link to="/login" state={{ from: location.pathname }} className="text-center text-xs text-slate-500 hover:text-blue-600">Sign in to fork</Link>
                         ) : !session.user.username ? (
@@ -154,6 +160,14 @@ export function GalleryDetailPage() {
                     )}
                 </div>
             </main>
+            {showHistory && (
+                <HistoryModal
+                    cloudProjectId={project.id}
+                    mode="clone"
+                    onClone={({ state }) => { stageImport({ name: project.name, state }); navigate('/app'); }}
+                    onClose={() => setShowHistory(false)}
+                />
+            )}
         </div>
     );
 }
