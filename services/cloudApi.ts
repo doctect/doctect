@@ -57,6 +57,9 @@ export interface MrDetail {
     mergeRequest: MergeRequestDto;
     diff: { source: ChangeSetDto; target: ChangeSetDto; conflicts: { kind: string; variantId?: string; templateId?: string; description: string }[] } | null;
     sourceState: any; targetState: any;
+    // Server-computed (never re-derive client-side from "not the author" -- that heuristic breaks
+    // when the same user is both the fork's author and the target's owner, e.g. a self-fork).
+    isTargetOwner: boolean;
 }
 
 export const cloudApi = {

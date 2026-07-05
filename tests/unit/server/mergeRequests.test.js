@@ -75,10 +75,41 @@ describe('merge request creation', () => {
         expect(detail.body.diff.source.templatesModified).toEqual({ default: ['page'] });
         expect(detail.body.diff.conflicts).toEqual([]);
         expect(detail.body.sourceState.variants.default.templates.page.name).toBe('Improved');
+        expect(detail.body.isTargetOwner).toBe(true);
+
+        const asAuthor = await request(app).get(`/api/merge-requests/${mrId}`).set('Cookie', authorCookie);
+        expect(asAuthor.status).toBe(200);
+        expect(asAuthor.body.isTargetOwner).toBe(false);
 
         const stranger = await signUpUser(app, { email: 'nosy@test.dev', username: 'nosy' });
         const blocked = await request(app).get(`/api/merge-requests/${mrId}`).set('Cookie', stranger);
         expect(blocked.status).toBe(404);
+    });
+
+    it('reports isTargetOwner correctly even when the same user is both the fork author and the target owner (self-fork)', async () => {
+        // A solo user forking and proposing changes back to their OWN public project is a
+        // legitimate flow (nothing prevents it) -- and it's exactly the case where "not the
+        // author" is NOT a safe proxy for "is the target owner", since here they're the same person.
+        // Reuses the already-signed-up ownerCookie (rather than a fresh signUpUser call) to stay
+        // under better-auth's hardcoded 3-sign-up-per-10s-per-IP+path rate limit for this file
+        // (see requireUsername.test.js for the same constraint, root-caused there) -- entirely new
+        // project/fork/MR resources scoped to just this test, so it doesn't disturb other assertions.
+        const own = await request(app).post('/api/projects').set('Cookie', ownerCookie)
+            .send({ name: 'Solo Upstream', state: stateWithDayName('Original') });
+        const ownId = own.body.project.id;
+        await request(app).post(`/api/projects/${ownId}/publish`).set('Cookie', ownerCookie)
+            .send({ description: '', tags: [], thumbnails: [PNG_1X1] });
+        const selfFork = await request(app).post(`/api/projects/${ownId}/fork`).set('Cookie', ownerCookie);
+        const selfForkId = selfFork.body.project.id;
+        await request(app).post(`/api/projects/${selfForkId}/commits`).set('Cookie', ownerCookie)
+            .send({ state: stateWithDayName('Improved'), message: 'improve my own template' });
+        const mk = await request(app).post('/api/merge-requests').set('Cookie', ownerCookie)
+            .send({ sourceProjectId: selfForkId, title: 'Self merge test' });
+        expect(mk.status).toBe(201);
+
+        const detail = await request(app).get(`/api/merge-requests/${mk.body.mergeRequest.id}`).set('Cookie', ownerCookie);
+        expect(detail.status).toBe(200);
+        expect(detail.body.isTargetOwner).toBe(true);
     });
 
     it('recomputes the diff live against the target\'s current head, flagging new conflicts', async () => {
@@ -130,6 +161,12 @@ describe('merge and close', () => {
             .get(`/api/projects/${upstreamId}/commits/${res.body.commit.id}`).set('Cookie', ownerCookie);
         expect(head.body.commit.state.variants.default.templates.page.name).toBe('Improved');
         expect(head.body.commit.message).toContain('Merge:');
+
+        // The merged/closed early-return branch of GET /api/merge-requests/:id must also report
+        // isTargetOwner -- it's a separate code path from the live-diff branch above.
+        const mergedDetail = await request(app).get(`/api/merge-requests/${mrId}`).set('Cookie', ownerCookie);
+        expect(mergedDetail.body.mergeRequest.status).toBe('merged');
+        expect(mergedDetail.body.isTargetOwner).toBe(true);
     });
 
     it('refuses to merge twice', async () => {

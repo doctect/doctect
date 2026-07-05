@@ -131,7 +131,7 @@ const loadMrForParticipant = async (req, res, next) => {
 router.get('/api/merge-requests/:id', requireAuth, loadMrForParticipant, async (req, res) => {
     const mr = req.mr;
     if (mr.status === 'merged' || mr.status === 'closed') {
-        return res.json({ mergeRequest: await mrDto(mr), diff: null, sourceState: null, targetState: null });
+        return res.json({ mergeRequest: await mrDto(mr), diff: null, sourceState: null, targetState: null, isTargetOwner: req.isTargetOwner });
     }
     const computed = await computeMrDiff(mr);
     if (computed.error) return res.status(409).json({ error: computed.error });
@@ -145,7 +145,11 @@ router.get('/api/merge-requests/:id', requireAuth, loadMrForParticipant, async (
         mergeRequest: await mrDto(mr),
         diff: computed.diff,
         sourceState: computed.sourceState,
-        targetState: computed.targetState
+        targetState: computed.targetState,
+        // Authoritative, server-computed ownership (same check the merge endpoint itself enforces at
+        // POST .../merge) -- the client must not re-derive this from "am I not the author", which
+        // breaks when the same user is both the fork's author and the target's owner (self-fork).
+        isTargetOwner: req.isTargetOwner
     });
 });
 

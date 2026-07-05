@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { ArrowLeft, GitMerge, XCircle, AlertTriangle, Eye } from 'lucide-react';
 import { cloudApi, MrDetail, ChangeSetDto, ApiError } from '../services/cloudApi';
-import { useSession } from '../lib/auth-client';
 import { AccountMenu } from '../components/AccountMenu';
 import { computePageOrder } from '../services/pdfService';
 import { generateThumbnails } from '../services/thumbnailService';
@@ -36,7 +35,6 @@ function ChangeList({ cs }: { cs: ChangeSetDto }) {
 
 export function MergeRequestPage() {
     const { id } = useParams<{ id: string }>();
-    const { data: session } = useSession();
     const [detail, setDetail] = useState<MrDetail | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [busy, setBusy] = useState(false);
@@ -85,7 +83,10 @@ export function MergeRequestPage() {
     if (error && !detail) return <div className="p-10 text-sm text-red-600">{error}</div>;
     if (!detail) return <div className="p-10 text-sm text-slate-400">Loading…</div>;
     const mr = detail.mergeRequest;
-    const isOwner = session?.user && (session.user as any).id !== mr.createdBy; // participant who isn't the author is the owner
+    // Server-computed (server/routes/mergeRequests.js's loadMrForParticipant) -- never re-derive
+    // this from "am I not the author": that heuristic breaks when the same user is both the fork's
+    // author and the target's owner (a self-fork), since they'd then genuinely be the author too.
+    const isOwner = detail.isTargetOwner;
     const actionable = mr.status === 'open' || mr.status === 'conflicted';
 
     return (
