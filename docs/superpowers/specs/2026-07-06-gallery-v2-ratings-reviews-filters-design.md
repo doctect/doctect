@@ -22,8 +22,8 @@ Appended to `server/migrations/index.js` (pg + sqlite variants, same pattern as 
 ```sql
 CREATE TABLE IF NOT EXISTS reviews (
     id TEXT PRIMARY KEY,
-    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-    user_id TEXT NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
+    project_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
     rating INTEGER NOT NULL CHECK (rating BETWEEN 1 AND 5),
     body TEXT,
     created_at TIMESTAMP NOT NULL,
@@ -33,6 +33,8 @@ CREATE TABLE IF NOT EXISTS reviews (
 CREATE INDEX IF NOT EXISTS idx_reviews_project ON reviews(project_id);
 ALTER TABLE reports ADD COLUMN review_id TEXT;
 ```
+
+- **No `REFERENCES`/CASCADE clauses:** SQLite runs here without `PRAGMA foreign_keys`, so FK cascades would silently not fire — this codebase cleans up related rows manually (see the project-delete route deleting commits). `reviews` follows the `reports` table precedent (plain `TEXT` columns), and the project-delete route gains an explicit `DELETE FROM reviews WHERE project_id = ...`.
 
 - Rating required; body optional (trimmed, max 2000 chars — server-enforced).
 - `created_at`/`updated_at` are **app-stamped millisecond-precision timestamps** (same lesson as Task 8's commit-ordering bug — SQLite `CURRENT_TIMESTAMP` is whole-second).
@@ -63,7 +65,7 @@ ALTER TABLE reports ADD COLUMN review_id TEXT;
 
 **Admin:** `GET /api/admin/reports` gains `review_id` and (when set) the review body in its rows (LEFT JOIN reviews). New `DELETE /api/admin/reviews/:id` (`requireAdmin`) removes a review outright.
 
-**Visibility:** every review read/write goes through `loadPublicProject`, so unpublishing a project automatically hides (and blocks writes to) its reviews without any extra code. Rows survive for re-publish; project deletion cascades them away.
+**Visibility:** every review read/write goes through `loadPublicProject`, so unpublishing a project automatically hides (and blocks writes to) its reviews without any extra code. Rows survive for re-publish; the project-delete route removes them explicitly (no FK cascade — see §1).
 
 ### 3. Client API — `services/cloudApi.ts`
 
@@ -98,7 +100,7 @@ Two view modes driven by URL search params (`useSearchParams`: `q`, `tag`, `sort
 - Star summary (display `StarRating` + count) directly under the author line.
 - Tag chips become clickable (navigate to gallery tag filter; inside the modal this replaces the background — acceptable, it's a navigation).
 - `ReviewsSection` appended below the existing content (inside the modal it scrolls with the body).
-- `useGalleryDetail` gains review state: loads `listReviews` alongside the detail, exposes `reviews`, `myReview`, `saveReview`, `deleteReview`, `reportReview`; saving/deleting refreshes both the list and the project's `ratingAvg`/`ratingCount`.
+- `useGalleryDetail` gains review state: loads `listReviews` alongside the detail, exposes `reviews`, `myReview`, `saveReview`, `deleteMyReview`, `reportReview`; saving/deleting refreshes both the list and the project's `ratingAvg`/`ratingCount`.
 
 ### 7. `pages/ProfilePage.tsx`
 
