@@ -24,23 +24,38 @@ router.get('/api/thumbnails/:thumbId', async (req, res) => {
 
 const PAGE_SIZE = 24;
 
+const ratingFields = `
+    (SELECT AVG(rv.rating) FROM reviews rv WHERE rv.project_id = p.id) AS rating_avg,
+    (SELECT COUNT(*) FROM reviews rv WHERE rv.project_id = p.id) AS rating_count
+`;
+
+// Postgres returns AVG/COUNT as strings — Number() before math.
+const ratingDtoFields = (r) => ({
+    ratingAvg: r.rating_avg == null ? null : Math.round(Number(r.rating_avg) * 10) / 10,
+    ratingCount: Number(r.rating_count ?? 0),
+});
+
 const cardFields = `
     p.id, p.name, p.description, p.tags, p.fork_count, p.download_count, p.updated_at,
     u.username AS author,
-    (SELECT t.id FROM thumbnails t WHERE t.project_id = p.id ORDER BY t.position LIMIT 1) AS thumbnail_id
+    (SELECT t.id FROM thumbnails t WHERE t.project_id = p.id ORDER BY t.position LIMIT 1) AS thumbnail_id,
+    ${ratingFields}
 `;
 
 const cardDto = (r) => ({
     id: r.id, name: r.name, description: r.description, tags: JSON.parse(r.tags || '[]'),
     author: r.author, forkCount: r.fork_count, downloadCount: r.download_count,
-    updatedAt: r.updated_at, thumbnailId: r.thumbnail_id
+    updatedAt: r.updated_at, thumbnailId: r.thumbnail_id,
+    ...ratingDtoFields(r)
 });
 
 router.get('/api/gallery', async (req, res) => {
     const q = String(req.query.q ?? '').toLowerCase().slice(0, 100);
     const sort = req.query.sort === 'popular'
         ? 'ORDER BY (p.fork_count + p.download_count) DESC, p.updated_at DESC'
-        : 'ORDER BY p.updated_at DESC';
+        : req.query.sort === 'rating'
+            ? 'ORDER BY rating_avg DESC NULLS LAST, rating_count DESC, p.updated_at DESC'
+            : 'ORDER BY p.updated_at DESC';
     const page = Math.max(0, parseInt(req.query.page ?? '0', 10) || 0);
     const rows = await query(
         `SELECT ${cardFields}
@@ -76,6 +91,9 @@ const reviewSelect = `
 router.get('/api/gallery/:id', loadPublicProject, async (req, res) => {
     const p = req.publicProject;
     const thumbs = await query('SELECT id FROM thumbnails WHERE project_id = $1 ORDER BY position', [p.id]);
+    const agg = await query(
+        'SELECT AVG(rating) AS rating_avg, COUNT(*) AS rating_count FROM reviews WHERE project_id = $1',
+        [p.id]);
     let forkedFrom = null;
     if (p.forked_from_project_id) {
         const src = await query(
@@ -91,7 +109,8 @@ router.get('/api/gallery/:id', loadPublicProject, async (req, res) => {
             id: p.id, name: p.name, description: p.description, tags: JSON.parse(p.tags || '[]'),
             author: p.author, ownerId: p.owner_id, forkCount: p.fork_count, downloadCount: p.download_count,
             updatedAt: p.updated_at, headCommitId: p.head_commit_id,
-            thumbnailIds: thumbs.map(t => t.id), forkedFrom
+            thumbnailIds: thumbs.map(t => t.id), forkedFrom,
+            ...ratingDtoFields(agg[0])
         }
     });
 });

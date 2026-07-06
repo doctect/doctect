@@ -18,7 +18,9 @@ router.get('/api/users/:username', async (req, res) => {
     if (!users[0]) return res.status(404).json({ error: 'User not found' });
     const rows = await query(
         `SELECT p.id, p.name, p.description, p.tags, p.fork_count, p.download_count, p.updated_at,
-                (SELECT t.id FROM thumbnails t WHERE t.project_id = p.id ORDER BY t.position LIMIT 1) AS thumbnail_id
+                (SELECT t.id FROM thumbnails t WHERE t.project_id = p.id ORDER BY t.position LIMIT 1) AS thumbnail_id,
+                (SELECT AVG(rv.rating) FROM reviews rv WHERE rv.project_id = p.id) AS rating_avg,
+                (SELECT COUNT(*) FROM reviews rv WHERE rv.project_id = p.id) AS rating_count
          FROM projects p WHERE p.owner_id = $1 AND p.visibility = 'public' ORDER BY p.updated_at DESC LIMIT 100`,
         [users[0].id]);
     res.json({
@@ -28,7 +30,9 @@ router.get('/api/users/:username', async (req, res) => {
         projects: rows.map(r => ({
             id: r.id, name: r.name, description: r.description, tags: JSON.parse(r.tags || '[]'),
             author: users[0].username, forkCount: r.fork_count, downloadCount: r.download_count,
-            updatedAt: r.updated_at, thumbnailId: r.thumbnail_id
+            updatedAt: r.updated_at, thumbnailId: r.thumbnail_id,
+            ratingAvg: r.rating_avg == null ? null : Math.round(Number(r.rating_avg) * 10) / 10,
+            ratingCount: Number(r.rating_count ?? 0)
         }))
     });
 });
