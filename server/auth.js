@@ -28,7 +28,13 @@ export const createAuth = (config = {}) => {
         ],
         trustedOrigins: defaultTrustedOrigins,
         rateLimit: {
-            enabled: true,
+            // Enabled unless a test opts out (env var is never set in production, so the
+            // default there is unchanged: enabled). better-auth additionally applies a
+            // built-in "special rule" of max 3 requests per 10s to /sign-in*, /sign-up*,
+            // /change-password* and /change-email* that overrides the window/max below;
+            // test files that create 4+ users in a beforeAll trip it, so the test harness
+            // (tests/unit/server/helpers.js) sets DISABLE_AUTH_RATE_LIMIT.
+            enabled: !process.env.DISABLE_AUTH_RATE_LIMIT,
             window: 60,
             max: 20
         },

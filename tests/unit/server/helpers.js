@@ -30,6 +30,9 @@ export const initTestApp = async () => {
     process.env.TRUSTED_ORIGINS = 'http://localhost:3000,http://localhost:3001';
     process.env.CLIENT_URL = 'http://localhost:3000';
     delete process.env.ALLOWED_HOSTS;
+    // better-auth caps /sign-up* at 3 requests per 10s (built-in special rule that
+    // overrides the configured window/max); any test file that creates 4+ users in its
+    // beforeAll would 429. server/auth.js reads this to skip rate limiting under test.
     process.env.DISABLE_AUTH_RATE_LIMIT = 'true';
     const { runMigrations } = await import('../../../server/migrations.js');
     await runMigrations();
