@@ -51,22 +51,49 @@ const cardDto = (r) => ({
 
 router.get('/api/gallery', async (req, res) => {
     const q = String(req.query.q ?? '').toLowerCase().slice(0, 100);
+    const tag = String(req.query.tag ?? '').slice(0, 30);
     const sort = req.query.sort === 'popular'
         ? 'ORDER BY (p.fork_count + p.download_count) DESC, p.updated_at DESC'
         : req.query.sort === 'rating'
             ? 'ORDER BY rating_avg DESC NULLS LAST, rating_count DESC, p.updated_at DESC'
             : 'ORDER BY p.updated_at DESC';
     const page = Math.max(0, parseInt(req.query.page ?? '0', 10) || 0);
+    const limit = Math.min(PAGE_SIZE, Math.max(1, parseInt(req.query.limit ?? '0', 10) || PAGE_SIZE));
+
+    const params = [`%${q}%`, `%${q}%`, `%${q}%`];
+    let where = `p.visibility = 'public'
+           AND (LOWER(p.name) LIKE $1 OR LOWER(p.description) LIKE $2 OR LOWER(p.tags) LIKE $3)`;
+    if (tag) {
+        // Tags are stored as a JSON array string; matching the JSON-quoted encoding of the
+        // tag ("tag", incl. escaping) makes this an exact-element match — 'plan' cannot
+        // match 'planner' because the closing quote must follow.
+        params.push(`%${JSON.stringify(tag)}%`);
+        where += ` AND p.tags LIKE $${params.length}`;
+    }
     const rows = await query(
         `SELECT ${cardFields}
          FROM projects p JOIN "user" u ON u.id = p.owner_id
-         WHERE p.visibility = 'public'
-           AND (LOWER(p.name) LIKE $1 OR LOWER(p.description) LIKE $2)
+         WHERE ${where}
          ${sort}
-         LIMIT ${PAGE_SIZE + 1} OFFSET ${page * PAGE_SIZE}`,
-        [`%${q}%`, `%${q}%`]
+         LIMIT ${limit + 1} OFFSET ${page * limit}`,
+        params
     );
-    res.json({ items: rows.slice(0, PAGE_SIZE).map(cardDto), page, hasMore: rows.length > PAGE_SIZE });
+    res.json({ items: rows.slice(0, limit).map(cardDto), page, hasMore: rows.length > limit });
+});
+
+router.get('/api/gallery/tags', async (req, res) => {
+    const rows = await query(`SELECT tags FROM projects WHERE visibility = 'public'`, []);
+    const counts = new Map();
+    for (const r of rows) {
+        for (const t of JSON.parse(r.tags || '[]')) {
+            counts.set(t, (counts.get(t) || 0) + 1);
+        }
+    }
+    const tags = [...counts.entries()]
+        .map(([tag, count]) => ({ tag, count }))
+        .sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag))
+        .slice(0, 30);
+    res.json({ tags });
 });
 
 const loadPublicProject = async (req, res, next) => {
