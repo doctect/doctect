@@ -53,9 +53,12 @@ test.describe('Username identity', () => {
         expect(publishRes.ok()).toBeTruthy();
         await expect(page.getByRole('heading', { name: /publish to gallery/i })).toBeHidden({ timeout: 10000 });
 
-        // Gallery card shows the original username.
+        // Gallery card shows the original username. The unfiltered gallery renders up to
+        // three curated sections (Top rated / Popular / Recently updated), so the same
+        // project card can legitimately appear more than once -- .first() is enough since
+        // we only care that the author name shows up somewhere.
         await page.goto('/gallery');
-        await expect(page.getByText(`by ${oldUsername}`)).toBeVisible({ timeout: 10000 });
+        await expect(page.getByText(`by ${oldUsername}`).first()).toBeVisible({ timeout: 10000 });
 
         // Old profile works and lists the project.
         await page.goto(`/u/${oldUsername}`);
@@ -77,9 +80,9 @@ test.describe('Username identity', () => {
         await expect(page.getByRole('heading', { name: newUsername })).toBeVisible({ timeout: 10000 });
         await expect(page.getByText('Blank Project')).toBeVisible();
 
-        // Gallery card now shows the new username.
+        // Gallery card now shows the new username (again, may appear in multiple sections).
         await page.goto('/gallery');
-        await expect(page.getByText(`by ${newUsername}`)).toBeVisible({ timeout: 10000 });
+        await expect(page.getByText(`by ${newUsername}`).first()).toBeVisible({ timeout: 10000 });
     });
 
     test('a session with no username is redirected to /welcome before it can fork, and continues afterward', async ({ browser }) => {
