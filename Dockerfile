@@ -29,6 +29,9 @@ COPY --from=builder /app/dist ./dist
 # Copy backend source code
 COPY server ./server
 
+# Copy code shared between server and client (e.g. the merge-request diff engine)
+COPY shared ./shared
+
 # Expose port (Cloud Run expects 8080 by default, but we'll stick to env var)
 ENV PORT=3001
 EXPOSE 3001
