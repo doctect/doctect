@@ -122,6 +122,33 @@ Two independent edits that happen to produce byte-identical results are *not* fl
 
 (`BETTER_AUTH_URL`, `CLIENT_URL`, `ADMIN_EMAILS`, and the Google OAuth/GitHub token variables predate this feature set and are unchanged; see `.env.example` for the full list.)
 
+## Storage limits and cost control
+
+Cloud storage is real, billed infrastructure, so this layer adds a set of guardrails around it — all tunable via environment variables, all read live at call time (nothing is cached at process start), so they can be adjusted per deploy or overridden cheaply in tests.
+
+| Limit | Env var | Default | On exceeding |
+|---|---|---|---|
+| Per-user storage quota | `USER_STORAGE_QUOTA_MB` | 50 (MB) | `413` `STORAGE_QUOTA_EXCEEDED` |
+| Global storage ceiling | `MAX_TOTAL_STORAGE_MB` | 20480 (20GB) | `507` `SERVICE_STORAGE_FULL` |
+| Commits kept per project | `COMMIT_RETENTION_PER_PROJECT` | 50 | — older commits are silently pruned, not rejected |
+| Projects per user | `MAX_PROJECTS_PER_USER` | 25 | `403` `PROJECT_LIMIT_REACHED` |
+| Published projects per user | `MAX_PUBLIC_PROJECTS_PER_USER` | 20 | `403` `PUBLIC_LIMIT_REACHED` |
+| Writes per user per hour | `USER_COMMITS_PER_HOUR` | 60 | `429` `RATE_LIMITED` |
+
+- The **storage quota and global ceiling** are both checked before `POST /api/projects`, `POST /api/projects/:id/commits`, and `POST /api/projects/:id/fork` write anything — the ceiling is checked first, as a hard, service-wide kill-switch that holds independently of (and even if) per-user accounting were ever wrong.
+- The **project cap** is checked on project creation and forking (a fork is its own new project row, so it counts against the cap). The **publish cap** is checked only when a project isn't already public — re-publishing or editing an already-public project doesn't re-check it.
+- The **write rate limit** is one shared per-user hourly budget across project create, commit save, and fork — not a separate budget per route.
+
+**Storage mechanics.** Commit state is stored gzip-compressed (`commits.state_gzip`), and it's this compressed byte count — not the original JSON size — that both the quota and the ceiling measure. Rows written before compression was introduced only have the legacy `commits.state_json` column populated; the read path checks `state_gzip` first and falls back to `state_json`, so old rows keep working indefinitely with no backfill migration required. Saves are also deduplicated against the current head: a new commit whose content hash (`state_hash`, computed in a key-order-insensitive way so re-serialization by a different client doesn't defeat it) matches the head commit's hash is treated as a no-op — the API returns the existing head commit (`deduped: true`) instead of writing a new row or counting against quota, retention, or the rate limit.
+
+**Retention pruning** runs on every commit insert — project creation, commit save, fork-seeding, and merging all funnel through the same internal `insertCommit` path — keeping only the newest `COMMIT_RETENTION_PER_PROJECT` commits per project. Commits still referenced by an **open** merge request (as either its source head or its three-way-diff base) are always exempt, since the MR detail page recomputes that diff live on every fetch. One deliberate consequence: a fork's `forkedFromCommitId` pointer is *not itself* protected from pruning, so once the referenced upstream commit ages out of retention (and isn't separately held open by an MR), that pointer resolves to nothing and the fork's lineage degrades from commit-level to project-level (`forkedFromProjectId` still holds).
+
+**Deliberate exclusions:**
+- Merging (`POST /api/merge-requests/:id/merge`) performs **no quota or global-ceiling check** — the same reasoning as its pre-existing exemption from `requireUsername`: a project owner accepting a proposed change into content they already own shouldn't be blocked by a limit meant to slow *new* low-trust growth. The resulting commit still goes through the same `insertCommit` path as everything else, so it's still subject to retention pruning — it just skips the quota/ceiling check that create, save, and fork perform.
+- **Thumbnails** are bounded by the publish cap, not the byte quota — publishing is limited by how many projects a user can have public at once, not by thumbnail storage size.
+
+**Ops note (Neon/Postgres in production).** Keep the database branch's history retention / point-in-time-recovery window short — one day or less — in the Neon console. That history window is itself billed storage, and this workload is insert-heavy (every save is a new immutable commit row, on top of the retention pruning above), so a long PITR window can end up billing for substantially more historical data than the live tables ever hold. It's also worth remembering operationally that deleting rows — via retention pruning, project deletion, or unpublishing — does not shrink billed storage by itself; that space is only reclaimed once the configured history window ages past the deletion.
+
 ## Security Model
 
 - **Session cookies**, not bearer tokens — better-auth issues an httpOnly session cookie on sign-in; every `requireAuth`/`optionalAuth` check resolves the caller from that cookie via `auth.api.getSession`.
