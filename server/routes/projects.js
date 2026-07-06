@@ -159,6 +159,7 @@ router.delete('/api/projects/:id', requireAuth, loadProject(true), async (req, r
          WHERE (source_project_id = $1 OR target_project_id = $2) AND status IN ('open', 'conflicted')`,
         [req.project.id, req.project.id]
     );
+    await query('DELETE FROM reviews WHERE project_id = $1', [req.project.id]);
     await query('DELETE FROM commits WHERE project_id = $1', [req.project.id]);
     await query('DELETE FROM projects WHERE id = $1', [req.project.id]);
     res.json({ success: true });

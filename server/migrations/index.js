@@ -191,5 +191,41 @@ export const migrations = [
             ALTER TABLE commits ADD COLUMN state_hash TEXT;
             UPDATE commits SET state_bytes = LENGTH(CAST(state_json AS BLOB)) WHERE state_bytes IS NULL
         `
+    },
+    {
+        id: '008_reviews',
+        // No REFERENCES clauses: SQLite runs without PRAGMA foreign_keys here, so FK
+        // cascades would silently not fire — related-row cleanup is manual, matching
+        // the reports/commits precedent. The non-idempotent ALTER is deliberately the
+        // LAST statement (the runner re-runs an unrecorded migration from the top;
+        // everything before it is IF NOT EXISTS — see spec §1 partial-failure note).
+        pg: `
+            CREATE TABLE IF NOT EXISTS reviews (
+                id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                rating INTEGER NOT NULL CHECK (rating BETWEEN 1 AND 5),
+                body TEXT,
+                created_at TIMESTAMP NOT NULL,
+                updated_at TIMESTAMP NOT NULL,
+                UNIQUE (project_id, user_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_reviews_project ON reviews(project_id);
+            ALTER TABLE reports ADD COLUMN IF NOT EXISTS review_id TEXT
+        `,
+        sqlite: `
+            CREATE TABLE IF NOT EXISTS reviews (
+                id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                rating INTEGER NOT NULL CHECK (rating BETWEEN 1 AND 5),
+                body TEXT,
+                created_at TIMESTAMP NOT NULL,
+                updated_at TIMESTAMP NOT NULL,
+                UNIQUE (project_id, user_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_reviews_project ON reviews(project_id);
+            ALTER TABLE reports ADD COLUMN review_id TEXT
+        `
     }
 ];
