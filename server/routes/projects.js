@@ -28,6 +28,26 @@ const projectDto = (row) => ({
     updatedAt: row.updated_at
 });
 
+const retentionLimit = () => {
+    const v = Number(process.env.COMMIT_RETENTION_PER_PROJECT);
+    return Number.isFinite(v) && v > 0 ? v : 50;
+};
+
+// Deletes commits beyond the newest N for a project. Commits referenced by an OPEN
+// merge request must survive — the MR detail page recomputes its diff from them live.
+// Note $1 and $2 are the same projectId passed twice: the SQLite adapter rewrites
+// placeholders positionally, so a reused $1 would mis-bind (see Global Constraints).
+export const pruneCommits = async (projectId) => {
+    await query(
+        `DELETE FROM commits
+         WHERE project_id = $1
+           AND id NOT IN (SELECT id FROM commits WHERE project_id = $2 ORDER BY created_at DESC, id DESC LIMIT $3)
+           AND id NOT IN (SELECT source_commit_id FROM merge_requests WHERE status = 'open')
+           AND id NOT IN (SELECT base_commit_id FROM merge_requests WHERE status = 'open')`,
+        [projectId, projectId, retentionLimit()]
+    );
+};
+
 export const insertCommit = async ({ projectId, parentCommitId, message, state, userId, encoded }) => {
     const id = randomUUID();
     const enc = encoded ?? encodeState(state);
@@ -43,6 +63,7 @@ export const insertCommit = async ({ projectId, parentCommitId, message, state, 
         [id, projectId, parentCommitId ?? null, message, '', enc.gzip, enc.bytes, enc.hash, state.schemaVersion ?? null, userId, createdAt]
     );
     await query(`UPDATE projects SET head_commit_id = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`, [id, projectId]);
+    await pruneCommits(projectId);
     return id;
 };
 
