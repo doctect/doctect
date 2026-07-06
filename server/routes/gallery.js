@@ -115,7 +115,10 @@ router.post('/api/gallery/:id/report', optionalAuth, loadPublicProject, async (r
 
 router.get('/api/admin/reports', requireAdmin, async (req, res) => {
     const rows = await query(
-        `SELECT r.*, p.name AS project_name FROM reports r LEFT JOIN projects p ON p.id = r.project_id
+        `SELECT r.*, p.name AS project_name, rv.body AS review_body, rv.rating AS review_rating
+         FROM reports r
+         LEFT JOIN projects p ON p.id = r.project_id
+         LEFT JOIN reviews rv ON rv.id = r.review_id
          ORDER BY r.created_at DESC LIMIT 200`, []);
     res.json({ reports: rows });
 });
@@ -171,6 +174,24 @@ router.delete('/api/gallery/:id/review', requireAuth, loadPublicProject, async (
         [req.publicProject.id, req.user.id]);
     if (!rows[0]) return res.status(404).json({ error: 'No review to delete' });
     await query('DELETE FROM reviews WHERE id = $1', [rows[0].id]);
+    res.json({ success: true });
+});
+
+router.post('/api/gallery/:id/reviews/:reviewId/report', optionalAuth, loadPublicProject, async (req, res) => {
+    const reason = String(req.body?.reason ?? '').trim().slice(0, 500);
+    if (!reason) return res.status(400).json({ error: 'reason is required' });
+    const rows = await query(
+        'SELECT id FROM reviews WHERE id = $1 AND project_id = $2',
+        [req.params.reviewId, req.publicProject.id]);
+    if (!rows[0]) return res.status(404).json({ error: 'Review not found' });
+    await query(
+        'INSERT INTO reports (id, project_id, reporter_user_id, reason, review_id) VALUES ($1, $2, $3, $4, $5)',
+        [randomUUID(), req.publicProject.id, req.user?.id ?? null, reason, rows[0].id]);
+    res.status(201).json({ success: true });
+});
+
+router.delete('/api/admin/reviews/:id', requireAdmin, async (req, res) => {
+    await query('DELETE FROM reviews WHERE id = $1', [req.params.id]);
     res.json({ success: true });
 });
 

@@ -165,3 +165,46 @@ describe('review CRUD', () => {
         expect(list.status).toBe(404);
     });
 });
+
+describe('review reporting and moderation', () => {
+    let adminCookie, reviewId;
+    beforeAll(async () => {
+        const { query } = await import('../../../server/db.js');
+        adminCookie = await signUpUser(app, { email: 'rev-admin@test.dev', username: 'rev_admin' });
+        await query(`UPDATE "user" SET role = 'admin' WHERE email = $1`, ['rev-admin@test.dev']);
+        const list = await request(app).get(`/api/gallery/${projectId}/reviews`);
+        reviewId = list.body.reviews.find(r => r.author === 'rev_rater').id;
+    });
+
+    it('accepts an anonymous review report and requires a reason', async () => {
+        const bad = await request(app).post(`/api/gallery/${projectId}/reviews/${reviewId}/report`).send({});
+        expect(bad.status).toBe(400);
+        const ok = await request(app).post(`/api/gallery/${projectId}/reviews/${reviewId}/report`)
+            .send({ reason: 'abusive text' });
+        expect(ok.status).toBe(201);
+    });
+
+    it('404s when the review does not belong to that project', async () => {
+        const res = await request(app).post(`/api/gallery/${projectId}/reviews/not-a-real-review/report`)
+            .send({ reason: 'x' });
+        expect(res.status).toBe(404);
+    });
+
+    it('surfaces the review in the admin report listing', async () => {
+        const res = await request(app).get('/api/admin/reports').set('Cookie', adminCookie);
+        expect(res.status).toBe(200);
+        const rep = res.body.reports.find(r => r.review_id === reviewId);
+        expect(rep).toBeTruthy();
+        expect(rep.review_rating).toBe(2);
+        expect(rep.review_body).toBe('Changed my mind.');
+    });
+
+    it('lets an admin delete a review; non-admins cannot', async () => {
+        const forbidden = await request(app).delete(`/api/admin/reviews/${reviewId}`).set('Cookie', raterCookie);
+        expect(forbidden.status).toBe(403);
+        const res = await request(app).delete(`/api/admin/reviews/${reviewId}`).set('Cookie', adminCookie);
+        expect(res.status).toBe(200);
+        const list = await request(app).get(`/api/gallery/${projectId}/reviews`);
+        expect(list.body.reviews.find(r => r.id === reviewId)).toBeUndefined();
+    });
+});
