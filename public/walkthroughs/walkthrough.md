@@ -3,7 +3,7 @@
 **Issue:** [doctect/doctect#9](https://github.com/doctect/doctect/issues/9)
 **Branch:** `feature/gallery-fork-merge-requests` (merged to `main`)
 
-This is a detailed walkthrough of how PDF Architect went from a purely local-first, single-user editor to a full public gallery with GitHub-style forking, version history, and merge requests — gated behind an expanded authentication system. It covers all 27 planned tasks, the critical finding from the final review, and the follow-up polish that came out of first-use feedback.
+This is a detailed walkthrough of how PDF Architect went from a purely local-first, single-user editor to a full public gallery with GitHub-style forking, version history, and merge requests — gated behind an expanded authentication system. It covers all 27 planned tasks, the critical finding from the final review, and every round of follow-up work that's come out of real use since.
 
 ## Why this exists
 
@@ -118,9 +118,44 @@ Trying the finished feature surfaced two small, real issues, fixed the same way 
 1. **Sign-in always redirected to the admin analytics page**, regardless of where you started. Now it returns you to wherever you came from (the gallery, a specific project, wherever "Sign in" was clicked), defaulting sensibly to the editor instead of the analytics dashboard when there's nowhere to return to.
 2. **The gallery had no way to get a project's PDFs without opening it in the editor.** Added a "Download all variants" button to every project's gallery page that generates a PDF for each of the project's variants and packages them into a single zip — specifically to avoid the multiple-download permission prompt that separate downloads would otherwise trigger in most browsers.
 
+## Fixing a broken public identity system
+
+First real use of the gallery surfaced three bugs, filed together: clicking "My profile" led to a "User not found" page, a published gallery card showed no author at all, and there was no way to use a pseudonym instead of your real name. All three traced back to one gap: an account can exist with `username = null` — guaranteed for anyone who signed in with Google (the OAuth path never collects a username) or any account older than the username plugin itself — and there was no way to ever set or change one after signup.
+
+Worked through its own brainstorming/spec/plan cycle (`docs/superpowers/plans/2026-07-04-username-identity.md`), the fix broke into 9 tasks:
+
+**Task 1 — `requireUsername` server middleware**, applied to exactly the five routes that create or attach new cloud/gallery content as the acting user (`POST /api/projects`, `.../commits`, `.../publish`, `.../fork`, `POST /api/merge-requests`) — deliberately *not* applied to routes that only reduce exposure or act on content the caller already owns (`unpublish`, `merge`, `close`, delete), since gating those could trap a legacy no-username account away from cleaning up its own data.
+
+**Task 2 — `ApiError` gains a `code` field**, so the client can branch on `USERNAME_REQUIRED` reliably instead of string-matching a message.
+
+**Tasks 3–5 — `UsernameForm`, `/welcome`, `/account`.** A shared form component (format validation, debounced availability check, graceful fallback on a failed submit) used by a blocking onboarding page (`/welcome`, reusing the existing `from`-redirect pattern) and a settings page for changing your username any time afterward. Uncovered a real upstream quirk here: better-auth's own `/update-user` doesn't return its clean "already taken" error the way `/sign-up/email` does — it throws an unhandled database constraint violation instead — worked around by having the UI always pre-check availability rather than trusting a clean error after the fact.
+
+**Tasks 6–8 — Gating the UI.** `AccountMenu` drops its buggy `session.user.name` fallback entirely; `CloudMenu` and the gallery's Fork button both become a 3-way branch (signed out / signed in without a username / signed in with one) instead of a 2-way one.
+
+**Task 9 — End-to-end coverage**, including a real sign-up → publish → change-username → confirm-the-old-profile-link-404s-and-the-new-one-works flow, run against a real server.
+
+Two more fixes came out of wrapping this round up, same rigor as the original feature's own final review:
+
+- **The account's real name field was leaking over the API** (`GET /api/me`, `GET /api/users/:username`) — pre-existing code, untouched by any of the 9 tasks above, flagged by this round's own final whole-branch review. No client code ever read it; removed from both response bodies and the underlying SQL query.
+- **Forking your own public project and opening a merge request against it hid the Merge button entirely.** `MergeRequestPage` guessed ownership as "whoever isn't the author must be the owner" — true only when the author and owner are different people, which breaks for exactly this legitimate self-fork case. Fixed by having the server send its own already-correct `isTargetOwner` (the same check the merge endpoint itself enforces) instead of the client re-deriving it. Found via live manual testing against a real self-forked project.
+
+## Gallery version history
+
+The editor already had full commit history for a project's own owner — a list of commits with **Restore**, in the Cloud menu. There was no way to see a *public* project's history from the gallery itself, and the server turned out to already allow it: `GET /api/projects/:id/commits` and its single-commit counterpart already permitted anyone to read a public project's full history, not just its owner. The gap was purely front-end.
+
+Two tasks: generalize the existing `HistoryModal` with a `mode` prop (`'restore'`, the untouched default the editor's Cloud menu already uses; `'clone'`, new — no confirm dialog, clones a past commit into a fresh local project instead of overwriting the one you have open, and deliberately skips the migration step the editor's own import-consuming code already runs once, rather than running it twice), then add a "Version history" button to the gallery detail page using it. Landed with zero server changes and zero regressions to the existing gallery-detail-page test suite — both tasks and the final whole-branch review came back clean, no Critical or Important findings.
+
+## Gallery projects open as an overlay modal
+
+Feedback: clicking a project anywhere in the app felt like more page than the content needed. The fix uses React Router's "background location" pattern — the URL still changes to `/gallery/:id` and stays fully shareable/bookmarkable, but if the navigation came from inside the app (a click), the page you clicked from keeps rendering underneath and the project opens as a modal over it. A direct hit — a typed URL, a refresh, a shared link, or any of the existing Playwright specs' `page.goto('/gallery/:id')` calls — still renders the exact same standalone page as before, completely unchanged.
+
+Four tasks: `GalleryLink`, a `<Link>` wrapper that inherits an already-open modal's background instead of nesting a second one behind it (so "forked from," clicked from inside a modal, doesn't produce a modal-behind-a-modal); a pure extraction of the gallery detail page's data-fetching and rendering into a shared hook and presentational component, so the page and the new modal have exactly one implementation to keep in sync instead of two; the modal itself plus the routing split in `App.tsx`; and finally wiring all four real in-app links (the gallery grid, the profile grid, the "forked from" link, and the merge-request page's project link) to the new component — proven end-to-end with a real two-user fork chain and a real merge-request flow in an actual browser.
+
+The trickiest part — the background-location routing itself — was spiked and verified working in this exact toolchain *before* being written into the implementation plan, rather than trusting the pattern's reputation. The final whole-branch review caught one thing no single task's review could have: a fifth in-app link to a gallery project (the editor's own "forked from upstream" indicator, in the Cloud menu) had been missed when the work was originally scoped. Left as a full-page link rather than a modal — popping a modal over the editor's working canvas would be a worse fit than it is on the simpler list/detail pages it appears on elsewhere — and documented as a deliberate exclusion rather than an oversight.
+
 ## By the numbers
 
-- 27 planned tasks across 6 phases, plus 1 post-review security fix and 2 follow-up fixes — 30 pieces of work in total, every one test-driven and independently reviewed.
-- 82 unit tests, several committed end-to-end Playwright specs covering the full publish → gallery → fork → merge-request loop (both the clean-merge and conflicted paths).
-- New server surface: 6 database migrations, 5 route files (`projects`, `gallery`, `mergeRequests`, `me`, plus the existing auth), all additive — nothing destructive to existing data.
-- New client surface: a public gallery, author profiles, a cloud menu, version history, a publish wizard, and a full merge-request review UI.
+- 27 planned tasks across 6 phases, plus 1 post-review security fix, 2 follow-up fixes (sign-in redirect + gallery zip download), a 9-task round fixing public username identity (plus 2 more fixes from wrapping that round up), a 2-task round adding gallery version history, and a 4-task round making gallery projects open as a modal — 47 pieces of work in total, every one test-driven and independently reviewed.
+- 145 unit tests as of the latest round. Several committed end-to-end Playwright specs cover the full publish → gallery → fork → merge-request loop (both the clean-merge and conflicted paths) plus the username onboarding/change flow; the gallery version-history and overlay-modal rounds were each verified with a real, throwaway (not committed) browser script instead, per their own plans.
+- New server surface: 6 database migrations, 5 route files (`projects`, `gallery`, `mergeRequests`, `me`, plus the existing auth), all additive — nothing destructive to existing data. Unchanged by every round since: none of the three follow-up rounds after the original feature touched the server's schema or added a route file.
+- New client surface: a public gallery, author profiles, a cloud menu, version history (in the editor, and later from the gallery itself), a publish wizard, a full merge-request review UI, username onboarding/settings pages, and — most recently — every gallery project link opening as an overlay modal instead of a full page.
