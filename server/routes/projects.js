@@ -147,6 +147,18 @@ router.patch('/api/projects/:id', requireAuth, loadProject(true), async (req, re
 });
 
 router.delete('/api/projects/:id', requireAuth, loadProject(true), async (req, res) => {
+    // Deletion always proceeds -- it is never blocked by open merge requests (a project
+    // owner's right to delete their own data takes priority). But an MR still open or
+    // conflicted that references this project (as source or target) would otherwise be
+    // left permanently broken once its referenced commits are gone (computeMrDiff starts
+    // erroring forever), sitting silently in someone's incoming/outgoing list with no
+    // warning. Closing it here is a courtesy cleanup, not a safety gate -- it runs
+    // unconditionally and never prevents or delays the delete itself.
+    await query(
+        `UPDATE merge_requests SET status = 'closed', resolved_at = CURRENT_TIMESTAMP
+         WHERE (source_project_id = $1 OR target_project_id = $2) AND status IN ('open', 'conflicted')`,
+        [req.project.id, req.project.id]
+    );
     await query('DELETE FROM commits WHERE project_id = $1', [req.project.id]);
     await query('DELETE FROM projects WHERE id = $1', [req.project.id]);
     res.json({ success: true });
