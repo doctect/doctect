@@ -36,9 +36,9 @@ describe('GalleryPage', () => {
     it('default view renders the hero, tag chips and three sections', async () => {
         renderAt();
         expect(await screen.findByText(/discover planner & notebook templates/i)).toBeInTheDocument();
-        expect(await screen.findByText('Top rated')).toBeInTheDocument();
-        expect(screen.getByText('Popular')).toBeInTheDocument();
-        expect(screen.getByText('Recently updated')).toBeInTheDocument();
+        expect(await screen.findByRole('heading', { name: /top rated/i })).toBeInTheDocument();
+        expect(screen.getByRole('heading', { name: /popular/i })).toBeInTheDocument();
+        expect(screen.getByRole('heading', { name: /recently updated/i })).toBeInTheDocument();
         expect(await screen.findByRole('button', { name: /planner \(3\)/i })).toBeInTheDocument();
         await waitFor(() => {
             const sorts = (cloudApi.gallery as any).mock.calls.map((c: any[]) => c[0]?.sort);
@@ -53,7 +53,7 @@ describe('GalleryPage', () => {
     it('?tag= URL param opens the filtered grid directly', async () => {
         renderAt('/gallery?tag=planner');
         await waitFor(() => expect(cloudApi.gallery).toHaveBeenCalledWith(expect.objectContaining({ tag: 'planner' })));
-        expect(screen.queryByText('Top rated')).toBeNull();
+        expect(screen.queryByRole('heading', { name: /top rated/i })).toBeNull();
         expect(await screen.findByText('Alpha')).toBeInTheDocument();
         // dismissible active-tag chip
         expect(screen.getByRole('button', { name: /remove tag filter/i })).toBeInTheDocument();
@@ -61,15 +61,15 @@ describe('GalleryPage', () => {
 
     it('typing a search switches to grid mode with the q param', async () => {
         renderAt();
-        await screen.findByText('Top rated');
+        await screen.findByRole('heading', { name: /top rated/i });
         fireEvent.change(screen.getByPlaceholderText(/search planners/i), { target: { value: 'alp' } });
         await waitFor(() => expect(cloudApi.gallery).toHaveBeenCalledWith(expect.objectContaining({ q: 'alp' })), { timeout: 2000 });
-        expect(screen.queryByText('Top rated')).toBeNull();
+        expect(screen.queryByRole('heading', { name: /top rated/i })).toBeNull();
     });
 
     it('"See all" enters grid mode with that sort', async () => {
         renderAt();
-        await screen.findByText('Top rated');
+        await screen.findByRole('heading', { name: /top rated/i });
         fireEvent.click(screen.getAllByRole('button', { name: /see all/i })[0]);
         await waitFor(() => expect(cloudApi.gallery).toHaveBeenCalledWith(expect.objectContaining({ sort: 'rating', page: 0 })));
     });
@@ -78,7 +78,17 @@ describe('GalleryPage', () => {
         renderAt('/gallery?tag=planner');
         await screen.findByText('Alpha');
         fireEvent.click(screen.getByRole('button', { name: /all projects/i }));
-        expect(await screen.findByText('Top rated')).toBeInTheDocument();
+        expect(await screen.findByRole('heading', { name: /top rated/i })).toBeInTheDocument();
+    });
+
+    it('grid mode keeps the sort select with a Top rated option', async () => {
+        renderAt('/gallery?q=x');
+        await screen.findByText('Alpha');
+        const select = screen.getByRole('combobox');
+        expect(select).toBeInTheDocument();
+        expect(screen.getByRole('option', { name: /top rated/i })).toBeInTheDocument();
+        fireEvent.change(select, { target: { value: 'rating' } });
+        await waitFor(() => expect(cloudApi.gallery).toHaveBeenCalledWith(expect.objectContaining({ sort: 'rating' })));
     });
 
     it('shows an empty state with a clear-filters action when nothing matches', async () => {

@@ -113,8 +113,8 @@ export function GalleryPage() {
                         placeholder="Search planners and notebooks…"
                         className="w-full border rounded-lg pl-8 pr-3 py-1.5 text-sm" />
                 </div>
-                {sortParam && (
-                    <select value={sortParam} onChange={e => setParam('sort', e.target.value)}
+                {isFiltered && (
+                    <select value={sortParam || 'recent'} onChange={e => setParam('sort', e.target.value)}
                         className="border rounded-lg px-2 py-1.5 text-sm">
                         <option value="recent">Newest</option>
                         <option value="popular">Popular</option>

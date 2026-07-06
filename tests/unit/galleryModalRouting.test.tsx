@@ -49,13 +49,16 @@ describe('gallery card click opens an overlay modal; direct hits still get the f
         vi.restoreAllMocks();
         mockUseSession.mockReturnValue({ data: null });
         vi.spyOn(cloudApi, 'gallery').mockResolvedValue({ items: [item], page: 0, hasMore: false });
+        vi.spyOn(cloudApi, 'galleryTags').mockResolvedValue([]);
         vi.spyOn(cloudApi, 'galleryDetail').mockResolvedValue(detail);
         vi.spyOn(cloudApi, 'listIncomingMrs').mockResolvedValue([]);
     });
 
     it('clicking a card shows the modal without unmounting the grid behind it', async () => {
         render(<MemoryRouter initialEntries={['/gallery']}><TestAppRoutes /></MemoryRouter>);
-        const card = await screen.findByText('Cool Planner');
+        // Sections mode renders the item once per section (rating/popular/recent),
+        // so the same name can appear multiple times; any card works for this test.
+        const card = (await screen.findAllByText('Cool Planner'))[0];
         fireEvent.click(card);
         expect(await screen.findByRole('button', { name: /open in editor/i })).toBeInTheDocument();
         // The grid's own search input proves GalleryPage never unmounted underneath the modal.
