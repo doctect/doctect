@@ -38,11 +38,15 @@ export interface StorageUsage { usedBytes: number; quotaBytes: number; }
 export interface GalleryItem {
     id: string; name: string; description: string; tags: string[]; author: string;
     forkCount: number; downloadCount: number; updatedAt: string; thumbnailId: string | null;
+    ratingAvg: number | null; ratingCount: number;
 }
 export interface GalleryDetail extends Omit<GalleryItem, 'thumbnailId'> {
     ownerId: string; headCommitId: string | null; thumbnailIds: string[];
     forkedFrom: { projectId: string; name: string; author: string } | null;
 }
+
+export interface ReviewDto { id: string; rating: number; body: string; author: string; createdAt: string; updatedAt: string; }
+export interface GalleryTag { tag: string; count: number; }
 
 export interface MergeRequestDto {
     id: string; sourceProjectId: string; sourceProjectName: string; sourceCommitId: string;
@@ -95,11 +99,13 @@ export const cloudApi = {
     unpublish: (projectId: string) =>
         api<{ project: CloudProject }>(`/api/projects/${projectId}/unpublish`, { method: 'POST' }),
 
-    gallery: (params: { q?: string; sort?: 'recent' | 'popular'; page?: number } = {}) => {
+    gallery: (params: { q?: string; sort?: 'recent' | 'popular' | 'rating'; page?: number; tag?: string; limit?: number } = {}) => {
         const qs = new URLSearchParams();
         if (params.q) qs.set('q', params.q);
         if (params.sort) qs.set('sort', params.sort);
         if (params.page) qs.set('page', String(params.page));
+        if (params.tag) qs.set('tag', params.tag);
+        if (params.limit) qs.set('limit', String(params.limit));
         return api<{ items: GalleryItem[]; page: number; hasMore: boolean }>(`/api/gallery?${qs}`);
     },
     galleryDetail: async (id: string) =>
@@ -108,6 +114,17 @@ export const cloudApi = {
         api<{ name: string; state: any }>(`/api/gallery/${id}/state`),
     report: (id: string, reason: string) =>
         api<{ success: boolean }>(`/api/gallery/${id}/report`, { method: 'POST', body: JSON.stringify({ reason }) }),
+
+    galleryTags: async () =>
+        (await api<{ tags: GalleryTag[] }>('/api/gallery/tags')).tags,
+    listReviews: (projectId: string) =>
+        api<{ reviews: ReviewDto[]; myReview: ReviewDto | null }>(`/api/gallery/${projectId}/reviews`),
+    putReview: (projectId: string, args: { rating: number; body?: string }) =>
+        api<{ review: ReviewDto }>(`/api/gallery/${projectId}/review`, { method: 'PUT', body: JSON.stringify(args) }),
+    deleteReview: (projectId: string) =>
+        api<{ success: boolean }>(`/api/gallery/${projectId}/review`, { method: 'DELETE' }),
+    reportReview: (projectId: string, reviewId: string, reason: string) =>
+        api<{ success: boolean }>(`/api/gallery/${projectId}/reviews/${reviewId}/report`, { method: 'POST', body: JSON.stringify({ reason }) }),
 
     // Forks a public project into a new private project owned by the caller, seeded from
     // its head commit. Server endpoint implemented in Task 19 (Phase 4).

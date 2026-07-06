@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { cloudApi, ApiError } from '../../services/cloudApi';
 
 describe('cloudApi error handling', () => {
@@ -36,5 +36,57 @@ describe('cloudApi error handling', () => {
             expect(e).toBeInstanceOf(ApiError);
             expect((e as ApiError).code).toBeUndefined();
         }
+    });
+});
+
+describe('gallery v2 api methods', () => {
+    const okJson = (body: unknown) =>
+        Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(body) } as Response);
+    afterEach(() => vi.unstubAllGlobals());
+
+    it('gallery() serializes tag, limit and rating sort', async () => {
+        const fetchMock = vi.fn().mockReturnValue(okJson({ items: [], page: 0, hasMore: false }));
+        vi.stubGlobal('fetch', fetchMock);
+        await cloudApi.gallery({ q: 'x', sort: 'rating', tag: 'planner', limit: 8, page: 2 });
+        const url = fetchMock.mock.calls[0][0] as string;
+        expect(url).toContain('/api/gallery?');
+        expect(url).toContain('q=x');
+        expect(url).toContain('sort=rating');
+        expect(url).toContain('tag=planner');
+        expect(url).toContain('limit=8');
+        expect(url).toContain('page=2');
+    });
+
+    it('galleryTags() unwraps the tags array', async () => {
+        vi.stubGlobal('fetch', vi.fn().mockReturnValue(okJson({ tags: [{ tag: 'planner', count: 3 }] })));
+        const tags = await cloudApi.galleryTags();
+        expect(tags).toEqual([{ tag: 'planner', count: 3 }]);
+    });
+
+    it('listReviews() returns reviews and myReview', async () => {
+        vi.stubGlobal('fetch', vi.fn().mockReturnValue(okJson({ reviews: [], myReview: null })));
+        const res = await cloudApi.listReviews('p1');
+        expect(res).toEqual({ reviews: [], myReview: null });
+    });
+
+    it('putReview() PUTs to the review endpoint', async () => {
+        const fetchMock = vi.fn().mockReturnValue(okJson({ review: { id: 'r1' } }));
+        vi.stubGlobal('fetch', fetchMock);
+        await cloudApi.putReview('p1', { rating: 4, body: 'good' });
+        const [url, opts] = fetchMock.mock.calls[0];
+        expect(url).toContain('/api/gallery/p1/review');
+        expect(opts.method).toBe('PUT');
+        expect(JSON.parse(opts.body)).toEqual({ rating: 4, body: 'good' });
+    });
+
+    it('deleteReview() DELETEs; reportReview() POSTs to the nested route', async () => {
+        const fetchMock = vi.fn().mockReturnValue(okJson({ success: true }));
+        vi.stubGlobal('fetch', fetchMock);
+        await cloudApi.deleteReview('p1');
+        expect(fetchMock.mock.calls[0][1].method).toBe('DELETE');
+        await cloudApi.reportReview('p1', 'r9', 'spam');
+        const [url, opts] = fetchMock.mock.calls[1];
+        expect(url).toContain('/api/gallery/p1/reviews/r9/report');
+        expect(JSON.parse(opts.body)).toEqual({ reason: 'spam' });
     });
 });
