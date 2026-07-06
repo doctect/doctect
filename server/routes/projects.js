@@ -4,7 +4,7 @@ import { query } from '../db.js';
 import { requireAuth, optionalAuth, requireUsername } from '../middleware/guards.js';
 import { validateAppState } from '../validateAppState.js';
 import { encodeState, decodeStateRow } from '../stateCodec.js';
-import { assertStorageAllowance, assertProjectAllowance, assertPublishAllowance, sendLimitError, userWriteLimiter } from '../middleware/limits.js';
+import { assertStorageAllowance, assertProjectAllowance, assertPublishAllowance, sendLimitError, userWriteLimiter, userStorageQuotaBytes } from '../middleware/limits.js';
 
 const router = Router();
 
@@ -98,9 +98,19 @@ router.post('/api/projects', requireAuth, requireUsername, userWriteLimiter, asy
 });
 
 router.get('/api/projects', requireAuth, async (req, res) => {
+    // GROUP BY p.id is enough on both engines: Postgres allows selecting p.* when
+    // grouping by the primary key (functional dependency); SQLite allows it natively.
     const rows = await query(
-        `SELECT * FROM projects WHERE owner_id = $1 ORDER BY updated_at DESC`, [req.user.id]);
-    res.json({ projects: rows.map(projectDto) });
+        `SELECT p.*, COALESCE(SUM(c.state_bytes), 0) AS stored_bytes, COUNT(c.id) AS commit_count
+         FROM projects p LEFT JOIN commits c ON c.project_id = p.id
+         WHERE p.owner_id = $1
+         GROUP BY p.id
+         ORDER BY p.updated_at DESC`, [req.user.id]);
+    const usedBytes = rows.reduce((sum, r) => sum + Number(r.stored_bytes), 0);
+    res.json({
+        projects: rows.map(r => ({ ...projectDto(r), storedBytes: Number(r.stored_bytes), commitCount: Number(r.commit_count) })),
+        usage: { usedBytes, quotaBytes: userStorageQuotaBytes() }
+    });
 });
 
 // Loads project; enforces visibility. Sets req.project.
