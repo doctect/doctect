@@ -4,6 +4,7 @@ import { query } from '../db.js';
 import { requireAuth, optionalAuth, requireUsername } from '../middleware/guards.js';
 import { validateAppState } from '../validateAppState.js';
 import { encodeState, decodeStateRow } from '../stateCodec.js';
+import { assertStorageAllowance, assertProjectAllowance, assertPublishAllowance, sendLimitError } from '../middleware/limits.js';
 
 const router = Router();
 
@@ -77,12 +78,21 @@ router.post('/api/projects', requireAuth, requireUsername, async (req, res) => {
     const v = validateAppState(state);
     if (!v.ok) return res.status(400).json({ error: `invalid state: ${v.error}` });
 
+    const encoded = encodeState(state);
+    try {
+        await assertProjectAllowance(req.user.id);
+        await assertStorageAllowance(req.user.id, encoded.bytes);
+    } catch (e) {
+        if (sendLimitError(res, e)) return;
+        throw e;
+    }
+
     const projectId = randomUUID();
     await query(
         `INSERT INTO projects (id, owner_id, name) VALUES ($1, $2, $3)`,
         [projectId, req.user.id, n]
     );
-    const commitId = await insertCommit({ projectId, parentCommitId: null, message: cleanMessage(message ?? 'Initial save'), state, userId: req.user.id });
+    const commitId = await insertCommit({ projectId, parentCommitId: null, message: cleanMessage(message ?? 'Initial save'), state, userId: req.user.id, encoded });
     const row = await getProjectRow(projectId);
     res.status(201).json({ project: projectDto(row), commit: { id: commitId } });
 });
@@ -147,6 +157,13 @@ router.post('/api/projects/:id/commits', requireAuth, requireUsername, loadProje
         }
     }
 
+    try {
+        await assertStorageAllowance(req.user.id, encoded.bytes);
+    } catch (e) {
+        if (sendLimitError(res, e)) return;
+        throw e;
+    }
+
     const commitId = await insertCommit({
         projectId: req.project.id,
         parentCommitId: req.project.head_commit_id,
@@ -203,6 +220,14 @@ export const getThumbnailIds = async (projectId) => {
 };
 
 router.post('/api/projects/:id/publish', requireAuth, requireUsername, loadProject(true), async (req, res) => {
+    if (req.project.visibility !== 'public') {
+        try {
+            await assertPublishAllowance(req.user.id);
+        } catch (e) {
+            if (sendLimitError(res, e)) return;
+            throw e;
+        }
+    }
     const { description, tags, thumbnails } = req.body || {};
     if (!Array.isArray(thumbnails) || thumbnails.length < 1 || thumbnails.length > 4) {
         return res.status(400).json({ error: 'thumbnails must contain 1-4 images' });
@@ -238,6 +263,14 @@ router.post('/api/projects/:id/fork', requireAuth, requireUsername, loadProject(
     if (!src.head_commit_id) return res.status(400).json({ error: 'Source project has no content' });
     const headRows = await query('SELECT state_json, state_gzip, state_bytes FROM commits WHERE id = $1', [src.head_commit_id]);
     if (!headRows[0]) return res.status(404).json({ error: 'Source commit not found' });
+
+    try {
+        await assertProjectAllowance(req.user.id);
+        await assertStorageAllowance(req.user.id, Number(headRows[0].state_bytes ?? 0));
+    } catch (e) {
+        if (sendLimitError(res, e)) return;
+        throw e;
+    }
 
     const forkId = randomUUID();
     await query(
