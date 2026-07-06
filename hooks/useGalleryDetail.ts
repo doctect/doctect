@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { cloudApi, GalleryDetail, ApiError, MergeRequestDto } from '../services/cloudApi';
+import { cloudApi, GalleryDetail, ApiError, MergeRequestDto, ReviewDto } from '../services/cloudApi';
 import { stageImport } from '../services/importProject';
 import { downloadVariantsZip } from '../services/pdfService';
 import { useSession } from '../lib/auth-client';
@@ -20,6 +20,11 @@ export interface UseGalleryDetailResult {
     downloadAllVariants: () => Promise<void>;
     report: () => Promise<void>;
     onCloneHistoryVersion: (args: { state: any }) => void;
+    reviews: ReviewDto[];
+    myReview: ReviewDto | null;
+    saveReview: (args: { rating: number; body: string }) => Promise<void>;
+    deleteMyReview: () => Promise<void>;
+    reportReview: (reviewId: string) => Promise<void>;
 }
 
 export function useGalleryDetail(id: string | undefined): UseGalleryDetailResult {
@@ -100,9 +105,46 @@ export function useGalleryDetail(id: string | undefined): UseGalleryDetailResult
         navigate('/app');
     };
 
+    const [reviews, setReviews] = useState<ReviewDto[]>([]);
+    const [myReview, setMyReview] = useState<ReviewDto | null>(null);
+
+    const loadReviews = () => {
+        if (!id) return;
+        cloudApi.listReviews(id)
+            .then(r => { setReviews(r.reviews); setMyReview(r.myReview); })
+            .catch(() => {});
+    };
+    // session in deps: myReview is caller-specific, so a sign-in/out must refetch.
+    useEffect(loadReviews, [id, session?.user?.id]);
+
+    const refreshAfterReviewChange = () => {
+        loadReviews();
+        if (id) cloudApi.galleryDetail(id).then(setProject).catch(() => {});
+    };
+
+    const saveReview = async ({ rating, body }: { rating: number; body: string }) => {
+        if (!id) return;
+        await cloudApi.putReview(id, { rating, body }); // ApiError propagates to the form
+        refreshAfterReviewChange();
+    };
+
+    const deleteMyReview = async () => {
+        if (!id) return;
+        await cloudApi.deleteReview(id);
+        refreshAfterReviewChange();
+    };
+
+    const reportReview = async (reviewId: string) => {
+        const reason = window.prompt('Why are you reporting this review?');
+        if (!reason || !id) return;
+        try { await cloudApi.reportReview(id, reviewId, reason); window.alert('Thanks — the report was sent.'); }
+        catch { window.alert('Could not send report.'); }
+    };
+
     return {
         project, error, busy, mrs, isOwner, showHistory, setShowHistory,
         fromPath: location.pathname, session,
         openInEditor, fork, downloadAllVariants, report, onCloneHistoryVersion,
+        reviews, myReview, saveReview, deleteMyReview, reportReview,
     };
 }

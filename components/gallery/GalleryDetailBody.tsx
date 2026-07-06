@@ -1,16 +1,20 @@
 import React from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { GitFork, Download, Flag, ExternalLink, History } from 'lucide-react';
 import { API_BASE } from '../../services/cloudApi';
 import { HistoryModal } from '../cloud/HistoryModal';
 import { UseGalleryDetailResult } from '../../hooks/useGalleryDetail';
 import { GalleryLink } from './GalleryLink';
+import { StarRating } from './StarRating';
+import { ReviewsSection } from './ReviewsSection';
 
 export function GalleryDetailBody({ detail }: { detail: UseGalleryDetailResult }) {
+    const navigate = useNavigate();
     const {
         project, busy, mrs, isOwner, session, fromPath,
         openInEditor, fork, downloadAllVariants, report,
         showHistory, setShowHistory, onCloneHistoryVersion,
+        reviews, myReview, saveReview, deleteMyReview, reportReview,
     } = detail;
     if (!project) return null;
 
@@ -26,6 +30,7 @@ export function GalleryDetailBody({ detail }: { detail: UseGalleryDetailResult }
                 <div className="text-sm text-slate-500 mt-1">
                     by <Link to={`/u/${project.author}`} className="text-blue-600 hover:underline">{project.author}</Link>
                 </div>
+                <div className="mt-2"><StarRating value={project.ratingAvg} count={project.ratingCount} /></div>
                 {project.forkedFrom && (
                     <div className="text-xs text-slate-400 mt-1">
                         forked from <GalleryLink projectId={project.forkedFrom.projectId} className="text-blue-600 hover:underline">
@@ -34,7 +39,12 @@ export function GalleryDetailBody({ detail }: { detail: UseGalleryDetailResult }
                 )}
                 <p className="text-sm text-slate-600 mt-4 whitespace-pre-wrap">{project.description}</p>
                 <div className="flex flex-wrap gap-1 mt-3">
-                    {project.tags.map(t => <span key={t} className="text-[10px] bg-slate-200 text-slate-600 rounded-full px-2 py-0.5">{t}</span>)}
+                    {project.tags.map(t => (
+                        <button key={t} type="button" onClick={() => navigate(`/gallery?tag=${encodeURIComponent(t)}`)}
+                            className="text-[10px] bg-slate-200 text-slate-600 rounded-full px-2 py-0.5 hover:bg-blue-100 hover:text-blue-700 transition-colors">
+                            {t}
+                        </button>
+                    ))}
                 </div>
                 <div className="flex gap-4 mt-4 text-xs text-slate-500">
                     <span className="flex items-center gap-1"><GitFork size={12} /> {project.forkCount} forks</span>
@@ -80,6 +90,18 @@ export function GalleryDetailBody({ detail }: { detail: UseGalleryDetailResult }
                         </div>
                     </div>
                 )}
+                <ReviewsSection
+                    isOwner={isOwner}
+                    session={session}
+                    fromPath={fromPath}
+                    ratingAvg={project.ratingAvg}
+                    ratingCount={project.ratingCount}
+                    reviews={reviews}
+                    myReview={myReview}
+                    onSave={saveReview}
+                    onDelete={deleteMyReview}
+                    onReport={reportReview}
+                />
             </div>
             {showHistory && (
                 <HistoryModal

@@ -103,3 +103,66 @@ describe('GalleryDetailPage version history', () => {
         });
     });
 });
+
+describe('GalleryDetailPage reviews', () => {
+    const review = { id: 'r1', rating: 4, body: 'Great grid.', author: 'fan_one', createdAt: '2026-06-01T00:00:00.000Z', updatedAt: '2026-06-01T00:00:00.000Z' };
+
+    beforeEach(() => {
+        vi.restoreAllMocks();
+        vi.spyOn(cloudApi, 'galleryDetail').mockResolvedValue({ ...detail, ratingAvg: 4.0, ratingCount: 1 });
+        vi.spyOn(cloudApi, 'listIncomingMrs').mockResolvedValue([]);
+        vi.spyOn(cloudApi, 'listReviews').mockResolvedValue({ reviews: [review], myReview: null });
+    });
+
+    it('shows the rating summary and the review list', async () => {
+        mockUseSession.mockReturnValue({ data: null });
+        renderAt();
+        expect(await screen.findByText('Great grid.')).toBeInTheDocument();
+        expect(screen.getByText('fan_one')).toBeInTheDocument();
+        expect(screen.getAllByLabelText(/rated 4 out of 5/i).length).toBeGreaterThan(0);
+    });
+
+    it('signed out: shows "Sign in to review" and no star input', async () => {
+        mockUseSession.mockReturnValue({ data: null });
+        renderAt();
+        expect(await screen.findByText('Sign in to review')).toBeInTheDocument();
+        expect(screen.queryByRole('radiogroup', { name: 'Rating' })).toBeNull();
+    });
+
+    it('signed in without a username: shows the welcome link', async () => {
+        mockUseSession.mockReturnValue({ data: { user: { id: 'u9', username: null } } });
+        renderAt();
+        expect(await screen.findByText('Set a username to review')).toBeInTheDocument();
+    });
+
+    it('owner: sees reviews but no write box', async () => {
+        mockUseSession.mockReturnValue({ data: { user: { id: 'owner-1', username: 'the_owner' } } });
+        renderAt();
+        expect(await screen.findByText('Great grid.')).toBeInTheDocument();
+        expect(screen.queryByRole('radiogroup', { name: 'Rating' })).toBeNull();
+        expect(screen.queryByText('Sign in to review')).toBeNull();
+    });
+
+    it('signed in with a username: saves a review and refreshes', async () => {
+        mockUseSession.mockReturnValue({ data: { user: { id: 'u9', username: 'fan_two' } } });
+        const put = vi.spyOn(cloudApi, 'putReview').mockResolvedValue({ review: { ...review, id: 'r2', author: 'fan_two', rating: 5, body: 'Mine' } });
+        renderAt();
+        fireEvent.click(await screen.findByLabelText('5 stars'));
+        fireEvent.change(screen.getByPlaceholderText(/share what you think/i), { target: { value: 'Mine' } });
+        fireEvent.click(screen.getByRole('button', { name: /save review/i }));
+        await waitFor(() => expect(put).toHaveBeenCalledWith('proj-1', { rating: 5, body: 'Mine' }));
+        // refresh: listReviews called again after save
+        await waitFor(() => expect(cloudApi.listReviews).toHaveBeenCalledTimes(2));
+    });
+
+    it('editing: pre-fills my review and offers delete', async () => {
+        mockUseSession.mockReturnValue({ data: { user: { id: 'u9', username: 'fan_one' } } });
+        const mine = { ...review, author: 'fan_one' };
+        vi.spyOn(cloudApi, 'listReviews').mockResolvedValue({ reviews: [mine], myReview: mine });
+        const del = vi.spyOn(cloudApi, 'deleteReview').mockResolvedValue({ success: true });
+        renderAt();
+        expect(await screen.findByDisplayValue('Great grid.')).toBeInTheDocument();
+        fireEvent.click(screen.getByRole('button', { name: /delete review/i }));
+        await waitFor(() => expect(del).toHaveBeenCalledWith('proj-1'));
+    });
+});
