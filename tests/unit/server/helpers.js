@@ -30,6 +30,7 @@ export const initTestApp = async () => {
     process.env.TRUSTED_ORIGINS = 'http://localhost:3000,http://localhost:3001';
     process.env.CLIENT_URL = 'http://localhost:3000';
     delete process.env.ALLOWED_HOSTS;
+    process.env.DISABLE_AUTH_RATE_LIMIT = 'true';
     const { runMigrations } = await import('../../../server/migrations.js');
     await runMigrations();
     const { createApp } = await import('../../../server/app.js');

@@ -1,7 +1,8 @@
 import { Router } from 'express';
 import { randomUUID } from 'crypto';
 import { query } from '../db.js';
-import { optionalAuth, requireAdmin } from '../middleware/guards.js';
+import { optionalAuth, requireAdmin, requireAuth, requireUsername } from '../middleware/guards.js';
+import { userWriteLimiter } from '../middleware/limits.js';
 import { decodeStateRow } from '../stateCodec.js';
 
 const router = Router();
@@ -62,6 +63,16 @@ const loadPublicProject = async (req, res, next) => {
     next();
 };
 
+const reviewDto = (r) => ({
+    id: r.id, rating: r.rating, body: r.body || '', author: r.author,
+    createdAt: r.created_at, updatedAt: r.updated_at
+});
+
+const reviewSelect = `
+    SELECT r.id, r.rating, r.body, r.created_at, r.updated_at, u.username AS author
+    FROM reviews r JOIN "user" u ON u.id = r.user_id
+`;
+
 router.get('/api/gallery/:id', loadPublicProject, async (req, res) => {
     const p = req.publicProject;
     const thumbs = await query('SELECT id FROM thumbnails WHERE project_id = $1 ORDER BY position', [p.id]);
@@ -111,6 +122,55 @@ router.get('/api/admin/reports', requireAdmin, async (req, res) => {
 
 router.post('/api/admin/projects/:id/unpublish', requireAdmin, async (req, res) => {
     await query(`UPDATE projects SET visibility = 'private' WHERE id = $1`, [req.params.id]);
+    res.json({ success: true });
+});
+
+router.get('/api/gallery/:id/reviews', optionalAuth, loadPublicProject, async (req, res) => {
+    const rows = await query(
+        `${reviewSelect} WHERE r.project_id = $1 ORDER BY r.updated_at DESC LIMIT 100`,
+        [req.publicProject.id]);
+    let myReview = null;
+    if (req.user) {
+        const mine = await query(
+            `${reviewSelect} WHERE r.project_id = $1 AND r.user_id = $2`,
+            [req.publicProject.id, req.user.id]);
+        myReview = mine[0] ? reviewDto(mine[0]) : null;
+    }
+    res.json({ reviews: rows.map(reviewDto), myReview });
+});
+
+router.put('/api/gallery/:id/review', requireAuth, requireUsername, userWriteLimiter, loadPublicProject, async (req, res) => {
+    const p = req.publicProject;
+    if (p.owner_id === req.user.id) {
+        return res.status(403).json({ error: "You can't review your own project" });
+    }
+    const rating = req.body?.rating;
+    if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+        return res.status(400).json({ error: 'rating must be an integer from 1 to 5' });
+    }
+    const rawBody = req.body?.body ?? '';
+    if (typeof rawBody !== 'string') return res.status(400).json({ error: 'body must be a string' });
+    const body = rawBody.trim();
+    if (body.length > 2000) return res.status(400).json({ error: 'review must be 2000 characters or fewer' });
+
+    const now = new Date().toISOString();
+    await query(
+        `INSERT INTO reviews (id, project_id, user_id, rating, body, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         ON CONFLICT (project_id, user_id)
+         DO UPDATE SET rating = EXCLUDED.rating, body = EXCLUDED.body, updated_at = EXCLUDED.updated_at`,
+        [randomUUID(), p.id, req.user.id, rating, body, now, now]);
+    const rows = await query(
+        `${reviewSelect} WHERE r.project_id = $1 AND r.user_id = $2`, [p.id, req.user.id]);
+    res.json({ review: reviewDto(rows[0]) });
+});
+
+router.delete('/api/gallery/:id/review', requireAuth, loadPublicProject, async (req, res) => {
+    const rows = await query(
+        'SELECT id FROM reviews WHERE project_id = $1 AND user_id = $2',
+        [req.publicProject.id, req.user.id]);
+    if (!rows[0]) return res.status(404).json({ error: 'No review to delete' });
+    await query('DELETE FROM reviews WHERE id = $1', [rows[0].id]);
     res.json({ success: true });
 });
 
