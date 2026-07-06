@@ -1345,3 +1345,424 @@ Expected: clean build.
 git add .env.example docs/8-cloud-and-gallery.md
 git commit -m "docs: storage limits, env config, and Neon cost-control notes"
 ```
+
+---
+
+### Task 10: Global storage ceiling on merge (gap fix — added after Task 9 review)
+
+**Why this task exists:** this plan's Global Constraints originally stated "merge-created commits are still bounded by retention and the global ceiling," but Task 5 only wired `assertStorageAllowance` into `projects.js`'s four routes (create/commit/fork/publish), never into the merge endpoint. Task 9's documentation work correctly surfaced this as a real discrepancy: merge-created commits currently bypass **both** the per-user quota and the global ceiling, bounded only by per-project retention (50 commits) and the 5 MB per-commit hard cap. Confirmed by human decision: add a **global-ceiling-only** check to the merge endpoint — deliberately **not** the per-user quota (that exemption's original reasoning — never block an owner acting on content they already own — still holds for the per-user quota, but the global ceiling is a shared-cost kill-switch where "whose fault is the growth" doesn't matter).
+
+**Files:**
+- Modify: `server/middleware/limits.js` — extract `assertGlobalCeiling` out of `assertStorageAllowance` (so it can be called alone), export it.
+- Modify: `server/routes/mergeRequests.js` — call `assertGlobalCeiling` in the merge route, after validating the merged state, before `insertCommit`.
+- Test: `tests/unit/server/mergeGlobalCeiling.test.js`
+
+**Interfaces:**
+- Consumes: `LimitError`, `sendLimitError`, `globalCeilingBytes` (already in `server/middleware/limits.js`); `insertCommit`'s existing `encoded` param (Task 2); `encodeState` (Task 1).
+- Produces: `assertGlobalCeiling(incomingBytes) -> Promise<void>`, throwing the same `LimitError(507, 'SERVICE_STORAGE_FULL')` as before. `assertStorageAllowance(userId, incomingBytes)`'s own external behavior is unchanged (it now calls `assertGlobalCeiling` internally as its first check, then the per-user check) — every existing caller/test of `assertStorageAllowance` must keep passing unmodified.
+- Deliberately does **not** touch `assertProjectAllowance`, `assertPublishAllowance`, `assertStorageAllowance`'s per-user branch, `userWriteLimiter`, or `requireUsername` on the merge route — none of those apply to merging, only the global ceiling is being added.
+
+- [ ] **Step 1: Write the failing test**
+
+```js
+// tests/unit/server/mergeGlobalCeiling.test.js
+// @vitest-environment node
+import { describe, it, expect, beforeAll, afterEach } from 'vitest';
+import request from 'supertest';
+import { initTestApp, signUpUser, minimalState, PNG_1X1 } from './helpers.js';
+
+let app, ownerCookie, authorCookie;
+beforeAll(async () => {
+    app = await initTestApp();
+    ownerCookie = await signUpUser(app, { email: 'gceilowner@test.dev', username: 'gceil_owner' });
+    authorCookie = await signUpUser(app, { email: 'gceilauthor@test.dev', username: 'gceil_author' });
+});
+afterEach(() => {
+    delete process.env.MAX_TOTAL_STORAGE_MB;
+    delete process.env.USER_STORAGE_QUOTA_MB;
+});
+
+// Creates a fresh upstream (owned by ownerCookie) + fork with one real edit (by
+// authorCookie) + an open merge request proposing that edit back. Returns the MR id.
+// A fresh combo per test avoids depending on merge/test execution order.
+const makeOpenMr = async (seed) => {
+    const pub = await request(app).post('/api/projects').set('Cookie', ownerCookie)
+        .send({ name: `Upstream-${seed}`, state: minimalState(`base-${seed}`) });
+    const targetId = pub.body.project.id;
+    await request(app).post(`/api/projects/${targetId}/publish`).set('Cookie', ownerCookie)
+        .send({ description: '', tags: [], thumbnails: [PNG_1X1] });
+    const fork = await request(app).post(`/api/projects/${targetId}/fork`).set('Cookie', authorCookie);
+    const sourceId = fork.body.project.id;
+    await request(app).post(`/api/projects/${sourceId}/commits`).set('Cookie', authorCookie)
+        .send({ state: minimalState(`changed-${seed}`), message: 'edit' });
+    const mr = await request(app).post('/api/merge-requests').set('Cookie', authorCookie)
+        .send({ sourceProjectId: sourceId, title: `Propose-${seed}` });
+    return mr.body.mergeRequest.id;
+};
+
+describe('merge respects the global storage ceiling (but not the per-user quota)', () => {
+    it('rejects a merge that would exceed MAX_TOTAL_STORAGE_MB with 507', async () => {
+        const mrId = await makeOpenMr('ceiling-block');
+        process.env.MAX_TOTAL_STORAGE_MB = '0.0000001';
+        const res = await request(app).post(`/api/merge-requests/${mrId}/merge`).set('Cookie', ownerCookie);
+        expect(res.status).toBe(507);
+        expect(res.body.code).toBe('SERVICE_STORAGE_FULL');
+    });
+
+    it('allows the merge once comfortably under the ceiling', async () => {
+        const mrId = await makeOpenMr('ceiling-ok');
+        const res = await request(app).post(`/api/merge-requests/${mrId}/merge`).set('Cookie', ownerCookie);
+        expect(res.status).toBe(200);
+        expect(res.body.commit.id).toBeTruthy();
+    });
+
+    it('does NOT apply the per-user quota to merges — an owner already "over" their personal quota can still receive one', async () => {
+        const mrId = await makeOpenMr('quota-exempt');
+        process.env.USER_STORAGE_QUOTA_MB = '0.0000001';
+        const res = await request(app).post(`/api/merge-requests/${mrId}/merge`).set('Cookie', ownerCookie);
+        expect(res.status).toBe(200);
+    });
+});
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `npx vitest run tests/unit/server/mergeGlobalCeiling.test.js`
+Expected: FAIL — first test gets 200 instead of 507 (merge endpoint doesn't check the ceiling yet).
+
+- [ ] **Step 3: Extract `assertGlobalCeiling` in `server/middleware/limits.js`**
+
+Replace the existing `assertStorageAllowance` function with:
+
+```js
+export const assertGlobalCeiling = async (incomingBytes) => {
+    const total = await query('SELECT COALESCE(SUM(state_bytes), 0) AS used FROM commits');
+    if (Number(total[0].used) + incomingBytes > globalCeilingBytes()) {
+        throw new LimitError(507, 'SERVICE_STORAGE_FULL',
+            'Cloud storage is temporarily full. Please try again later.');
+    }
+};
+
+export const assertStorageAllowance = async (userId, incomingBytes) => {
+    // Global ceiling first: a hard cost kill-switch that holds even if per-user
+    // accounting is ever wrong. Checked on every content write.
+    await assertGlobalCeiling(incomingBytes);
+    if (await getUserStoredBytes(userId) + incomingBytes > userStorageQuotaBytes()) {
+        throw new LimitError(413, 'STORAGE_QUOTA_EXCEEDED',
+            'Storage quota exceeded. Delete old projects from the My Projects page to free up space.');
+    }
+};
+```
+
+This is a pure refactor of the existing function — `assertStorageAllowance`'s external behavior (signature, thrown errors, order of checks) is identical to before; every existing test in `tests/unit/server/storageLimits.test.js` must keep passing unmodified.
+
+- [ ] **Step 4: Wire into the merge route in `server/routes/mergeRequests.js`**
+
+Add to the imports at the top:
+
+```js
+import { assertGlobalCeiling, sendLimitError } from '../middleware/limits.js';
+import { encodeState } from '../stateCodec.js';
+```
+
+In the `POST /api/merge-requests/:id/merge` handler, after the existing `validateAppState` check and before the `insertCommit` call, insert:
+
+```js
+    const encoded = encodeState(merged);
+    try {
+        await assertGlobalCeiling(encoded.bytes);
+    } catch (e) {
+        if (sendLimitError(res, e)) return;
+        throw e;
+    }
+```
+
+Then update the `insertCommit` call immediately below it to reuse the already-computed encoding (avoiding a redundant second gzip, same optimization as Task 3's dedupe check):
+
+```js
+    const commitId = await insertCommit({
+        projectId: target.id,
+        parentCommitId: target.head_commit_id,
+        message: `Merge: ${mr.title} (from @${users[0]?.username ?? 'unknown'})`,
+        state: merged,
+        userId: req.user.id,
+        encoded
+    });
+```
+
+- [ ] **Step 5: Run the new test, then the full suite**
+
+Run: `npx vitest run tests/unit/server/mergeGlobalCeiling.test.js`
+Expected: PASS (3 tests)
+
+Run: `npx vitest run`
+Expected: ALL PASS — in particular, every test in `tests/unit/server/storageLimits.test.js` and `tests/unit/server/mergeRequests.test.js` must be unaffected, since `assertStorageAllowance`'s contract didn't change and the merge route's existing behavior (ownership check, conflict check, validation) is untouched.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add server/middleware/limits.js server/routes/mergeRequests.js tests/unit/server/mergeGlobalCeiling.test.js
+git commit -m "feat: enforce global storage ceiling on merge (not per-user quota)"
+```
+
+- [ ] **Step 7: Update the doc section this gap was found in**
+
+In `docs/8-cloud-and-gallery.md`'s "Storage limits and cost control" section (added in Task 9), update the "Deliberate exclusions" bullet about merging — it currently says merging performs "no quota or global-ceiling check." Change it to say merging performs no *per-user quota* check (still true, and still exempt for the same ownership reasoning) but **does** enforce the global ceiling as of this task. Also update the `.env.example`/table wording only if it referenced this exemption specifically (the six-row table itself doesn't need to change — the ceiling row's meaning is unaffected, it now simply also applies on one more code path).
+
+Run: `npx vitest run` once more after the doc edit (should still be ALL PASS — no code changed in this step).
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add docs/8-cloud-and-gallery.md
+git commit -m "docs: merge endpoint now enforces the global storage ceiling"
+```
+
+---
+
+### Task 11: Close open merge requests when their project is deleted (final-review gap fix)
+
+**Why this task exists:** the final whole-branch review found that `DELETE /api/projects/:id` (a pre-existing endpoint, newly given a prominent UI in Task 8) has no awareness of open merge requests. Deleting a project that's the source or target of an open MR leaves that MR permanently broken — `computeMrDiff` starts erroring forever once a referenced commit is gone — with no warning at delete time. Worse, `assertProjectAllowance`'s own error message (`server/middleware/limits.js`) directs users to this exact delete flow to free up space. Human decision: **deletion always takes priority and is never blocked** by open merge requests — but as a courtesy cleanup, any merge request still `open` or `conflicted` that references the deleted project (as either source or target) should be closed at delete time, so it stops appearing as a live, silently-broken entry in anyone's incoming/outgoing MR list.
+
+**Files:**
+- Modify: `server/routes/projects.js` — `DELETE /api/projects/:id`
+- Test: `tests/unit/server/deleteProjectClosesMrs.test.js`
+
+**Interfaces:**
+- Consumes: existing `merge_requests` table (`source_project_id`, `target_project_id`, `status`, `resolved_at` columns from migration `006_merge_requests`).
+- Produces: no new exports. `DELETE /api/projects/:id`'s response shape (`{ success: true }`) and status codes are unchanged — this is a side-effect added inside the existing handler, not a new endpoint.
+
+- [ ] **Step 1: Write the failing test**
+
+```js
+// tests/unit/server/deleteProjectClosesMrs.test.js
+// @vitest-environment node
+import { describe, it, expect, beforeAll } from 'vitest';
+import request from 'supertest';
+import { initTestApp, signUpUser, minimalState, PNG_1X1 } from './helpers.js';
+
+let app, query, ownerCookie, authorCookie;
+beforeAll(async () => {
+    app = await initTestApp();
+    ({ query } = await import('../../../server/db.js'));
+    ownerCookie = await signUpUser(app, { email: 'delmr-owner@test.dev', username: 'delmr_owner' });
+    authorCookie = await signUpUser(app, { email: 'delmr-author@test.dev', username: 'delmr_author' });
+});
+
+// Builds a fresh upstream (owned by ownerCookie) + fork with one edit (by authorCookie)
+// + an open merge request proposing that edit back. Returns all three ids so a test can
+// delete either side. A fresh combo per test avoids cross-test ordering dependencies.
+const makeOpenMr = async () => {
+    const pub = await request(app).post('/api/projects').set('Cookie', ownerCookie)
+        .send({ name: 'Upstream', state: minimalState('base') });
+    const targetId = pub.body.project.id;
+    await request(app).post(`/api/projects/${targetId}/publish`).set('Cookie', ownerCookie)
+        .send({ description: '', tags: [], thumbnails: [PNG_1X1] });
+    const fork = await request(app).post(`/api/projects/${targetId}/fork`).set('Cookie', authorCookie);
+    const sourceId = fork.body.project.id;
+    await request(app).post(`/api/projects/${sourceId}/commits`).set('Cookie', authorCookie)
+        .send({ state: minimalState('changed'), message: 'edit' });
+    const mr = await request(app).post('/api/merge-requests').set('Cookie', authorCookie)
+        .send({ sourceProjectId: sourceId, title: 'Propose' });
+    return { mrId: mr.body.mergeRequest.id, targetId, sourceId };
+};
+
+describe('deleting a project closes any open MRs referencing it', () => {
+    it('closes an open MR when its SOURCE (fork) project is deleted', async () => {
+        const { mrId, sourceId } = await makeOpenMr();
+        const del = await request(app).delete(`/api/projects/${sourceId}`).set('Cookie', authorCookie);
+        expect(del.status).toBe(200);
+        const rows = await query('SELECT status FROM merge_requests WHERE id = $1', [mrId]);
+        expect(rows[0].status).toBe('closed');
+    });
+
+    it('closes an open MR when its TARGET (upstream) project is deleted', async () => {
+        const { mrId, targetId } = await makeOpenMr();
+        const del = await request(app).delete(`/api/projects/${targetId}`).set('Cookie', ownerCookie);
+        expect(del.status).toBe(200);
+        const rows = await query('SELECT status FROM merge_requests WHERE id = $1', [mrId]);
+        expect(rows[0].status).toBe('closed');
+    });
+
+    it('deletion still succeeds even though it closes MRs -- never blocked', async () => {
+        const { targetId } = await makeOpenMr();
+        const del = await request(app).delete(`/api/projects/${targetId}`).set('Cookie', ownerCookie);
+        expect(del.status).toBe(200);
+        expect(del.body.success).toBe(true);
+        const getRes = await request(app).get(`/api/projects/${targetId}`).set('Cookie', ownerCookie);
+        expect(getRes.status).toBe(404);
+    });
+
+    it('does not re-touch an already-closed MR\'s resolved_at when its project is later deleted', async () => {
+        const { mrId, targetId } = await makeOpenMr();
+        await request(app).post(`/api/merge-requests/${mrId}/close`).set('Cookie', ownerCookie);
+        const before = await query('SELECT resolved_at FROM merge_requests WHERE id = $1', [mrId]);
+        const resolvedAtBefore = before[0].resolved_at;
+        await request(app).delete(`/api/projects/${targetId}`).set('Cookie', ownerCookie);
+        const after = await query('SELECT status, resolved_at FROM merge_requests WHERE id = $1', [mrId]);
+        expect(after[0].status).toBe('closed');
+        expect(after[0].resolved_at).toBe(resolvedAtBefore);
+    });
+});
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `npx vitest run tests/unit/server/deleteProjectClosesMrs.test.js`
+Expected: FAIL — first two tests see `status` still `'open'` (or `'conflicted'`) after deletion, since nothing closes it yet.
+
+- [ ] **Step 3: Update `DELETE /api/projects/:id` in `server/routes/projects.js`**
+
+```js
+router.delete('/api/projects/:id', requireAuth, loadProject(true), async (req, res) => {
+    // Deletion always proceeds -- it is never blocked by open merge requests (a project
+    // owner's right to delete their own data takes priority). But an MR still open or
+    // conflicted that references this project (as source or target) would otherwise be
+    // left permanently broken once its referenced commits are gone (computeMrDiff starts
+    // erroring forever), sitting silently in someone's incoming/outgoing list with no
+    // warning. Closing it here is a courtesy cleanup, not a safety gate -- it runs
+    // unconditionally and never prevents or delays the delete itself.
+    await query(
+        `UPDATE merge_requests SET status = 'closed', resolved_at = CURRENT_TIMESTAMP
+         WHERE (source_project_id = $1 OR target_project_id = $2) AND status IN ('open', 'conflicted')`,
+        [req.project.id, req.project.id]
+    );
+    await query('DELETE FROM commits WHERE project_id = $1', [req.project.id]);
+    await query('DELETE FROM projects WHERE id = $1', [req.project.id]);
+    res.json({ success: true });
+});
+```
+
+Note `$1`/`$2` both bind `req.project.id` as two separate params (`[req.project.id, req.project.id]`) — per this codebase's placeholder rule (`server/db.js:26`, "each number exactly once, params in order"), never reuse a placeholder number for two occurrences of the same value; this is the same pattern already used in `pruneCommits` (Task 4).
+
+- [ ] **Step 4: Run the new test, then the full suite**
+
+Run: `npx vitest run tests/unit/server/deleteProjectClosesMrs.test.js`
+Expected: PASS (4 tests)
+
+Run: `npx vitest run`
+Expected: ALL PASS — in particular, `tests/unit/server/mergeRequests.test.js` and `tests/unit/server/fork.test.js` (which also delete/interact with projects) must be unaffected.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add server/routes/projects.js tests/unit/server/deleteProjectClosesMrs.test.js
+git commit -m "fix: close open merge requests when a project they reference is deleted"
+```
+
+---
+
+### Task 12: Rate limiter doesn't penalize rejected writes + disclose known limitations (final-review gap fix)
+
+**Why this task exists:** the final whole-branch review found that `userWriteLimiter` (Task 6) counts every content-creating request against the hourly budget — including ones the handler itself goes on to reject with a 4xx/5xx (e.g. `PROJECT_LIMIT_REACHED`, `STORAGE_QUOTA_EXCEEDED`). This directly undercuts the recovery path the rest of this feature is built around: a user who hits a cap, follows the error message's own advice (e.g. deletes a project via the My Projects page), and retries within the same hour can find themselves additionally `RATE_LIMITED` by the earlier rejected attempts. `express-rate-limit`'s `skipFailedRequests` option (confirmed by reading the installed package source, `node_modules/express-rate-limit/dist/index.cjs`) decrements the counter for any request whose final response status is `>= 400`, via `requestWasSuccessful: (_, response) => response.statusCode < 400` — exactly the fix needed, with no other behavior change. Also folded into this task: disclosing two related findings from the final review (the non-atomic check-then-act race across all four `limits.js` assertions, and the in-memory rate-limiter store's single-instance assumption) in `docs/8-cloud-and-gallery.md`'s existing "Known Limitations / Follow-ups" section, matching the disclosure style already used there for the merge endpoint's own check-then-write race. Human decision: fix the rate-limiter penalty now (cheap, safe); disclose the other two rather than fix them now (fixing the check-then-act race would require adding transaction support to `server/db.js` itself — confirmed today to have none at all across its Postgres/SQLite backends — which is a foundational change out of proportion to this plan).
+
+**Files:**
+- Modify: `server/middleware/limits.js` — `userWriteLimiter`
+- Modify: `docs/8-cloud-and-gallery.md` — "Known Limitations / Follow-ups" section
+- Test: `tests/unit/server/rateLimitSkipsFailed.test.js`
+
+**Interfaces:**
+- Consumes: `userWriteLimiter` (Task 6, unchanged signature/export).
+- Produces: no new exports. `userWriteLimiter`'s behavior changes only in that rejected (`>= 400`) requests no longer count toward `USER_COMMITS_PER_HOUR`.
+
+- [ ] **Step 1: Write the failing test**
+
+```js
+// tests/unit/server/rateLimitSkipsFailed.test.js
+// @vitest-environment node
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import request from 'supertest';
+import { initTestApp, signUpUser, minimalState } from './helpers.js';
+
+let app, cookie;
+beforeAll(async () => {
+    process.env.USER_COMMITS_PER_HOUR = '2';
+    process.env.MAX_PROJECTS_PER_USER = '1';
+    app = await initTestApp();
+    cookie = await signUpUser(app, { email: 'skipfail@test.dev', username: 'skipfail_u' });
+});
+afterAll(() => {
+    delete process.env.USER_COMMITS_PER_HOUR;
+    delete process.env.MAX_PROJECTS_PER_USER;
+});
+
+describe('rate limiter does not count rejected (>=400) writes against the hourly budget', () => {
+    it('lets a legitimate write through after several rejected ones that would have exhausted a naive budget', async () => {
+        const first = await request(app).post('/api/projects').set('Cookie', cookie)
+            .send({ name: 'Only', state: minimalState('only') });
+        expect(first.status).toBe(201);
+
+        // Cap is 1 and we're already at 1, so all 5 of these fail with 403
+        // PROJECT_LIMIT_REACHED. None should consume the USER_COMMITS_PER_HOUR=2 budget.
+        for (let i = 0; i < 5; i++) {
+            const rejected = await request(app).post('/api/projects').set('Cookie', cookie)
+                .send({ name: `Rejected${i}`, state: minimalState(`r${i}`) });
+            expect(rejected.status).toBe(403);
+        }
+
+        // A genuinely allowed write (a commit on the one project we're allowed) still
+        // succeeds. If the 5 rejections above had each counted, this would 429 first --
+        // the create (1) + 5 rejections would already be 6 hits against a budget of 2.
+        const commit = await request(app).post(`/api/projects/${first.body.project.id}/commits`)
+            .set('Cookie', cookie).send({ state: minimalState('changed'), message: 'edit' });
+        expect(commit.status).toBe(201);
+    });
+});
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `npx vitest run tests/unit/server/rateLimitSkipsFailed.test.js`
+Expected: FAIL — final commit gets 429 instead of 201 (the 5 rejected attempts currently still consume budget).
+
+- [ ] **Step 3: Add `skipFailedRequests: true` to `userWriteLimiter`**
+
+In `server/middleware/limits.js`:
+
+```js
+export const userWriteLimiter = rateLimit({
+    windowMs: 60 * 60 * 1000,
+    max: () => envNum('USER_COMMITS_PER_HOUR', 60),
+    keyGenerator: (req) => req.user.id,
+    standardHeaders: true,
+    legacyHeaders: false,
+    skipFailedRequests: true,
+    message: { error: 'Too many saves in the last hour. Please slow down and try again later.', code: 'RATE_LIMITED' }
+});
+```
+
+- [ ] **Step 4: Run the new test, then the full suite**
+
+Run: `npx vitest run tests/unit/server/rateLimitSkipsFailed.test.js`
+Expected: PASS
+
+Run: `npx vitest run`
+Expected: ALL PASS — in particular `tests/unit/server/userRateLimit.test.js` (Task 6's own test, which only exercises successful requests) must be unaffected, since `skipFailedRequests` changes nothing about how successful requests are counted.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add server/middleware/limits.js tests/unit/server/rateLimitSkipsFailed.test.js
+git commit -m "fix: don't count rejected writes against the per-user hourly rate limit"
+```
+
+- [ ] **Step 6: Disclose the two deferred findings in `docs/8-cloud-and-gallery.md`**
+
+In the "Known Limitations / Follow-ups" section, change the intro line from "Three disclosed, unresolved findings" to "Five disclosed, unresolved findings", and add two new bullets after the existing merge-endpoint-race bullet:
+
+```markdown
+  - **No transaction or optimistic lock around the storage-limit checks in `server/middleware/limits.js`** (flagged during the storage-limits feature's final whole-branch review): `assertGlobalCeiling`, `assertStorageAllowance`'s per-user branch, `assertProjectAllowance`, and `assertPublishAllowance` each read a `SUM`/`COUNT`, compare it to a threshold, and return — the actual insert happens as a separate, later statement, with nothing holding a lock in between. Several concurrent requests from the same user (parallel tabs, or a client issuing overlapping requests) could all read the same pre-insert total, all pass the check, and all insert — jointly exceeding a cap that any one of them, checked alone, would have correctly blocked. The blast radius is bounded on every axis that matters: each individual commit is still capped at 5 MB by `validateAppState` regardless of this race, and the per-user `userWriteLimiter` caps the number of requests in the exposure window to `USER_COMMITS_PER_HOUR` (default 60) — so the worst case for the storage quota specifically is on the order of 60 × 5 MB in a single hour before the next request's check would see the (by-then-updated) total and correctly reject, and the limit self-resets every hour regardless. This is the same class of finding as the merge-endpoint race just above, and is left unresolved for the same reason: the fix requires transactional locking (`SELECT ... FOR UPDATE` or equivalent), and this codebase's `query()` abstraction (`server/db.js`) has no transaction support at all today across its Postgres/SQLite backends — adding it is a foundational change larger than either feature that has surfaced this need. A minimal mitigation, if pursued later: a maintained running-total column (updated atomically alongside insert/prune/delete) rather than a live `SUM` would close most of the window without requiring full transactions.
+  - **The per-user write rate limiter's counter store is in-process memory, not shared** (flagged during the same review): `server/middleware/limits.js`'s `userWriteLimiter` uses `express-rate-limit`'s default in-memory store. This is fine for the byte-quota/cost-control goal this whole feature exists for — that accounting is entirely DB-backed via `SUM(state_bytes)`, correct regardless of how many server instances are running — but the separate per-user abuse-defense goal this specific limiter exists for ("IP limits die behind NAT/shared networks; a per-user limiter doesn't") only holds running a single server instance. If this app is ever deployed horizontally scaled behind a load balancer, each instance enforces its own independent `USER_COMMITS_PER_HOUR` budget, effectively multiplying the real limit by the instance count. A fix, if pursued: point `userWriteLimiter` at a shared store (e.g. a Postgres-backed counter table) instead of the default in-memory one.
+```
+
+- [ ] **Step 7: Run the full suite once more after the doc edit**
+
+Run: `npx vitest run`
+Expected: ALL PASS (no code changed in this step).
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add docs/8-cloud-and-gallery.md
+git commit -m "docs: disclose non-atomic limit checks and single-instance rate limiter"
+```
