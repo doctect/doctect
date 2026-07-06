@@ -84,5 +84,6 @@ export const userWriteLimiter = rateLimit({
     keyGenerator: (req) => req.user.id,
     standardHeaders: true,
     legacyHeaders: false,
+    skipFailedRequests: true,
     message: { error: 'Too many saves in the last hour. Please slow down and try again later.', code: 'RATE_LIMITED' }
 });
