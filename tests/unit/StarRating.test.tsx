@@ -32,4 +32,34 @@ describe('StarRatingInput', () => {
         fireEvent.click(screen.getByLabelText('4 stars'));
         expect(onChange).toHaveBeenCalledWith(4);
     });
+
+    it('uses a roving tabindex: only the selected star is tabbable', () => {
+        render(<StarRatingInput value={3} onChange={vi.fn()} />);
+        const radios = screen.getAllByRole('radio');
+        radios.forEach((radio, i) => {
+            expect(radio).toHaveAttribute('tabindex', i === 2 ? '0' : '-1');
+        });
+    });
+
+    it('makes the first star tabbable when nothing is selected', () => {
+        render(<StarRatingInput value={0} onChange={vi.fn()} />);
+        const radios = screen.getAllByRole('radio');
+        radios.forEach((radio, i) => {
+            expect(radio).toHaveAttribute('tabindex', i === 0 ? '0' : '-1');
+        });
+    });
+
+    it('ArrowRight increments the rating', () => {
+        const onChange = vi.fn();
+        render(<StarRatingInput value={2} onChange={onChange} />);
+        fireEvent.keyDown(screen.getByRole('radiogroup'), { key: 'ArrowRight' });
+        expect(onChange).toHaveBeenCalledWith(3);
+    });
+
+    it('ArrowLeft at the minimum keeps the rating at 1', () => {
+        const onChange = vi.fn();
+        render(<StarRatingInput value={1} onChange={onChange} />);
+        fireEvent.keyDown(screen.getByRole('radiogroup'), { key: 'ArrowLeft' });
+        expect(onChange).toHaveBeenCalledWith(1);
+    });
 });
