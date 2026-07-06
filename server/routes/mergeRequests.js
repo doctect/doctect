@@ -5,13 +5,14 @@ import { requireAuth, requireUsername } from '../middleware/guards.js';
 import { getProjectRow, loadProject, insertCommit } from './projects.js';
 import { threeWayDiff, applyChangeSet } from '../../shared/diff.js';
 import { validateAppState } from '../validateAppState.js';
+import { decodeStateRow } from '../stateCodec.js';
 
 const router = Router();
 
 const getCommitState = async (commitId) => {
-    const rows = await query('SELECT state_json, schema_version FROM commits WHERE id = $1', [commitId]);
+    const rows = await query('SELECT state_json, state_gzip, schema_version FROM commits WHERE id = $1', [commitId]);
     if (!rows[0]) return null;
-    return { state: JSON.parse(rows[0].state_json), schemaVersion: rows[0].schema_version };
+    return { state: decodeStateRow(rows[0]), schemaVersion: rows[0].schema_version };
 };
 
 const mrDto = async (row) => {

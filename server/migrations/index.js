@@ -176,5 +176,20 @@ export const migrations = [
             CREATE INDEX IF NOT EXISTS idx_mr_author ON merge_requests(created_by)
         `
         // sqlite: same DDL works on better-sqlite3 (TIMESTAMP degrades to NUMERIC affinity) — no override needed.
+    },
+    {
+        id: '007_commit_storage',
+        pg: `
+            ALTER TABLE commits ADD COLUMN IF NOT EXISTS state_gzip BYTEA;
+            ALTER TABLE commits ADD COLUMN IF NOT EXISTS state_bytes INTEGER;
+            ALTER TABLE commits ADD COLUMN IF NOT EXISTS state_hash TEXT;
+            UPDATE commits SET state_bytes = OCTET_LENGTH(state_json) WHERE state_bytes IS NULL
+        `,
+        sqlite: `
+            ALTER TABLE commits ADD COLUMN state_gzip BLOB;
+            ALTER TABLE commits ADD COLUMN state_bytes INTEGER;
+            ALTER TABLE commits ADD COLUMN state_hash TEXT;
+            UPDATE commits SET state_bytes = LENGTH(CAST(state_json AS BLOB)) WHERE state_bytes IS NULL
+        `
     }
 ];

@@ -3,6 +3,7 @@ import { randomUUID } from 'crypto';
 import { query } from '../db.js';
 import { requireAuth, optionalAuth, requireUsername } from '../middleware/guards.js';
 import { validateAppState } from '../validateAppState.js';
+import { encodeState, decodeStateRow } from '../stateCodec.js';
 
 const router = Router();
 
@@ -27,8 +28,9 @@ const projectDto = (row) => ({
     updatedAt: row.updated_at
 });
 
-export const insertCommit = async ({ projectId, parentCommitId, message, state, userId }) => {
+export const insertCommit = async ({ projectId, parentCommitId, message, state, userId, encoded }) => {
     const id = randomUUID();
+    const enc = encoded ?? encodeState(state);
     // Explicit millisecond-precision timestamp rather than relying on the DB's
     // CURRENT_TIMESTAMP default: SQLite's default only has whole-second resolution,
     // so two commits created within the same second (routine in tests, and possible
@@ -36,9 +38,9 @@ export const insertCommit = async ({ projectId, parentCommitId, message, state, 
     // random commit UUID — breaking the "newest first" ordering guarantee below.
     const createdAt = new Date().toISOString();
     await query(
-        `INSERT INTO commits (id, project_id, parent_commit_id, message, state_json, schema_version, created_by, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-        [id, projectId, parentCommitId ?? null, message, JSON.stringify(state), state.schemaVersion ?? null, userId, createdAt]
+        `INSERT INTO commits (id, project_id, parent_commit_id, message, state_json, state_gzip, state_bytes, state_hash, schema_version, created_by, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+        [id, projectId, parentCommitId ?? null, message, '', enc.gzip, enc.bytes, enc.hash, state.schemaVersion ?? null, userId, createdAt]
     );
     await query(`UPDATE projects SET head_commit_id = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`, [id, projectId]);
     return id;
@@ -137,10 +139,10 @@ router.get('/api/projects/:id/commits', optionalAuth, loadProject(false), async 
 });
 
 router.get('/api/projects/:id/commits/:commitId', optionalAuth, loadProject(false), async (req, res) => {
-    const rows = await query('SELECT id, message, created_at, state_json FROM commits WHERE id = $1 AND project_id = $2',
+    const rows = await query('SELECT id, message, created_at, state_json, state_gzip FROM commits WHERE id = $1 AND project_id = $2',
         [req.params.commitId, req.project.id]);
     if (!rows[0]) return res.status(404).json({ error: 'Commit not found' });
-    res.json({ commit: { id: rows[0].id, message: rows[0].message, createdAt: rows[0].created_at, state: JSON.parse(rows[0].state_json) } });
+    res.json({ commit: { id: rows[0].id, message: rows[0].message, createdAt: rows[0].created_at, state: decodeStateRow(rows[0]) } });
 });
 
 const MAX_THUMB_BYTES = 300 * 1024;
@@ -201,7 +203,7 @@ router.post('/api/projects/:id/unpublish', requireAuth, loadProject(true), async
 router.post('/api/projects/:id/fork', requireAuth, requireUsername, loadProject(false), async (req, res) => {
     const src = req.project;
     if (!src.head_commit_id) return res.status(400).json({ error: 'Source project has no content' });
-    const headRows = await query('SELECT state_json FROM commits WHERE id = $1', [src.head_commit_id]);
+    const headRows = await query('SELECT state_json, state_gzip, state_bytes FROM commits WHERE id = $1', [src.head_commit_id]);
     if (!headRows[0]) return res.status(404).json({ error: 'Source commit not found' });
 
     const forkId = randomUUID();
@@ -214,7 +216,7 @@ router.post('/api/projects/:id/fork', requireAuth, requireUsername, loadProject(
         projectId: forkId,
         parentCommitId: null,
         message: `Fork of "${src.name}"`,
-        state: JSON.parse(headRows[0].state_json),
+        state: decodeStateRow(headRows[0]),
         userId: req.user.id
     });
     await query('UPDATE projects SET fork_count = fork_count + 1 WHERE id = $1', [src.id]);

@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { randomUUID } from 'crypto';
 import { query } from '../db.js';
 import { optionalAuth, requireAdmin } from '../middleware/guards.js';
+import { decodeStateRow } from '../stateCodec.js';
 
 const router = Router();
 
@@ -87,10 +88,10 @@ router.get('/api/gallery/:id', loadPublicProject, async (req, res) => {
 router.get('/api/gallery/:id/state', loadPublicProject, async (req, res) => {
     const p = req.publicProject;
     if (!p.head_commit_id) return res.status(404).json({ error: 'Project has no content' });
-    const rows = await query('SELECT state_json FROM commits WHERE id = $1', [p.head_commit_id]);
+    const rows = await query('SELECT state_json, state_gzip FROM commits WHERE id = $1', [p.head_commit_id]);
     if (!rows[0]) return res.status(404).json({ error: 'Commit not found' });
     await query('UPDATE projects SET download_count = download_count + 1 WHERE id = $1', [p.id]);
-    res.json({ name: p.name, state: JSON.parse(rows[0].state_json) });
+    res.json({ name: p.name, state: decodeStateRow(rows[0]) });
 });
 
 router.post('/api/gallery/:id/report', optionalAuth, loadPublicProject, async (req, res) => {
