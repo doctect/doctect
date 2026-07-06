@@ -66,9 +66,13 @@ router.get('/api/gallery', async (req, res) => {
     if (tag) {
         // Tags are stored as a JSON array string; matching the JSON-quoted encoding of the
         // tag ("tag", incl. escaping) makes this an exact-element match — 'plan' cannot
-        // match 'planner' because the closing quote must follow.
-        params.push(`%${JSON.stringify(tag)}%`);
-        where += ` AND p.tags LIKE $${params.length}`;
+        // match 'planner' because the closing quote must follow. The JSON-quoted tag can
+        // itself contain LIKE wildcard characters (% or _), which must be escaped so a
+        // tag like "a%b" can't wildcard-match unrelated tags — escape backslashes first,
+        // then wildcards, and tell the DB the escape character is backslash.
+        const quoted = JSON.stringify(tag).replace(/\\/g, '\\\\').replace(/[%_]/g, m => '\\' + m);
+        params.push(`%${quoted}%`);
+        where += ` AND p.tags LIKE $${params.length} ESCAPE '\\'`;
     }
     const rows = await query(
         `SELECT ${cardFields}
@@ -211,6 +215,7 @@ router.put('/api/gallery/:id/review', requireAuth, requireUsername, userWriteLim
         [randomUUID(), p.id, req.user.id, rating, body, now, now]);
     const rows = await query(
         `${reviewSelect} WHERE r.project_id = $1 AND r.user_id = $2`, [p.id, req.user.id]);
+    if (!rows[0]) return res.status(409).json({ error: 'Review was removed concurrently, try again' });
     res.json({ review: reviewDto(rows[0]) });
 });
 

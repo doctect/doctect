@@ -18,6 +18,10 @@ beforeAll(async () => {
     ids.a = await make('gfilters alpha', ['gf-plan', 'gf-weekly']);
     ids.b = await make('gfilters beta', ['gf-planner']);
     ids.c = await make('gfilters gamma', ['gf-plan']);
+    // Named without the 'gfilters' prefix so they don't perturb the q=gfilters pagination
+    // counts in the 'limit param' tests below.
+    ids.d = await make('gf wildcard delta', ['gf-x%y']);
+    ids.e = await make('gf wildcard epsilon', ['gf-xa', 'gf-zy']);
 });
 
 describe('tag filtering', () => {
@@ -37,6 +41,23 @@ describe('tag filtering', () => {
     it('q matches tag text too', async () => {
         const res = await request(app).get('/api/gallery?q=gf-weekly');
         expect(res.body.items.map(i => i.id)).toContain(ids.a);
+    });
+
+    it('treats % in a tag literally, not as a wildcard', async () => {
+        const res = await request(app).get('/api/gallery?tag=gf-x%25y');
+        const found = res.body.items.map(i => i.id);
+        expect(found).toEqual([ids.d]);
+        // Without escaping, the wildcard pattern %"gf-x%y"% would also cross-match the
+        // JSON encoding of ids.e's tags (["gf-xa","gf-zy"]) since '%' matches any chars
+        // between "gf-x and y".
+        expect(found).not.toContain(ids.e);
+    });
+
+    it('still exact-matches a tag that would falsely match under wildcard leakage', async () => {
+        const res = await request(app).get('/api/gallery?tag=gf-xa');
+        const found = res.body.items.map(i => i.id);
+        expect(found).toEqual([ids.e]);
+        expect(found).not.toContain(ids.d);
     });
 });
 
