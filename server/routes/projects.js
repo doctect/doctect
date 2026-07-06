@@ -115,12 +115,24 @@ router.post('/api/projects/:id/commits', requireAuth, requireUsername, loadProje
     const { state, message } = req.body || {};
     const v = validateAppState(state);
     if (!v.ok) return res.status(400).json({ error: `invalid state: ${v.error}` });
+    const encoded = encodeState(state);
+
+    // Dedupe: content identical to the current head is a no-op, not a new commit.
+    // Legacy heads (pre-migration, state_hash NULL) never match and just commit normally.
+    if (req.project.head_commit_id) {
+        const head = await query('SELECT id, message, created_at, state_hash FROM commits WHERE id = $1', [req.project.head_commit_id]);
+        if (head[0] && head[0].state_hash === encoded.hash) {
+            return res.json({ commit: { id: head[0].id, message: head[0].message, createdAt: head[0].created_at }, deduped: true });
+        }
+    }
+
     const commitId = await insertCommit({
         projectId: req.project.id,
         parentCommitId: req.project.head_commit_id,
         message: cleanMessage(message),
         state,
-        userId: req.user.id
+        userId: req.user.id,
+        encoded
     });
     const rows = await query('SELECT id, message, created_at FROM commits WHERE id = $1', [commitId]);
     res.status(201).json({ commit: { id: rows[0].id, message: rows[0].message, createdAt: rows[0].created_at } });
