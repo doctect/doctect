@@ -38,6 +38,7 @@ ALTER TABLE reports ADD COLUMN review_id TEXT;
 - `created_at`/`updated_at` are **app-stamped millisecond-precision timestamps** (same lesson as Task 8's commit-ordering bug — SQLite `CURRENT_TIMESTAMP` is whole-second).
 - No denormalized average columns on `projects`. Averages are computed with SQL aggregates at read time; gallery scale doesn't justify counter-maintenance bugs. (Precedent: `fork_count`/`download_count` are counters, but they're increment-only; a rating average changes on every edit/delete and is genuinely easier to keep correct as an aggregate.)
 - `reports.review_id` nullable; existing project reports have it NULL. A report row now targets a project (`project_id` set, as today) or a review (`review_id` set; `project_id` still set to the review's project so admin listing keeps its project context).
+- **Partial-failure safety:** the migration runner (`server/migrations.js`) is not transactional — it splits on `;` and executes statements one at a time, so a mid-migration failure leaves earlier statements applied without recording the migration id, and a rerun re-executes all of them. `CREATE TABLE IF NOT EXISTS`/`CREATE INDEX IF NOT EXISTS` tolerate re-execution; `ALTER TABLE ADD COLUMN` does not in SQLite (no `IF NOT EXISTS` support). Therefore the `ALTER` must be the migration's **last** statement, and the Postgres variant uses `ADD COLUMN IF NOT EXISTS` (supported there).
 
 ### 2. Server — `server/routes/gallery.js` (all changes in this one file)
 
