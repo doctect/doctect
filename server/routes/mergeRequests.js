@@ -5,7 +5,8 @@ import { requireAuth, requireUsername } from '../middleware/guards.js';
 import { getProjectRow, loadProject, insertCommit } from './projects.js';
 import { threeWayDiff, applyChangeSet } from '../../shared/diff.js';
 import { validateAppState } from '../validateAppState.js';
-import { decodeStateRow } from '../stateCodec.js';
+import { decodeStateRow, encodeState } from '../stateCodec.js';
+import { assertGlobalCeiling, sendLimitError } from '../middleware/limits.js';
 
 const router = Router();
 
@@ -171,6 +172,14 @@ router.post('/api/merge-requests/:id/merge', requireAuth, loadMrForParticipant, 
     const v = validateAppState(merged);
     if (!v.ok) return res.status(409).json({ error: `Merged state failed validation: ${v.error}` });
 
+    const encoded = encodeState(merged);
+    try {
+        await assertGlobalCeiling(encoded.bytes);
+    } catch (e) {
+        if (sendLimitError(res, e)) return;
+        throw e;
+    }
+
     const users = await query('SELECT username FROM "user" WHERE id = $1', [mr.created_by]);
     const target = await getProjectRow(mr.target_project_id);
     const commitId = await insertCommit({
@@ -178,7 +187,8 @@ router.post('/api/merge-requests/:id/merge', requireAuth, loadMrForParticipant, 
         parentCommitId: target.head_commit_id,
         message: `Merge: ${mr.title} (from @${users[0]?.username ?? 'unknown'})`,
         state: merged,
-        userId: req.user.id
+        userId: req.user.id,
+        encoded
     });
     await query(
         `UPDATE merge_requests SET status = 'merged', resolved_by = $1, resolved_at = CURRENT_TIMESTAMP WHERE id = $2`,

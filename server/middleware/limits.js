@@ -41,14 +41,18 @@ export const getUserStoredBytes = async (userId) => {
     return Number(rows[0].used);
 };
 
-export const assertStorageAllowance = async (userId, incomingBytes) => {
-    // Global ceiling first: a hard cost kill-switch that holds even if per-user
-    // accounting is ever wrong. Checked on every content write.
+export const assertGlobalCeiling = async (incomingBytes) => {
     const total = await query('SELECT COALESCE(SUM(state_bytes), 0) AS used FROM commits');
     if (Number(total[0].used) + incomingBytes > globalCeilingBytes()) {
         throw new LimitError(507, 'SERVICE_STORAGE_FULL',
             'Cloud storage is temporarily full. Please try again later.');
     }
+};
+
+export const assertStorageAllowance = async (userId, incomingBytes) => {
+    // Global ceiling first: a hard cost kill-switch that holds even if per-user
+    // accounting is ever wrong. Checked on every content write.
+    await assertGlobalCeiling(incomingBytes);
     if (await getUserStoredBytes(userId) + incomingBytes > userStorageQuotaBytes()) {
         throw new LimitError(413, 'STORAGE_QUOTA_EXCEEDED',
             'Storage quota exceeded. Delete old projects from the My Projects page to free up space.');
