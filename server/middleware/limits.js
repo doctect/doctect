@@ -2,6 +2,7 @@
 // Storage/abuse limits. All env values are read at call time (never cached at module
 // load) so they are tunable per-deploy and overridable per-test-file. Fractional MB
 // values are intentionally allowed — tests use tiny quotas to trip limits cheaply.
+import rateLimit from 'express-rate-limit';
 import { query } from '../db.js';
 
 const envNum = (name, dflt) => {
@@ -69,3 +70,15 @@ export const assertPublishAllowance = async (userId) => {
             `Published project limit reached (max ${maxPublicProjectsPerUser()}). Unpublish one to publish another.`);
     }
 };
+
+// Per-USER write throttle for content-creating routes. Must run AFTER requireAuth
+// (it keys on req.user.id). One shared instance across projects/commits/fork so the
+// budget is a total, not per-route. `max` is a function so tests can tune it via env.
+export const userWriteLimiter = rateLimit({
+    windowMs: 60 * 60 * 1000,
+    max: () => envNum('USER_COMMITS_PER_HOUR', 60),
+    keyGenerator: (req) => req.user.id,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many saves in the last hour. Please slow down and try again later.', code: 'RATE_LIMITED' }
+});
