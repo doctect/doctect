@@ -32,6 +32,8 @@ export interface CloudProject {
     downloadCount: number; forkCount: number; createdAt: string; updatedAt: string;
 }
 export interface CommitMeta { id: string; parentCommitId: string | null; message: string; schemaVersion: number | null; createdBy: string | null; createdAt: string; }
+export interface MyProject extends CloudProject { storedBytes: number; commitCount: number; }
+export interface StorageUsage { usedBytes: number; quotaBytes: number; }
 
 export interface GalleryItem {
     id: string; name: string; description: string; tags: string[]; author: string;
@@ -71,6 +73,12 @@ export const cloudApi = {
 
     getProject: async (projectId: string) =>
         (await api<{ project: CloudProject }>(`/api/projects/${projectId}`)).project,
+
+    listProjects: () =>
+        api<{ projects: MyProject[]; usage: StorageUsage }>('/api/projects'),
+
+    deleteProject: (projectId: string) =>
+        api<{ success: boolean }>(`/api/projects/${projectId}`, { method: 'DELETE' }),
 
     saveCommit: (projectId: string, args: { state: AppState; message: string }) =>
         api<{ commit: { id: string; message: string; createdAt: string } }>(`/api/projects/${projectId}/commits`, { method: 'POST', body: JSON.stringify(args) }),

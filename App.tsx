@@ -13,6 +13,7 @@ import { ProfilePage } from './pages/ProfilePage';
 import { MergeRequestPage } from './pages/MergeRequestPage';
 import { WelcomePage } from './pages/WelcomePage';
 import { AccountSettingsPage } from './pages/AccountSettingsPage';
+import { MyProjectsPage } from './pages/MyProjectsPage';
 import { trackEvent } from './services/analytics';
 import { useSession } from './lib/auth-client';
 import { Navigate } from 'react-router-dom';
@@ -62,6 +63,14 @@ function AppRoutes() {
           element={
             <AuthGuard>
               <AccountSettingsPage />
+            </AuthGuard>
+          }
+        />
+        <Route
+          path="/projects"
+          element={
+            <AuthGuard>
+              <MyProjectsPage />
             </AuthGuard>
           }
         />
