@@ -101,7 +101,8 @@ export function GalleryPage() {
     const galleryEmpty = sections !== null && SECTIONS.every(s => sections[s.key].length === 0);
 
     return (
-        <div className="min-h-screen bg-slate-50">
+        // h-screen + overflow-y-auto: index.html sets body{overflow:hidden}, so each page owns its scrolling
+        <div className="h-screen overflow-y-auto bg-slate-50">
             <header className="h-14 bg-white border-b flex items-center px-6 gap-4 sticky top-0 z-10">
                 <Link to="/" className="flex items-center gap-2 font-bold text-slate-800">
                     <div className="w-7 h-7 bg-blue-600 rounded-lg flex items-center justify-center text-white"><Square size={16} fill="currentColor" /></div>
