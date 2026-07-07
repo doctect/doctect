@@ -43,7 +43,7 @@ export function MyProjectsPage() {
     const pct = usage ? Math.min(100, Math.round((usage.usedBytes / usage.quotaBytes) * 100)) : 0;
 
     return (
-        <div className="min-h-screen bg-slate-50">
+        <div className="h-screen overflow-y-auto bg-slate-50">
             <header className="h-14 bg-white border-b flex items-center px-6 gap-4">
                 <Link to="/gallery" className="flex items-center gap-1 text-sm text-slate-600 hover:text-blue-600"><ArrowLeft size={14} /> Gallery</Link>
             </header>
