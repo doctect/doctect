@@ -6,6 +6,7 @@ import clsx from 'clsx';
 import { CanvasElement } from './canvas/CanvasElement';
 import { OverlayTextEditor } from './canvas/OverlayTextEditor';
 import { SelectionHandles } from './canvas/SelectionHandles';
+import { resolveActiveLayerId, nextZIndexInLayer } from '../services/layers';
 
 interface CanvasProps {
     template: PageTemplate;
@@ -22,6 +23,7 @@ interface CanvasProps {
     onZoom: (newScale: number) => void;
     onInteractionStart: () => void;
     onSwitchToSelect?: () => void;
+    activeLayerId?: string;
 }
 
 const MIN_DRAG_THRESHOLD = 5;
@@ -183,7 +185,8 @@ export const Canvas: React.FC<CanvasProps> = ({
     onSelectElements,
     onZoom,
     onInteractionStart,
-    onSwitchToSelect
+    onSwitchToSelect,
+    activeLayerId
 }) => {
     const containerRef = useRef<HTMLDivElement>(null);
     const outerContainerRef = useRef<HTMLDivElement>(null);
@@ -1206,7 +1209,7 @@ export const Canvas: React.FC<CanvasProps> = ({
             if (w < MIN_DRAG_THRESHOLD && h < MIN_DRAG_THRESHOLD) {
                 if (tool === 'text') {
                     onInteractionStart();
-                    const maxZ = elements.reduce((max, el) => Math.max(max, el.zIndex || 0), 0);
+                    const layerId = resolveActiveLayerId(template, activeLayerId);
                     const fontSize = parseInt(localStorage.getItem('doctect_last_fontSize') || '16');
                     const newEl: TemplateElement = {
                         id: Math.random().toString(36).substr(2, 9),
@@ -1222,7 +1225,8 @@ export const Canvas: React.FC<CanvasProps> = ({
                         strokeWidth: 0,
                         borderStyle: 'solid',
                         opacity: 1,
-                        zIndex: maxZ + 1,
+                        zIndex: nextZIndexInLayer(elements, layerId),
+                        layerId,
                         text: '',
                         autoWidth: true,
                         fontSize: parseInt(localStorage.getItem('doctect_last_fontSize') || '16'),
@@ -1245,7 +1249,7 @@ export const Canvas: React.FC<CanvasProps> = ({
             // Save history before creating new element
             onInteractionStart();
 
-            const maxZ = elements.reduce((max, el) => Math.max(max, el.zIndex || 0), 0);
+            const layerId = resolveActiveLayerId(template, activeLayerId);
             let cellW = w;
             let cellH = h;
             let gridConfig = undefined;
@@ -1289,7 +1293,8 @@ export const Canvas: React.FC<CanvasProps> = ({
                 strokeWidth: tool === 'text' ? 0 : 1,
                 borderStyle: 'solid',
                 opacity: 1,
-                zIndex: maxZ + 1,
+                zIndex: nextZIndexInLayer(elements, layerId),
+                layerId,
                 text: tool === 'text' ? '' : undefined,
                 fontSize: parseInt(localStorage.getItem('doctect_last_fontSize') || '16'),
                 fontFamily: localStorage.getItem('doctect_last_fontFamily') || 'helvetica',
