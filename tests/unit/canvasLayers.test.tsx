@@ -30,3 +30,23 @@ describe('element creation assigns the active layer', () => {
         expect(updated[0].layerId).toBe('front');
     });
 });
+
+describe('canvas render order and hidden-layer exclusion', () => {
+    it('renders (layer.order asc, zIndex asc) and omits elements on hidden layers', () => {
+        const layers = [
+            makeLayer('back', 0),
+            makeLayer('front', 1),
+            makeLayer('hidden', 2, { visible: false }),
+        ];
+        const elements = [
+            makeEl('f1', { layerId: 'front', zIndex: 1 }),
+            makeEl('b9', { layerId: 'back', zIndex: 9 }),
+            makeEl('h1', { layerId: 'hidden', zIndex: 1 }),
+            makeEl('b2', { layerId: 'back', zIndex: 2 }),
+        ];
+        const { container } = renderCanvas(elements, layers);
+        const ids = Array.from(container.querySelectorAll('[data-element-id]'))
+            .map(n => n.getAttribute('data-element-id'));
+        expect(ids).toEqual(['b2', 'b9', 'f1']); // no h1; back layer before front
+    });
+});

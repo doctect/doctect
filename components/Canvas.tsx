@@ -6,7 +6,7 @@ import clsx from 'clsx';
 import { CanvasElement } from './canvas/CanvasElement';
 import { OverlayTextEditor } from './canvas/OverlayTextEditor';
 import { SelectionHandles } from './canvas/SelectionHandles';
-import { resolveActiveLayerId, nextZIndexInLayer } from '../services/layers';
+import { resolveActiveLayerId, nextZIndexInLayer, sortElementsForRender } from '../services/layers';
 
 interface CanvasProps {
     template: PageTemplate;
@@ -1431,7 +1431,7 @@ export const Canvas: React.FC<CanvasProps> = ({
                                     zIndex: 0
                                 }}></div>
                         )}
-                        {elements.sort((a, b) => (a.zIndex || 0) - (b.zIndex || 0)).map(el => (
+                        {sortElementsForRender(elements, template.layers).map(el => (
                             <CanvasElement
                                 key={el.id}
                                 element={el}
