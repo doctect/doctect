@@ -42,6 +42,16 @@ export const validateAppState = (state) => {
                 return fail(`template ${vid}/${tid} has invalid dimensions`);
             }
             if (!Array.isArray(tpl.elements)) return fail(`template ${vid}/${tid} elements must be an array`);
+            // Layers (v8+): light, optional checks — legacy/un-migrated states must still validate
+            if (tpl.layers !== undefined) {
+                if (!Array.isArray(tpl.layers)) return fail(`template ${vid}/${tid} layers must be an array`);
+                if (tpl.layers.length > 200) return fail(`template ${vid}/${tid} has too many layers (max 200)`);
+            }
+            for (const el of tpl.elements) {
+                if (el && typeof el === 'object' && el.layerId !== undefined && !isStr(el.layerId)) {
+                    return fail(`template ${vid}/${tid} has an element with a non-string layerId`);
+                }
+            }
             totalElements += tpl.elements.length;
         }
     }
