@@ -39,4 +39,29 @@ describe('validateAppState', () => {
         s.nodes.root.data.big = 'x'.repeat(5 * 1024 * 1024);
         expect(validateAppState(s).ok).toBe(false);
     });
+    it('accepts pre-migration states with no layers/layerId (legacy)', () => {
+        expect(validateAppState(goodState()).ok).toBe(true);
+    });
+    it('accepts templates with a valid layers array and string layerIds', () => {
+        const s = goodState();
+        const tpl = s.variants.default.templates.page;
+        tpl.layers = [{ id: 'l1', name: 'Layer 1', order: 0, visible: true, locked: false }];
+        tpl.elements = [{ id: 'e1', layerId: 'l1' }];
+        expect(validateAppState(s).ok).toBe(true);
+    });
+    it('rejects non-array layers', () => {
+        const s = goodState();
+        s.variants.default.templates.page.layers = { nope: true };
+        expect(validateAppState(s).ok).toBe(false);
+    });
+    it('rejects more than 200 layers per template', () => {
+        const s = goodState();
+        s.variants.default.templates.page.layers = Array.from({ length: 201 }, (_, i) => ({ id: `l${i}` }));
+        expect(validateAppState(s).ok).toBe(false);
+    });
+    it('rejects a non-string layerId on an element', () => {
+        const s = goodState();
+        s.variants.default.templates.page.elements = [{ id: 'e1', layerId: 42 }];
+        expect(validateAppState(s).ok).toBe(false);
+    });
 });

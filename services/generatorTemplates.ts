@@ -1,4 +1,5 @@
 import { PageTemplate, Variant } from '../types';
+import { ensureTemplateLayers } from './layers';
 
 // Auto-generates element ids missing from a hand-written generator template, mutating in place
 // (matches the generator's existing tolerance for scripts that omit per-element ids).
@@ -17,7 +18,7 @@ function normalizeFlatTemplates(raw: Record<string, any>): Record<string, PageTe
     const normalized: Record<string, PageTemplate> = {};
     Object.values(raw || {}).forEach((tpl: any) => {
         if (!tpl || !tpl.id) return;
-        normalized[tpl.id] = autoIdElements(tpl);
+        normalized[tpl.id] = ensureTemplateLayers(autoIdElements(tpl));
     });
     return normalized;
 }

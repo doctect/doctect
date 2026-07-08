@@ -5,6 +5,7 @@ import { svg2pdf } from "svg2pdf.js";
 import JSZip from "jszip";
 import { AppState, AppNode, PageTemplate, TemplateElement, RM_PP_WIDTH, RM_PP_HEIGHT, TraversalStep } from "../types";
 import { FONTS } from "../constants/editor";
+import { sortElementsForRender } from "./layers";
 
 const DEBUG_PDF = false; // Set to true to see debug visuals
 
@@ -850,7 +851,9 @@ export const generatePDF = async (state: AppState, options: GeneratePDFOptions =
         // Determine current page height for coordinate flipping
         const pageHeight = template.height;
 
-        const sortedElements = [...template.elements].sort((a, b) => (a.zIndex || 0) - (b.zIndex || 0));
+        // Two-level stacking (layer.order asc, zIndex asc) + hidden-layer exclusion.
+        // Thumbnails (services/thumbnailService.ts) render via generatePDF, so they inherit this.
+        const sortedElements = sortElementsForRender(template.elements, template.layers);
 
         for (const el of sortedElements) {
             // --- LINK VALIDATION (Pre-check) ---

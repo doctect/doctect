@@ -3,6 +3,7 @@ import { AppState, AppNode, TemplateElement, PageTemplate, Variant, RM_PP_WIDTH,
 import { Sidebar } from './Sidebar';
 import { Canvas } from './Canvas';
 import { PropertiesPanel } from './PropertiesPanel';
+import { LayersPanel } from './LayersPanel';
 import { JsonModal } from './JsonModal';
 import { NodeSelectorModal } from './NodeSelectorModal';
 import { DeleteConfirmModal } from './DeleteConfirmModal';
@@ -17,6 +18,7 @@ import { NewVariantModal, NewVariantConfig } from './NewVariantModal';
 import { reflowTemplates } from '../services/reflow';
 import clsx from 'clsx';
 import { trackEvent } from '../services/analytics';
+import { resolveActiveLayerId, nextZIndexInLayer, createDefaultLayer } from '../services/layers';
 
 interface HistoryState {
     past: { nodes: Record<string, AppNode>, variants: Record<string, Variant> }[];
@@ -452,13 +454,17 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, initial
             const original = template.elements.find(e => e.id === id);
             if (original) {
                 const newId = Math.random().toString(36).substr(2, 9);
+                const layerId = (original.layerId && template.layers?.some(l => l.id === original.layerId))
+                    ? original.layerId
+                    : resolveActiveLayerId(template, state.activeLayerId);
                 newIds.push(newId);
                 newElements.push({
                     ...JSON.parse(JSON.stringify(original)),
                     id: newId,
                     x: original.x + 20,
                     y: original.y + 20,
-                    zIndex: (Math.max(...template.elements.map(e => e.zIndex || 0), 0)) + 1
+                    layerId,
+                    zIndex: nextZIndexInLayer([...template.elements, ...newElements], layerId)
                 });
             }
         });
@@ -479,13 +485,17 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, initial
 
         state.clipboard.forEach(item => {
             const newId = Math.random().toString(36).substr(2, 9);
+            const layerId = (item.layerId && template.layers?.some(l => l.id === item.layerId))
+                ? item.layerId
+                : resolveActiveLayerId(template, state.activeLayerId);
             newIds.push(newId);
             newElements.push({
                 ...JSON.parse(JSON.stringify(item)),
                 id: newId,
                 x: item.x + offset,
                 y: item.y + offset,
-                zIndex: (Math.max(...template.elements.map(e => e.zIndex || 0), 0)) + 1
+                layerId,
+                zIndex: nextZIndexInLayer([...template.elements, ...newElements], layerId)
             });
         });
 
@@ -638,7 +648,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, initial
     const handleAddTemplate = () => {
         saveToHistory();
         const newId = `tpl_${Math.random().toString(36).substr(2, 6)}`;
-        const newTemplate: PageTemplate = { id: newId, name: 'New Template', width: RM_PP_WIDTH, height: RM_PP_HEIGHT, elements: [] };
+        const newTemplate: PageTemplate = { id: newId, name: 'New Template', width: RM_PP_WIDTH, height: RM_PP_HEIGHT, elements: [], layers: [createDefaultLayer()] };
         setState(prev => {
             const activeVariant = prev.variants[prev.activeVariantId];
             const updatedVariant = { ...activeVariant, templates: { ...activeVariant.templates, [newId]: newTemplate } };
@@ -739,7 +749,9 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, initial
                 const tplId = prev.selectedTemplateId;
                 const tpl = activeVariant.templates[tplId];
                 if (!tpl) return prev;
-                const updatedTemplate = { ...tpl, elements: [...tpl.elements, newElement] };
+                const layerId = resolveActiveLayerId(tpl, prev.activeLayerId);
+                const placedElement = { ...newElement, layerId, zIndex: nextZIndexInLayer(tpl.elements, layerId) };
+                const updatedTemplate = { ...tpl, elements: [...tpl.elements, placedElement] };
                 const updatedVariant = { ...activeVariant, templates: { ...activeVariant.templates, [tplId]: updatedTemplate } };
                 return {
                     ...prev,
@@ -1188,6 +1200,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, initial
                             currentNodeId={effectivePreviewNodeId}
                             snapToGrid={state.snapToGrid}
                             showGrid={state.showGrid}
+                            activeLayerId={state.activeLayerId}
                             onInteractionStart={saveToHistory}
                             onUpdateElements={(els, save) => handleUpdateTemplateElements(els, save)}
                             onSelectElements={(ids) => setState(s => ({ ...s, selectedElementIds: ids }))}
@@ -1202,6 +1215,17 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, initial
                         className="absolute left-0 top-0 bottom-0 w-1 hover:bg-blue-400 cursor-col-resize z-30 transition-colors"
                         onMouseDown={() => setResizingPanel('properties')}
                     />
+                    {state.showLayersPanel && currentTemplate && (
+                        <LayersPanel
+                            template={currentTemplate}
+                            selectedElementIds={state.selectedElementIds}
+                            activeLayerId={state.activeLayerId}
+                            onUpdateTemplate={(updates) => handleUpdateTemplate(currentTemplate.id, updates)}
+                            onUpdateElements={(els, save) => handleUpdateTemplateElements(els, save)}
+                            onSelectElements={(ids) => setState(s => ({ ...s, selectedElementIds: ids }))}
+                            onSetActiveLayer={(layerId) => setState(s => ({ ...s, activeLayerId: layerId }))}
+                        />
+                    )}
                     <PropertiesPanel
                         state={state}
                         onUpdateElements={(els, save) => handleUpdateTemplateElements(els, save)}

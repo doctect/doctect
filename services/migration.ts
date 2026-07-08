@@ -12,11 +12,12 @@
  */
 
 import { AppState } from '../types';
+import { ensureTemplateLayers } from './layers';
 
 /**
  * Current schema version. Increment this when making breaking changes.
  */
-export const CURRENT_SCHEMA_VERSION = 7;
+export const CURRENT_SCHEMA_VERSION = 8;
 
 /**
  * Migration v0 → v1
@@ -130,6 +131,11 @@ export function migrateState(state: any): AppState {
     if (version < 7) {
         migratedState = migrateV6ToV7(migratedState);
         version = 7;
+    }
+
+    if (version < 8) {
+        migratedState = migrateV7ToV8(migratedState);
+        version = 8;
     }
 
     console.log(`[Migration] Migration complete. Now at v${CURRENT_SCHEMA_VERSION}`);
@@ -268,6 +274,43 @@ function migrateV6ToV7(state: any): any {
     }
 
     migrated.schemaVersion = 7;
+    return migrated;
+}
+
+/**
+ * Migration v7 → v8
+ *
+ * Changes:
+ * - Adds the named-layer system (Shape B): `PageTemplate.layers: Layer[]` plus a
+ *   `layerId` tag on every `TemplateElement`. Elements stay in a flat array.
+ * - Every template (across all variants AND the legacy flat `templates` structure)
+ *   gets a single default layer { name: "Layer 1", order: 0, visible: true, locked: false }
+ *   and all its elements are tagged with that layer's id.
+ * - zIndex values are preserved untouched (it now means within-layer stacking, and with a
+ *   single layer the migrated document renders identically). Idempotent.
+ */
+function migrateV7ToV8(state: any): any {
+    console.log('[Migration] Applying v7 → v8: Adding layer system (default "Layer 1" per template)');
+    const migrated = JSON.parse(JSON.stringify(state));
+
+    const migrateTemplates = (templates: any) => {
+        if (!templates || typeof templates !== 'object') return;
+        Object.keys(templates).forEach(templateId => {
+            const tpl = templates[templateId];
+            if (tpl && typeof tpl === 'object') {
+                templates[templateId] = ensureTemplateLayers(tpl);
+            }
+        });
+    };
+
+    // Migrate across all variants
+    if (migrated.variants) {
+        Object.values(migrated.variants).forEach((variant: any) => migrateTemplates(variant?.templates));
+    }
+    // Also handle legacy flat templates structure
+    migrateTemplates(migrated.templates);
+
+    migrated.schemaVersion = 8;
     return migrated;
 }
 

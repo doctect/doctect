@@ -62,3 +62,25 @@ describe('normalizeGeneratedTemplates', () => {
         expect(variantShape.variants!.v1.templates).toEqual({});
     });
 });
+
+describe('normalizeGeneratedTemplates layer tagging', () => {
+    const rawTpl = {
+        id: 'day', name: 'Day', width: 500, height: 700,
+        elements: [{ type: 'rect', x: 0, y: 0, w: 10, h: 10, rotation: 0, fill: '#fff', stroke: '', strokeWidth: 0, opacity: 1 }]
+    };
+
+    it('gives flat-map templates a default layer and tags every element', () => {
+        const { templates } = normalizeGeneratedTemplates({ day: rawTpl });
+        const tpl = templates!['day'];
+        expect(tpl.layers).toHaveLength(1);
+        expect(tpl.elements[0].layerId).toBe(tpl.layers![0].id);
+    });
+
+    it('gives variants-shaped templates a default layer and tags every element', () => {
+        const raw = { variants: { v1: { id: 'v1', name: 'V1', templates: { day: rawTpl } } }, activeVariantId: 'v1' };
+        const { variants } = normalizeGeneratedTemplates(raw);
+        const tpl = variants!['v1'].templates['day'];
+        expect(tpl.layers).toHaveLength(1);
+        expect(tpl.elements[0].layerId).toBe(tpl.layers![0].id);
+    });
+});

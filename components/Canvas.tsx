@@ -6,6 +6,9 @@ import clsx from 'clsx';
 import { CanvasElement } from './canvas/CanvasElement';
 import { OverlayTextEditor } from './canvas/OverlayTextEditor';
 import { SelectionHandles } from './canvas/SelectionHandles';
+import { resolveActiveLayerId, nextZIndexInLayer, sortElementsForRender } from '../services/layers';
+import { hitTestPoint } from '../services/hitTest';
+import { SelectUnderMenu } from './canvas/SelectUnderMenu';
 
 interface CanvasProps {
     template: PageTemplate;
@@ -22,6 +25,7 @@ interface CanvasProps {
     onZoom: (newScale: number) => void;
     onInteractionStart: () => void;
     onSwitchToSelect?: () => void;
+    activeLayerId?: string;
 }
 
 const MIN_DRAG_THRESHOLD = 5;
@@ -183,7 +187,8 @@ export const Canvas: React.FC<CanvasProps> = ({
     onSelectElements,
     onZoom,
     onInteractionStart,
-    onSwitchToSelect
+    onSwitchToSelect,
+    activeLayerId
 }) => {
     const containerRef = useRef<HTMLDivElement>(null);
     const outerContainerRef = useRef<HTMLDivElement>(null);
@@ -220,10 +225,13 @@ export const Canvas: React.FC<CanvasProps> = ({
 
     // Inline Editing State
     const [editingElementId, setEditingElementId] = useState<string | null>(null);
+    const [selectUnderMenu, setSelectUnderMenu] = useState<{ x: number; y: number; stack: TemplateElement[] } | null>(null);
 
     // Group Transform State
     const initialGroupElements = useRef<TemplateElement[]>([]);
     const initialGroupBoundsRef = useRef<TemplateElement | null>(null); // For rotating group visualization
+    // Alt-click cycle state: last click point + current depth in the stack
+    const altCycleRef = useRef<{ x: number; y: number; index: number } | null>(null);
     const [persistentGroupRotation, setPersistentGroupRotation] = useState(0);
 
     // Reset persistent rotation and pivots when selection changes
@@ -284,6 +292,19 @@ export const Canvas: React.FC<CanvasProps> = ({
     const groupBounds = React.useMemo(() => {
         return selectedElementIds.length > 1 ? getGroupBounds(selectedElementIds) : null;
     }, [selectedElementIds, elements]); // Recalculate when selection or elements change
+
+    // Locked or hidden layers are not editable on the canvas: the Layers panel may still
+    // SELECT such an element (escape hatch), but we must not render its transform handles
+    // or let the handle mousedown paths act on it. Legacy elements (no layerId / no
+    // layers) are treated as unlocked + visible.
+    const isElementTransformable = (el: TemplateElement | undefined) => {
+        if (!el) return false;
+        const layer = el.layerId ? template.layers?.find(l => l.id === el.layerId) : undefined;
+        return !(layer && (layer.locked || layer.visible === false));
+    };
+    const singleSelectedTransformable = selectedElementIds.length === 1
+        ? isElementTransformable(elements.find(el => el.id === selectedElementIds[0]))
+        : true; // group / no single selection: unaffected by this guard
 
 
     // Dynamic Grid Calculation
@@ -489,6 +510,15 @@ export const Canvas: React.FC<CanvasProps> = ({
         return currentGroupBounds;
     };
 
+    const handleContextMenu = (e: MouseEvent) => {
+        if (tool !== 'select') return;
+        const coords = getMouseCoords(e);
+        const stack = hitTestPoint(coords, elements, template.layers, nodes, currentNodeId);
+        if (stack.length === 0) return; // let the browser menu through on empty canvas
+        e.preventDefault();
+        setSelectUnderMenu({ x: e.clientX, y: e.clientY, stack });
+    };
+
     const handleMouseDown = (e: MouseEvent) => {
         // Reset history save flag for new interactions
         hasSavedHistory.current = false;
@@ -521,10 +551,38 @@ export const Canvas: React.FC<CanvasProps> = ({
         // 3. Selection / Transform Logic
         if (tool === 'select') {
             const targetEl = e.target as HTMLElement;
-            const clickedId = targetEl.closest('[data-element-id]')?.getAttribute('data-element-id');
+
+            // Alt-click: cycle through the stack under the cursor (visible + unlocked layers, top -> bottom)
+            if (e.altKey) {
+                const stack = hitTestPoint(coords, elements, template.layers, nodes, currentNodeId);
+                if (stack.length > 0) {
+                    const prev = altCycleRef.current;
+                    const samePoint = !!prev && Math.abs(prev.x - coords.x) < 3 && Math.abs(prev.y - coords.y) < 3;
+                    const index = samePoint ? (prev!.index + 1) % stack.length : 0;
+                    altCycleRef.current = { x: coords.x, y: coords.y, index };
+                    onSelectElements([stack[index].id]);
+                    e.preventDefault();
+                    return;
+                }
+            }
+
+            // Any non-Alt click resets the Alt-click cycle
+            altCycleRef.current = null;
+
+            let clickedId = targetEl.closest('[data-element-id]')?.getAttribute('data-element-id') ?? null;
+            // Locked layers: still rendered, but clicks pass through as if the canvas were empty
+            if (clickedId) {
+                const clickedEl = elements.find(el => el.id === clickedId);
+                const clickedLayer = clickedEl?.layerId ? template.layers?.find(l => l.id === clickedEl.layerId) : undefined;
+                if (clickedLayer?.locked) clickedId = null;
+            }
+
+            // A locked/hidden single selection renders no handles; guard the handle
+            // mousedown paths too so a stale/synthetic handle event can never transform it.
+            const handlesActive = singleSelectedTransformable;
 
             // Check for Pivot Handle (Transform Origin)
-            if (targetEl.closest('[data-pivot-handle]')) {
+            if (handlesActive && targetEl.closest('[data-pivot-handle]')) {
                 setIsDraggingPivot(true);
                 setDragStart(coords); // Track mouse start
 
@@ -551,7 +609,7 @@ export const Canvas: React.FC<CanvasProps> = ({
             }
 
             // Check for Rotation Handle
-            if (targetEl.closest('[data-rotate-handle]')) {
+            if (handlesActive && targetEl.closest('[data-rotate-handle]')) {
                 if (selectedElementIds.length > 1 && groupBounds) {
                     // Group Rotation
                     setIsRotating(true);
@@ -594,7 +652,7 @@ export const Canvas: React.FC<CanvasProps> = ({
             }
 
             // Check for Resize Handle - allow for single or group
-            if (targetEl.hasAttribute('data-resize-handle')) {
+            if (handlesActive && targetEl.hasAttribute('data-resize-handle')) {
                 const handle = targetEl.getAttribute('data-resize-handle');
 
                 if (selectedElementIds.length > 1 && groupBounds && handle) {
@@ -1206,7 +1264,7 @@ export const Canvas: React.FC<CanvasProps> = ({
             if (w < MIN_DRAG_THRESHOLD && h < MIN_DRAG_THRESHOLD) {
                 if (tool === 'text') {
                     onInteractionStart();
-                    const maxZ = elements.reduce((max, el) => Math.max(max, el.zIndex || 0), 0);
+                    const layerId = resolveActiveLayerId(template, activeLayerId);
                     const fontSize = parseInt(localStorage.getItem('doctect_last_fontSize') || '16');
                     const newEl: TemplateElement = {
                         id: Math.random().toString(36).substr(2, 9),
@@ -1222,7 +1280,8 @@ export const Canvas: React.FC<CanvasProps> = ({
                         strokeWidth: 0,
                         borderStyle: 'solid',
                         opacity: 1,
-                        zIndex: maxZ + 1,
+                        zIndex: nextZIndexInLayer(elements, layerId),
+                        layerId,
                         text: '',
                         autoWidth: true,
                         fontSize: parseInt(localStorage.getItem('doctect_last_fontSize') || '16'),
@@ -1245,7 +1304,7 @@ export const Canvas: React.FC<CanvasProps> = ({
             // Save history before creating new element
             onInteractionStart();
 
-            const maxZ = elements.reduce((max, el) => Math.max(max, el.zIndex || 0), 0);
+            const layerId = resolveActiveLayerId(template, activeLayerId);
             let cellW = w;
             let cellH = h;
             let gridConfig = undefined;
@@ -1289,7 +1348,8 @@ export const Canvas: React.FC<CanvasProps> = ({
                 strokeWidth: tool === 'text' ? 0 : 1,
                 borderStyle: 'solid',
                 opacity: 1,
-                zIndex: maxZ + 1,
+                zIndex: nextZIndexInLayer(elements, layerId),
+                layerId,
                 text: tool === 'text' ? '' : undefined,
                 fontSize: parseInt(localStorage.getItem('doctect_last_fontSize') || '16'),
                 fontFamily: localStorage.getItem('doctect_last_fontFamily') || 'helvetica',
@@ -1308,8 +1368,14 @@ export const Canvas: React.FC<CanvasProps> = ({
                 setEditingElementId(newEl.id);
             }
         } else if (isSelecting && selectionBox) {
+            // Marquee (incl. a zero-area click) must respect layers: elements on hidden or
+            // locked layers are not selectable, matching hitTestPoint / direct-click behaviour.
+            // Untagged / unknown-layer elements stay selectable (legacy safety).
+            const layerMap = new Map((template.layers ?? []).map(l => [l.id, l]));
             const ids: string[] = [];
             elements.forEach(el => {
+                const layer = el.layerId ? layerMap.get(el.layerId) : undefined;
+                if (layer && (layer.visible === false || layer.locked)) return;
                 const bounds = getElementBounds(el);
                 const elRight = bounds.x + bounds.w;
                 const elBottom = bounds.y + bounds.h;
@@ -1400,6 +1466,7 @@ export const Canvas: React.FC<CanvasProps> = ({
             onMouseMove={handleMouseMove}
             onMouseUp={handleMouseUp}
             onMouseLeave={handleMouseUp}
+            onContextMenu={handleContextMenu}
         >
             {/* Inner container wrapper to handle centering vs scrolling */}
             <div className="m-auto p-12 min-w-fit min-h-fit">
@@ -1426,7 +1493,7 @@ export const Canvas: React.FC<CanvasProps> = ({
                                     zIndex: 0
                                 }}></div>
                         )}
-                        {elements.sort((a, b) => (a.zIndex || 0) - (b.zIndex || 0)).map(el => (
+                        {sortElementsForRender(elements, template.layers).map(el => (
                             <CanvasElement
                                 key={el.id}
                                 element={el}
@@ -1435,7 +1502,12 @@ export const Canvas: React.FC<CanvasProps> = ({
                                 currentNodeId={currentNodeId}
                                 tool={tool}
                                 showHandles={selectedElementIds.includes(el.id) && selectedElementIds.length === 1}
-                                onDoubleClick={() => setEditingElementId(el.id)}
+                                onDoubleClick={() => {
+                                    // Locked layers are not editable: don't enter inline edit mode.
+                                    const layer = el.layerId ? template.layers?.find(l => l.id === el.layerId) : undefined;
+                                    if (layer?.locked) return;
+                                    setEditingElementId(el.id);
+                                }}
                                 isEditing={editingElementId === el.id}
                             />
                         ))}
@@ -1673,8 +1745,10 @@ export const Canvas: React.FC<CanvasProps> = ({
                                         <div className="absolute -inset-1 border border-blue-500 rounded-md" />
                                     )}
 
-                                    {/* Handles (Use existing component, it has pointer-events-auto) */}
-                                    {selectedElementIds.length === 1 && <SelectionHandles element={el} />}
+                                    {/* Handles (Use existing component, it has pointer-events-auto).
+                                        Suppressed when the element's layer is locked or hidden — a
+                                        locked/hidden element is selectable via the panel but not editable. */}
+                                    {selectedElementIds.length === 1 && isElementTransformable(el) && <SelectionHandles element={el} />}
                                 </div>
                             );
                         })}
@@ -1691,6 +1765,18 @@ export const Canvas: React.FC<CanvasProps> = ({
                     </div>
                 </div>
             </div>
+
+            {selectUnderMenu && (
+                <SelectUnderMenu
+                    position={{ x: selectUnderMenu.x, y: selectUnderMenu.y }}
+                    items={selectUnderMenu.stack.map(el => ({
+                        element: el,
+                        layerName: template.layers?.find(l => l.id === el.layerId)?.name ?? '—',
+                    }))}
+                    onSelect={id => onSelectElements([id])}
+                    onClose={() => setSelectUnderMenu(null)}
+                />
+            )}
         </div>
     );
 };
