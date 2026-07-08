@@ -715,18 +715,20 @@ export const Canvas: React.FC<CanvasProps> = ({
             if (clickedId) {
                 let newSelection = selectedElementIds;
 
-                // If a single element is already selected and the cursor is over it
-                // (rotation-aware, skipping hidden/locked layers), keep the selection so a
-                // drag moves it instead of grabbing whatever sits on top — and arm plain-click
-                // cycling through the overlapping stack for a click that doesn't drag.
+                // If the cursor is over any already-selected element (rotation-aware,
+                // skipping hidden/locked layers), keep the selection so a drag moves it —
+                // single or multi — instead of grabbing whatever sits on top. For a single
+                // selection, also arm plain-click cycling through the overlapping stack.
                 const noModifier = !e.shiftKey && !e.ctrlKey && !e.metaKey;
                 let keepSelection = false;
-                if (noModifier && selectedElementIds.length === 1) {
+                if (noModifier && selectedElementIds.length >= 1) {
                     const stack = hitTestPoint(coords, elements, template.layers, nodes, currentNodeId);
                     const stackIds = stack.map(el => el.id);
-                    if (stackIds.includes(selectedElementIds[0])) {
+                    if (stackIds.some(id => selectedElementIds.includes(id))) {
                         keepSelection = true;
-                        if (stackIds.length >= 2) clickCycleStackRef.current = stackIds;
+                        if (selectedElementIds.length === 1 && stackIds.length >= 2) {
+                            clickCycleStackRef.current = stackIds;
+                        }
                     }
                 }
 

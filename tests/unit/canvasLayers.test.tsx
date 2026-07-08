@@ -298,3 +298,36 @@ describe('shift-click cycle for multi-select over stacks', () => {
         expect(onSelectElements.mock.calls.at(-1)![0]).toEqual([]);
     });
 });
+
+describe('drag with a multi-selection over a stack', () => {
+    const layers = [makeLayer('back', 0), makeLayer('front', 1)];
+    const els = [
+        makeEl('bottom', { layerId: 'back', zIndex: 1 }),
+        makeEl('top', { layerId: 'front', zIndex: 1 }),
+        makeEl('aside', { layerId: 'back', zIndex: 2, x: 300, y: 300 }),
+    ];
+
+    it('dragging from a point over a selected (covered) member moves the whole selection', () => {
+        const { container, outer, onSelectElements, onUpdateElements } =
+            renderCanvas(els, layers, { selectedElementIds: ['bottom', 'aside'] });
+        // Press lands on the unselected foreground 'top'.
+        fireEvent.mouseDown(container.querySelector('[data-element-id="top"]')!, { clientX: 50, clientY: 50, button: 0 });
+        fireEvent.mouseMove(outer, { clientX: 80, clientY: 80 });
+        fireEvent.mouseUp(outer, { clientX: 80, clientY: 80 });
+
+        const updated: TemplateElement[] = onUpdateElements.mock.calls.at(-1)![0];
+        expect(updated.find(e => e.id === 'bottom')!.x).toBe(30);
+        expect(updated.find(e => e.id === 'aside')!.x).toBe(330);
+        expect(updated.find(e => e.id === 'top')!.x).toBe(0); // foreground untouched
+        // selection was never collapsed to the foreground
+        expect(onSelectElements.mock.calls.flatMap(c => c[0])).not.toContain('top');
+    });
+
+    it('clicking a foreground element with no selected member beneath still selects it', () => {
+        const { container, outer, onSelectElements } =
+            renderCanvas(els, layers, { selectedElementIds: ['aside'] });
+        fireEvent.mouseDown(container.querySelector('[data-element-id="top"]')!, { clientX: 50, clientY: 50, button: 0 });
+        fireEvent.mouseUp(outer, { clientX: 50, clientY: 50 });
+        expect(onSelectElements.mock.calls[0][0]).toEqual(['top']);
+    });
+});
