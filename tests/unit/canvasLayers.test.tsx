@@ -63,6 +63,26 @@ describe('locked-layer click-through', () => {
     });
 });
 
+describe('double-click inline text editing respects locked layers', () => {
+    it('does not enter edit mode when the element is on a locked layer', () => {
+        const layers = [makeLayer('lock', 0, { locked: true })];
+        const elements = [makeEl('lockedText', { layerId: 'lock', type: 'text', text: 'Hi' })];
+        const { container, queryByTestId } = renderCanvas(elements, layers);
+        const node = container.querySelector('[data-element-id="lockedText"]')!;
+        fireEvent.doubleClick(node);
+        expect(queryByTestId('overlay-text-editor')).toBeNull();
+    });
+
+    it('still enters edit mode on an unlocked-layer element', () => {
+        const layers = [makeLayer('open', 0)];
+        const elements = [makeEl('openText', { layerId: 'open', type: 'text', text: 'Hi' })];
+        const { container, queryByTestId } = renderCanvas(elements, layers);
+        const node = container.querySelector('[data-element-id="openText"]')!;
+        fireEvent.doubleClick(node);
+        expect(queryByTestId('overlay-text-editor')).not.toBeNull();
+    });
+});
+
 describe('Alt-click cycle', () => {
     const layers = [makeLayer('back', 0), makeLayer('front', 1)];
     const stackOf3 = [

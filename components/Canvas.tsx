@@ -8,6 +8,7 @@ import { OverlayTextEditor } from './canvas/OverlayTextEditor';
 import { SelectionHandles } from './canvas/SelectionHandles';
 import { resolveActiveLayerId, nextZIndexInLayer, sortElementsForRender } from '../services/layers';
 import { hitTestPoint } from '../services/hitTest';
+import { SelectUnderMenu } from './canvas/SelectUnderMenu';
 
 interface CanvasProps {
     template: PageTemplate;
@@ -224,6 +225,7 @@ export const Canvas: React.FC<CanvasProps> = ({
 
     // Inline Editing State
     const [editingElementId, setEditingElementId] = useState<string | null>(null);
+    const [selectUnderMenu, setSelectUnderMenu] = useState<{ x: number; y: number; stack: TemplateElement[] } | null>(null);
 
     // Group Transform State
     const initialGroupElements = useRef<TemplateElement[]>([]);
@@ -493,6 +495,15 @@ export const Canvas: React.FC<CanvasProps> = ({
             } as any;
         }
         return currentGroupBounds;
+    };
+
+    const handleContextMenu = (e: MouseEvent) => {
+        if (tool !== 'select') return;
+        const coords = getMouseCoords(e);
+        const stack = hitTestPoint(coords, elements, template.layers, nodes, currentNodeId);
+        if (stack.length === 0) return; // let the browser menu through on empty canvas
+        e.preventDefault();
+        setSelectUnderMenu({ x: e.clientX, y: e.clientY, stack });
     };
 
     const handleMouseDown = (e: MouseEvent) => {
@@ -1432,6 +1443,7 @@ export const Canvas: React.FC<CanvasProps> = ({
             onMouseMove={handleMouseMove}
             onMouseUp={handleMouseUp}
             onMouseLeave={handleMouseUp}
+            onContextMenu={handleContextMenu}
         >
             {/* Inner container wrapper to handle centering vs scrolling */}
             <div className="m-auto p-12 min-w-fit min-h-fit">
@@ -1467,7 +1479,12 @@ export const Canvas: React.FC<CanvasProps> = ({
                                 currentNodeId={currentNodeId}
                                 tool={tool}
                                 showHandles={selectedElementIds.includes(el.id) && selectedElementIds.length === 1}
-                                onDoubleClick={() => setEditingElementId(el.id)}
+                                onDoubleClick={() => {
+                                    // Locked layers are not editable: don't enter inline edit mode.
+                                    const layer = el.layerId ? template.layers?.find(l => l.id === el.layerId) : undefined;
+                                    if (layer?.locked) return;
+                                    setEditingElementId(el.id);
+                                }}
                                 isEditing={editingElementId === el.id}
                             />
                         ))}
@@ -1723,6 +1740,18 @@ export const Canvas: React.FC<CanvasProps> = ({
                     </div>
                 </div>
             </div>
+
+            {selectUnderMenu && (
+                <SelectUnderMenu
+                    position={{ x: selectUnderMenu.x, y: selectUnderMenu.y }}
+                    items={selectUnderMenu.stack.map(el => ({
+                        element: el,
+                        layerName: template.layers?.find(l => l.id === el.layerId)?.name ?? '—',
+                    }))}
+                    onSelect={id => onSelectElements([id])}
+                    onClose={() => setSelectUnderMenu(null)}
+                />
+            )}
         </div>
     );
 };
