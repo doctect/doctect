@@ -112,6 +112,40 @@ describe('double-click inline text editing respects locked layers', () => {
     });
 });
 
+describe('transform handles respect locked/hidden layers', () => {
+    // The Layers panel can select an element on a locked/hidden layer (escape hatch),
+    // but the canvas must not offer resize/rotate/move affordances for it.
+    it('renders no selection handles for a single element on a locked layer', () => {
+        const layers = [makeLayer('lock', 0, { locked: true })];
+        const elements = [makeEl('lockedEl', { layerId: 'lock' })];
+        const { container } = renderCanvas(elements, layers, { selectedElementIds: ['lockedEl'] });
+        expect(container.querySelector('[data-rotate-handle]')).toBeNull();
+        expect(container.querySelector('[data-resize-handle]')).toBeNull();
+    });
+
+    it('renders no selection handles for a single element on a hidden layer', () => {
+        const layers = [makeLayer('hid', 0, { visible: false })];
+        const elements = [makeEl('hiddenEl', { layerId: 'hid' })];
+        const { container } = renderCanvas(elements, layers, { selectedElementIds: ['hiddenEl'] });
+        expect(container.querySelector('[data-rotate-handle]')).toBeNull();
+        expect(container.querySelector('[data-resize-handle]')).toBeNull();
+    });
+
+    it('still renders selection handles for a single element on a normal layer', () => {
+        const layers = [makeLayer('open', 0)];
+        const elements = [makeEl('openEl', { layerId: 'open' })];
+        const { container } = renderCanvas(elements, layers, { selectedElementIds: ['openEl'] });
+        expect(container.querySelector('[data-rotate-handle]')).not.toBeNull();
+        expect(container.querySelector('[data-resize-handle]')).not.toBeNull();
+    });
+
+    it('renders selection handles for a legacy element (no layerId / no layers)', () => {
+        const elements = [makeEl('legacy')];
+        const { container } = renderCanvas(elements, [], { selectedElementIds: ['legacy'] });
+        expect(container.querySelector('[data-rotate-handle]')).not.toBeNull();
+    });
+});
+
 describe('Alt-click cycle', () => {
     const layers = [makeLayer('back', 0), makeLayer('front', 1)];
     const stackOf3 = [

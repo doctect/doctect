@@ -293,6 +293,19 @@ export const Canvas: React.FC<CanvasProps> = ({
         return selectedElementIds.length > 1 ? getGroupBounds(selectedElementIds) : null;
     }, [selectedElementIds, elements]); // Recalculate when selection or elements change
 
+    // Locked or hidden layers are not editable on the canvas: the Layers panel may still
+    // SELECT such an element (escape hatch), but we must not render its transform handles
+    // or let the handle mousedown paths act on it. Legacy elements (no layerId / no
+    // layers) are treated as unlocked + visible.
+    const isElementTransformable = (el: TemplateElement | undefined) => {
+        if (!el) return false;
+        const layer = el.layerId ? template.layers?.find(l => l.id === el.layerId) : undefined;
+        return !(layer && (layer.locked || layer.visible === false));
+    };
+    const singleSelectedTransformable = selectedElementIds.length === 1
+        ? isElementTransformable(elements.find(el => el.id === selectedElementIds[0]))
+        : true; // group / no single selection: unaffected by this guard
+
 
     // Dynamic Grid Calculation
     const effectiveGridSize = React.useMemo(() => {
@@ -564,8 +577,12 @@ export const Canvas: React.FC<CanvasProps> = ({
                 if (clickedLayer?.locked) clickedId = null;
             }
 
+            // A locked/hidden single selection renders no handles; guard the handle
+            // mousedown paths too so a stale/synthetic handle event can never transform it.
+            const handlesActive = singleSelectedTransformable;
+
             // Check for Pivot Handle (Transform Origin)
-            if (targetEl.closest('[data-pivot-handle]')) {
+            if (handlesActive && targetEl.closest('[data-pivot-handle]')) {
                 setIsDraggingPivot(true);
                 setDragStart(coords); // Track mouse start
 
@@ -592,7 +609,7 @@ export const Canvas: React.FC<CanvasProps> = ({
             }
 
             // Check for Rotation Handle
-            if (targetEl.closest('[data-rotate-handle]')) {
+            if (handlesActive && targetEl.closest('[data-rotate-handle]')) {
                 if (selectedElementIds.length > 1 && groupBounds) {
                     // Group Rotation
                     setIsRotating(true);
@@ -635,7 +652,7 @@ export const Canvas: React.FC<CanvasProps> = ({
             }
 
             // Check for Resize Handle - allow for single or group
-            if (targetEl.hasAttribute('data-resize-handle')) {
+            if (handlesActive && targetEl.hasAttribute('data-resize-handle')) {
                 const handle = targetEl.getAttribute('data-resize-handle');
 
                 if (selectedElementIds.length > 1 && groupBounds && handle) {
@@ -1728,8 +1745,10 @@ export const Canvas: React.FC<CanvasProps> = ({
                                         <div className="absolute -inset-1 border border-blue-500 rounded-md" />
                                     )}
 
-                                    {/* Handles (Use existing component, it has pointer-events-auto) */}
-                                    {selectedElementIds.length === 1 && <SelectionHandles element={el} />}
+                                    {/* Handles (Use existing component, it has pointer-events-auto).
+                                        Suppressed when the element's layer is locked or hidden — a
+                                        locked/hidden element is selectable via the panel but not editable. */}
+                                    {selectedElementIds.length === 1 && isElementTransformable(el) && <SelectionHandles element={el} />}
                                 </div>
                             );
                         })}
