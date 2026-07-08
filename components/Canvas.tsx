@@ -232,6 +232,10 @@ export const Canvas: React.FC<CanvasProps> = ({
     const initialGroupBoundsRef = useRef<TemplateElement | null>(null); // For rotating group visualization
     // Alt-click cycle state: last click point + current depth in the stack
     const altCycleRef = useRef<{ x: number; y: number; index: number } | null>(null);
+    // Tracks whether the pointer moved past the drag threshold since the last mousedown,
+    // and the overlapping stack armed for plain-click cycling (top -> bottom ids).
+    const movedSinceDownRef = useRef(false);
+    const clickCycleStackRef = useRef<string[] | null>(null);
     const [persistentGroupRotation, setPersistentGroupRotation] = useState(0);
 
     // Reset persistent rotation and pivots when selection changes
@@ -568,6 +572,9 @@ export const Canvas: React.FC<CanvasProps> = ({
 
             // Any non-Alt click resets the Alt-click cycle
             altCycleRef.current = null;
+            // Reset click-drag/cycle trackers for this fresh press.
+            movedSinceDownRef.current = false;
+            clickCycleStackRef.current = null;
 
             let clickedId = targetEl.closest('[data-element-id]')?.getAttribute('data-element-id') ?? null;
             // Locked layers: still rendered, but clicks pass through as if the canvas were empty
@@ -705,10 +712,27 @@ export const Canvas: React.FC<CanvasProps> = ({
             if (clickedId) {
                 let newSelection = selectedElementIds;
 
+                // If a single element is already selected and the cursor is over it
+                // (rotation-aware, skipping hidden/locked layers), keep the selection so a
+                // drag moves it instead of grabbing whatever sits on top — and arm plain-click
+                // cycling through the overlapping stack for a click that doesn't drag.
+                const noModifier = !e.shiftKey && !e.ctrlKey && !e.metaKey;
+                let keepSelection = false;
+                if (noModifier && selectedElementIds.length === 1) {
+                    const stack = hitTestPoint(coords, elements, template.layers, nodes, currentNodeId);
+                    const stackIds = stack.map(el => el.id);
+                    if (stackIds.includes(selectedElementIds[0])) {
+                        keepSelection = true;
+                        if (stackIds.length >= 2) clickCycleStackRef.current = stackIds;
+                    }
+                }
+
                 if (e.shiftKey) {
                     newSelection = selectedElementIds.includes(clickedId)
                         ? selectedElementIds.filter(id => id !== clickedId)
                         : [...selectedElementIds, clickedId];
+                } else if (keepSelection) {
+                    // Keep the current selection: a drag moves it, a plain click cycles.
                 } else if (!selectedElementIds.includes(clickedId)) {
                     newSelection = [clickedId];
                 }
@@ -961,6 +985,9 @@ export const Canvas: React.FC<CanvasProps> = ({
 
             const rawDx = coords.x - dragStart.x;
             const rawDy = coords.y - dragStart.y;
+            if (Math.abs(rawDx) > MIN_DRAG_THRESHOLD || Math.abs(rawDy) > MIN_DRAG_THRESHOLD) {
+                movedSinceDownRef.current = true;
+            }
             const dx = snapToGrid ? Math.round(rawDx / effectiveGridSize) * effectiveGridSize : rawDx;
             const dy = snapToGrid ? Math.round(rawDy / effectiveGridSize) * effectiveGridSize : rawDy;
 
@@ -1388,6 +1415,18 @@ export const Canvas: React.FC<CanvasProps> = ({
             });
             onSelectElements(ids);
         }
+
+        // Plain click (no drag past threshold) on an overlapping stack cycles the
+        // selection one step down the stack (top -> bottom), wrapping around.
+        if (tool === 'select' && !movedSinceDownRef.current && clickCycleStackRef.current && selectedElementIds.length === 1) {
+            const stackIds = clickCycleStackRef.current;
+            const curIdx = stackIds.indexOf(selectedElementIds[0]);
+            if (stackIds.length >= 2 && curIdx !== -1) {
+                const nextId = stackIds[(curIdx + 1) % stackIds.length];
+                if (nextId !== selectedElementIds[0]) onSelectElements([nextId]);
+            }
+        }
+        clickCycleStackRef.current = null;
 
         setNewShapeStart(null);
         setNewShapeCurrent(null);
