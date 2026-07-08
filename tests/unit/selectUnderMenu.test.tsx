@@ -80,3 +80,34 @@ describe('shift-click in the select-under menu adds to the selection', () => {
         expect(queryByTestId('select-under-menu')).toBeNull();
     });
 });
+
+describe('hovering a menu entry highlights the element on canvas', () => {
+    const layers = [makeLayer('back', 0), makeLayer('front', 1)];
+    const elements = [
+        makeEl('bottom', { layerId: 'back', zIndex: 1 }),
+        makeEl('top', { layerId: 'front', zIndex: 1, rotation: 45 }),
+    ];
+
+    it('shows a highlight box over the hovered entry\'s element and clears it on leave', () => {
+        const { outer, getByTestId, queryByTestId } = renderCanvas(elements, layers);
+        fireEvent.contextMenu(outer, { clientX: 50, clientY: 50 });
+        const row = getByTestId('select-under-menu').querySelector('[data-menu-element-id="top"]')!;
+
+        fireEvent.mouseEnter(row);
+        const hl = getByTestId('menu-hover-highlight');
+        expect(hl.style.transform).toContain('rotate(45deg)'); // tracks the element, rotation-aware
+
+        fireEvent.mouseLeave(getByTestId('select-under-menu'));
+        expect(queryByTestId('menu-hover-highlight')).toBeNull();
+    });
+
+    it('clears the highlight when the menu closes', () => {
+        const { outer, getByTestId, queryByTestId } = renderCanvas(elements, layers);
+        fireEvent.contextMenu(outer, { clientX: 50, clientY: 50 });
+        fireEvent.mouseEnter(getByTestId('select-under-menu').querySelector('[data-menu-element-id="bottom"]')!);
+        expect(queryByTestId('menu-hover-highlight')).not.toBeNull();
+        fireEvent.keyDown(window, { key: 'Escape' });
+        expect(queryByTestId('select-under-menu')).toBeNull();
+        expect(queryByTestId('menu-hover-highlight')).toBeNull();
+    });
+});

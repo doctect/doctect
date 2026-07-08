@@ -226,6 +226,7 @@ export const Canvas: React.FC<CanvasProps> = ({
     // Inline Editing State
     const [editingElementId, setEditingElementId] = useState<string | null>(null);
     const [selectUnderMenu, setSelectUnderMenu] = useState<{ x: number; y: number; stack: TemplateElement[] } | null>(null);
+    const [menuHoverId, setMenuHoverId] = useState<string | null>(null);
 
     // Group Transform State
     const initialGroupElements = useRef<TemplateElement[]>([]);
@@ -1793,6 +1794,30 @@ export const Canvas: React.FC<CanvasProps> = ({
                             return null;
                         })()}
 
+                        {/* Hover highlight for the select-under menu: outlines the element the
+                            hovered menu entry refers to, so stacked entries are tellable apart. */}
+                        {selectUnderMenu && menuHoverId && (() => {
+                            const el = elements.find(e => e.id === menuHoverId);
+                            if (!el) return null;
+                            const bounds = getElementBounds(el);
+                            return (
+                                <div
+                                    data-testid="menu-hover-highlight"
+                                    className="absolute pointer-events-none z-[101]"
+                                    style={{
+                                        left: 0,
+                                        top: 0,
+                                        width: bounds.w,
+                                        height: bounds.h,
+                                        transform: `translate(${el.x}px, ${el.y}px) rotate(${el.rotation || 0}deg)`,
+                                        transformOrigin: el.transformOrigin ? `${el.transformOrigin.x * bounds.w}px ${el.transformOrigin.y * bounds.h}px` : 'center'
+                                    }}
+                                >
+                                    <div className="absolute -inset-1 border-2 border-dashed border-indigo-500 rounded-md bg-indigo-500/10" />
+                                </div>
+                            );
+                        })()}
+
                         {/* Selection Overlay - Rendered on top to prevent occlusion */}
                         {selectedElementIds.map(id => {
                             const el = elements.find(e => e.id === id);
@@ -1858,7 +1883,8 @@ export const Canvas: React.FC<CanvasProps> = ({
                             onSelectElements([id]);
                         }
                     }}
-                    onClose={() => setSelectUnderMenu(null)}
+                    onHover={setMenuHoverId}
+                    onClose={() => { setSelectUnderMenu(null); setMenuHoverId(null); }}
                 />
             )}
         </div>
