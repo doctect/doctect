@@ -14,6 +14,7 @@ import { MergeRequestPage } from './pages/MergeRequestPage';
 import { WelcomePage } from './pages/WelcomePage';
 import { AccountSettingsPage } from './pages/AccountSettingsPage';
 import { MyProjectsPage } from './pages/MyProjectsPage';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { trackEvent } from './services/analytics';
 import { useSession } from './lib/auth-client';
 import { Navigate } from 'react-router-dom';
@@ -32,7 +33,7 @@ function AppRoutes() {
   const backgroundLocation = (location.state as { backgroundLocation?: Location } | null)?.backgroundLocation;
 
   return (
-    <>
+    <ErrorBoundary>
       <Routes location={backgroundLocation || location}>
         <Route path="/" element={<LandingPage />} />
         <Route path="/app" element={<EditorPage />} />
@@ -80,7 +81,7 @@ function AppRoutes() {
           <Route path="/gallery/:id" element={<GalleryDetailModal />} />
         </Routes>
       )}
-    </>
+    </ErrorBoundary>
   );
 }
 
