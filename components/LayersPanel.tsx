@@ -45,8 +45,43 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
         return () => window.removeEventListener('mousedown', onWindowMouseDown);
     }, [colorPickerId]);
 
+    const rowAnchorRef = React.useRef<string | null>(null);
+
     const updateLayer = (id: string, updates: Partial<Layer>) => {
         onUpdateTemplate({ layers: (template.layers ?? []).map(l => (l.id === id ? { ...l, ...updates } : l)) });
+    };
+
+    // Visible element rows of a layer, in display order (zIndex desc, filter applied).
+    const visibleElementsOf = (layer: Layer) => template.elements
+        .filter(el => el.layerId === layer.id)
+        .filter(el => {
+            if (!filter.trim()) return true;
+            const q = filter.trim().toLowerCase();
+            return getElementLabel(el).toLowerCase().includes(q) || el.type.includes(q);
+        })
+        .sort((a, b) => (b.zIndex || 0) - (a.zIndex || 0));
+
+    // Element-row click: plain = single select (sets range anchor); ctrl/cmd = toggle;
+    // shift = display-order range from the anchor.
+    const handleRowClick = (e: React.MouseEvent, id: string) => {
+        if (e.ctrlKey || e.metaKey) {
+            rowAnchorRef.current = id;
+            onSelectElements(selectedElementIds.includes(id)
+                ? selectedElementIds.filter(x => x !== id)
+                : [...selectedElementIds, id]);
+            return;
+        }
+        if (e.shiftKey && rowAnchorRef.current && rowAnchorRef.current !== id) {
+            const flatIds = layers.flatMap(l => (l.collapsed ? [] : visibleElementsOf(l).map(el => el.id)));
+            const a = flatIds.indexOf(rowAnchorRef.current);
+            const b = flatIds.indexOf(id);
+            if (a !== -1 && b !== -1) {
+                onSelectElements(flatIds.slice(Math.min(a, b), Math.max(a, b) + 1));
+                return;
+            }
+        }
+        rowAnchorRef.current = id;
+        onSelectElements([id]);
     };
 
     const commitRename = () => {
@@ -177,14 +212,7 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
                             <Trash2 size={12} />
                         </button>
                     </div>
-                    {!layer.collapsed && template.elements
-                        .filter(el => el.layerId === layer.id)
-                        .filter(el => {
-                            if (!filter.trim()) return true;
-                            const q = filter.trim().toLowerCase();
-                            return getElementLabel(el).toLowerCase().includes(q) || el.type.includes(q);
-                        })
-                        .sort((a, b) => (b.zIndex || 0) - (a.zIndex || 0))
+                    {!layer.collapsed && visibleElementsOf(layer)
                         .map(el => {
                             const Icon = TYPE_ICONS[el.type] || Square;
                             const isSelected = selectedElementIds.includes(el.id);
@@ -194,7 +222,7 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
                                     draggable
                                     onDragStart={e => { e.stopPropagation(); setDragElementId(el.id); }}
                                     onDragEnd={() => { setDragElementId(null); setDragLayerId(null); }}
-                                    onClick={() => onSelectElements([el.id])}
+                                    onClick={e => handleRowClick(e, el.id)}
                                     className={clsx('flex items-center gap-1.5 pl-9 pr-2 py-1 text-xs cursor-pointer border-b border-slate-50',
                                         isSelected ? 'bg-blue-100 text-blue-800' : 'text-slate-500 hover:bg-slate-50')}>
                                     <Icon size={11} className="flex-shrink-0" />

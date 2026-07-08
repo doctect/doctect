@@ -331,3 +331,29 @@ describe('drag with a multi-selection over a stack', () => {
         expect(onSelectElements.mock.calls[0][0]).toEqual(['top']);
     });
 });
+
+describe('shift+alt-click cycle-add', () => {
+    const layers = [makeLayer('back', 0), makeLayer('front', 1)];
+    const els = [
+        makeEl('bottom', { layerId: 'back', zIndex: 1 }),
+        makeEl('middle', { layerId: 'back', zIndex: 2 }),
+        makeEl('top', { layerId: 'front', zIndex: 1 }),
+        makeEl('aside', { layerId: 'back', zIndex: 3, x: 300, y: 300 }),
+    ];
+
+    it('each shift+alt-click adds the next stack member down to the selection', () => {
+        const { outer, onSelectElements } = renderCanvas(els, layers, { selectedElementIds: ['aside'] });
+        const ev = { clientX: 50, clientY: 50, button: 0, altKey: true, shiftKey: true };
+        fireEvent.mouseDown(outer, ev);
+        fireEvent.mouseDown(outer, ev);
+        expect(onSelectElements.mock.calls.map(c => c[0])).toEqual(
+            [['aside', 'top'], ['aside', 'middle']]
+        );
+    });
+
+    it('does not duplicate an already-selected member', () => {
+        const { outer, onSelectElements } = renderCanvas(els, layers, { selectedElementIds: ['aside', 'top'] });
+        fireEvent.mouseDown(outer, { clientX: 50, clientY: 50, button: 0, altKey: true, shiftKey: true });
+        expect(onSelectElements.mock.calls.at(-1)![0]).toEqual(['aside', 'top']);
+    });
+});

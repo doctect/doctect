@@ -205,3 +205,32 @@ describe('color popover outside-click dismiss', () => {
         expect(queryByTestId('layer-color-swatch-none')).not.toBeNull();
     });
 });
+
+describe('element-row multi-select (ctrl/cmd toggle, shift range)', () => {
+    const layers = [makeLayer('back', 0)];
+    // Display order within the layer is zIndex desc: e1, t1, r1
+    const elements = [
+        makeEl('r1', { layerId: 'back', zIndex: 1 }),
+        makeEl('t1', { layerId: 'back', zIndex: 2 }),
+        makeEl('e1', { layerId: 'back', zIndex: 3 }),
+    ];
+
+    it('ctrl-click toggles a row into the selection', () => {
+        const { getByTestId, onSelectElements } = renderPanel(elements, layers, { selectedElementIds: ['r1'] });
+        fireEvent.click(getByTestId('element-row-t1'), { ctrlKey: true });
+        expect(onSelectElements.mock.calls.at(-1)![0]).toEqual(['r1', 't1']);
+    });
+
+    it('ctrl-click toggles an already-selected row out of the selection', () => {
+        const { getByTestId, onSelectElements } = renderPanel(elements, layers, { selectedElementIds: ['r1', 't1'] });
+        fireEvent.click(getByTestId('element-row-t1'), { ctrlKey: true });
+        expect(onSelectElements.mock.calls.at(-1)![0]).toEqual(['r1']);
+    });
+
+    it('shift-click selects the display-order range from the last clicked row', () => {
+        const { getByTestId, onSelectElements } = renderPanel(elements, layers);
+        fireEvent.click(getByTestId('element-row-e1'));            // anchor
+        fireEvent.click(getByTestId('element-row-r1'), { shiftKey: true });
+        expect(onSelectElements.mock.calls.at(-1)![0]).toEqual(['e1', 't1', 'r1']);
+    });
+});

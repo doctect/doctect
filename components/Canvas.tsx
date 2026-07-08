@@ -566,7 +566,13 @@ export const Canvas: React.FC<CanvasProps> = ({
                     const samePoint = !!prev && Math.abs(prev.x - coords.x) < 3 && Math.abs(prev.y - coords.y) < 3;
                     const index = samePoint ? (prev!.index + 1) % stack.length : 0;
                     altCycleRef.current = { x: coords.x, y: coords.y, index };
-                    onSelectElements([stack[index].id]);
+                    const id = stack[index].id;
+                    if (e.shiftKey) {
+                        // Shift+Alt: cycle-ADD — each click adds the next stack member down.
+                        onSelectElements(selectedElementIds.includes(id) ? selectedElementIds : [...selectedElementIds, id]);
+                    } else {
+                        onSelectElements([id]);
+                    }
                     e.preventDefault();
                     return;
                 }
@@ -1842,7 +1848,16 @@ export const Canvas: React.FC<CanvasProps> = ({
                         element: el,
                         layerName: template.layers?.find(l => l.id === el.layerId)?.name ?? '—',
                     }))}
-                    onSelect={id => onSelectElements([id])}
+                    selectedIds={selectedElementIds}
+                    onSelect={(id, additive) => {
+                        if (additive) {
+                            onSelectElements(selectedElementIds.includes(id)
+                                ? selectedElementIds.filter(x => x !== id)
+                                : [...selectedElementIds, id]);
+                        } else {
+                            onSelectElements([id]);
+                        }
+                    }}
                     onClose={() => setSelectUnderMenu(null)}
                 />
             )}
