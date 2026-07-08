@@ -236,6 +236,8 @@ export const Canvas: React.FC<CanvasProps> = ({
     // and the overlapping stack armed for plain-click cycling (top -> bottom ids).
     const movedSinceDownRef = useRef(false);
     const clickCycleStackRef = useRef<string[] | null>(null);
+    // Shift-click cycling: which stack member of the current selection to swap on a clean click.
+    const shiftCycleRef = useRef<{ stackIds: string[]; member: string } | null>(null);
     const [persistentGroupRotation, setPersistentGroupRotation] = useState(0);
 
     // Reset persistent rotation and pivots when selection changes
@@ -575,6 +577,7 @@ export const Canvas: React.FC<CanvasProps> = ({
             // Reset click-drag/cycle trackers for this fresh press.
             movedSinceDownRef.current = false;
             clickCycleStackRef.current = null;
+            shiftCycleRef.current = null;
 
             let clickedId = targetEl.closest('[data-element-id]')?.getAttribute('data-element-id') ?? null;
             // Locked layers: still rendered, but clicks pass through as if the canvas were empty
@@ -728,9 +731,23 @@ export const Canvas: React.FC<CanvasProps> = ({
                 }
 
                 if (e.shiftKey) {
-                    newSelection = selectedElementIds.includes(clickedId)
-                        ? selectedElementIds.filter(id => id !== clickedId)
-                        : [...selectedElementIds, clickedId];
+                    // Over an overlapping stack, shift-click cycles WHICH stack member is part
+                    // of the multi-selection: first click adds the topmost; repeated clean
+                    // clicks swap it for the next one down (handled on mouseup); past the
+                    // bottom it is removed. A shift-drag with a member selected moves the
+                    // whole selection without cycling.
+                    const stackIds = hitTestPoint(coords, elements, template.layers, nodes, currentNodeId).map(el => el.id);
+                    const member = stackIds.length >= 2 ? stackIds.find(id => selectedElementIds.includes(id)) : undefined;
+                    if (stackIds.length >= 2 && member) {
+                        shiftCycleRef.current = { stackIds, member };
+                        // Keep the selection: drag moves it, a clean click swaps on mouseup.
+                    } else if (stackIds.length >= 2) {
+                        newSelection = [...selectedElementIds, stackIds[0]];
+                    } else {
+                        newSelection = selectedElementIds.includes(clickedId)
+                            ? selectedElementIds.filter(id => id !== clickedId)
+                            : [...selectedElementIds, clickedId];
+                    }
                 } else if (keepSelection) {
                     // Keep the current selection: a drag moves it, a plain click cycles.
                 } else if (!selectedElementIds.includes(clickedId)) {
@@ -1415,6 +1432,17 @@ export const Canvas: React.FC<CanvasProps> = ({
             });
             onSelectElements(ids);
         }
+
+        // Clean shift-click on a stack: swap the selected stack member for the next one
+        // down; past the bottom, drop it from the selection (deselect state).
+        if (tool === 'select' && !movedSinceDownRef.current && shiftCycleRef.current) {
+            const { stackIds, member } = shiftCycleRef.current;
+            const idx = stackIds.indexOf(member);
+            const next = idx !== -1 && idx + 1 < stackIds.length ? stackIds[idx + 1] : null;
+            const withoutMember = selectedElementIds.filter(id => id !== member);
+            onSelectElements(next ? [...withoutMember, next] : withoutMember);
+        }
+        shiftCycleRef.current = null;
 
         // Plain click (no drag past threshold) on an overlapping stack cycles the
         // selection one step down the stack (top -> bottom), wrapping around.

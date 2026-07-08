@@ -241,3 +241,60 @@ describe('plain-click cycle through an overlapping stack', () => {
         expect(onSelectElements.mock.calls.flatMap(c => c[0])).not.toContain('top');
     });
 });
+
+describe('shift-click cycle for multi-select over stacks', () => {
+    const layers = [makeLayer('back', 0), makeLayer('front', 1)];
+    // Stack of three at (0,0)-(100,100); 'aside' sits elsewhere and stays selected throughout.
+    const els = [
+        makeEl('bottom', { layerId: 'back', zIndex: 1 }),
+        makeEl('middle', { layerId: 'back', zIndex: 2 }),
+        makeEl('top', { layerId: 'front', zIndex: 1 }),
+        makeEl('aside', { layerId: 'back', zIndex: 3, x: 300, y: 300 }),
+    ];
+    const shiftClickStack = (container: HTMLElement, outer: HTMLElement) => {
+        fireEvent.mouseDown(container.querySelector('[data-element-id="top"]')!,
+            { clientX: 50, clientY: 50, button: 0, shiftKey: true });
+        fireEvent.mouseUp(outer, { clientX: 50, clientY: 50, shiftKey: true });
+    };
+
+    it('adds the topmost stack element when none of the stack is selected', () => {
+        const { container, outer, onSelectElements } = renderCanvas(els, layers, { selectedElementIds: ['aside'] });
+        shiftClickStack(container, outer);
+        expect(onSelectElements.mock.calls.at(-1)![0]).toEqual(['aside', 'top']);
+    });
+
+    it('swaps the selected stack member for the next one down on a repeated shift-click', () => {
+        const { container, outer, onSelectElements } = renderCanvas(els, layers, { selectedElementIds: ['aside', 'top'] });
+        shiftClickStack(container, outer);
+        expect(onSelectElements.mock.calls.at(-1)![0]).toEqual(['aside', 'middle']);
+    });
+
+    it('removes the stack member after cycling past the bottom (deselect state)', () => {
+        const { container, outer, onSelectElements } = renderCanvas(els, layers, { selectedElementIds: ['aside', 'bottom'] });
+        shiftClickStack(container, outer);
+        expect(onSelectElements.mock.calls.at(-1)![0]).toEqual(['aside']);
+    });
+
+    it('shift-drag with a stack member selected moves the whole selection without cycling', () => {
+        const { container, outer, onSelectElements, onUpdateElements } = renderCanvas(els, layers, { selectedElementIds: ['aside', 'middle'] });
+        fireEvent.mouseDown(container.querySelector('[data-element-id="top"]')!,
+            { clientX: 50, clientY: 50, button: 0, shiftKey: true });
+        fireEvent.mouseMove(outer, { clientX: 80, clientY: 80, shiftKey: true });
+        fireEvent.mouseUp(outer, { clientX: 80, clientY: 80, shiftKey: true });
+
+        const updated: TemplateElement[] = onUpdateElements.mock.calls.at(-1)![0];
+        expect(updated.find(e => e.id === 'middle')!.x).toBe(30);
+        expect(updated.find(e => e.id === 'aside')!.x).toBe(330);
+        expect(updated.find(e => e.id === 'top')!.x).toBe(0); // unselected foreground untouched
+        // no cycle happened
+        expect(onSelectElements.mock.calls.flatMap(c => c[0])).not.toContain('bottom');
+    });
+
+    it('still plain-toggles when the click point has no stack (single element)', () => {
+        const { container, outer, onSelectElements } = renderCanvas(els, layers, { selectedElementIds: ['aside'] });
+        fireEvent.mouseDown(container.querySelector('[data-element-id="aside"]')!,
+            { clientX: 350, clientY: 350, button: 0, shiftKey: true });
+        fireEvent.mouseUp(outer, { clientX: 350, clientY: 350, shiftKey: true });
+        expect(onSelectElements.mock.calls.at(-1)![0]).toEqual([]);
+    });
+});
