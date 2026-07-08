@@ -162,6 +162,22 @@ describe('LayersPanel element rows', () => {
         expect(updated.find(e => e.id === 'r1')).toMatchObject({ layerId: 'front', zIndex: 2 });
     });
 
+    it('an aborted element drag (dragEnd without drop) does not hijack a later layer reorder', () => {
+        const { getByTestId, onUpdateElements, onUpdateTemplate } = renderPanel(elements, layers);
+        // Start dragging an element row, then release OUTSIDE any layer row (abort).
+        fireEvent.dragStart(getByTestId('element-row-r1'));
+        fireEvent.dragEnd(getByTestId('element-row-r1'));
+        // Now a normal layer reorder: drag 'back' onto 'front'.
+        fireEvent.dragStart(getByTestId('layer-row-back'));
+        fireEvent.dragOver(getByTestId('layer-row-front'));
+        fireEvent.drop(getByTestId('layer-row-front'));
+        // The stale element must NOT be retagged...
+        expect(onUpdateElements).not.toHaveBeenCalled();
+        // ...and the layers MUST have been reordered.
+        const updated: Layer[] = onUpdateTemplate.mock.calls[0][0].layers;
+        expect(updated.find(l => l.id === 'back')!.order).toBeGreaterThan(updated.find(l => l.id === 'front')!.order);
+    });
+
     it('"move selection to layer" reassigns the whole canvas selection', () => {
         const { getByTestId, onUpdateElements } = renderPanel(elements, layers, { selectedElementIds: ['r1', 't1'] });
         fireEvent.change(getByTestId('move-selection-select'), { target: { value: 'front' } });

@@ -102,9 +102,12 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
                     <div data-testid={`layer-row-${layer.id}`}
                         draggable
                         onDragStart={() => setDragLayerId(layer.id)}
+                        onDragEnd={() => { setDragElementId(null); setDragLayerId(null); }}
                         onDragOver={e => e.preventDefault()}
                         onDrop={() => {
-                            if (dragElementId) {
+                            // Only retag when an element drag was actually in progress (no layer
+                            // reorder underway) — an aborted element drag must not hijack a reorder.
+                            if (dragElementId && !dragLayerId) {
                                 onUpdateElements(moveElementsToLayer(template.elements, [dragElementId], layer.id), true);
                                 setDragElementId(null);
                             } else {
@@ -180,6 +183,7 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
                                     aria-selected={isSelected}
                                     draggable
                                     onDragStart={e => { e.stopPropagation(); setDragElementId(el.id); }}
+                                    onDragEnd={() => { setDragElementId(null); setDragLayerId(null); }}
                                     onClick={() => onSelectElements([el.id])}
                                     className={clsx('flex items-center gap-1.5 pl-9 pr-2 py-1 text-xs cursor-pointer border-b border-slate-50',
                                         isSelected ? 'bg-blue-100 text-blue-800' : 'text-slate-500 hover:bg-slate-50')}>
