@@ -218,16 +218,19 @@ Each element MUST have these required base properties:
 \`\`\`javascript
 {
   id: "unique_id",        // unique within template
-  type: "rect",           // "rect" | "ellipse" | "text" | "triangle" | "line" | "grid"
+  type: "rect",           // "rect" | "ellipse" | "text" | "triangle" | "line" | "grid" | "svg"
   x: 0,                   // x position (pixels)
-  y: 0,                   // y position (pixels)  
+  y: 0,                   // y position (pixels)
   w: 100,                 // width (pixels)
   h: 50,                  // height (pixels)
-  rotation: 0,            // rotation in degrees
+  rotation: 0,            // rotation in degrees (rotates around the element's center)
   fill: "#ffffff",        // fill color (hex or "none")
   stroke: "#000000",      // stroke color (hex or "none")
   strokeWidth: 1,         // stroke width (pixels)
-  opacity: 1              // 0 to 1
+  opacity: 1,             // 0 to 1
+  zIndex: 0               // optional: stacking order. Higher = drawn on top. Elements later
+                          // in the array already draw over earlier ones, but zIndex lets you
+                          // override that (e.g. keep an invisible link rect above its artwork).
 }
 \`\`\`
 
@@ -236,11 +239,18 @@ All base properties + optional:
 \`\`\`javascript
 {
   borderRadius: 0,                    // corner radius
-  borderStyle: "solid",               // "solid" | "dashed" | "dotted" | "none"
+  borderStyle: "solid",               // "solid" | "dashed" | "dotted" | "double" | "none"
   fillType: "solid",                  // "solid" | "pattern"
   patternType: "lines-h",             // "lines-h" | "lines-v" | "lines-d" | "dots"
   patternSpacing: 5,                  // spacing between pattern elements
-  patternWeight: 1                    // pattern line width or dot size
+  patternWeight: 1,                   // pattern line width or dot size
+
+  // OPTIONAL per-side borders. Omit a side to fall back to the global stroke;
+  // set a side to draw only that edge (e.g. an underline-style bottom rule).
+  borderSides: {
+    bottom: { width: 1, color: "#000000", style: "solid" }
+    // top / right / left take the same shape
+  }
 }
 \`\`\`
 
@@ -296,14 +306,14 @@ All base properties + required gridConfig:
     gapY: 2,                          // vertical gap between cells (pixels)
     sourceType: "current",            // "current" = children of this node, "specific" = children of sourceId
     sourceId: "",                     // node ID if sourceType is "specific"
-    displayField: "title",            // which node.data field to show (e.g., "title", "day", "month")
-    displayField: "title",            // which node.data field to show (e.g., "title", "day", "month")
-    
+    displayField: "title",            // which field to show. "title" shows the node's title;
+                                      // any other name shows child.data[displayField]
+
     // --- OFFSET CONFIGURATION ---
     // Offsets effectively add "empty cells" before the first child is rendered.
     // 1. Static Mode: Hardcoded number of empty cells.
-    offsetMode: "static", 
-    offsetStart: 0, 
+    offsetMode: "static",
+    offsetStart: 0,
 
     // 2. Dynamic Mode: Reads offset from the data of the FIRST CHILD item.
     // Why? For a monthly calendar, the "Month" node doesn't know when it starts.
@@ -312,10 +322,43 @@ All base properties + required gridConfig:
     // offsetMode: "dynamic",
     // offsetField: "startWeekday",      // e.g. 0=Sun, 1=Mon...
     // offsetAdjustment: 0,              // optional add/subtract
-    
+
     dataSliceStart: 0,                // skip first N children
     dataSliceCount: 31                // only show this many children (e.g., 31 for days in month)
   }
+}
+\`\`\`
+
+**Optional grid cell styling** (all fields below are optional; omit for plain cells):
+\`\`\`javascript
+gridConfig: {
+  // ...core config above...
+
+  // Cell borders. Defaults to the element's own stroke/strokeWidth when omitted.
+  gridBorderMode: "all",              // "all" | "outside" | "inside" | "none"
+  gridBorderColor: "#c8b58c",         // override cell border color
+  gridBorderWidth: 1,                 // override cell border width
+  gridBorderStyle: "solid",           // "solid" | "dashed" | "dotted" | "double" | "none"
+  gridBorderRadius: 0,                // rounded cell corners
+  showEmptyCellBorders: false,        // also draw borders on empty/offset cells (default false)
+
+  // Table-style emphasis (useful when the grid reads like a spreadsheet)
+  headerRow: false,                   // style the first row as a header
+  headerRowFill: "#7a1f1f",
+  headerRowTextColor: "#f3ead6",
+  headerRowFontWeight: "bold",        // "normal" | "bold"
+  firstColumn: false,                 // style the first column as a header column
+  firstColumnFill: "#ede1c6",
+  firstColumnTextColor: "#2b2118",
+  firstColumnFontWeight: "bold",
+  alternateRows: false,               // zebra striping
+  alternateRowFill: "#ede1c6",
+  alternateColumns: false,
+  alternateColumnFill: "#ede1c6",
+
+  // Drill into descendants instead of direct children (applied BEFORE dataSlice).
+  // Each step slices the level's children, then descends into their children.
+  traversalPath: [ { sliceStart: 0, sliceCount: 4 } ]
 }
 \`\`\`
 
@@ -329,11 +372,46 @@ Example: A monthly calendar grid with specific start day (dynamic offset):
     // "offset" field in Month node data stores weekday of 1st (0=Sun, 1=Mon...).
     // This shifts the first cell (Day 1) to the correct column.
     offsetMode: "dynamic",
-    offsetField: "startWeekday", 
-    offsetAdjustment: 0 
+    offsetField: "startWeekday",
+    offsetAdjustment: 0
   }
 }
 \`\`\`
+
+### SVG (type: "svg")
+Use SVG elements for icons, crests, banners, decorative art, and any custom vector
+shape the built-in rect/ellipse/triangle/line can't express. The raw markup goes in
+\`svgContent\`; the element's x/y/w/h box positions and sizes it like any other element.
+
+\`\`\`javascript
+{
+  id: "crest",
+  type: "svg",
+  x: 175, y: 42, w: 160, h: 134,
+  // ...base props (rotation, opacity, zIndex) apply as usual...
+  svgContent: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><polygon points="50,3 91,26 91,74 50,97 9,74 9,26" fill="#a9812e" stroke="#2b2118" stroke-width="3"/></svg>'
+  // NOTE: the base "fill" / "stroke" / "strokeWidth" props are IGNORED for svg —
+  // color comes only from inline attributes inside the markup (see rules below).
+}
+\`\`\`
+
+**Authoring rules (follow these or the SVG will render wrong or be stripped):**
+- **Use \`viewBox\` only — do NOT put \`width\`/\`height\` on the \`<svg>\` tag.** Any width/height
+  attributes are stripped and replaced so the art scales to the element box. Set the viewBox
+  aspect ratio to match your w:h box, or the art is aspect-fit and centered
+  (\`preserveAspectRatio="xMidYMid meet"\`, i.e. letterboxed, never distorted).
+- **Inline presentation attributes only** — put \`fill\`, \`stroke\`, \`stroke-width\`,
+  \`stroke-linejoin\`, \`opacity\`, etc. directly on each shape. Do NOT rely on CSS
+  \`<style>\` blocks, \`class=\`, or external stylesheets.
+- **Plain shapes and paths only:** \`<path>\`, \`<polygon>\`, \`<rect>\`, \`<circle>\`, \`<ellipse>\`,
+  \`<line>\`, \`<polyline>\`, \`<g>\`, and \`<svg>\` transforms. These export correctly to PDF.
+  Avoid \`<image>\`, \`<foreignObject>\`, external \`<use href>\`, embedded fonts, and filters —
+  they may render on screen but drop out or misrender in the exported PDF.
+- **No scripts or interactivity:** \`<script>\`, event handlers (\`onload\`, \`onclick\`, ...),
+  and \`javascript:\` URLs are removed by the sanitizer before rendering. SVGs published to
+  the gallery are opened in other users' browsers, so untrusted markup is always sanitized.
+- **Reuse via string variables:** since templates are plain JS, define an SVG string once
+  (e.g. \`const CREST = '<svg ...>...</svg>'\`) and reference it from multiple elements.
 
 ### Link Targets
 Elements can trigger navigation when clicked. Use \`linkTarget\` and \`linkValue\`:
@@ -371,9 +449,16 @@ Elements can trigger navigation when clicked. Use \`linkTarget\` and \`linkValue
 
   // OPTION 7: Specific Node
   linkTarget: "specific_node",
-  linkValue: "target_node_id"
+  linkValue: "target_node_id",
+
+  // OPTION 8: External URL (opens in a new browser tab)
+  linkTarget: "url",
+  linkValue: "https://example.com"
 }
 \`\`\`
+
+Any element type can carry a link (a common pattern is an invisible \`rect\` —
+\`fill: "none", stroke: "none"\` — laid over artwork as a tap target).
 
 ## Node Schema  
 Each node is a page in the document:
@@ -405,14 +490,30 @@ To do this, create a "pointer" node in the second parent's children list that re
 }
 \`\`\`
 
-## Available Constants
-- RM_PP_WIDTH = 509 (reMarkable Paper Pro width)
-- RM_PP_HEIGHT = 679 (reMarkable Paper Pro height)
-- A4_WIDTH = 595
-- A4_HEIGHT = 842
+## Two Separate Scopes — what's available where
+The Templates script and the Hierarchy script run as **two independent functions with
+different injected variables.** A name available in one is NOT available in the other.
 
-## Helper Functions
-- \`createId('prefix')\` is provided in the scope. DO NOT define it yourself. Use it to generate unique IDs like "prefix_abc123xyz".
+**Templates script scope** — these page-size constants are pre-injected as bare identifiers:
+- \`RM_PP_WIDTH\` = 509 (reMarkable Paper Pro width)
+- \`RM_PP_HEIGHT\` = 679 (reMarkable Paper Pro height)
+- \`A4_WIDTH\` = 595
+- \`A4_HEIGHT\` = 842
+
+\`createId\` is **NOT** available in the Templates script. Template ids and element ids are
+just literal strings you choose (e.g. \`id: "tpl_home"\`) — they must be stable so the
+Hierarchy script's node \`type\` fields can reference them. (Element \`id\`s may even be omitted;
+the generator auto-fills any that are missing.)
+
+**Hierarchy script scope** — these are pre-injected:
+- \`templates\` — the object your Templates script returned (already normalized), in case you
+  want to inspect it.
+- \`createId('prefix')\` — helper that returns a unique id like \`"prefix_abc123xyz"\`. Use it for
+  node ids. DO NOT define it yourself. It is the ONLY place \`createId\` exists.
+
+The page-size constants (\`RM_PP_WIDTH\`, etc.) are **NOT** available in the Hierarchy script —
+referencing them there throws a ReferenceError. The Hierarchy script deals only with nodes,
+not pixel dimensions, so it doesn't need them.
 
 ## Output Format
 Return TWO scripts:
