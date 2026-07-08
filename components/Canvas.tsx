@@ -7,6 +7,7 @@ import { CanvasElement } from './canvas/CanvasElement';
 import { OverlayTextEditor } from './canvas/OverlayTextEditor';
 import { SelectionHandles } from './canvas/SelectionHandles';
 import { resolveActiveLayerId, nextZIndexInLayer, sortElementsForRender } from '../services/layers';
+import { hitTestPoint } from '../services/hitTest';
 
 interface CanvasProps {
     template: PageTemplate;
@@ -227,6 +228,8 @@ export const Canvas: React.FC<CanvasProps> = ({
     // Group Transform State
     const initialGroupElements = useRef<TemplateElement[]>([]);
     const initialGroupBoundsRef = useRef<TemplateElement | null>(null); // For rotating group visualization
+    // Alt-click cycle state: last click point + current depth in the stack
+    const altCycleRef = useRef<{ x: number; y: number; index: number } | null>(null);
     const [persistentGroupRotation, setPersistentGroupRotation] = useState(0);
 
     // Reset persistent rotation and pivots when selection changes
@@ -524,7 +527,31 @@ export const Canvas: React.FC<CanvasProps> = ({
         // 3. Selection / Transform Logic
         if (tool === 'select') {
             const targetEl = e.target as HTMLElement;
-            const clickedId = targetEl.closest('[data-element-id]')?.getAttribute('data-element-id');
+
+            // Alt-click: cycle through the stack under the cursor (visible + unlocked layers, top -> bottom)
+            if (e.altKey) {
+                const stack = hitTestPoint(coords, elements, template.layers, nodes, currentNodeId);
+                if (stack.length > 0) {
+                    const prev = altCycleRef.current;
+                    const samePoint = !!prev && Math.abs(prev.x - coords.x) < 3 && Math.abs(prev.y - coords.y) < 3;
+                    const index = samePoint ? (prev!.index + 1) % stack.length : 0;
+                    altCycleRef.current = { x: coords.x, y: coords.y, index };
+                    onSelectElements([stack[index].id]);
+                    e.preventDefault();
+                    return;
+                }
+            }
+
+            // Any non-Alt click resets the Alt-click cycle
+            altCycleRef.current = null;
+
+            let clickedId = targetEl.closest('[data-element-id]')?.getAttribute('data-element-id') ?? null;
+            // Locked layers: still rendered, but clicks pass through as if the canvas were empty
+            if (clickedId) {
+                const clickedEl = elements.find(el => el.id === clickedId);
+                const clickedLayer = clickedEl?.layerId ? template.layers?.find(l => l.id === clickedEl.layerId) : undefined;
+                if (clickedLayer?.locked) clickedId = null;
+            }
 
             // Check for Pivot Handle (Transform Origin)
             if (targetEl.closest('[data-pivot-handle]')) {

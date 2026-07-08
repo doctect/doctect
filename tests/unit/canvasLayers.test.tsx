@@ -50,3 +50,61 @@ describe('canvas render order and hidden-layer exclusion', () => {
         expect(ids).toEqual(['b2', 'b9', 'f1']); // no h1; back layer before front
     });
 });
+
+describe('locked-layer click-through', () => {
+    it('does not select an element whose layer is locked when clicked directly', () => {
+        const layers = [makeLayer('lock', 0, { locked: true })];
+        const elements = [makeEl('lockedEl', { layerId: 'lock' })];
+        const { container, onSelectElements } = renderCanvas(elements, layers);
+        const node = container.querySelector('[data-element-id="lockedEl"]')!;
+        fireEvent.mouseDown(node, { clientX: 50, clientY: 50, button: 0 });
+        const selectedIds = onSelectElements.mock.calls.flatMap(c => c[0]);
+        expect(selectedIds).not.toContain('lockedEl');
+    });
+});
+
+describe('Alt-click cycle', () => {
+    const layers = [makeLayer('back', 0), makeLayer('front', 1)];
+    const stackOf3 = [
+        makeEl('bottom', { layerId: 'back', zIndex: 1 }),
+        makeEl('middle', { layerId: 'back', zIndex: 2 }),
+        makeEl('top', { layerId: 'front', zIndex: 1 }),
+    ];
+
+    it('selects the topmost element first, then steps one deeper per Alt+click on the same spot, wrapping', () => {
+        const { outer, onSelectElements } = renderCanvas(stackOf3, layers);
+        const alt = { clientX: 50, clientY: 50, button: 0, altKey: true };
+        fireEvent.mouseDown(outer, alt);
+        fireEvent.mouseDown(outer, alt);
+        fireEvent.mouseDown(outer, alt);
+        fireEvent.mouseDown(outer, alt); // wraps
+        expect(onSelectElements.mock.calls.map(c => c[0])).toEqual(
+            [['top'], ['middle'], ['bottom'], ['top']]
+        );
+    });
+
+    it('restarts at the top when Alt+clicking a different spot', () => {
+        const { outer, onSelectElements } = renderCanvas(stackOf3, layers);
+        fireEvent.mouseDown(outer, { clientX: 50, clientY: 50, button: 0, altKey: true });
+        fireEvent.mouseDown(outer, { clientX: 50, clientY: 50, button: 0, altKey: true });
+        fireEvent.mouseDown(outer, { clientX: 90, clientY: 90, button: 0, altKey: true });
+        expect(onSelectElements.mock.calls.map(c => c[0])).toEqual([['top'], ['middle'], ['top']]);
+    });
+
+    it('skips hidden and locked layers while cycling', () => {
+        const specialLayers = [
+            makeLayer('ok', 0),
+            makeLayer('hid', 1, { visible: false }),
+            makeLayer('lock', 2, { locked: true }),
+        ];
+        const els = [
+            makeEl('okEl', { layerId: 'ok' }),
+            makeEl('hiddenEl', { layerId: 'hid' }),
+            makeEl('lockedEl', { layerId: 'lock' }),
+        ];
+        const { outer, onSelectElements } = renderCanvas(els, specialLayers);
+        fireEvent.mouseDown(outer, { clientX: 50, clientY: 50, button: 0, altKey: true });
+        fireEvent.mouseDown(outer, { clientX: 50, clientY: 50, button: 0, altKey: true });
+        expect(onSelectElements.mock.calls.map(c => c[0])).toEqual([['okEl'], ['okEl']]);
+    });
+});
