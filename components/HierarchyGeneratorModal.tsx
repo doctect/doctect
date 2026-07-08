@@ -1,6 +1,7 @@
 
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { AppState, RM_PP_WIDTH, RM_PP_HEIGHT, A4_WIDTH, A4_HEIGHT } from '../types';
+import { normalizeGeneratedTemplates } from '../services/generatorTemplates';
 import { X, Play, AlertTriangle, CheckCircle2, RotateCcw, LayoutTemplate, Network, Sparkles, Minus, Plus, WrapText, HelpCircle, Book, ChevronDown, ChevronUp, Copy, Check } from 'lucide-react';
 import { HighlightedCode } from './HighlightedCode';
 import { GENERATOR_PRESETS } from './generatorPresets';
@@ -1949,23 +1950,16 @@ export const HierarchyGeneratorModal: React.FC<HierarchyGeneratorModalProps> = (
         throw new Error("Template script must return an object where keys are template IDs.");
       }
 
-      // Re-key templates by their ID to ensure consistency and auto-generate element IDs
-      const normalizedTemplates: any = {};
+      // Re-key templates by their ID, auto-generate element IDs, and accept either the flat
+      // { templateId: template } shape or the documented multi-device { variants, activeVariantId }
+      // shape (see the LLM prompt / schema docs below) — both are normalized the same way.
+      const normalized = normalizeGeneratedTemplates(templates);
+      const activeTemplateLookup: Record<string, any> = normalized.templates
+        ?? normalized.variants![normalized.activeVariantId!].templates;
 
-      Object.values(templates).forEach((tpl: any) => {
-        if (!tpl.id) return;
-
-        // Auto-generate element IDs
-        if (tpl.elements && Array.isArray(tpl.elements)) {
-          tpl.elements.forEach((el: any, idx: number) => {
-            if (!el.id) {
-              el.id = `gen_${tpl.id}_${idx}_${Math.random().toString(36).substr(2, 5)}`;
-            }
-          });
-        }
-
-        normalizedTemplates[tpl.id] = tpl;
-      });
+      if (Object.keys(activeTemplateLookup).length === 0) {
+        throw new Error("Template script produced no usable templates — check that each template object has an 'id' field.");
+      }
 
       // 2. Execute Hierarchy Script
       const createId = (prefix: string = 'node') => `${prefix}_${Math.random().toString(36).substr(2, 9)}`;
@@ -1974,7 +1968,7 @@ export const HierarchyGeneratorModal: React.FC<HierarchyGeneratorModalProps> = (
             ${hierarchyScript}
         `);
 
-      const result = hierarchyFn(normalizedTemplates, createId);
+      const result = hierarchyFn(activeTemplateLookup, createId);
 
       if (!result || !result.nodes || !result.rootId) {
         throw new Error("Hierarchy script must return an object with { nodes, rootId }.");
@@ -1985,11 +1979,23 @@ export const HierarchyGeneratorModal: React.FC<HierarchyGeneratorModalProps> = (
         throw new Error(`Root ID '${result.rootId}' not found in nodes.`);
       }
 
+      // Every node's `type` must resolve to a real template, or the editor will crash later
+      // trying to read that (nonexistent) template's width/height when rendering the page.
+      const unknownTypes = new Set<string>();
+      Object.values(result.nodes).forEach((n: any) => {
+        if (n && n.type && !activeTemplateLookup[n.type]) unknownTypes.add(n.type);
+      });
+      if (unknownTypes.size > 0) {
+        throw new Error(`Hierarchy references unknown template type(s): ${[...unknownTypes].join(', ')}. Check that these ids exist in the Templates script output.`);
+      }
+
       // 4. Import
       onImport({
         nodes: result.nodes,
         rootId: result.rootId,
-        templates: normalizedTemplates as any
+        ...(normalized.templates
+          ? { templates: normalized.templates as any }
+          : { variants: normalized.variants as any, activeVariantId: normalized.activeVariantId })
       });
       setSuccess(true);
       setTimeout(() => {
