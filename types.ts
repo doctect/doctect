@@ -71,6 +71,7 @@ export interface TemplateElement {
   rotation: number;
   transformOrigin?: { x: number, y: number }; // Normalized coordinates (0-1). Default { x: 0.5, y: 0.5 }
   zIndex?: number;
+  layerId?: string; // Layer membership (Shape B). Always present after v8 migration; optional so pre-migration states type-check.
   flip?: boolean; // For lines: false = \, true = /
 
   // Styling
@@ -117,12 +118,23 @@ export interface TemplateElement {
   svgContent?: string; // Raw SVG markup for svg elements
 }
 
+export interface Layer {
+  id: string;
+  name: string;
+  order: number;       // outer stacking; higher order = frontmost
+  visible: boolean;    // false => excluded from canvas, PDF, and thumbnails
+  locked: boolean;     // elements not selectable/editable on canvas (still rendered)
+  color?: string;      // optional label chip for panel grouping
+  collapsed?: boolean; // panel fold state (UI-only; safe to persist)
+}
+
 export interface PageTemplate {
   id: string;
   name: string;
   width: number;
   height: number;
   elements: TemplateElement[];
+  layers?: Layer[]; // Layer metadata (Shape B). Always present after v8 migration; optional so pre-migration states type-check.
 }
 
 export interface Variant {
@@ -147,6 +159,8 @@ export interface AppState {
   scale: number;
   tool: 'select' | 'hand' | ElementType;
   showJsonModal: boolean;
+  activeLayerId?: string;    // Layer new elements are created into (resolved per active template; fallback: frontmost)
+  showLayersPanel?: boolean; // Layers panel visibility (toolbar toggle)
 
   // Layout State
   sidebarWidth: number;
