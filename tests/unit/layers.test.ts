@@ -2,7 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { Layer, PageTemplate, TemplateElement } from '../../types';
 import {
     createDefaultLayer, ensureTemplateLayers, sortElementsForRender,
-    resolveActiveLayerId, nextZIndexInLayer, moveElementsToLayer, getElementLabel
+    resolveActiveLayerId, nextZIndexInLayer, moveElementsToLayer, getElementLabel,
+    addLayer, removeLayerFromTemplate, moveLayerToIndex
 } from '../../services/layers';
 
 const makeEl = (id: string, overrides: Partial<TemplateElement> = {}): TemplateElement => ({
@@ -118,5 +119,42 @@ describe('getElementLabel', () => {
         expect(getElementLabel(makeEl('b', { type: 'text', text: 'x'.repeat(40) }))).toBe('x'.repeat(24) + '…');
         expect(getElementLabel(makeEl('c', { type: 'ellipse' }))).toBe('Ellipse');
         expect(getElementLabel(makeEl('d', { type: 'text', text: '' }))).toBe('Text');
+    });
+});
+
+describe('addLayer', () => {
+    it('appends "Layer N" above everything', () => {
+        const { layers, newLayer } = addLayer([makeLayer('a', 0, { name: 'Layer 1' })]);
+        expect(layers).toHaveLength(2);
+        expect(newLayer).toMatchObject({ name: 'Layer 2', order: 1, visible: true, locked: false });
+    });
+});
+
+describe('removeLayerFromTemplate', () => {
+    it('refuses to remove the last layer', () => {
+        const tpl = ensureTemplateLayers(makeTemplate([makeEl('a')]));
+        expect(removeLayerFromTemplate(tpl, tpl.layers![0].id)).toBe(tpl);
+    });
+    it('re-tags orphaned elements onto the lowest-order remaining layer, stacked on top', () => {
+        const layers = [makeLayer('bottom', 0), makeLayer('doomed', 1)];
+        const tpl = makeTemplate([
+            makeEl('keep', { layerId: 'bottom', zIndex: 4 }),
+            makeEl('o1', { layerId: 'doomed', zIndex: 1 }),
+            makeEl('o2', { layerId: 'doomed', zIndex: 2 }),
+        ], layers);
+        const out = removeLayerFromTemplate(tpl, 'doomed');
+        expect(out.layers!.map(l => l.id)).toEqual(['bottom']);
+        expect(out.elements.find(e => e.id === 'o1')).toMatchObject({ layerId: 'bottom', zIndex: 5 });
+        expect(out.elements.find(e => e.id === 'o2')).toMatchObject({ layerId: 'bottom', zIndex: 6 });
+    });
+});
+
+describe('moveLayerToIndex', () => {
+    it('moves a layer and renumbers order 0..n-1', () => {
+        const layers = [makeLayer('a', 0), makeLayer('b', 1), makeLayer('c', 2)];
+        const out = moveLayerToIndex(layers, 'c', 0);
+        const byOrder = [...out].sort((x, y) => x.order - y.order).map(l => l.id);
+        expect(byOrder).toEqual(['c', 'a', 'b']);
+        expect([...out].sort((x, y) => x.order - y.order).map(l => l.order)).toEqual([0, 1, 2]);
     });
 });

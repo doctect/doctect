@@ -3,6 +3,7 @@ import { AppState, AppNode, TemplateElement, PageTemplate, Variant, RM_PP_WIDTH,
 import { Sidebar } from './Sidebar';
 import { Canvas } from './Canvas';
 import { PropertiesPanel } from './PropertiesPanel';
+import { LayersPanel } from './LayersPanel';
 import { JsonModal } from './JsonModal';
 import { NodeSelectorModal } from './NodeSelectorModal';
 import { DeleteConfirmModal } from './DeleteConfirmModal';
@@ -1214,6 +1215,17 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, initial
                         className="absolute left-0 top-0 bottom-0 w-1 hover:bg-blue-400 cursor-col-resize z-30 transition-colors"
                         onMouseDown={() => setResizingPanel('properties')}
                     />
+                    {state.showLayersPanel && currentTemplate && (
+                        <LayersPanel
+                            template={currentTemplate}
+                            selectedElementIds={state.selectedElementIds}
+                            activeLayerId={state.activeLayerId}
+                            onUpdateTemplate={(updates) => handleUpdateTemplate(currentTemplate.id, updates)}
+                            onUpdateElements={(els, save) => handleUpdateTemplateElements(els, save)}
+                            onSelectElements={(ids) => setState(s => ({ ...s, selectedElementIds: ids }))}
+                            onSetActiveLayer={(layerId) => setState(s => ({ ...s, activeLayerId: layerId }))}
+                        />
+                    )}
                     <PropertiesPanel
                         state={state}
                         onUpdateElements={(els, save) => handleUpdateTemplateElements(els, save)}

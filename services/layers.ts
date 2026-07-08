@@ -79,3 +79,46 @@ export function getElementLabel(el: TemplateElement): string {
     }
     return el.type.charAt(0).toUpperCase() + el.type.slice(1);
 }
+
+/** Append a new "Layer N" above everything (order = max + 1). */
+export function addLayer(layers: Layer[]): { layers: Layer[]; newLayer: Layer } {
+    const maxOrder = layers.reduce((m, l) => Math.max(m, l.order), -1);
+    const newLayer: Layer = {
+        id: createLayerId(),
+        name: `Layer ${layers.length + 1}`,
+        order: maxOrder + 1,
+        visible: true,
+        locked: false,
+    };
+    return { layers: [...layers, newLayer], newLayer };
+}
+
+/**
+ * Remove a layer, re-tagging its elements onto the lowest-order remaining layer
+ * (stacked on top, preserving their relative zIndex order). No-op on the last layer.
+ */
+export function removeLayerFromTemplate(template: PageTemplate, layerId: string): PageTemplate {
+    const layers = template.layers ?? [];
+    if (layers.length <= 1 || !layers.some(l => l.id === layerId)) return template;
+    const remaining = layers.filter(l => l.id !== layerId);
+    const targetId = [...remaining].sort((a, b) => a.order - b.order)[0].id;
+    const orphans = template.elements
+        .filter(el => el.layerId === layerId)
+        .sort((a, b) => (a.zIndex || 0) - (b.zIndex || 0))
+        .map(el => el.id);
+    return {
+        ...template,
+        layers: remaining,
+        elements: moveElementsToLayer(template.elements, orphans, targetId),
+    };
+}
+
+/** Move a layer to targetIndex within the bottom->top (order asc) list; renumber order 0..n-1. */
+export function moveLayerToIndex(layers: Layer[], layerId: string, targetIndex: number): Layer[] {
+    const asc = [...layers].sort((a, b) => a.order - b.order);
+    const from = asc.findIndex(l => l.id === layerId);
+    if (from === -1) return layers;
+    const [moved] = asc.splice(from, 1);
+    asc.splice(Math.max(0, Math.min(targetIndex, asc.length)), 0, moved);
+    return asc.map((l, i) => ({ ...l, order: i }));
+}
