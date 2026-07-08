@@ -1,10 +1,17 @@
 import React, { useState } from 'react';
 import clsx from 'clsx';
-import { ChevronDown, ChevronRight, Eye, EyeOff, GripVertical, Layers, Lock, Plus, Trash2, Unlock } from 'lucide-react';
+import {
+    ChevronDown, ChevronRight, Circle, Eye, EyeOff, Grid3X3, GripVertical, Image as ImageIcon,
+    Layers, Lock, Minus, Plus, Search, Square, Trash2, Triangle, Type, Unlock,
+} from 'lucide-react';
 import { Layer, PageTemplate, TemplateElement } from '../types';
-import { addLayer, moveLayerToIndex, removeLayerFromTemplate } from '../services/layers';
+import { addLayer, getElementLabel, moveElementsToLayer, moveLayerToIndex, removeLayerFromTemplate } from '../services/layers';
 
 const LAYER_COLORS = ['#ef4444', '#f59e0b', '#22c55e', '#3b82f6', '#a855f7', ''];
+
+const TYPE_ICONS: Record<string, React.FC<any>> = {
+    rect: Square, ellipse: Circle, triangle: Triangle, text: Type, grid: Grid3X3, line: Minus, svg: ImageIcon,
+};
 
 interface LayersPanelProps {
     template: PageTemplate;
@@ -25,6 +32,8 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
     const [renameValue, setRenameValue] = useState('');
     const [colorPickerId, setColorPickerId] = useState<string | null>(null);
     const [dragLayerId, setDragLayerId] = useState<string | null>(null);
+    const [filter, setFilter] = useState('');
+    const [dragElementId, setDragElementId] = useState<string | null>(null);
 
     const updateLayer = (id: string, updates: Partial<Layer>) => {
         onUpdateTemplate({ layers: (template.layers ?? []).map(l => (l.id === id ? { ...l, ...updates } : l)) });
@@ -67,13 +76,41 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
                     <Plus size={14} />
                 </button>
             </div>
+            <div className="flex items-center gap-2 px-3 py-1.5 border-b border-slate-100">
+                <div className="flex items-center gap-1 flex-1 min-w-0 bg-slate-50 rounded px-1.5">
+                    <Search size={11} className="text-slate-400 flex-shrink-0" />
+                    <input value={filter} onChange={e => setFilter(e.target.value)}
+                        placeholder="Filter elements…"
+                        className="w-full bg-transparent py-1 text-xs outline-none" />
+                </div>
+                {selectedElementIds.length > 0 && (
+                    <select data-testid="move-selection-select" value=""
+                        title="Move selection to layer"
+                        className="text-xs border border-slate-200 rounded py-1 max-w-[110px]"
+                        onChange={e => {
+                            if (!e.target.value) return;
+                            onUpdateElements(moveElementsToLayer(template.elements, selectedElementIds, e.target.value), true);
+                        }}>
+                        <option value="">Move to…</option>
+                        {layers.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+                    </select>
+                )}
+            </div>
             <div className="overflow-y-auto">
                 {layers.map(layer => (
-                    <div key={layer.id} data-testid={`layer-row-${layer.id}`}
+                    <React.Fragment key={layer.id}>
+                    <div data-testid={`layer-row-${layer.id}`}
                         draggable
                         onDragStart={() => setDragLayerId(layer.id)}
                         onDragOver={e => e.preventDefault()}
-                        onDrop={() => handleDropOnLayer(layer.id)}
+                        onDrop={() => {
+                            if (dragElementId) {
+                                onUpdateElements(moveElementsToLayer(template.elements, [dragElementId], layer.id), true);
+                                setDragElementId(null);
+                            } else {
+                                handleDropOnLayer(layer.id);
+                            }
+                        }}
                         className={clsx('group flex items-center gap-1 px-2 py-1.5 border-b border-slate-50 text-sm',
                             activeLayerId === layer.id ? 'bg-blue-50' : 'hover:bg-slate-50')}>
                         <span title="Reorder layer" className="cursor-grab text-slate-300 group-hover:text-slate-400">
@@ -127,8 +164,32 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
                             <Trash2 size={12} />
                         </button>
                     </div>
+                    {!layer.collapsed && template.elements
+                        .filter(el => el.layerId === layer.id)
+                        .filter(el => {
+                            if (!filter.trim()) return true;
+                            const q = filter.trim().toLowerCase();
+                            return getElementLabel(el).toLowerCase().includes(q) || el.type.includes(q);
+                        })
+                        .sort((a, b) => (b.zIndex || 0) - (a.zIndex || 0))
+                        .map(el => {
+                            const Icon = TYPE_ICONS[el.type] || Square;
+                            const isSelected = selectedElementIds.includes(el.id);
+                            return (
+                                <div key={el.id} data-testid={`element-row-${el.id}`}
+                                    aria-selected={isSelected}
+                                    draggable
+                                    onDragStart={e => { e.stopPropagation(); setDragElementId(el.id); }}
+                                    onClick={() => onSelectElements([el.id])}
+                                    className={clsx('flex items-center gap-1.5 pl-9 pr-2 py-1 text-xs cursor-pointer border-b border-slate-50',
+                                        isSelected ? 'bg-blue-100 text-blue-800' : 'text-slate-500 hover:bg-slate-50')}>
+                                    <Icon size={11} className="flex-shrink-0" />
+                                    <span className="truncate">{getElementLabel(el)}</span>
+                                </div>
+                            );
+                        })}
+                    </React.Fragment>
                 ))}
-                {/* Element rows are added in the next task */}
             </div>
         </div>
     );

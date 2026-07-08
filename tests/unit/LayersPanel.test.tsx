@@ -109,3 +109,64 @@ describe('LayersPanel layer rows', () => {
         expect(onUpdateElements.mock.calls[0][0][0]).toMatchObject({ id: 'x', layerId: 'back' });
     });
 });
+
+describe('LayersPanel element rows', () => {
+    const layers = [makeLayer('back', 0, { name: 'Back' }), makeLayer('front', 1, { name: 'Front' })];
+    const elements = [
+        makeEl('r1', { layerId: 'back', zIndex: 1 }),
+        makeEl('t1', { layerId: 'back', zIndex: 2, type: 'text', text: 'Big title' }),
+        makeEl('e1', { layerId: 'front', zIndex: 1, type: 'ellipse' }),
+    ];
+
+    it('lists each layer\'s elements frontmost-first under its layer row', () => {
+        const { container } = renderPanel(elements, layers);
+        const ids = Array.from(container.querySelectorAll('[data-testid^="element-row-"]'))
+            .map(n => n.getAttribute('data-testid'));
+        // front layer first (frontmost), then back layer's elements zIndex desc
+        expect(ids).toEqual(['element-row-e1', 'element-row-t1', 'element-row-r1']);
+    });
+
+    it('click selects the element — even one fully covered on canvas', () => {
+        const { getByTestId, onSelectElements } = renderPanel(elements, layers);
+        fireEvent.click(getByTestId('element-row-r1'));
+        expect(onSelectElements).toHaveBeenCalledWith(['r1']);
+    });
+
+    it('highlights the current selection', () => {
+        const { getByTestId } = renderPanel(elements, layers, { selectedElementIds: ['t1'] });
+        expect(getByTestId('element-row-t1').getAttribute('aria-selected')).toBe('true');
+        expect(getByTestId('element-row-r1').getAttribute('aria-selected')).toBe('false');
+    });
+
+    it('hides element rows of collapsed layers', () => {
+        const collapsed = [makeLayer('back', 0, { collapsed: true }), makeLayer('front', 1)];
+        const { queryByTestId } = renderPanel(elements, collapsed);
+        expect(queryByTestId('element-row-r1')).toBeNull();
+        expect(queryByTestId('element-row-e1')).not.toBeNull();
+    });
+
+    it('search filters element rows by label or type', () => {
+        const { getByPlaceholderText, queryByTestId } = renderPanel(elements, layers);
+        fireEvent.change(getByPlaceholderText('Filter elements…'), { target: { value: 'big' } });
+        expect(queryByTestId('element-row-t1')).not.toBeNull();
+        expect(queryByTestId('element-row-r1')).toBeNull();
+        expect(queryByTestId('element-row-e1')).toBeNull();
+    });
+
+    it('dragging an element row onto a layer row retags it on top of that layer', () => {
+        const { getByTestId, onUpdateElements } = renderPanel(elements, layers);
+        fireEvent.dragStart(getByTestId('element-row-r1'));
+        fireEvent.dragOver(getByTestId('layer-row-front'));
+        fireEvent.drop(getByTestId('layer-row-front'));
+        const updated: TemplateElement[] = onUpdateElements.mock.calls[0][0];
+        expect(updated.find(e => e.id === 'r1')).toMatchObject({ layerId: 'front', zIndex: 2 });
+    });
+
+    it('"move selection to layer" reassigns the whole canvas selection', () => {
+        const { getByTestId, onUpdateElements } = renderPanel(elements, layers, { selectedElementIds: ['r1', 't1'] });
+        fireEvent.change(getByTestId('move-selection-select'), { target: { value: 'front' } });
+        const updated: TemplateElement[] = onUpdateElements.mock.calls[0][0];
+        expect(updated.find(e => e.id === 'r1')!.layerId).toBe('front');
+        expect(updated.find(e => e.id === 't1')!.layerId).toBe('front');
+    });
+});
