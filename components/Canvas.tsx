@@ -1447,8 +1447,11 @@ export const Canvas: React.FC<CanvasProps> = ({
         if (tool === 'select' && !movedSinceDownRef.current && shiftCycleRef.current) {
             const { stackIds, member } = shiftCycleRef.current;
             const idx = stackIds.indexOf(member);
-            const next = idx !== -1 && idx + 1 < stackIds.length ? stackIds[idx + 1] : null;
             const withoutMember = selectedElementIds.filter(id => id !== member);
+            // Next = first stack member below that isn't already selected — appending an
+            // already-selected id would duplicate it in the selection (duplicate React keys).
+            const next = idx === -1 ? null
+                : stackIds.slice(idx + 1).find(id => !withoutMember.includes(id)) ?? null;
             onSelectElements(next ? [...withoutMember, next] : withoutMember);
         }
         shiftCycleRef.current = null;

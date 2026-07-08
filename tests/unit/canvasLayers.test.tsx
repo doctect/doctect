@@ -357,3 +357,35 @@ describe('shift+alt-click cycle-add', () => {
         expect(onSelectElements.mock.calls.at(-1)![0]).toEqual(['aside', 'top']);
     });
 });
+
+describe('shift-click cycle never duplicates ids in the selection', () => {
+    const layers = [makeLayer('back', 0), makeLayer('front', 1)];
+    const els = [
+        makeEl('bottom', { layerId: 'back', zIndex: 1 }),
+        makeEl('middle', { layerId: 'back', zIndex: 2 }),
+        makeEl('top', { layerId: 'front', zIndex: 1 }),
+    ];
+    const shiftClickStack = (container: HTMLElement, outer: HTMLElement) => {
+        fireEvent.mouseDown(container.querySelector('[data-element-id="top"]')!,
+            { clientX: 50, clientY: 50, button: 0, shiftKey: true });
+        fireEvent.mouseUp(outer, { clientX: 50, clientY: 50, shiftKey: true });
+    };
+
+    it('swaps to the next NON-selected member when the one below is already selected', () => {
+        const { container, outer, onSelectElements } =
+            renderCanvas(els, layers, { selectedElementIds: ['top', 'middle'] });
+        shiftClickStack(container, outer);
+        const result = onSelectElements.mock.calls.at(-1)![0];
+        expect(result).toEqual(['middle', 'bottom']);
+        expect(new Set(result).size).toBe(result.length); // no duplicates
+    });
+
+    it('just drops the member when every other stack element is already selected', () => {
+        const { container, outer, onSelectElements } =
+            renderCanvas(els, layers, { selectedElementIds: ['top', 'middle', 'bottom'] });
+        shiftClickStack(container, outer);
+        const result = onSelectElements.mock.calls.at(-1)![0];
+        expect(result).toEqual(['middle', 'bottom']);
+        expect(new Set(result).size).toBe(result.length);
+    });
+});
