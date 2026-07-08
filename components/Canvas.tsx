@@ -1351,8 +1351,14 @@ export const Canvas: React.FC<CanvasProps> = ({
                 setEditingElementId(newEl.id);
             }
         } else if (isSelecting && selectionBox) {
+            // Marquee (incl. a zero-area click) must respect layers: elements on hidden or
+            // locked layers are not selectable, matching hitTestPoint / direct-click behaviour.
+            // Untagged / unknown-layer elements stay selectable (legacy safety).
+            const layerMap = new Map((template.layers ?? []).map(l => [l.id, l]));
             const ids: string[] = [];
             elements.forEach(el => {
+                const layer = el.layerId ? layerMap.get(el.layerId) : undefined;
+                if (layer && (layer.visible === false || layer.locked)) return;
                 const bounds = getElementBounds(el);
                 const elRight = bounds.x + bounds.w;
                 const elBottom = bounds.y + bounds.h;

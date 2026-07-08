@@ -63,6 +63,35 @@ describe('locked-layer click-through', () => {
     });
 });
 
+describe('marquee selection respects locked and hidden layers', () => {
+    it('a plain click (zero-area marquee) over a locked-layer element does not select it', () => {
+        const layers = [makeLayer('lock', 0, { locked: true })];
+        const elements = [makeEl('lockedEl', { layerId: 'lock', x: 0, y: 0, w: 100, h: 100 })];
+        const { outer, onSelectElements } = renderCanvas(elements, layers);
+        // mousedown on the container (not the element) starts a marquee; mouseup at the same
+        // point closes a zero-area box whose bounds contain the click.
+        fireEvent.mouseDown(outer, { clientX: 50, clientY: 50, button: 0 });
+        fireEvent.mouseUp(outer, { clientX: 50, clientY: 50 });
+        const selectedIds = onSelectElements.mock.calls.flatMap(c => c[0]);
+        expect(selectedIds).not.toContain('lockedEl');
+    });
+
+    it('a drag-marquee over a hidden-layer element does not select it', () => {
+        const layers = [makeLayer('vis', 0), makeLayer('hid', 1, { visible: false })];
+        const elements = [
+            makeEl('visEl', { layerId: 'vis', x: 0, y: 0, w: 100, h: 100 }),
+            makeEl('hidEl', { layerId: 'hid', x: 0, y: 0, w: 100, h: 100 }),
+        ];
+        const { outer, onSelectElements } = renderCanvas(elements, layers);
+        fireEvent.mouseDown(outer, { clientX: 5, clientY: 5, button: 0 });
+        fireEvent.mouseMove(outer, { clientX: 200, clientY: 200 });
+        fireEvent.mouseUp(outer, { clientX: 200, clientY: 200 });
+        const lastCall = onSelectElements.mock.calls.at(-1)![0];
+        expect(lastCall).toContain('visEl');
+        expect(lastCall).not.toContain('hidEl');
+    });
+});
+
 describe('double-click inline text editing respects locked layers', () => {
     it('does not enter edit mode when the element is on a locked layer', () => {
         const layers = [makeLayer('lock', 0, { locked: true })];
