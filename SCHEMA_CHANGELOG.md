@@ -4,6 +4,33 @@ This document tracks changes to the AppState JSON schema used by the project.
 
 ---
 
+## Version 8
+**Date:** 2026-07-08
+
+### Changes
+- Added `Layer` interface and `layers: Layer[]` to `PageTemplate`
+- Added `layerId: string` to `TemplateElement`
+- Added `activeLayerId?: string` (UI state) to `AppState`
+
+### Purpose
+Named-layer system (Layers panel). Elements stay in a flat array (Shape B); layers are
+template metadata plus a per-element tag. Render/export order is now
+(layer.order asc, then zIndex asc); `zIndex` means within-layer stacking. Layers with
+`visible: false` are excluded from canvas, PDF export, and thumbnails.
+
+### Migration Notes
+- Every template (all variants + legacy flat `templates`) gets one default layer
+  `{ name: "Layer 1", order: 0, visible: true, locked: false }`; all its elements are tagged
+  with it. `zIndex` values are preserved untouched, so migrated documents render identically.
+  The migration is idempotent.
+- **Known caveat:** the first cloud save after migration rewrites each template (it now carries
+  `layers` and per-element `layerId`), so it registers once as a "template modified" entry in
+  version history / merge diffs. Expected and harmless — not a bug.
+- Diff/merge engine (`shared/diff.js`) needs no changes: it compares whole templates, so layer
+  data rides along transparently.
+
+---
+
 ## Version 3
 **Date:** 2026-01-19
 

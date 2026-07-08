@@ -1,6 +1,7 @@
 
 import { AppState } from "../types";
 import { migrateState, CURRENT_SCHEMA_VERSION } from "./migration";
+import { ensureTemplateLayers } from "./layers";
 import { blankPresetData } from "./blank_preset";
 import { notebookPresetData } from "./notebook_preset";
 import { plannerPresetData } from "./planner_preset";
@@ -113,7 +114,16 @@ const loadPreset = (data: any): AppState => {
     }
 
     // Migrate to ensure all elements have required fields
-    return migrateState(baseState);
+    const migrated = migrateState(baseState);
+
+    // Belt-and-suspenders (spec §Migration): variants-shaped presets are stamped
+    // CURRENT_SCHEMA_VERSION above, which skips migrateV7ToV8 — ensure layer tagging directly.
+    Object.values(migrated.variants).forEach(variant => {
+        Object.keys(variant.templates).forEach(tid => {
+            variant.templates[tid] = ensureTemplateLayers(variant.templates[tid]);
+        });
+    });
+    return migrated;
 };
 
 // --- PRESET 1: BLANK PROJECT ---
