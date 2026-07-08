@@ -186,3 +186,22 @@ describe('LayersPanel element rows', () => {
         expect(updated.find(e => e.id === 't1')!.layerId).toBe('front');
     });
 });
+
+describe('color popover outside-click dismiss', () => {
+    const layers = [makeLayer('back', 0), makeLayer('front', 1)];
+
+    it('closes when clicking outside without picking a color', () => {
+        const { getByTestId, queryByTestId } = renderPanel([], layers);
+        fireEvent.click(getByTestId('layer-row-front').querySelector('[title="Layer color"]')!);
+        expect(queryByTestId('layer-color-swatch-none')).not.toBeNull();
+        fireEvent.mouseDown(document.body);
+        expect(queryByTestId('layer-color-swatch-none')).toBeNull();
+    });
+
+    it('stays open when the mousedown lands inside the popover', () => {
+        const { getByTestId, queryByTestId } = renderPanel([], layers);
+        fireEvent.click(getByTestId('layer-row-front').querySelector('[title="Layer color"]')!);
+        fireEvent.mouseDown(getByTestId('layer-color-swatch-none'));
+        expect(queryByTestId('layer-color-swatch-none')).not.toBeNull();
+    });
+});

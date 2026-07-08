@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import clsx from 'clsx';
 import {
     ChevronDown, ChevronRight, Circle, Eye, EyeOff, Grid3X3, GripVertical, Image as ImageIcon,
@@ -34,6 +34,16 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
     const [dragLayerId, setDragLayerId] = useState<string | null>(null);
     const [filter, setFilter] = useState('');
     const [dragElementId, setDragElementId] = useState<string | null>(null);
+
+    // Dismiss the color popover when a mousedown lands outside it (or its chip).
+    useEffect(() => {
+        if (!colorPickerId) return;
+        const onWindowMouseDown = (e: MouseEvent) => {
+            if (!(e.target as HTMLElement)?.closest?.('[data-color-popover]')) setColorPickerId(null);
+        };
+        window.addEventListener('mousedown', onWindowMouseDown);
+        return () => window.removeEventListener('mousedown', onWindowMouseDown);
+    }, [colorPickerId]);
 
     const updateLayer = (id: string, updates: Partial<Layer>) => {
         onUpdateTemplate({ layers: (template.layers ?? []).map(l => (l.id === id ? { ...l, ...updates } : l)) });
@@ -131,7 +141,7 @@ export const LayersPanel: React.FC<LayersPanelProps> = ({
                             onClick={() => updateLayer(layer.id, { locked: !layer.locked })}>
                             {layer.locked ? <Lock size={13} /> : <Unlock size={13} className="text-slate-300" />}
                         </button>
-                        <span className="relative">
+                        <span className="relative" data-color-popover>
                             <button title="Layer color"
                                 className="w-3 h-3 rounded-full border border-slate-300"
                                 style={{ backgroundColor: layer.color || 'transparent' }}
