@@ -16,9 +16,10 @@ interface PropertiesPanelProps {
     onDeleteElements: (ids: string[]) => void;
     onOpenNodeSelector: (mode: 'grid_source' | 'link_element', elementId: string) => void; // Pass elementId context
     onUpdateTemplate: (id: string, updates: Partial<PageTemplate>, autoReflow?: boolean, scaleFontSize?: boolean) => void;
+    layersSlot?: React.ReactNode;
 }
 
-export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({ state, onUpdateElements, onUpdateNode, onDeleteElements, onOpenNodeSelector, onUpdateTemplate }) => {
+export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({ state, onUpdateElements, onUpdateNode, onDeleteElements, onOpenNodeSelector, onUpdateTemplate, layersSlot }) => {
     const { nodes, selectedNodeId, viewMode, selectedElementIds, variants, activeVariantId, selectedTemplateId } = state;
     const node = nodes[selectedNodeId];
     const isHierarchyMode = viewMode === 'hierarchy';
@@ -275,6 +276,8 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({ state, onUpdat
                     </div>
                 )}
             </div>
+
+            {layersSlot}
 
             <div className="p-4 flex-1">
                 <h3 className="font-bold text-slate-700 mb-4 flex justify-between items-center">

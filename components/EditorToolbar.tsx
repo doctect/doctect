@@ -1,5 +1,5 @@
 import React, { useMemo, useRef } from 'react';
-import { MousePointer2, Hand, Type, Square, Circle, Triangle, Minus, Grid3X3, Magnet, GripVertical, ZoomOut, ZoomIn, Wand2, Save, Eye, AlignLeft, AlignCenter, AlignRight, AlignVerticalJustifyStart, AlignVerticalJustifyCenter, AlignVerticalJustifyEnd, AlignHorizontalSpaceAround, AlignVerticalSpaceAround, FileImage, Layers } from 'lucide-react';
+import { MousePointer2, Hand, Type, Square, Circle, Triangle, Minus, Grid3X3, Magnet, GripVertical, ZoomOut, ZoomIn, Wand2, Save, Eye, AlignLeft, AlignCenter, AlignRight, AlignVerticalJustifyStart, AlignVerticalJustifyCenter, AlignVerticalJustifyEnd, AlignHorizontalSpaceAround, AlignVerticalSpaceAround, FileImage } from 'lucide-react';
 import clsx from 'clsx';
 import { AppState, AppNode } from '../types';
 
@@ -216,7 +216,6 @@ export const EditorToolbar: React.FC<EditorToolbarProps> = ({ state, setState, o
             <div className="flex bg-white border border-slate-200 p-0.5 rounded gap-0.5 shadow-sm">
                 <ToolButton active={state.snapToGrid} icon={Magnet} onClick={() => setState(s => ({ ...s, snapToGrid: !s.snapToGrid, showGrid: !s.snapToGrid ? true : s.showGrid }))} title="Snap to Grid" />
                 <ToolButton active={state.showGrid} icon={GripVertical} onClick={() => setState(s => ({ ...s, showGrid: !s.showGrid }))} title="Show Grid" />
-                <ToolButton active={!!state.showLayersPanel} icon={Layers} onClick={() => setState(s => ({ ...s, showLayersPanel: !s.showLayersPanel }))} title="Layers Panel" />
             </div>
             <div className="h-6 w-px bg-slate-300 mx-1"></div>
             <div className="flex items-center gap-1">
