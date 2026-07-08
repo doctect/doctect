@@ -65,8 +65,9 @@ export const getCustomPresets = (): PresetDefinition[] => {
     return [];
 };
 
-// Helper to hydrate the loaded JSON into a full AppState
-const loadPreset = (data: any): AppState => {
+// Helper to hydrate the loaded JSON into a full AppState.
+// Exported so tests can drive the same variants-shaped path the create*Project fns use.
+export const loadPreset = (data: any): AppState => {
     // Basic validation - accept either old templates format or new variants format
     const hasTemplates = data.templates && typeof data.templates === 'object';
     const hasVariants = data.variants && typeof data.variants === 'object';
@@ -114,10 +115,18 @@ const loadPreset = (data: any): AppState => {
     }
 
     // Migrate to ensure all elements have required fields
-    const migrated = migrateState(baseState);
+    let migrated = migrateState(baseState);
 
     // Belt-and-suspenders (spec §Migration): variants-shaped presets are stamped
-    // CURRENT_SCHEMA_VERSION above, which skips migrateV7ToV8 — ensure layer tagging directly.
+    // CURRENT_SCHEMA_VERSION above, so migrateState early-returns WITHOUT cloning and hands
+    // back the module's source `data.variants` object graph by reference. Deep-clone before
+    // tagging so we never mutate the shared preset data and each project gets independent
+    // layer ids. (The flat-`templates` path already ran the full clone-ing migration chain.)
+    if (hasVariants) {
+        migrated = JSON.parse(JSON.stringify(migrated)) as AppState;
+    }
+
+    // Ensure layer tagging directly (migrateV7ToV8 is skipped for the stamped variants path).
     Object.values(migrated.variants).forEach(variant => {
         Object.keys(variant.templates).forEach(tid => {
             variant.templates[tid] = ensureTemplateLayers(variant.templates[tid]);
