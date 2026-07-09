@@ -5,7 +5,7 @@ import { svg2pdf } from "svg2pdf.js";
 import JSZip from "jszip";
 import { AppState, AppNode, PageTemplate, TemplateElement, RM_PP_WIDTH, RM_PP_HEIGHT, TraversalStep } from "../types";
 import { FONTS } from "../constants/editor";
-import { normalizeSvgColorsInTree } from "./svgColorNormalize";
+import { normalizeSvgColorsInTree, desaturateSvgColorsInTree, bakeElementOpacityIntoSvg } from "./svgColorNormalize";
 import { sortElementsForRender } from "./layers";
 
 const DEBUG_PDF = false; // Set to true to see debug visuals
@@ -999,7 +999,10 @@ export const generatePDF = async (state: AppState, options: GeneratePDFOptions =
             if (hasTransform) {
                 doc.saveGraphicsState();
 
-                if (hasOpacity) {
+                // SVG elements are excluded: svg2pdf emits its own per-shape graphics
+                // states which REPLACE (not multiply) this outer /ca — the element
+                // opacity is baked into the SVG tree instead (bakeElementOpacityIntoSvg).
+                if (hasOpacity && el.type !== 'svg') {
                     try {
                         const GState = (doc as any).GState;
                         if (GState) {
@@ -1065,6 +1068,15 @@ export const generatePDF = async (state: AppState, options: GeneratePDFOptions =
                 // drops those fills/strokes (shape renders stroke-only or vanishes).
                 // Rewrite them to rgb() + *-opacity, which it handles.
                 normalizeSvgColorsInTree(svgElement);
+
+                // Greyscale export: svg2pdf gets the tree verbatim, so desaturate
+                // it here like hexToGreyscale does for every other element type.
+                if (options.isGreyscale) desaturateSvgColorsInTree(svgElement);
+
+                // Element opacity composes with the SVG's internal opacities by
+                // baking it into the tree (see bakeElementOpacityIntoSvg for why
+                // an outer graphics state cannot work).
+                if (opacity < 1) bakeElementOpacityIntoSvg(svgElement, opacity);
 
                 if (!svgElement.hasAttribute('width')) svgElement.setAttribute('width', String(w));
                 if (!svgElement.hasAttribute('height')) svgElement.setAttribute('height', String(h));
