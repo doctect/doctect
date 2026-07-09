@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { signIn, signUp } from '../lib/auth-client';
+import { signIn, signUp, authClient } from '../lib/auth-client';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { Loader2 } from 'lucide-react';
 import { validatePassword } from '../shared/passwordPolicy.js';
@@ -13,9 +13,13 @@ export const LoginPage = () => {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [passwordError, setPasswordError] = useState<string | null>(null);
+    const [verifyEmailFor, setVerifyEmailFor] = useState<string | null>(null);
+    const [resent, setResent] = useState(false);
     const navigate = useNavigate();
     const location = useLocation();
     const from = (location.state as { from?: string } | null)?.from;
+    const verifiedBanner = new URLSearchParams(location.search).get('verified') === '1';
+    const verificationCallbackURL = `${window.location.origin}/login?verified=1`;
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -39,7 +43,7 @@ export const LoginPage = () => {
 
         try {
             if (isLogin) {
-                await signIn.email({
+                const result: any = await signIn.email({
                     email,
                     password,
                 }, {
@@ -47,23 +51,40 @@ export const LoginPage = () => {
                         navigate(from ?? '/app', { replace: true });
                     },
                     onError: (ctx) => {
-                        setError(ctx.error.message);
+                        if (ctx.error?.status === 403) {
+                            setVerifyEmailFor(email);
+                        } else {
+                            setError(ctx.error.message);
+                        }
                     }
                 });
+                if (result?.error) {
+                    if (result.error.status === 403) {
+                        setVerifyEmailFor(email);
+                    } else {
+                        setError(result.error.message);
+                    }
+                }
             } else {
-                await signUp.email({
+                const result: any = await signUp.email({
                     email,
                     password,
                     name,
                     username,
+                    callbackURL: verificationCallbackURL,
                 } as any, {
                     onSuccess: () => {
-                        navigate(from ?? '/app', { replace: true });
+                        setVerifyEmailFor(email);
                     },
                     onError: (ctx) => {
                         setError(ctx.error.message);
                     }
                 });
+                if (result?.error) {
+                    setError(result.error.message);
+                } else if (result?.data) {
+                    setVerifyEmailFor(email);
+                }
             }
         } catch (err: any) {
             setError(err.message || 'An error occurred');
@@ -76,8 +97,14 @@ export const LoginPage = () => {
         <div className="h-screen overflow-y-auto flex items-center justify-center bg-gray-50 p-4">
             <div className="w-full max-w-md bg-white rounded-lg shadow-md p-8">
                 <h2 className="text-2xl font-bold mb-6 text-center text-gray-800">
-                    {isLogin ? 'Sign In' : 'Create Account'}
+                    {verifyEmailFor ? 'Verify your email' : (isLogin ? 'Sign In' : 'Create Account')}
                 </h2>
+
+                {verifiedBanner && !verifyEmailFor && (
+                    <div className="mb-4 p-3 bg-green-50 text-green-700 rounded text-sm text-center">
+                        Email verified — you're signed in.
+                    </div>
+                )}
 
                 {error && (
                     <div className="mb-4 p-3 bg-red-50 text-red-700 rounded text-sm">
@@ -85,6 +112,30 @@ export const LoginPage = () => {
                     </div>
                 )}
 
+                {verifyEmailFor ? (
+                    <div className="text-center space-y-3">
+                        <p className="text-slate-600">We sent a verification link to <strong>{verifyEmailFor}</strong>. Click it to finish signing in.</p>
+                        <button
+                            onClick={async () => {
+                                await authClient.sendVerificationEmail({
+                                    email: verifyEmailFor,
+                                    callbackURL: verificationCallbackURL,
+                                });
+                                setResent(true);
+                            }}
+                            className="px-3 py-1.5 border rounded text-sm"
+                        >
+                            Resend email
+                        </button>
+                        {resent && <p className="text-sm text-green-600">Sent — check your inbox.</p>}
+                        <button
+                            onClick={() => { setVerifyEmailFor(null); setResent(false); }}
+                            className="text-sm text-slate-500 underline"
+                        >
+                            Back
+                        </button>
+                    </div>
+                ) : (
                 <form onSubmit={handleSubmit} className="space-y-4">
                     {!isLogin && (
                         <div>
@@ -194,16 +245,19 @@ export const LoginPage = () => {
                         Sign in with Google
                     </button>
                 </form>
+                )}
 
-                <div className="mt-6 text-center text-sm text-gray-600">
-                    {isLogin ? "Don't have an account? " : "Already have an account? "}
-                    <button
-                        onClick={() => setIsLogin(!isLogin)}
-                        className="text-blue-600 hover:underline font-medium"
-                    >
-                        {isLogin ? 'Sign Up' : 'Sign In'}
-                    </button>
-                </div>
+                {!verifyEmailFor && (
+                    <div className="mt-6 text-center text-sm text-gray-600">
+                        {isLogin ? "Don't have an account? " : "Already have an account? "}
+                        <button
+                            onClick={() => setIsLogin(!isLogin)}
+                            className="text-blue-600 hover:underline font-medium"
+                        >
+                            {isLogin ? 'Sign Up' : 'Sign In'}
+                        </button>
+                    </div>
+                )}
             </div>
         </div>
     );
