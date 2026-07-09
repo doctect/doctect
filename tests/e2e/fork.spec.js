@@ -1,5 +1,6 @@
 
 import { test, expect } from '@playwright/test';
+import { signUpAndVerify, TEST_PASSWORD } from './helpers.js';
 
 // The API server (server/index.js) listens on a different origin than the Vite
 // dev server that Playwright's baseURL points at (see .env: VITE_API_BASE).
@@ -21,14 +22,12 @@ test.describe('Fork', () => {
             dialog.accept(dialog.type() === 'prompt' ? 'A initial save' : undefined);
         });
 
-        await pageA.goto('/login');
-        await pageA.getByRole('button', { name: 'Sign Up' }).click();
-        await pageA.locator('label:text-is("Name") + input').fill('User A');
-        await pageA.locator('label:text-is("Username") + input').fill(`user_a_${unique}`);
-        await pageA.locator('input[type="email"]').fill(`usera${unique}@test.dev`);
-        await pageA.locator('input[type="password"]').fill('Password-1234!');
-        await pageA.getByRole('button', { name: 'Sign Up' }).click();
-        await pageA.waitForURL('**/app', { timeout: 15000 });
+        await signUpAndVerify(pageA, {
+            name: 'User A',
+            username: `user_a_${unique}`,
+            email: `usera${unique}@test.dev`,
+            password: TEST_PASSWORD,
+        });
 
         await pageA.goto('/app');
         await pageA.getByTitle('Cloud').click();
@@ -69,14 +68,12 @@ test.describe('Fork', () => {
             dialog.accept(dialog.type() === 'prompt' ? 'B edit save' : undefined);
         });
 
-        await pageB.goto('/login');
-        await pageB.getByRole('button', { name: 'Sign Up' }).click();
-        await pageB.locator('label:text-is("Name") + input').fill('User B');
-        await pageB.locator('label:text-is("Username") + input').fill(`user_b_${unique}`);
-        await pageB.locator('input[type="email"]').fill(`userb${unique}@test.dev`);
-        await pageB.locator('input[type="password"]').fill('Password-1234!');
-        await pageB.getByRole('button', { name: 'Sign Up' }).click();
-        await pageB.waitForURL('**/app', { timeout: 15000 });
+        await signUpAndVerify(pageB, {
+            name: 'User B',
+            username: `user_b_${unique}`,
+            email: `userb${unique}@test.dev`,
+            password: TEST_PASSWORD,
+        });
 
         // B opens the gallery detail page for A's published project and forks it.
         // (GalleryDetailPage's <h1> shows the project *name*, which stays as the

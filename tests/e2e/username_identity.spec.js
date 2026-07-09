@@ -1,5 +1,6 @@
 
 import { test, expect } from '@playwright/test';
+import { signUpAndVerify, apiSignUpAndVerify, TEST_PASSWORD } from './helpers.js';
 
 // The API server (server/index.js) listens on a different origin than the Vite
 // dev server that Playwright's baseURL points at (see .env: VITE_API_BASE).
@@ -24,14 +25,12 @@ test.describe('Username identity', () => {
         const oldUsername = `old_handle_${unique}`;
         const newUsername = `new_handle_${unique}`;
 
-        await page.goto('/login');
-        await page.getByRole('button', { name: 'Sign Up' }).click();
-        await page.locator('label:text-is("Name") + input').fill('Identity Tester');
-        await page.locator('label:text-is("Username") + input').fill(oldUsername);
-        await page.locator('input[type="email"]').fill(`identity${unique}@test.dev`);
-        await page.locator('input[type="password"]').fill('Password-1234!');
-        await page.getByRole('button', { name: 'Sign Up' }).click();
-        await page.waitForURL('**/app', { timeout: 15000 });
+        await signUpAndVerify(page, {
+            name: 'Identity Tester',
+            username: oldUsername,
+            email: `identity${unique}@test.dev`,
+            password: TEST_PASSWORD,
+        });
 
         // Save + publish the default project.
         await page.getByTitle('Cloud').click();
@@ -90,10 +89,12 @@ test.describe('Username identity', () => {
 
         // Upstream project + owner, set up entirely via direct API calls (no UI needed for this side).
         const ownerCtx = await browser.newContext();
-        const ownerSignup = await ownerCtx.request.post(`${API_BASE}/api/auth/sign-up/email`, {
-            data: { email: `owner${unique}@test.dev`, password: 'Password-1234!', name: 'Owner', username: `owner_${unique}` },
+        await apiSignUpAndVerify(ownerCtx.request, API_BASE, {
+            email: `owner${unique}@test.dev`,
+            password: TEST_PASSWORD,
+            name: 'Owner',
+            username: `owner_${unique}`,
         });
-        expect(ownerSignup.ok()).toBeTruthy();
         const createRes = await ownerCtx.request.post(`${API_BASE}/api/projects`, {
             data: { name: 'Upstream For Fork Test', state: minimalState },
         });
@@ -109,10 +110,11 @@ test.describe('Username identity', () => {
         // this is exactly what Google OAuth sign-in produces in production (no username ever collected).
         const ctx = await browser.newContext();
         const page = await ctx.newPage();
-        const signupRes = await page.request.post(`${API_BASE}/api/auth/sign-up/email`, {
-            data: { email: `nouser${unique}@test.dev`, password: 'Password-1234!', name: 'No Username Person' },
+        await apiSignUpAndVerify(page.request, API_BASE, {
+            email: `nouser${unique}@test.dev`,
+            password: TEST_PASSWORD,
+            name: 'No Username Person',
         });
-        expect(signupRes.ok()).toBeTruthy();
 
         await page.goto(`/gallery/${projectId}`);
         await expect(page.getByText('Set a username to fork')).toBeVisible({ timeout: 10000 });
