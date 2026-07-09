@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { signIn, signUp } from '../lib/auth-client';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { Loader2 } from 'lucide-react';
+import { validatePassword } from '../shared/passwordPolicy.js';
 
 export const LoginPage = () => {
     const [isLogin, setIsLogin] = useState(true);
@@ -11,6 +12,7 @@ export const LoginPage = () => {
     const [username, setUsername] = useState('');
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [passwordError, setPasswordError] = useState<string | null>(null);
     const navigate = useNavigate();
     const location = useLocation();
     const from = (location.state as { from?: string } | null)?.from;
@@ -21,6 +23,15 @@ export const LoginPage = () => {
         if (!isLogin && !/^[a-zA-Z0-9_]{3,30}$/.test(username)) {
             setError('Username must be 3-30 characters and contain only letters, numbers, and underscores.');
             return;
+        }
+
+        if (!isLogin) {
+            const policy = validatePassword(password);
+            if (!policy.ok) {
+                setPasswordError(policy.message);
+                return;
+            }
+            setPasswordError(null);
         }
 
         setLoading(true);
@@ -77,8 +88,9 @@ export const LoginPage = () => {
                 <form onSubmit={handleSubmit} className="space-y-4">
                     {!isLogin && (
                         <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-1">Name</label>
+                            <label htmlFor="login-name" className="block text-sm font-medium text-gray-700 mb-1">Name</label>
                             <input
+                                id="login-name"
                                 type="text"
                                 value={name}
                                 onChange={(e) => setName(e.target.value)}
@@ -90,8 +102,9 @@ export const LoginPage = () => {
 
                     {!isLogin && (
                         <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-1">Username</label>
+                            <label htmlFor="login-username" className="block text-sm font-medium text-gray-700 mb-1">Username</label>
                             <input
+                                id="login-username"
                                 type="text"
                                 value={username}
                                 onChange={(e) => setUsername(e.target.value)}
@@ -103,8 +116,9 @@ export const LoginPage = () => {
                     )}
 
                     <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
+                        <label htmlFor="login-email" className="block text-sm font-medium text-gray-700 mb-1">Email</label>
                         <input
+                            id="login-email"
                             type="email"
                             value={email}
                             onChange={(e) => setEmail(e.target.value)}
@@ -114,14 +128,21 @@ export const LoginPage = () => {
                     </div>
 
                     <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Password</label>
+                        <label htmlFor="login-password" className="block text-sm font-medium text-gray-700 mb-1">Password</label>
                         <input
+                            id="login-password"
                             type="password"
                             value={password}
-                            onChange={(e) => setPassword(e.target.value)}
+                            onChange={(e) => {
+                                setPassword(e.target.value);
+                                if (passwordError) setPasswordError(null);
+                            }}
                             className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                             required
                         />
+                        {!isLogin && passwordError && (
+                            <p className="text-sm text-red-600 mt-1">{passwordError}</p>
+                        )}
                     </div>
 
                     <button
