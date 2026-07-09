@@ -34,6 +34,10 @@ export const initTestApp = async () => {
     // overrides the configured window/max); any test file that creates 4+ users in its
     // beforeAll would 429. server/auth.js reads this to skip rate limiting under test.
     process.env.DISABLE_AUTH_RATE_LIMIT = 'true';
+    // A developer's local .env may hold a real Resend API key (see .env.example);
+    // tests must always exercise the console fallback (or an injected impl via
+    // setSendEmailImpl) and never attempt to send a real email.
+    delete process.env.RESEND_API_KEY;
     const { runMigrations } = await import('../../../server/migrations.js');
     await runMigrations();
     const { createApp } = await import('../../../server/app.js');

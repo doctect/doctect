@@ -54,7 +54,7 @@ describe('email verification flow', () => {
         expect(signin.status).toBe(200);
     });
 
-    it('google-style accounts are unaffected (helpers still produce working sessions)', async () => {
+    it('signUpUser test helper produces a verified account with a working session', async () => {
         const { signUpUser } = await import('./helpers.js');
         const cookie = await signUpUser(app, { email: 'helper@test.dev', username: 'helperuser' });
         const me = await request(app).get('/api/me').set('Cookie', cookie);
