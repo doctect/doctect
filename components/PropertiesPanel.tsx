@@ -4,7 +4,7 @@ import React, { useState, useCallback } from 'react';
 import { AppState, AppNode, TemplateElement, PageTemplate } from '../types';
 import { Trash, Settings2, RectangleVertical, RectangleHorizontal, ToggleRight, ToggleLeft } from 'lucide-react';
 
-import { UNIT_CONVERSION, PAGE_PRESETS, RM_PP_WIDTH, RM_PP_HEIGHT } from '../constants/editor';
+import { PAGE_PRESETS, RM_PP_WIDTH, RM_PP_HEIGHT, toDisplayUnit, fromDisplayUnit } from '../constants/editor';
 import { SingleElementEditor } from './properties/SingleElementEditor';
 import { NodeProperties } from './properties/NodeProperties';
 import { CollapsibleSection } from './CollapsibleSection';
@@ -60,15 +60,16 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({ state, onUpdat
     }, [selectedElements]);
 
 
+    // Inputs show/accept the selected display unit; the template stays canonical (pt).
     const updateDim = (dim: 'width' | 'height', val: number) => {
         if (template && !isNaN(val)) {
-            onUpdateTemplate(template.id, { [dim]: val }, autoReflow, scaleFontSize);
+            onUpdateTemplate(template.id, { [dim]: fromDisplayUnit(val, dimUnit) }, autoReflow, scaleFontSize);
         }
     };
 
     const getDim = (dim: 'width' | 'height') => {
         if (!template) return 0;
-        return template[dim] || (dim === 'width' ? RM_PP_WIDTH : RM_PP_HEIGHT);
+        return toDisplayUnit(template[dim] || (dim === 'width' ? RM_PP_WIDTH : RM_PP_HEIGHT), dimUnit);
     };
 
     const [dimUnit, setDimUnit] = React.useState<'px' | 'pt' | 'in' | 'mm'>('px');
