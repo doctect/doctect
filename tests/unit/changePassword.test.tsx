@@ -4,7 +4,12 @@ import { MemoryRouter } from 'react-router-dom';
 import { AccountSettingsPage } from '../../pages/AccountSettingsPage';
 
 const changePassword = vi.fn(async () => ({ data: {}, error: null }));
-let accounts: { provider: string }[] = [{ provider: 'credential' }];
+// better-auth's real /list-accounts endpoint returns objects keyed by `providerId`
+// (verified against a live server: node_modules/better-auth/dist/api/routes/account.mjs
+// maps `providerId: a.providerId` into the response) -- NOT `provider`. The mock must
+// match the real wire shape or this test can pass while the app is broken against the
+// actual API.
+let accounts: { providerId: string }[] = [{ providerId: 'credential' }];
 vi.mock('../../lib/auth-client', () => ({
     useSession: () => ({ data: { user: { id: 'u1', email: 'a@b.dev', username: 'someuser' } }, isPending: false }),
     signIn: {}, signUp: {}, signOut: vi.fn(),
@@ -17,7 +22,7 @@ vi.mock('../../lib/auth-client', () => ({
 const renderPage = () => render(<MemoryRouter><AccountSettingsPage /></MemoryRouter>);
 
 describe('change password section', () => {
-    beforeEach(() => { changePassword.mockClear(); accounts = [{ provider: 'credential' }]; });
+    beforeEach(() => { changePassword.mockClear(); accounts = [{ providerId: 'credential' }]; });
 
     it('renders for credential accounts and submits a valid change with revokeOtherSessions', async () => {
         renderPage();
@@ -57,7 +62,7 @@ describe('change password section', () => {
     });
 
     it('is hidden for Google-only accounts', async () => {
-        accounts = [{ provider: 'google' }];
+        accounts = [{ providerId: 'google' }];
         renderPage();
         await waitFor(() => expect(screen.queryByText(/change password/i)).toBeNull());
     });

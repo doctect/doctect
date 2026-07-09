@@ -23,7 +23,9 @@ function ChangePasswordSection() {
             .then(() => authClient.listAccounts())
             .then((res: any) => {
                 if (cancelled) return;
-                setHasCredential(!!res?.data?.some((a: any) => a.provider === 'credential'));
+                // better-auth's /list-accounts response keys the provider as `providerId`
+                // (see node_modules/better-auth/dist/api/routes/account.mjs), not `provider`.
+                setHasCredential(!!res?.data?.some((a: any) => a.providerId === 'credential'));
             })
             .catch(() => {
                 // On lookup failure, stay hidden (no password-less account should see it).
