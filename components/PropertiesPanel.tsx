@@ -201,9 +201,19 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({ state, onUpdat
                                 </optgroup>
                             </select>
 
-                            <div className="grid grid-cols-2 gap-2 mb-2">
+                            <div className="grid grid-cols-[1fr_1fr_auto] gap-2 mb-2 items-end">
                                 <div><label className="text-[10px] text-slate-400">Width</label><input type="number" step="0.1" value={getDim('width')} onChange={(e) => updateDim('width', parseFloat(e.target.value))} className="w-full border rounded px-1 text-sm" /></div>
                                 <div><label className="text-[10px] text-slate-400">Height</label><input type="number" step="0.1" value={getDim('height')} onChange={(e) => updateDim('height', parseFloat(e.target.value))} className="w-full border rounded px-1 text-sm" /></div>
+                                <div>
+                                    <label className="text-[10px] text-slate-400">Unit</label>
+                                    <select value={dimUnit} onChange={(e) => setDimUnit(e.target.value as any)} title="Dimension unit"
+                                        className="block w-full border rounded px-0.5 py-[3px] text-xs bg-white text-slate-600 cursor-pointer">
+                                        <option value="pt">pt</option>
+                                        <option value="px">px</option>
+                                        <option value="in">in</option>
+                                        <option value="mm">mm</option>
+                                    </select>
+                                </div>
                             </div>
 
                             <div className="flex gap-2">
@@ -245,14 +255,6 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({ state, onUpdat
                                 )}
                             </div>
 
-                            <div className="mt-2 flex justify-end">
-                                <select value={dimUnit} onChange={(e) => setDimUnit(e.target.value as any)} className="text-[10px] border-none bg-transparent text-slate-400 focus:ring-0 cursor-pointer">
-                                    <option value="pt">Points (pt)</option>
-                                    <option value="px">Pixels (px)</option>
-                                    <option value="in">Inches (in)</option>
-                                    <option value="mm">Millimeters (mm)</option>
-                                </select>
-                            </div>
                         </div>
 
                         {/* Redundant editor block removed from here; element deletion lives
