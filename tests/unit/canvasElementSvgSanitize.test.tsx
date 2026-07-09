@@ -40,6 +40,38 @@ describe('CanvasElement SVG sanitization', () => {
         expect(container.querySelector('rect')).not.toBeNull();
     });
 
+    it('keeps child width/height attributes when the root svg tag has none (viewBox only)', () => {
+        // Regression: the width/height-stripping regexes (meant for the ROOT
+        // <svg> tag so it can be replaced with width/height 100%) were not
+        // anchored to the root tag — with a viewBox-only root they deleted the
+        // FIRST child's width/height instead, rendering that shape invisible.
+        const viewBoxOnly: TemplateElement = {
+            ...baseElement,
+            svgContent: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect x="0" y="0" width="40" height="40" fill="hsla(200,50%,50%,0.5)" stroke="#000"/></svg>'
+        };
+        const { container } = render(<CanvasElement element={viewBoxOnly} {...baseProps} />);
+        const rect = container.querySelector('rect');
+        expect(rect).not.toBeNull();
+        expect(rect?.getAttribute('width')).toBe('40');
+        expect(rect?.getAttribute('height')).toBe('40');
+        // root still gets the fill-the-box treatment
+        const svg = container.querySelector('svg');
+        expect(svg?.getAttribute('width')).toBe('100%');
+        expect(svg?.getAttribute('height')).toBe('100%');
+    });
+
+    it('replaces root width/height with 100% when the root svg tag has them', () => {
+        const withDims: TemplateElement = {
+            ...baseElement,
+            svgContent: '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100"><rect width="40" height="40" fill="red"/></svg>'
+        };
+        const { container } = render(<CanvasElement element={withDims} {...baseProps} />);
+        const svg = container.querySelector('svg');
+        expect(svg?.getAttribute('width')).toBe('100%');
+        expect(svg?.getAttribute('height')).toBe('100%');
+        expect(container.querySelector('rect')?.getAttribute('width')).toBe('40');
+    });
+
     it('preserves legitimate SVG content (shapes, viewBox, styling) unchanged in substance', () => {
         const legit: TemplateElement = {
             ...baseElement,

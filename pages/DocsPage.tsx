@@ -1,7 +1,7 @@
 
 import React from 'react';
 import { Link } from 'react-router-dom';
-import { Book, Home, Grid3X3, Layers, Settings2, Link as LinkIcon, Command, Zap, CheckCircle2, Code, Wand2, Network } from 'lucide-react';
+import { Book, Home, Grid3X3, Layers, Settings2, Link as LinkIcon, Command, Zap, CheckCircle2, Code, Wand2, Network, Cloud, Globe, GitFork, Star, FileImage, History, Users } from 'lucide-react';
 import { HighlightedCode } from '../components/HighlightedCode';
 
 const Section: React.FC<{ title: string, children: React.ReactNode }> = ({ title, children }) => (
@@ -67,14 +67,23 @@ export const DocsPage: React.FC = () => {
                   </Section>
                   <Section title="The Interface">
                      <NavLink id="interface">Interface Overview</NavLink>
+                     <NavLink id="layers">Layers</NavLink>
                      <NavLink id="grids">Dynamic Grids</NavLink>
                      <NavLink id="linking">Smart Linking</NavLink>
                      <NavLink id="variants">Multi-Device Variants</NavLink>
                   </Section>
                   <Section title="Advanced Tools">
+                     <NavLink id="svg-images">SVG Images</NavLink>
                      <NavLink id="referencing">Reference Fields</NavLink>
                      <NavLink id="json-editor">JSON Inspector</NavLink>
                      <NavLink id="hierarchy-generator">Hierarchy Scripting</NavLink>
+                  </Section>
+                  <Section title="Cloud & Community">
+                     <NavLink id="accounts">Accounts & Usernames</NavLink>
+                     <NavLink id="cloud-saves">Cloud Saves & History</NavLink>
+                     <NavLink id="publishing">Publishing to the Gallery</NavLink>
+                     <NavLink id="gallery">Browsing the Gallery</NavLink>
+                     <NavLink id="forking">Forking & Merge Requests</NavLink>
                   </Section>
                   <Section title="Power User">
                      <NavLink id="shortcuts">Shortcuts</NavLink>
@@ -105,7 +114,7 @@ export const DocsPage: React.FC = () => {
              ">
                   <h1 className="font-extrabold text-slate-900 mb-6">Documentation</h1>
                   <p className="text-xl md:text-2xl text-slate-500 mb-16 leading-relaxed font-light">
-                     Welcome to the comprehensive guide for PDF Architect. Learn how to design complex, data-driven layouts for digital planners, notebooks, and reports.
+                     Welcome to the comprehensive guide for PDF Architect. Learn how to design complex, data-driven layouts for digital planners, notebooks, and reports — then save them to the cloud, publish them to the public gallery, and collaborate through forks and merge requests.
                   </p>
 
                   <div className="bg-blue-50 border border-blue-100 rounded-xl p-8 mb-20 flex gap-6 shadow-sm">
@@ -164,6 +173,16 @@ export const DocsPage: React.FC = () => {
                               <img src="/walkthroughs/interactive_navigation.webp" alt="Interactive Navigation Walkthrough" className="w-full h-auto" />
                            </div>
                         </div>
+
+                        <div className="space-y-4">
+                           <h3 className="text-lg font-bold text-slate-900 border-l-4 border-purple-500 pl-4">4. Automated Generation</h3>
+                           <p className="text-slate-600">
+                              Watch the <strong>Hierarchy Generator</strong> build an entire project programmatically — templates and hundreds of pages from a short script instead of manual clicking.
+                           </p>
+                           <div className="rounded-xl overflow-hidden shadow-lg border border-slate-200">
+                              <img src="/walkthroughs/automated_generation.webp" alt="Automated Generation Walkthrough" className="w-full h-auto" />
+                           </div>
+                        </div>
                      </div>
                   </section>
 
@@ -204,7 +223,7 @@ export const DocsPage: React.FC = () => {
                            <div className="p-4 bg-slate-100 rounded-xl text-slate-600 mt-1"><Settings2 size={28} /></div>
                            <div>
                               <strong className="block text-slate-900 text-xl mb-3">Properties Panel (Right)</strong>
-                              <p className="mt-0">When a node is selected, edit its Title and Data Fields here. When an element on the canvas is selected, use this panel to change colors, fonts, links, and grid configurations.</p>
+                              <p className="mt-0">Organized into collapsible sections: <strong>Template Settings</strong> (page dimensions with a working pt/px/in/mm unit selector), the <strong>Layers</strong> panel, and <strong>Element Properties</strong>. When a node is selected, edit its Title and Data Fields here. When an element is selected, change colors, fonts, links, and grid configurations.</p>
                            </div>
                         </li>
                         <li className="flex gap-6 items-start">
@@ -214,6 +233,35 @@ export const DocsPage: React.FC = () => {
                               <p className="mt-0">The infinite workspace. Hold <strong>Spacebar</strong> to pan. Use <strong>Ctrl + Scroll</strong> to zoom. Objects snap to grid if the magnet icon is enabled.</p>
                            </div>
                         </li>
+                     </ul>
+                  </section>
+
+                  <section id="layers">
+                     <h2><span className="flex items-center gap-4"><Layers className="text-blue-500" size={32} /> Layers</span></h2>
+                     <p>
+                        Every template organizes its elements into named, Photoshop-style <strong>Layers</strong>. Existing projects are migrated automatically — all elements land in a single default layer, and everything works exactly as before until you start adding more.
+                     </p>
+
+                     <h3>The Layers Panel</h3>
+                     <p>
+                        Find it in the right-hand Properties column, between Template Settings and Element Properties (collapsed by default). Each layer row offers:
+                     </p>
+                     <ul className="list-disc pl-5 space-y-2">
+                        <li><strong>Hide / Show:</strong> Hidden layers disappear from the canvas, the exported PDF, and gallery thumbnails alike.</li>
+                        <li><strong>Lock:</strong> Locked layers stay visible but their elements can't be clicked, dragged, or edited — clicks pass through to whatever's underneath.</li>
+                        <li><strong>Rename, color label, and drag-to-reorder</strong> — layer order controls stacking: elements sort by layer order first, then by their z-index within the layer.</li>
+                        <li><strong>Element rows:</strong> Expand a layer to see its elements, filter them with the search box, click a row to select the element on canvas (ctrl/cmd-click and shift-click to multi-select), or move the current selection to another layer.</li>
+                     </ul>
+
+                     <h3>Selecting Overlapping Elements</h3>
+                     <p>
+                        When elements fully overlap, a plain click only ever reaches the topmost one. The editor gives you several ways down the stack — all of them skip hidden and locked layers:
+                     </p>
+                     <ul className="list-disc pl-5 space-y-2">
+                        <li><strong>Click again:</strong> Clicking an already-selected element keeps the selection (so you can drag it); a clean click with no drag cycles the selection one step down the overlapping stack, wrapping back to the top.</li>
+                        <li><strong>Alt + Click:</strong> Explicitly cycle down through the elements under the cursor. Add <strong>Shift</strong> to cycle which stack member joins a multi-selection.</li>
+                        <li><strong>Right-Click:</strong> A "select under" menu lists every element under the cursor. Hovering an entry outlines it on the canvas; shift-click entries to build a multi-selection without closing the menu.</li>
+                        <li><strong>Layers panel:</strong> Click the element's row directly — no canvas archaeology required.</li>
                      </ul>
                   </section>
 
@@ -305,6 +353,21 @@ export const DocsPage: React.FC = () => {
                         <li><strong>Resize & Reflow</strong>: Switch to the new variant. Your templates now exist as copies. Change their dimensions and move elements to fit the new screen size.</li>
                         <li><strong>Export</strong>: When you generate a PDF, it uses the currently active variant's dimensions.</li>
                      </ol>
+                  </section>
+
+                  <section id="svg-images">
+                     <h2><span className="flex items-center gap-4"><FileImage className="text-blue-500" size={32} /> SVG Images</span></h2>
+                     <p>
+                        Drop custom vector artwork — logos, decorative flourishes, complex icons — straight into your templates. Click the <strong>Import SVG Image</strong> button in the editor toolbar and pick a <code>.svg</code> file.
+                     </p>
+                     <ul className="list-disc pl-5 space-y-2">
+                        <li><strong>First-class element:</strong> Once placed, an SVG behaves like any other element — move it, resize it, assign it to a layer, copy/paste it between templates.</li>
+                        <li><strong>True vector export:</strong> SVGs are rendered into the PDF as vectors, not rasterized screenshots — they stay crisp at any zoom level and keep file sizes small.</li>
+                        <li><strong>Safe to share:</strong> All SVG markup is sanitized before rendering, so artwork from gallery projects you open or fork can never run scripts in your browser.</li>
+                     </ul>
+                     <p className="bg-amber-50 border-l-4 border-amber-400 p-4 text-amber-900 text-sm">
+                        <strong>Note:</strong> Very complex SVGs (heavy filters, embedded raster images) may render differently in the PDF than on the canvas. Keep artwork as clean vector paths where possible.
+                     </p>
                   </section>
 
                   <section id="referencing">
@@ -559,6 +622,76 @@ nodes[refId] = {
                      </p>
                   </section>
 
+                  <section id="accounts">
+                     <h2><span className="flex items-center gap-4"><Users className="text-blue-500" size={32} /> Accounts & Usernames</span></h2>
+                     <p>
+                        PDF Architect is <strong>local-first</strong>: everything works without an account, and your projects live in your browser. An account adds cloud saves, publishing, forking, and reviews.
+                     </p>
+                     <ul className="list-disc pl-5 space-y-2">
+                        <li><strong>Sign up</strong> with email and password, or sign in with Google.</li>
+                        <li><strong>Pick a username</strong> — a unique public handle (3–30 characters) shown on everything you publish, instead of your email or real name. A username is required before you can save to the cloud, publish, fork, or write reviews; if your account doesn't have one yet, you'll be prompted to choose it.</li>
+                        <li><strong>Change it anytime</strong> from your Account settings. Your public profile lives at <code>/u/your-username</code> and shows all your published projects.</li>
+                     </ul>
+                  </section>
+
+                  <section id="cloud-saves">
+                     <h2><span className="flex items-center gap-4"><Cloud className="text-blue-500" size={32} /> Cloud Saves & Version History</span></h2>
+                     <p>
+                        The <strong>Cloud menu</strong> in the editor toolbar handles everything cloud-related. Nothing syncs silently — you decide when a snapshot goes up.
+                     </p>
+                     <ul className="list-disc pl-5 space-y-2">
+                        <li><strong>Save to Cloud:</strong> Each save creates an immutable snapshot (a commit) of your entire project. Saving identical content twice doesn't create duplicate commits.</li>
+                        <li><strong>Version History:</strong> Browse every commit and <strong>Restore</strong> any of them — the editor reverts to exactly that state.</li>
+                        <li><strong>My Projects:</strong> A dedicated page listing all your cloud projects, with a storage usage bar and the ability to delete projects you no longer need.</li>
+                     </ul>
+                  </section>
+
+                  <section id="publishing">
+                     <h2><span className="flex items-center gap-4"><Globe className="text-blue-500" size={32} /> Publishing to the Gallery</span></h2>
+                     <p>
+                        Publishing makes a cloud project publicly visible in the gallery. The <strong>Publish wizard</strong> (in the Cloud menu) walks you through it:
+                     </p>
+                     <ol className="list-decimal pl-5 space-y-2">
+                        <li><strong>Pick preview pages</strong> — choose 1–4 pages of your project; thumbnails render live in the wizard so you see exactly what gallery visitors will see.</li>
+                        <li><strong>Describe it</strong> — a description and tags. Tags power the gallery's filtering, so pick ones people will actually search for.</li>
+                        <li><strong>Publish.</strong> You can unpublish at any time, which removes the project (and its reviews) from public view without deleting anything.</li>
+                     </ol>
+                  </section>
+
+                  <section id="gallery">
+                     <h2><span className="flex items-center gap-4"><Star className="text-blue-500" size={32} /> Browsing the Gallery</span></h2>
+                     <p>
+                        The public gallery is browsable by anyone — no account needed. The default view offers curated rows (<strong>Top Rated</strong>, <strong>Popular</strong>, <strong>Recently Updated</strong>); searching, picking a tag chip, or hitting "see all" switches to a filtered grid whose URL is fully shareable and bookmarkable. Search matches names, descriptions, and tags.
+                     </p>
+                     <p>Every project page gives you:</p>
+                     <ul className="list-disc pl-5 space-y-2">
+                        <li><strong>Open in Editor:</strong> Clone the project straight into your own local editor — works even without an account, and your copy has no link back to the original.</li>
+                        <li><strong>Download all variants:</strong> Generates a PDF for each of the project's device variants and packages them into a single zip.</li>
+                        <li><strong>Version history:</strong> Browse the project's public commits and clone any past version into a fresh local project.</li>
+                        <li><strong>Ratings & reviews:</strong> 1–5 stars with an optional written review — one per user per project, editable and deletable. Owners can't review their own work, and inappropriate content can be reported.</li>
+                     </ul>
+                  </section>
+
+                  <section id="forking">
+                     <h2><span className="flex items-center gap-4"><GitFork className="text-blue-500" size={32} /> Forking & Merge Requests</span></h2>
+                     <p>
+                        Want to build on someone's published project — and maybe contribute your improvements back? That's forking, GitHub-style.
+                     </p>
+                     <h3>Forking</h3>
+                     <p>
+                        <strong>Fork</strong> on a gallery project copies its current version into a brand-new <strong>private</strong> cloud project you own, with a "forked from" link back to the original. Edit it freely; your fork never appears in the gallery unless you publish it yourself.
+                     </p>
+                     <h3>Merge Requests</h3>
+                     <p>
+                        When your fork has changes worth sharing, open the Cloud menu and choose <strong>Propose changes to upstream</strong>. The original's owner sees your merge request as a structured change list — which templates and variants changed, with a rendered before/after preview of affected pages — not a wall of raw JSON.
+                     </p>
+                     <ul className="list-disc pl-5 space-y-2">
+                        <li><strong>Live diffs:</strong> The comparison is recomputed every time it's viewed, so it always reflects the upstream project's current state.</li>
+                        <li><strong>Conflict detection:</strong> If the owner changed the same template you did, the request is flagged as conflicted and can't be merged until resolved.</li>
+                        <li><strong>Clean merges preserve both sides:</strong> Merging applies only your changes on top of the owner's current version — their independent edits survive — and lands as a normal commit in their version history.</li>
+                     </ul>
+                  </section>
+
                   <section id="shortcuts">
                      <h2><span className="flex items-center gap-4"><Command className="text-blue-500" size={32} /> Keyboard Shortcuts</span></h2>
                      <div className="grid grid-cols-2 md:grid-cols-3 gap-6 mt-10 not-prose">
@@ -573,6 +706,16 @@ nodes[refId] = {
                         <Shortcut k="Shift + Arrow" desc="Fast Nudge" />
                         <Shortcut k="Esc" desc="Cancel Selection" />
                         <Shortcut k="Middle Click" desc="Pan Canvas" />
+                     </div>
+
+                     <h3 className="text-lg font-bold text-slate-800 mt-8 mb-4">Selection & Stacks</h3>
+                     <div className="grid grid-cols-2 md:grid-cols-3 gap-6 not-prose">
+                        <Shortcut k="Click Again" desc="Cycle Down Stack" />
+                        <Shortcut k="Alt + Click" desc="Cycle Under Cursor" />
+                        <Shortcut k="Shift + Alt + Click" desc="Cycle-Add to Selection" />
+                        <Shortcut k="Shift + Click" desc="Add / Remove from Selection" />
+                        <Shortcut k="Right Click" desc="Select-Under Menu" />
+                        <Shortcut k="Ctrl + Click (Panel)" desc="Multi-Select Rows" />
                      </div>
 
                      <h3 className="text-lg font-bold text-slate-800 mt-8 mb-4">Tools</h3>
@@ -598,6 +741,18 @@ nodes[refId] = {
                         <li className="flex gap-4 p-6 bg-green-50/50 rounded-xl border border-green-100">
                            <CheckCircle2 className="text-green-600 flex-shrink-0 mt-1" size={24} />
                            <span className="text-slate-700 text-lg"><strong>Pattern Fills:</strong> Use 'Dots' pattern with a high spacing value to create bullet journal style grid pages without adding thousands of individual circle elements, keeping PDF file size low.</span>
+                        </li>
+                        <li className="flex gap-4 p-6 bg-green-50/50 rounded-xl border border-green-100">
+                           <CheckCircle2 className="text-green-600 flex-shrink-0 mt-1" size={24} />
+                           <span className="text-slate-700 text-lg"><strong>Lock Your Background Layer:</strong> Put page backgrounds, frames, and decorative elements on their own layer and lock it. Clicks pass straight through to your content, and you'll never accidentally drag the background again.</span>
+                        </li>
+                        <li className="flex gap-4 p-6 bg-green-50/50 rounded-xl border border-green-100">
+                           <CheckCircle2 className="text-green-600 flex-shrink-0 mt-1" size={24} />
+                           <span className="text-slate-700 text-lg"><strong>Hide Layers for Draft Exports:</strong> Hidden layers are excluded from the exported PDF too — keep guides, notes-to-self, or experimental variants on a layer you hide before exporting.</span>
+                        </li>
+                        <li className="flex gap-4 p-6 bg-green-50/50 rounded-xl border border-green-100">
+                           <CheckCircle2 className="text-green-600 flex-shrink-0 mt-1" size={24} />
+                           <span className="text-slate-700 text-lg"><strong>Fork Before You Fiddle:</strong> Found a gallery planner that's almost right? Fork it (or just "Open in Editor" for a local copy), tweak the templates, and keep the original's structure. If your improvements are good, propose them back upstream.</span>
                         </li>
                      </ul>
                   </section>

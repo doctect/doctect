@@ -1,7 +1,14 @@
 import 'dotenv/config';
 import { betterAuth } from "better-auth";
 import { admin, username } from "better-auth/plugins";
+import { createAuthMiddleware, APIError } from "better-auth/api";
+import { validatePassword } from "../shared/passwordPolicy.js";
 import db, { makeUserAdmin } from "./db.js";
+import { sendEmail } from "./email.js";
+
+// Paths where a password is being SET. Sign-in is deliberately absent:
+// pre-existing weaker passwords must keep working until changed.
+const PASSWORD_SETTING_PATHS = ["/sign-up/email", "/change-password", "/reset-password"];
 
 const defaultTrustedOrigins = [
     process.env.CLIENT_URL || "http://localhost:3000",
@@ -14,7 +21,23 @@ export const createAuth = (config = {}) => {
         database: db,
         baseURL: config.baseURL || process.env.BETTER_AUTH_URL,
         emailAndPassword: {
-            enabled: true
+            enabled: true,
+            minPasswordLength: 12,
+            requireEmailVerification: true,
+        },
+        emailVerification: {
+            sendVerificationEmail: async ({ user, url }) => {
+                await sendEmail({
+                    to: user.email,
+                    subject: "Verify your email — PDF Architect",
+                    html: `<p>Confirm your address to finish signing up: <a href="${url}">Verify email</a></p><p>This link expires in 1 hour. If you didn't create this account, ignore this email.</p>`,
+                    text: `Verify your email: ${url}\nThis link expires in 1 hour.`,
+                });
+            },
+            sendOnSignUp: true,
+            sendOnSignIn: true,
+            autoSignInAfterVerification: true,
+            expiresIn: 3600,
         },
         socialProviders: {
             google: {
@@ -63,6 +86,17 @@ export const createAuth = (config = {}) => {
                     }
                 }
             }
+        },
+        hooks: {
+            before: createAuthMiddleware(async (ctx) => {
+                if (!PASSWORD_SETTING_PATHS.includes(ctx.path)) return;
+                const password = ctx.body?.newPassword ?? ctx.body?.password;
+                if (typeof password !== "string") return; // missing field: better-auth's own validation handles it
+                const result = validatePassword(password);
+                if (!result.ok) {
+                    throw new APIError("BAD_REQUEST", { message: result.message, code: "PASSWORD_POLICY" });
+                }
+            }),
         },
         ...config // Allow overrides
     });

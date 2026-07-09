@@ -4,6 +4,7 @@ import { Sidebar } from './Sidebar';
 import { Canvas } from './Canvas';
 import { PropertiesPanel } from './PropertiesPanel';
 import { LayersPanel } from './LayersPanel';
+import { CollapsibleSection } from './CollapsibleSection';
 import { JsonModal } from './JsonModal';
 import { NodeSelectorModal } from './NodeSelectorModal';
 import { DeleteConfirmModal } from './DeleteConfirmModal';
@@ -38,6 +39,8 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, initial
 
     const [deleteConfirmState, setDeleteConfirmState] = useState<{ isOpen: boolean, nodeIds: string[] }>({ isOpen: false, nodeIds: [] });
     const [showScriptGenModal, setShowScriptGenModal] = useState(false);
+    // Session-local: the Layers section always starts collapsed on load.
+    const [layersExpanded, setLayersExpanded] = useState(false);
     const [showSavePresetModal, setShowSavePresetModal] = useState(false);
     const [showNewVariantModal, setShowNewVariantModal] = useState(false);
     const [resizingPanel, setResizingPanel] = useState<'sidebar' | 'properties' | null>(null);
@@ -1215,17 +1218,6 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, initial
                         className="absolute left-0 top-0 bottom-0 w-1 hover:bg-blue-400 cursor-col-resize z-30 transition-colors"
                         onMouseDown={() => setResizingPanel('properties')}
                     />
-                    {state.showLayersPanel && currentTemplate && (
-                        <LayersPanel
-                            template={currentTemplate}
-                            selectedElementIds={state.selectedElementIds}
-                            activeLayerId={state.activeLayerId}
-                            onUpdateTemplate={(updates) => handleUpdateTemplate(currentTemplate.id, updates)}
-                            onUpdateElements={(els, save) => handleUpdateTemplateElements(els, save)}
-                            onSelectElements={(ids) => setState(s => ({ ...s, selectedElementIds: ids }))}
-                            onSetActiveLayer={(layerId) => setState(s => ({ ...s, activeLayerId: layerId }))}
-                        />
-                    )}
                     <PropertiesPanel
                         state={state}
                         onUpdateElements={(els, save) => handleUpdateTemplateElements(els, save)}
@@ -1233,6 +1225,25 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, initial
                         onDeleteElements={(ids) => { saveToHistory(); handleDeleteElements(ids); }}
                         onOpenNodeSelector={(mode, elId) => setState(s => ({ ...s, showNodeSelector: true, nodeSelectorMode: mode, editingElementId: elId }))}
                         onUpdateTemplate={handleUpdateTemplate}
+                        layersSlot={currentTemplate ? (
+                            <CollapsibleSection
+                                title="Layers"
+                                icon={Layers}
+                                testId="layers-section"
+                                expanded={layersExpanded}
+                                onToggle={() => setLayersExpanded(v => !v)}
+                            >
+                                <LayersPanel
+                                    template={currentTemplate}
+                                    selectedElementIds={state.selectedElementIds}
+                                    activeLayerId={state.activeLayerId}
+                                    onUpdateTemplate={(updates) => handleUpdateTemplate(currentTemplate.id, updates)}
+                                    onUpdateElements={(els, save) => handleUpdateTemplateElements(els, save)}
+                                    onSelectElements={(ids) => setState(s => ({ ...s, selectedElementIds: ids }))}
+                                    onSetActiveLayer={(layerId) => setState(s => ({ ...s, activeLayerId: layerId }))}
+                                />
+                            </CollapsibleSection>
+                        ) : null}
                     />
                 </div>
             </div>

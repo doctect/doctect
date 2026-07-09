@@ -2,6 +2,16 @@
 
 export const UNIT_CONVERSION = { 'pt': 1, 'px': 1, 'in': 72, 'mm': 2.83465 };
 
+export type DimUnit = keyof typeof UNIT_CONVERSION;
+
+// Template dimensions are stored canonically in pt (px treated 1:1).
+// These convert for display/entry so switching units keeps the actual size.
+export const toDisplayUnit = (valuePt: number, unit: DimUnit): number =>
+    parseFloat((valuePt / UNIT_CONVERSION[unit]).toFixed(3));
+
+export const fromDisplayUnit = (value: number, unit: DimUnit): number =>
+    parseFloat((value * UNIT_CONVERSION[unit]).toFixed(3));
+
 export const RM_PP_WIDTH = 509;
 export const RM_PP_HEIGHT = 679;
 

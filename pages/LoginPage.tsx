@@ -1,7 +1,24 @@
-import React, { useState } from 'react';
-import { signIn, signUp } from '../lib/auth-client';
+import React, { useState, useEffect } from 'react';
+import { signIn, signUp, authClient, useSession } from '../lib/auth-client';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { Loader2 } from 'lucide-react';
+import { validatePassword } from '../shared/passwordPolicy.js';
+
+// A 403 from sign-in/email can mean the account is unverified OR (admin plugin)
+// that the user is banned -- both surface as status 403, so the status alone
+// can't distinguish them. better-auth's own APIError derives `code` from the
+// thrown message when no explicit code is given (see better-call's
+// InternalAPIError), which is exactly what happens for the unverified case
+// (sign-in.mjs throws APIError("FORBIDDEN", { message: "Email not verified" })
+// with no explicit code, so it becomes code "EMAIL_NOT_VERIFIED"); the banned
+// case (admin plugin) throws an explicit code: "BANNED_USER". Match on the
+// specific code, falling back to a message substring only if a differently-
+// shaped client ever omits `code`.
+const isUnverifiedEmailError = (error: any): boolean => {
+    if (!error) return false;
+    if (error.code) return error.code === 'EMAIL_NOT_VERIFIED';
+    return typeof error.message === 'string' && /not verified/i.test(error.message);
+};
 
 export const LoginPage = () => {
     const [isLogin, setIsLogin] = useState(true);
@@ -11,9 +28,25 @@ export const LoginPage = () => {
     const [username, setUsername] = useState('');
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [passwordError, setPasswordError] = useState<string | null>(null);
+    const [verifyEmailFor, setVerifyEmailFor] = useState<string | null>(null);
+    const [resent, setResent] = useState(false);
+    const [resendError, setResendError] = useState<string | null>(null);
     const navigate = useNavigate();
     const location = useLocation();
     const from = (location.state as { from?: string } | null)?.from;
+    const verifiedBanner = new URLSearchParams(location.search).get('verified') === '1';
+    const verificationCallbackURL = `${window.location.origin}/login?verified=1`;
+    const { data: session } = useSession();
+
+    // After clicking the emailed verification link the user lands back on
+    // /login?verified=1 already signed in (autoSignInAfterVerification) —
+    // continue to where they were originally headed.
+    useEffect(() => {
+        if (verifiedBanner && session) {
+            navigate(from ?? '/app', { replace: true });
+        }
+    }, [verifiedBanner, session, from, navigate]);
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -23,36 +56,63 @@ export const LoginPage = () => {
             return;
         }
 
+        if (!isLogin) {
+            const policy = validatePassword(password);
+            if (!policy.ok) {
+                setPasswordError(policy.message);
+                return;
+            }
+            setPasswordError(null);
+        }
+
         setLoading(true);
         setError(null);
 
         try {
             if (isLogin) {
-                await signIn.email({
+                const result: any = await signIn.email({
                     email,
                     password,
+                    callbackURL: verificationCallbackURL,
                 }, {
                     onSuccess: () => {
                         navigate(from ?? '/app', { replace: true });
                     },
                     onError: (ctx) => {
-                        setError(ctx.error.message);
+                        if (isUnverifiedEmailError(ctx.error)) {
+                            setVerifyEmailFor(email);
+                        } else {
+                            setError(ctx.error.message);
+                        }
                     }
                 });
+                if (result?.error) {
+                    if (isUnverifiedEmailError(result.error)) {
+                        setVerifyEmailFor(email);
+                    } else {
+                        setError(result.error.message);
+                    }
+                }
             } else {
-                await signUp.email({
+                const result: any = await signUp.email({
                     email,
                     password,
                     name,
                     username,
+                    callbackURL: verificationCallbackURL,
                 } as any, {
                     onSuccess: () => {
-                        navigate(from ?? '/app', { replace: true });
+                        setVerifyEmailFor(email);
                     },
                     onError: (ctx) => {
                         setError(ctx.error.message);
                     }
                 });
+                if (result?.error) {
+                    setError(result.error.message);
+                } else if (result?.data) {
+                    setVerifyEmailFor(email);
+                }
             }
         } catch (err: any) {
             setError(err.message || 'An error occurred');
@@ -65,8 +125,14 @@ export const LoginPage = () => {
         <div className="h-screen overflow-y-auto flex items-center justify-center bg-gray-50 p-4">
             <div className="w-full max-w-md bg-white rounded-lg shadow-md p-8">
                 <h2 className="text-2xl font-bold mb-6 text-center text-gray-800">
-                    {isLogin ? 'Sign In' : 'Create Account'}
+                    {verifyEmailFor ? 'Verify your email' : (isLogin ? 'Sign In' : 'Create Account')}
                 </h2>
+
+                {verifiedBanner && !verifyEmailFor && (
+                    <div className="mb-4 p-3 bg-green-50 text-green-700 rounded text-sm text-center">
+                        Email verified — you're signed in.
+                    </div>
+                )}
 
                 {error && (
                     <div className="mb-4 p-3 bg-red-50 text-red-700 rounded text-sm">
@@ -74,11 +140,43 @@ export const LoginPage = () => {
                     </div>
                 )}
 
+                {verifyEmailFor ? (
+                    <div className="text-center space-y-3">
+                        <p className="text-slate-600">We sent a verification link to <strong>{verifyEmailFor}</strong>. Click it to finish signing in.</p>
+                        <button
+                            onClick={async () => {
+                                const result: any = await authClient.sendVerificationEmail({
+                                    email: verifyEmailFor,
+                                    callbackURL: verificationCallbackURL,
+                                });
+                                if (result?.error) {
+                                    setResendError(result.error.message || 'Failed to resend — try again.');
+                                    setResent(false);
+                                } else {
+                                    setResendError(null);
+                                    setResent(true);
+                                }
+                            }}
+                            className="px-3 py-1.5 border rounded text-sm"
+                        >
+                            Resend email
+                        </button>
+                        {resent && <p className="text-sm text-green-600">Sent — check your inbox.</p>}
+                        {resendError && <p className="text-sm text-red-600">{resendError}</p>}
+                        <button
+                            onClick={() => { setVerifyEmailFor(null); setResent(false); setResendError(null); }}
+                            className="text-sm text-slate-500 underline"
+                        >
+                            Back
+                        </button>
+                    </div>
+                ) : (
                 <form onSubmit={handleSubmit} className="space-y-4">
                     {!isLogin && (
                         <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-1">Name</label>
+                            <label htmlFor="login-name" className="block text-sm font-medium text-gray-700 mb-1">Name</label>
                             <input
+                                id="login-name"
                                 type="text"
                                 value={name}
                                 onChange={(e) => setName(e.target.value)}
@@ -90,8 +188,9 @@ export const LoginPage = () => {
 
                     {!isLogin && (
                         <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-1">Username</label>
+                            <label htmlFor="login-username" className="block text-sm font-medium text-gray-700 mb-1">Username</label>
                             <input
+                                id="login-username"
                                 type="text"
                                 value={username}
                                 onChange={(e) => setUsername(e.target.value)}
@@ -103,8 +202,9 @@ export const LoginPage = () => {
                     )}
 
                     <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
+                        <label htmlFor="login-email" className="block text-sm font-medium text-gray-700 mb-1">Email</label>
                         <input
+                            id="login-email"
                             type="email"
                             value={email}
                             onChange={(e) => setEmail(e.target.value)}
@@ -114,14 +214,21 @@ export const LoginPage = () => {
                     </div>
 
                     <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Password</label>
+                        <label htmlFor="login-password" className="block text-sm font-medium text-gray-700 mb-1">Password</label>
                         <input
+                            id="login-password"
                             type="password"
                             value={password}
-                            onChange={(e) => setPassword(e.target.value)}
+                            onChange={(e) => {
+                                setPassword(e.target.value);
+                                if (passwordError) setPasswordError(null);
+                            }}
                             className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                             required
                         />
+                        {!isLogin && passwordError && (
+                            <p className="text-sm text-red-600 mt-1">{passwordError}</p>
+                        )}
                     </div>
 
                     <button
@@ -173,16 +280,19 @@ export const LoginPage = () => {
                         Sign in with Google
                     </button>
                 </form>
+                )}
 
-                <div className="mt-6 text-center text-sm text-gray-600">
-                    {isLogin ? "Don't have an account? " : "Already have an account? "}
-                    <button
-                        onClick={() => setIsLogin(!isLogin)}
-                        className="text-blue-600 hover:underline font-medium"
-                    >
-                        {isLogin ? 'Sign Up' : 'Sign In'}
-                    </button>
-                </div>
+                {!verifyEmailFor && (
+                    <div className="mt-6 text-center text-sm text-gray-600">
+                        {isLogin ? "Don't have an account? " : "Already have an account? "}
+                        <button
+                            onClick={() => setIsLogin(!isLogin)}
+                            className="text-blue-600 hover:underline font-medium"
+                        >
+                            {isLogin ? 'Sign Up' : 'Sign In'}
+                        </button>
+                    </div>
+                )}
             </div>
         </div>
     );

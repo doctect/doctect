@@ -226,12 +226,19 @@ export const Canvas: React.FC<CanvasProps> = ({
     // Inline Editing State
     const [editingElementId, setEditingElementId] = useState<string | null>(null);
     const [selectUnderMenu, setSelectUnderMenu] = useState<{ x: number; y: number; stack: TemplateElement[] } | null>(null);
+    const [menuHoverId, setMenuHoverId] = useState<string | null>(null);
 
     // Group Transform State
     const initialGroupElements = useRef<TemplateElement[]>([]);
     const initialGroupBoundsRef = useRef<TemplateElement | null>(null); // For rotating group visualization
     // Alt-click cycle state: last click point + current depth in the stack
     const altCycleRef = useRef<{ x: number; y: number; index: number } | null>(null);
+    // Tracks whether the pointer moved past the drag threshold since the last mousedown,
+    // and the overlapping stack armed for plain-click cycling (top -> bottom ids).
+    const movedSinceDownRef = useRef(false);
+    const clickCycleStackRef = useRef<string[] | null>(null);
+    // Shift-click cycling: which stack member of the current selection to swap on a clean click.
+    const shiftCycleRef = useRef<{ stackIds: string[]; member: string } | null>(null);
     const [persistentGroupRotation, setPersistentGroupRotation] = useState(0);
 
     // Reset persistent rotation and pivots when selection changes
@@ -560,7 +567,13 @@ export const Canvas: React.FC<CanvasProps> = ({
                     const samePoint = !!prev && Math.abs(prev.x - coords.x) < 3 && Math.abs(prev.y - coords.y) < 3;
                     const index = samePoint ? (prev!.index + 1) % stack.length : 0;
                     altCycleRef.current = { x: coords.x, y: coords.y, index };
-                    onSelectElements([stack[index].id]);
+                    const id = stack[index].id;
+                    if (e.shiftKey) {
+                        // Shift+Alt: cycle-ADD — each click adds the next stack member down.
+                        onSelectElements(selectedElementIds.includes(id) ? selectedElementIds : [...selectedElementIds, id]);
+                    } else {
+                        onSelectElements([id]);
+                    }
                     e.preventDefault();
                     return;
                 }
@@ -568,6 +581,10 @@ export const Canvas: React.FC<CanvasProps> = ({
 
             // Any non-Alt click resets the Alt-click cycle
             altCycleRef.current = null;
+            // Reset click-drag/cycle trackers for this fresh press.
+            movedSinceDownRef.current = false;
+            clickCycleStackRef.current = null;
+            shiftCycleRef.current = null;
 
             let clickedId = targetEl.closest('[data-element-id]')?.getAttribute('data-element-id') ?? null;
             // Locked layers: still rendered, but clicks pass through as if the canvas were empty
@@ -705,10 +722,43 @@ export const Canvas: React.FC<CanvasProps> = ({
             if (clickedId) {
                 let newSelection = selectedElementIds;
 
+                // If the cursor is over any already-selected element (rotation-aware,
+                // skipping hidden/locked layers), keep the selection so a drag moves it —
+                // single or multi — instead of grabbing whatever sits on top. For a single
+                // selection, also arm plain-click cycling through the overlapping stack.
+                const noModifier = !e.shiftKey && !e.ctrlKey && !e.metaKey;
+                let keepSelection = false;
+                if (noModifier && selectedElementIds.length >= 1) {
+                    const stack = hitTestPoint(coords, elements, template.layers, nodes, currentNodeId);
+                    const stackIds = stack.map(el => el.id);
+                    if (stackIds.some(id => selectedElementIds.includes(id))) {
+                        keepSelection = true;
+                        if (selectedElementIds.length === 1 && stackIds.length >= 2) {
+                            clickCycleStackRef.current = stackIds;
+                        }
+                    }
+                }
+
                 if (e.shiftKey) {
-                    newSelection = selectedElementIds.includes(clickedId)
-                        ? selectedElementIds.filter(id => id !== clickedId)
-                        : [...selectedElementIds, clickedId];
+                    // Over an overlapping stack, shift-click cycles WHICH stack member is part
+                    // of the multi-selection: first click adds the topmost; repeated clean
+                    // clicks swap it for the next one down (handled on mouseup); past the
+                    // bottom it is removed. A shift-drag with a member selected moves the
+                    // whole selection without cycling.
+                    const stackIds = hitTestPoint(coords, elements, template.layers, nodes, currentNodeId).map(el => el.id);
+                    const member = stackIds.length >= 2 ? stackIds.find(id => selectedElementIds.includes(id)) : undefined;
+                    if (stackIds.length >= 2 && member) {
+                        shiftCycleRef.current = { stackIds, member };
+                        // Keep the selection: drag moves it, a clean click swaps on mouseup.
+                    } else if (stackIds.length >= 2) {
+                        newSelection = [...selectedElementIds, stackIds[0]];
+                    } else {
+                        newSelection = selectedElementIds.includes(clickedId)
+                            ? selectedElementIds.filter(id => id !== clickedId)
+                            : [...selectedElementIds, clickedId];
+                    }
+                } else if (keepSelection) {
+                    // Keep the current selection: a drag moves it, a plain click cycles.
                 } else if (!selectedElementIds.includes(clickedId)) {
                     newSelection = [clickedId];
                 }
@@ -961,6 +1011,9 @@ export const Canvas: React.FC<CanvasProps> = ({
 
             const rawDx = coords.x - dragStart.x;
             const rawDy = coords.y - dragStart.y;
+            if (Math.abs(rawDx) > MIN_DRAG_THRESHOLD || Math.abs(rawDy) > MIN_DRAG_THRESHOLD) {
+                movedSinceDownRef.current = true;
+            }
             const dx = snapToGrid ? Math.round(rawDx / effectiveGridSize) * effectiveGridSize : rawDx;
             const dy = snapToGrid ? Math.round(rawDy / effectiveGridSize) * effectiveGridSize : rawDy;
 
@@ -1389,6 +1442,32 @@ export const Canvas: React.FC<CanvasProps> = ({
             onSelectElements(ids);
         }
 
+        // Clean shift-click on a stack: swap the selected stack member for the next one
+        // down; past the bottom, drop it from the selection (deselect state).
+        if (tool === 'select' && !movedSinceDownRef.current && shiftCycleRef.current) {
+            const { stackIds, member } = shiftCycleRef.current;
+            const idx = stackIds.indexOf(member);
+            const withoutMember = selectedElementIds.filter(id => id !== member);
+            // Next = first stack member below that isn't already selected — appending an
+            // already-selected id would duplicate it in the selection (duplicate React keys).
+            const next = idx === -1 ? null
+                : stackIds.slice(idx + 1).find(id => !withoutMember.includes(id)) ?? null;
+            onSelectElements(next ? [...withoutMember, next] : withoutMember);
+        }
+        shiftCycleRef.current = null;
+
+        // Plain click (no drag past threshold) on an overlapping stack cycles the
+        // selection one step down the stack (top -> bottom), wrapping around.
+        if (tool === 'select' && !movedSinceDownRef.current && clickCycleStackRef.current && selectedElementIds.length === 1) {
+            const stackIds = clickCycleStackRef.current;
+            const curIdx = stackIds.indexOf(selectedElementIds[0]);
+            if (stackIds.length >= 2 && curIdx !== -1) {
+                const nextId = stackIds[(curIdx + 1) % stackIds.length];
+                if (nextId !== selectedElementIds[0]) onSelectElements([nextId]);
+            }
+        }
+        clickCycleStackRef.current = null;
+
         setNewShapeStart(null);
         setNewShapeCurrent(null);
         setIsDragging(false);
@@ -1493,24 +1572,29 @@ export const Canvas: React.FC<CanvasProps> = ({
                                     zIndex: 0
                                 }}></div>
                         )}
-                        {sortElementsForRender(elements, template.layers).map(el => (
-                            <CanvasElement
-                                key={el.id}
-                                element={el}
-                                selected={selectedElementIds.includes(el.id)}
-                                nodes={nodes}
-                                currentNodeId={currentNodeId}
-                                tool={tool}
-                                showHandles={selectedElementIds.includes(el.id) && selectedElementIds.length === 1}
-                                onDoubleClick={() => {
-                                    // Locked layers are not editable: don't enter inline edit mode.
-                                    const layer = el.layerId ? template.layers?.find(l => l.id === el.layerId) : undefined;
-                                    if (layer?.locked) return;
-                                    setEditingElementId(el.id);
-                                }}
-                                isEditing={editingElementId === el.id}
-                            />
-                        ))}
+                        {/* isolation: element zIndex is user-editable and unbounded; without its own
+                            stacking context an element with zIndex >= 100 paints over the selection
+                            box (z-100) and select-under hover highlight (z-101) of anything under it. */}
+                        <div style={{ isolation: 'isolate' }}>
+                            {sortElementsForRender(elements, template.layers).map(el => (
+                                <CanvasElement
+                                    key={el.id}
+                                    element={el}
+                                    selected={selectedElementIds.includes(el.id)}
+                                    nodes={nodes}
+                                    currentNodeId={currentNodeId}
+                                    tool={tool}
+                                    showHandles={selectedElementIds.includes(el.id) && selectedElementIds.length === 1}
+                                    onDoubleClick={() => {
+                                        // Locked layers are not editable: don't enter inline edit mode.
+                                        const layer = el.layerId ? template.layers?.find(l => l.id === el.layerId) : undefined;
+                                        if (layer?.locked) return;
+                                        setEditingElementId(el.id);
+                                    }}
+                                    isEditing={editingElementId === el.id}
+                                />
+                            ))}
+                        </div>
 
                         {/* Group Selection Overlay */}
                         {(() => {
@@ -1718,6 +1802,30 @@ export const Canvas: React.FC<CanvasProps> = ({
                             return null;
                         })()}
 
+                        {/* Hover highlight for the select-under menu: outlines the element the
+                            hovered menu entry refers to, so stacked entries are tellable apart. */}
+                        {selectUnderMenu && menuHoverId && (() => {
+                            const el = elements.find(e => e.id === menuHoverId);
+                            if (!el) return null;
+                            const bounds = getElementBounds(el);
+                            return (
+                                <div
+                                    data-testid="menu-hover-highlight"
+                                    className="absolute pointer-events-none z-[101]"
+                                    style={{
+                                        left: 0,
+                                        top: 0,
+                                        width: bounds.w,
+                                        height: bounds.h,
+                                        transform: `translate(${el.x}px, ${el.y}px) rotate(${el.rotation || 0}deg)`,
+                                        transformOrigin: el.transformOrigin ? `${el.transformOrigin.x * bounds.w}px ${el.transformOrigin.y * bounds.h}px` : 'center'
+                                    }}
+                                >
+                                    <div className="absolute -inset-1 border-2 border-dashed border-indigo-500 rounded-md bg-indigo-500/10" />
+                                </div>
+                            );
+                        })()}
+
                         {/* Selection Overlay - Rendered on top to prevent occlusion */}
                         {selectedElementIds.map(id => {
                             const el = elements.find(e => e.id === id);
@@ -1773,8 +1881,18 @@ export const Canvas: React.FC<CanvasProps> = ({
                         element: el,
                         layerName: template.layers?.find(l => l.id === el.layerId)?.name ?? '—',
                     }))}
-                    onSelect={id => onSelectElements([id])}
-                    onClose={() => setSelectUnderMenu(null)}
+                    selectedIds={selectedElementIds}
+                    onSelect={(id, additive) => {
+                        if (additive) {
+                            onSelectElements(selectedElementIds.includes(id)
+                                ? selectedElementIds.filter(x => x !== id)
+                                : [...selectedElementIds, id]);
+                        } else {
+                            onSelectElements([id]);
+                        }
+                    }}
+                    onHover={setMenuHoverId}
+                    onClose={() => { setSelectUnderMenu(null); setMenuHoverId(null); }}
                 />
             )}
         </div>

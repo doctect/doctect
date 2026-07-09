@@ -5,6 +5,7 @@ import { svg2pdf } from "svg2pdf.js";
 import JSZip from "jszip";
 import { AppState, AppNode, PageTemplate, TemplateElement, RM_PP_WIDTH, RM_PP_HEIGHT, TraversalStep } from "../types";
 import { FONTS } from "../constants/editor";
+import { normalizeSvgColorsInTree } from "./svgColorNormalize";
 import { sortElementsForRender } from "./layers";
 
 const DEBUG_PDF = false; // Set to true to see debug visuals
@@ -855,6 +856,20 @@ export const generatePDF = async (state: AppState, options: GeneratePDFOptions =
         // Thumbnails (services/thumbnailService.ts) render via generatePDF, so they inherit this.
         const sortedElements = sortElementsForRender(template.elements, template.layers);
 
+        // Writes the clickable link annotation for an element. Must run for every
+        // element type — branches that `continue` before the end of the loop
+        // (line, svg) call this themselves.
+        const applyElementLink = (el: TemplateElement, x: number, y: number, w: number, h: number, angle: number, resolvedTargetId: string | undefined) => {
+            if (!el.linkTarget || el.linkTarget === 'none') return;
+            const linkArea = getRotatedAABB(x, y, w, h, angle);
+            if (resolvedTargetId) {
+                const targetPage = resolvePage(resolvedTargetId);
+                if (targetPage) doc.link(linkArea.x, linkArea.y, linkArea.w, linkArea.h, { pageNumber: targetPage });
+            } else if (el.linkTarget === 'url' && el.linkValue) {
+                doc.link(linkArea.x, linkArea.y, linkArea.w, linkArea.h, { url: el.linkValue });
+            }
+        };
+
         for (const el of sortedElements) {
             // --- LINK VALIDATION (Pre-check) ---
             // If an element has an internal link target but resolves to nothing, we skip rendering it entirely.
@@ -988,7 +1003,9 @@ export const generatePDF = async (state: AppState, options: GeneratePDFOptions =
                     try {
                         const GState = (doc as any).GState;
                         if (GState) {
-                            doc.setGState(new GState({ opacity: opacity }));
+                            // 'opacity' alone only sets /ca (fill alpha); strokes would
+                            // stay fully opaque. /CA must carry the same value.
+                            doc.setGState(new GState({ opacity: opacity, 'stroke-opacity': opacity }));
                         }
                     } catch (e) { }
                 }
@@ -1035,6 +1052,7 @@ export const generatePDF = async (state: AppState, options: GeneratePDFOptions =
                     }
                 }
                 if (hasTransform) doc.restoreGraphicsState();
+                applyElementLink(el, x, y, w, h, angle, resolvedTargetId);
                 continue;
             }
             // Handle SVG
@@ -1042,6 +1060,11 @@ export const generatePDF = async (state: AppState, options: GeneratePDFOptions =
                 const parser = new DOMParser();
                 const svgDoc = parser.parseFromString(el.svgContent, 'image/svg+xml');
                 const svgElement = svgDoc.documentElement;
+
+                // svg2pdf can't parse hsl()/hsla()/#rgba/#rrggbbaa — it silently
+                // drops those fills/strokes (shape renders stroke-only or vanishes).
+                // Rewrite them to rgb() + *-opacity, which it handles.
+                normalizeSvgColorsInTree(svgElement);
 
                 if (!svgElement.hasAttribute('width')) svgElement.setAttribute('width', String(w));
                 if (!svgElement.hasAttribute('height')) svgElement.setAttribute('height', String(h));
@@ -1058,6 +1081,7 @@ export const generatePDF = async (state: AppState, options: GeneratePDFOptions =
                 }
 
                 if (hasTransform) doc.restoreGraphicsState();
+                applyElementLink(el, x, y, w, h, angle, resolvedTargetId);
                 continue;
             }
 
@@ -1724,16 +1748,7 @@ export const generatePDF = async (state: AppState, options: GeneratePDFOptions =
             if (hasTransform) doc.restoreGraphicsState();
 
             // Apply Link (if resolvedTargetId exists from earlier validation check)
-            if (el.linkTarget && el.linkTarget !== 'none') {
-                const linkArea = getRotatedAABB(x, y, w, h, angle);
-
-                if (resolvedTargetId) {
-                    const targetPage = resolvePage(resolvedTargetId);
-                    if (targetPage) doc.link(linkArea.x, linkArea.y, linkArea.w, linkArea.h, { pageNumber: targetPage });
-                } else if (el.linkTarget === 'url' && el.linkValue) {
-                    doc.link(linkArea.x, linkArea.y, linkArea.w, linkArea.h, { url: el.linkValue });
-                }
-            }
+            applyElementLink(el, x, y, w, h, angle, resolvedTargetId);
         }
     }
 

@@ -74,6 +74,8 @@ gcloud run deploy $APP_NAME \
   --set-env-vars GOOGLE_CLIENT_SECRET=$GOOGLE_CLIENT_SECRET \
   --set-env-vars ADMIN_EMAILS="$ADMIN_EMAILS" \
   --set-env-vars DATABASE_URL="$DATABASE_URL" \
+  --set-env-vars RESEND_API_KEY="$RESEND_API_KEY" \
+  --set-env-vars EMAIL_FROM="$EMAIL_FROM" \
 # Get the deployed URL
 SERVICE_URL=$(gcloud run services describe $APP_NAME --platform managed --region $REGION --format 'value(status.url)')
 
@@ -115,7 +117,9 @@ gcloud run services update $APP_NAME \
   --set-env-vars GOOGLE_CLIENT_ID="$GOOGLE_CLIENT_ID" \
   --set-env-vars GOOGLE_CLIENT_SECRET="$GOOGLE_CLIENT_SECRET" \
   --set-env-vars ADMIN_EMAILS="$ADMIN_EMAILS" \
-  --set-env-vars DATABASE_URL="$DATABASE_URL"
+  --set-env-vars DATABASE_URL="$DATABASE_URL" \
+  --set-env-vars RESEND_API_KEY="$RESEND_API_KEY" \
+  --set-env-vars EMAIL_FROM="$EMAIL_FROM"
 
 echo "Deployment complete!"
 echo "App is live at: $FINAL_CLIENT_URL"

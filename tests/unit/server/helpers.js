@@ -34,26 +34,54 @@ export const initTestApp = async () => {
     // overrides the configured window/max); any test file that creates 4+ users in its
     // beforeAll would 429. server/auth.js reads this to skip rate limiting under test.
     process.env.DISABLE_AUTH_RATE_LIMIT = 'true';
+    // A developer's local .env may hold a real Resend API key (see .env.example);
+    // tests must always exercise the console fallback (or an injected impl via
+    // setSendEmailImpl) and never attempt to send a real email.
+    delete process.env.RESEND_API_KEY;
     const { runMigrations } = await import('../../../server/migrations.js');
     await runMigrations();
     const { createApp } = await import('../../../server/app.js');
     return createApp();
 };
 
+// Compliant with shared/passwordPolicy.js (12+ chars, 3+ classes). Exported so
+// tests that sign in as a helper-created user use the same value.
+export const TEST_PASSWORD = 'Password-1234!';
+
+// Direct DB verify: tests run on SQLite only (initTestApp forces SQLITE_PATH),
+// so the 1/0 boolean form is safe. Import db lazily — server/db.js reads env
+// at import time and must load after initTestApp has set SQLITE_PATH.
+// Exported so test files that call sign-up/sign-in directly (rather than through
+// signUpUser/signUpUserNoUsername) can still get past requireEmailVerification.
+export const markVerified = async (email) => {
+    const { query } = await import('../../../server/db.js');
+    await query('UPDATE "user" SET "emailVerified" = 1 WHERE email = $1', [email]);
+};
+
+const signInFor = async (app, email) => {
+    const res = await request(app)
+        .post('/api/auth/sign-in/email')
+        .send({ email, password: TEST_PASSWORD });
+    if (res.status !== 200) throw new Error(`sign-in failed: ${res.status} ${JSON.stringify(res.body)}`);
+    return res.headers['set-cookie'].map(c => c.split(';')[0]).join('; ');
+};
+
 export const signUpUser = async (app, { email, username }) => {
     const res = await request(app)
         .post('/api/auth/sign-up/email')
-        .send({ email, password: 'password1234', name: username, username });
+        .send({ email, password: TEST_PASSWORD, name: username, username });
     if (res.status !== 200) throw new Error(`sign-up failed: ${res.status} ${JSON.stringify(res.body)}`);
-    return res.headers['set-cookie'].map(c => c.split(';')[0]).join('; ');
+    await markVerified(email);
+    return signInFor(app, email);
 };
 
 export const signUpUserNoUsername = async (app, { email, name }) => {
     const res = await request(app)
         .post('/api/auth/sign-up/email')
-        .send({ email, password: 'password1234', name });
+        .send({ email, password: TEST_PASSWORD, name });
     if (res.status !== 200) throw new Error(`sign-up failed: ${res.status} ${JSON.stringify(res.body)}`);
-    return res.headers['set-cookie'].map(c => c.split(';')[0]).join('; ');
+    await markVerified(email);
+    return signInFor(app, email);
 };
 
 // Shared fixtures. IMPORTANT: keep these in this plain (non-`.test.js`) helper module,

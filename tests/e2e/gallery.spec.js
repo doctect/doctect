@@ -1,5 +1,6 @@
 
 import { test, expect } from '@playwright/test';
+import { signUpAndVerify, TEST_PASSWORD } from './helpers.js';
 
 const unique = Date.now();
 
@@ -13,21 +14,16 @@ test.describe('Gallery', () => {
             dialog.accept(dialog.type() === 'prompt' ? 'e2e save' : undefined);
         });
 
-        // 1. Sign up a fresh user via the real /login signup form.
-        await page.goto('/login');
-        // Initially in "Sign In" mode; this toggle button (outside the <form>)
-        // is the only "Sign Up" match until it's clicked (the submit button
-        // reads "Sign In" until then).
-        await page.getByRole('button', { name: 'Sign Up' }).click();
-        // Name/Username inputs have no placeholder or for/id label association,
-        // just adjacent sibling <label>s -- select via the CSS sibling combinator.
-        await page.locator('label:text-is("Name") + input').fill('E2E User');
-        await page.locator('label:text-is("Username") + input').fill(`e2e_user_${unique}`);
-        await page.locator('input[type="email"]').fill(`e2e${unique}@test.dev`);
-        await page.locator('input[type="password"]').fill('password1234');
-        // Now the submit button reads "Sign Up" (the toggle now reads "Sign In").
-        await page.getByRole('button', { name: 'Sign Up' }).click();
-        await page.waitForURL('**/app', { timeout: 15000 });
+        // 1. Sign up a fresh user via the real /login signup form. Signup leaves
+        // the account unverified and session-less (requireEmailVerification:
+        // true in server/auth.js) -- signUpAndVerify marks it verified directly
+        // in the server's DB and finishes by signing in for real.
+        await signUpAndVerify(page, {
+            name: 'E2E User',
+            username: `e2e_user_${unique}`,
+            email: `e2e${unique}@test.dev`,
+            password: TEST_PASSWORD,
+        });
 
         // 2. Save the default "Blank Project" (auto-loaded for a fresh session) to the cloud.
         await page.goto('/app');

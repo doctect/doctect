@@ -600,11 +600,14 @@ export const CanvasElement: React.FC<CanvasElementProps> = (props) => {
 
     // SVG Image
     if (element.type === 'svg' && element.svgContent) {
-        // Prepare the SVG content: ensure it scales to fill the bounding box
-        const svgMarkup = element.svgContent
-            .replace(/<svg/, '<svg preserveAspectRatio="xMidYMid meet"')
-            .replace(/width="[^"]*"/, '')
-            .replace(/height="[^"]*"/, '');
+        // Prepare the SVG content: ensure it scales to fill the bounding box.
+        // Only the ROOT <svg> tag's width/height may be stripped — an unanchored
+        // replace would eat the first child's width/height when the root has none.
+        const svgMarkup = element.svgContent.replace(/<svg[^>]*>/, rootTag =>
+            rootTag
+                .replace(/\s(?:width|height)="[^"]*"/g, '')
+                .replace(/<svg/, '<svg preserveAspectRatio="xMidYMid meet"')
+        );
 
         // Security: svgContent is untrusted user-supplied content (it can arrive from
         // another user's published gallery project via "Open in editor", fork, or a

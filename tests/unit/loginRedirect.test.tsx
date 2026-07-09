@@ -11,6 +11,7 @@ vi.mock('../../lib/auth-client', () => ({
     signUp: {
         email: vi.fn((_creds: any, handlers: any) => { handlers.onSuccess(); return Promise.resolve(); }),
     },
+    useSession: () => ({ data: null, isPending: false }),
 }));
 
 const renderAt = (initialEntries: any[]) => render(

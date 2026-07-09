@@ -4,9 +4,10 @@ import React, { useState, useCallback } from 'react';
 import { AppState, AppNode, TemplateElement, PageTemplate } from '../types';
 import { Trash, Settings2, RectangleVertical, RectangleHorizontal, ToggleRight, ToggleLeft } from 'lucide-react';
 
-import { UNIT_CONVERSION, PAGE_PRESETS, RM_PP_WIDTH, RM_PP_HEIGHT } from '../constants/editor';
+import { PAGE_PRESETS, RM_PP_WIDTH, RM_PP_HEIGHT, toDisplayUnit, fromDisplayUnit } from '../constants/editor';
 import { SingleElementEditor } from './properties/SingleElementEditor';
 import { NodeProperties } from './properties/NodeProperties';
+import { CollapsibleSection } from './CollapsibleSection';
 import clsx from 'clsx';
 
 interface PropertiesPanelProps {
@@ -16,10 +17,13 @@ interface PropertiesPanelProps {
     onDeleteElements: (ids: string[]) => void;
     onOpenNodeSelector: (mode: 'grid_source' | 'link_element', elementId: string) => void; // Pass elementId context
     onUpdateTemplate: (id: string, updates: Partial<PageTemplate>, autoReflow?: boolean, scaleFontSize?: boolean) => void;
+    layersSlot?: React.ReactNode;
 }
 
-export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({ state, onUpdateElements, onUpdateNode, onDeleteElements, onOpenNodeSelector, onUpdateTemplate }) => {
+export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({ state, onUpdateElements, onUpdateNode, onDeleteElements, onOpenNodeSelector, onUpdateTemplate, layersSlot }) => {
     const { nodes, selectedNodeId, viewMode, selectedElementIds, variants, activeVariantId, selectedTemplateId } = state;
+    // Session-local: Template Settings starts expanded, collapsible from its header.
+    const [settingsExpanded, setSettingsExpanded] = React.useState(true);
     const node = nodes[selectedNodeId];
     const isHierarchyMode = viewMode === 'hierarchy';
 
@@ -56,15 +60,16 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({ state, onUpdat
     }, [selectedElements]);
 
 
+    // Inputs show/accept the selected display unit; the template stays canonical (pt).
     const updateDim = (dim: 'width' | 'height', val: number) => {
         if (template && !isNaN(val)) {
-            onUpdateTemplate(template.id, { [dim]: val }, autoReflow, scaleFontSize);
+            onUpdateTemplate(template.id, { [dim]: fromDisplayUnit(val, dimUnit) }, autoReflow, scaleFontSize);
         }
     };
 
     const getDim = (dim: 'width' | 'height') => {
         if (!template) return 0;
-        return template[dim] || (dim === 'width' ? RM_PP_WIDTH : RM_PP_HEIGHT);
+        return toDisplayUnit(template[dim] || (dim === 'width' ? RM_PP_WIDTH : RM_PP_HEIGHT), dimUnit);
     };
 
     const [dimUnit, setDimUnit] = React.useState<'px' | 'pt' | 'in' | 'mm'>('px');
@@ -122,11 +127,14 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({ state, onUpdat
 
     return (
         <div className="flex flex-col h-full overflow-y-auto bg-white border-l" data-prevent-finish-edit="true">
-            <div className="p-4 border-b bg-slate-50">
-                <h3 className="font-bold text-slate-700 flex items-center gap-2">
-                    <Settings2 size={16} />
-                    {isHierarchyMode ? 'Node Properties' : 'Template Settings'}
-                </h3>
+            <CollapsibleSection
+                title={isHierarchyMode ? 'Node Properties' : 'Template Settings'}
+                icon={Settings2}
+                testId="template-settings-section"
+                expanded={settingsExpanded}
+                onToggle={() => setSettingsExpanded(v => !v)}
+            >
+                <div className="px-4 pb-4">
 
                 {isHierarchyMode ? (
                     state.selectedNodeIds?.length > 1 ? (
@@ -194,9 +202,19 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({ state, onUpdat
                                 </optgroup>
                             </select>
 
-                            <div className="grid grid-cols-2 gap-2 mb-2">
+                            <div className="grid grid-cols-[1fr_1fr_auto] gap-2 mb-2 items-end">
                                 <div><label className="text-[10px] text-slate-400">Width</label><input type="number" step="0.1" value={getDim('width')} onChange={(e) => updateDim('width', parseFloat(e.target.value))} className="w-full border rounded px-1 text-sm" /></div>
                                 <div><label className="text-[10px] text-slate-400">Height</label><input type="number" step="0.1" value={getDim('height')} onChange={(e) => updateDim('height', parseFloat(e.target.value))} className="w-full border rounded px-1 text-sm" /></div>
+                                <div>
+                                    <label className="text-[10px] text-slate-400">Unit</label>
+                                    <select value={dimUnit} onChange={(e) => setDimUnit(e.target.value as any)} title="Dimension unit"
+                                        className="block w-full border rounded px-0.5 py-[3px] text-xs bg-white text-slate-600 cursor-pointer">
+                                        <option value="pt">pt</option>
+                                        <option value="px">px</option>
+                                        <option value="in">in</option>
+                                        <option value="mm">mm</option>
+                                    </select>
+                                </div>
                             </div>
 
                             <div className="flex gap-2">
@@ -238,28 +256,10 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({ state, onUpdat
                                 )}
                             </div>
 
-                            <div className="mt-2 flex justify-end">
-                                <select value={dimUnit} onChange={(e) => setDimUnit(e.target.value as any)} className="text-[10px] border-none bg-transparent text-slate-400 focus:ring-0 cursor-pointer">
-                                    <option value="pt">Points (pt)</option>
-                                    <option value="px">Pixels (px)</option>
-                                    <option value="in">Inches (in)</option>
-                                    <option value="mm">Millimeters (mm)</option>
-                                </select>
-                            </div>
                         </div>
 
-                        {/* Redundant editor block removed from here */}
-
-                        {selectedElements.length > 0 && (
-                            <div className="border-t pt-4 mt-4">
-                                <button
-                                    onClick={() => onDeleteElements(selectedElements.map(e => e.id))}
-                                    className="w-full bg-red-50 text-red-600 border border-red-200 rounded py-1.5 text-xs font-semibold hover:bg-red-100 flex items-center justify-center gap-2"
-                                >
-                                    <Trash size={14} /> Delete {selectedElements.length > 1 ? `${selectedElements.length} Elements` : 'Element'}
-                                </button>
-                            </div>
-                        )}
+                        {/* Redundant editor block removed from here; element deletion lives
+                            in the Element Properties header (trash icon) only. */}
                     </div>
                 )}
                 {!isHierarchyMode && state.selectedTemplateIds?.length > 1 && (
@@ -274,7 +274,10 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({ state, onUpdat
                         </div>
                     </div>
                 )}
-            </div>
+                </div>
+            </CollapsibleSection>
+
+            {layersSlot}
 
             <div className="p-4 flex-1">
                 <h3 className="font-bold text-slate-700 mb-4 flex justify-between items-center">

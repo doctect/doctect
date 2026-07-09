@@ -1,22 +1,12 @@
 
 import { test, expect } from '@playwright/test';
+import { signUpAndVerify as signUp } from './helpers.js';
 
 // The API server (server/index.js) listens on a different origin than the Vite
 // dev server that Playwright's baseURL points at (see .env: VITE_API_BASE).
 const API_BASE = 'http://localhost:3001';
 
 const unique = Date.now();
-
-const signUp = async (page, { name, username, email }) => {
-    await page.goto('/login');
-    await page.getByRole('button', { name: 'Sign Up' }).click();
-    await page.locator('label:text-is("Name") + input').fill(name);
-    await page.locator('label:text-is("Username") + input').fill(username);
-    await page.locator('input[type="email"]').fill(email);
-    await page.locator('input[type="password"]').fill('password1234');
-    await page.getByRole('button', { name: 'Sign Up' }).click();
-    await page.waitForURL('**/app', { timeout: 15000 });
-};
 
 // Draws a rectangle on the active project's canvas, mutating its currently active
 // template's `elements` (a fresh, random element id each time -- see
