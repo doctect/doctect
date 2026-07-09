@@ -7,6 +7,7 @@ import { Trash, Settings2, RectangleVertical, RectangleHorizontal, ToggleRight, 
 import { UNIT_CONVERSION, PAGE_PRESETS, RM_PP_WIDTH, RM_PP_HEIGHT } from '../constants/editor';
 import { SingleElementEditor } from './properties/SingleElementEditor';
 import { NodeProperties } from './properties/NodeProperties';
+import { CollapsibleSection } from './CollapsibleSection';
 import clsx from 'clsx';
 
 interface PropertiesPanelProps {
@@ -21,6 +22,8 @@ interface PropertiesPanelProps {
 
 export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({ state, onUpdateElements, onUpdateNode, onDeleteElements, onOpenNodeSelector, onUpdateTemplate, layersSlot }) => {
     const { nodes, selectedNodeId, viewMode, selectedElementIds, variants, activeVariantId, selectedTemplateId } = state;
+    // Session-local: Template Settings starts expanded, collapsible from its header.
+    const [settingsExpanded, setSettingsExpanded] = React.useState(true);
     const node = nodes[selectedNodeId];
     const isHierarchyMode = viewMode === 'hierarchy';
 
@@ -123,11 +126,14 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({ state, onUpdat
 
     return (
         <div className="flex flex-col h-full overflow-y-auto bg-white border-l" data-prevent-finish-edit="true">
-            <div className="p-4 border-b bg-slate-50">
-                <h3 className="font-bold text-slate-700 flex items-center gap-2">
-                    <Settings2 size={16} />
-                    {isHierarchyMode ? 'Node Properties' : 'Template Settings'}
-                </h3>
+            <CollapsibleSection
+                title={isHierarchyMode ? 'Node Properties' : 'Template Settings'}
+                icon={Settings2}
+                testId="template-settings-section"
+                expanded={settingsExpanded}
+                onToggle={() => setSettingsExpanded(v => !v)}
+            >
+                <div className="px-4 pb-4">
 
                 {isHierarchyMode ? (
                     state.selectedNodeIds?.length > 1 ? (
@@ -249,18 +255,8 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({ state, onUpdat
                             </div>
                         </div>
 
-                        {/* Redundant editor block removed from here */}
-
-                        {selectedElements.length > 0 && (
-                            <div className="border-t pt-4 mt-4">
-                                <button
-                                    onClick={() => onDeleteElements(selectedElements.map(e => e.id))}
-                                    className="w-full bg-red-50 text-red-600 border border-red-200 rounded py-1.5 text-xs font-semibold hover:bg-red-100 flex items-center justify-center gap-2"
-                                >
-                                    <Trash size={14} /> Delete {selectedElements.length > 1 ? `${selectedElements.length} Elements` : 'Element'}
-                                </button>
-                            </div>
-                        )}
+                        {/* Redundant editor block removed from here; element deletion lives
+                            in the Element Properties header (trash icon) only. */}
                     </div>
                 )}
                 {!isHierarchyMode && state.selectedTemplateIds?.length > 1 && (
@@ -275,7 +271,8 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({ state, onUpdat
                         </div>
                     </div>
                 )}
-            </div>
+                </div>
+            </CollapsibleSection>
 
             {layersSlot}
 

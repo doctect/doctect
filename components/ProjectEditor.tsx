@@ -4,7 +4,7 @@ import { Sidebar } from './Sidebar';
 import { Canvas } from './Canvas';
 import { PropertiesPanel } from './PropertiesPanel';
 import { LayersPanel } from './LayersPanel';
-import { LayersSection } from './LayersSection';
+import { CollapsibleSection } from './CollapsibleSection';
 import { JsonModal } from './JsonModal';
 import { NodeSelectorModal } from './NodeSelectorModal';
 import { DeleteConfirmModal } from './DeleteConfirmModal';
@@ -39,6 +39,8 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, initial
 
     const [deleteConfirmState, setDeleteConfirmState] = useState<{ isOpen: boolean, nodeIds: string[] }>({ isOpen: false, nodeIds: [] });
     const [showScriptGenModal, setShowScriptGenModal] = useState(false);
+    // Session-local: the Layers section always starts collapsed on load.
+    const [layersExpanded, setLayersExpanded] = useState(false);
     const [showSavePresetModal, setShowSavePresetModal] = useState(false);
     const [showNewVariantModal, setShowNewVariantModal] = useState(false);
     const [resizingPanel, setResizingPanel] = useState<'sidebar' | 'properties' | null>(null);
@@ -1224,9 +1226,12 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, initial
                         onOpenNodeSelector={(mode, elId) => setState(s => ({ ...s, showNodeSelector: true, nodeSelectorMode: mode, editingElementId: elId }))}
                         onUpdateTemplate={handleUpdateTemplate}
                         layersSlot={currentTemplate ? (
-                            <LayersSection
-                                expanded={!!state.showLayersPanel}
-                                onToggle={() => setState(s => ({ ...s, showLayersPanel: !s.showLayersPanel }))}
+                            <CollapsibleSection
+                                title="Layers"
+                                icon={Layers}
+                                testId="layers-section"
+                                expanded={layersExpanded}
+                                onToggle={() => setLayersExpanded(v => !v)}
                             >
                                 <LayersPanel
                                     template={currentTemplate}
@@ -1237,7 +1242,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, initial
                                     onSelectElements={(ids) => setState(s => ({ ...s, selectedElementIds: ids }))}
                                     onSetActiveLayer={(layerId) => setState(s => ({ ...s, activeLayerId: layerId }))}
                                 />
-                            </LayersSection>
+                            </CollapsibleSection>
                         ) : null}
                     />
                 </div>
