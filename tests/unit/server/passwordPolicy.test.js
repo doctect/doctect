@@ -2,7 +2,7 @@
 // @vitest-environment node
 import { describe, it, expect, beforeAll } from 'vitest';
 import request from 'supertest';
-import { initTestApp, TEST_PASSWORD } from './helpers.js';
+import { initTestApp, TEST_PASSWORD, markVerified } from './helpers.js';
 
 let app;
 beforeAll(async () => { app = await initTestApp(); });
@@ -35,6 +35,7 @@ describe('password policy enforcement', () => {
         const email = 'legacy@test.dev';
         await request(app).post('/api/auth/sign-up/email')
             .send({ email, password: TEST_PASSWORD, name: 'legacy', username: 'legacypw' });
+        await markVerified(email);
         const res = await request(app).post('/api/auth/sign-in/email')
             .send({ email, password: TEST_PASSWORD });
         expect(res.status).toBe(200);
@@ -44,6 +45,7 @@ describe('password policy enforcement', () => {
         const email = 'changer@test.dev';
         await request(app).post('/api/auth/sign-up/email')
             .send({ email, password: TEST_PASSWORD, name: 'changer', username: 'changerpw' });
+        await markVerified(email);
         const signin = await request(app).post('/api/auth/sign-in/email')
             .send({ email, password: TEST_PASSWORD });
         const cookie = signin.headers['set-cookie'].map(c => c.split(';')[0]).join('; ');
@@ -59,6 +61,7 @@ describe('password policy enforcement', () => {
         const NEW_PW = 'Rotated-Pass-99!';
         await request(app).post('/api/auth/sign-up/email')
             .send({ email, password: TEST_PASSWORD, name: 'rotator', username: 'rotatorpw' });
+        await markVerified(email);
         const signin = await request(app).post('/api/auth/sign-in/email')
             .send({ email, password: TEST_PASSWORD });
         const cookie = signin.headers['set-cookie'].map(c => c.split(';')[0]).join('; ');

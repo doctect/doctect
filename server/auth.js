@@ -4,6 +4,7 @@ import { admin, username } from "better-auth/plugins";
 import { createAuthMiddleware, APIError } from "better-auth/api";
 import { validatePassword } from "../shared/passwordPolicy.js";
 import db, { makeUserAdmin } from "./db.js";
+import { sendEmail } from "./email.js";
 
 // Paths where a password is being SET. Sign-in is deliberately absent:
 // pre-existing weaker passwords must keep working until changed.
@@ -22,6 +23,21 @@ export const createAuth = (config = {}) => {
         emailAndPassword: {
             enabled: true,
             minPasswordLength: 12,
+            requireEmailVerification: true,
+        },
+        emailVerification: {
+            sendVerificationEmail: async ({ user, url }) => {
+                await sendEmail({
+                    to: user.email,
+                    subject: "Verify your email — PDF Architect",
+                    html: `<p>Confirm your address to finish signing up: <a href="${url}">Verify email</a></p><p>This link expires in 1 hour. If you didn't create this account, ignore this email.</p>`,
+                    text: `Verify your email: ${url}\nThis link expires in 1 hour.`,
+                });
+            },
+            sendOnSignUp: true,
+            sendOnSignIn: true,
+            autoSignInAfterVerification: true,
+            expiresIn: 3600,
         },
         socialProviders: {
             google: {
