@@ -855,6 +855,20 @@ export const generatePDF = async (state: AppState, options: GeneratePDFOptions =
         // Thumbnails (services/thumbnailService.ts) render via generatePDF, so they inherit this.
         const sortedElements = sortElementsForRender(template.elements, template.layers);
 
+        // Writes the clickable link annotation for an element. Must run for every
+        // element type — branches that `continue` before the end of the loop
+        // (line, svg) call this themselves.
+        const applyElementLink = (el: TemplateElement, x: number, y: number, w: number, h: number, angle: number, resolvedTargetId: string | undefined) => {
+            if (!el.linkTarget || el.linkTarget === 'none') return;
+            const linkArea = getRotatedAABB(x, y, w, h, angle);
+            if (resolvedTargetId) {
+                const targetPage = resolvePage(resolvedTargetId);
+                if (targetPage) doc.link(linkArea.x, linkArea.y, linkArea.w, linkArea.h, { pageNumber: targetPage });
+            } else if (el.linkTarget === 'url' && el.linkValue) {
+                doc.link(linkArea.x, linkArea.y, linkArea.w, linkArea.h, { url: el.linkValue });
+            }
+        };
+
         for (const el of sortedElements) {
             // --- LINK VALIDATION (Pre-check) ---
             // If an element has an internal link target but resolves to nothing, we skip rendering it entirely.
@@ -1035,6 +1049,7 @@ export const generatePDF = async (state: AppState, options: GeneratePDFOptions =
                     }
                 }
                 if (hasTransform) doc.restoreGraphicsState();
+                applyElementLink(el, x, y, w, h, angle, resolvedTargetId);
                 continue;
             }
             // Handle SVG
@@ -1058,6 +1073,7 @@ export const generatePDF = async (state: AppState, options: GeneratePDFOptions =
                 }
 
                 if (hasTransform) doc.restoreGraphicsState();
+                applyElementLink(el, x, y, w, h, angle, resolvedTargetId);
                 continue;
             }
 
@@ -1724,16 +1740,7 @@ export const generatePDF = async (state: AppState, options: GeneratePDFOptions =
             if (hasTransform) doc.restoreGraphicsState();
 
             // Apply Link (if resolvedTargetId exists from earlier validation check)
-            if (el.linkTarget && el.linkTarget !== 'none') {
-                const linkArea = getRotatedAABB(x, y, w, h, angle);
-
-                if (resolvedTargetId) {
-                    const targetPage = resolvePage(resolvedTargetId);
-                    if (targetPage) doc.link(linkArea.x, linkArea.y, linkArea.w, linkArea.h, { pageNumber: targetPage });
-                } else if (el.linkTarget === 'url' && el.linkValue) {
-                    doc.link(linkArea.x, linkArea.y, linkArea.w, linkArea.h, { url: el.linkValue });
-                }
-            }
+            applyElementLink(el, x, y, w, h, angle, resolvedTargetId);
         }
     }
 
