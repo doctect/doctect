@@ -1,6 +1,6 @@
 
 import { test, expect } from '@playwright/test';
-import { signUpAndVerify as signUp, TEST_PASSWORD } from './helpers.js';
+import { signUpAndVerify as signUp } from './helpers.js';
 
 // The API server (server/index.js) listens on a different origin than the Vite
 // dev server that Playwright's baseURL points at (see .env: VITE_API_BASE).

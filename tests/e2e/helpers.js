@@ -1,3 +1,7 @@
+// Load .env exactly like the webServer (server/index.js) does, BEFORE
+// server/db.js reads DATABASE_URL — otherwise the server could be on the
+// .env's Postgres while this helper silently updates a fallback SQLite.
+import 'dotenv/config';
 import { expect } from '@playwright/test';
 import { query, dbType } from '../../server/db.js';
 
