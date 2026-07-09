@@ -5,6 +5,7 @@ import { svg2pdf } from "svg2pdf.js";
 import JSZip from "jszip";
 import { AppState, AppNode, PageTemplate, TemplateElement, RM_PP_WIDTH, RM_PP_HEIGHT, TraversalStep } from "../types";
 import { FONTS } from "../constants/editor";
+import { normalizeSvgColorsInTree } from "./svgColorNormalize";
 import { sortElementsForRender } from "./layers";
 
 const DEBUG_PDF = false; // Set to true to see debug visuals
@@ -1057,6 +1058,11 @@ export const generatePDF = async (state: AppState, options: GeneratePDFOptions =
                 const parser = new DOMParser();
                 const svgDoc = parser.parseFromString(el.svgContent, 'image/svg+xml');
                 const svgElement = svgDoc.documentElement;
+
+                // svg2pdf can't parse hsl()/hsla()/#rgba/#rrggbbaa — it silently
+                // drops those fills/strokes (shape renders stroke-only or vanishes).
+                // Rewrite them to rgb() + *-opacity, which it handles.
+                normalizeSvgColorsInTree(svgElement);
 
                 if (!svgElement.hasAttribute('width')) svgElement.setAttribute('width', String(w));
                 if (!svgElement.hasAttribute('height')) svgElement.setAttribute('height', String(h));
