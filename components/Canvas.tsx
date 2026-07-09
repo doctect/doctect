@@ -1572,24 +1572,29 @@ export const Canvas: React.FC<CanvasProps> = ({
                                     zIndex: 0
                                 }}></div>
                         )}
-                        {sortElementsForRender(elements, template.layers).map(el => (
-                            <CanvasElement
-                                key={el.id}
-                                element={el}
-                                selected={selectedElementIds.includes(el.id)}
-                                nodes={nodes}
-                                currentNodeId={currentNodeId}
-                                tool={tool}
-                                showHandles={selectedElementIds.includes(el.id) && selectedElementIds.length === 1}
-                                onDoubleClick={() => {
-                                    // Locked layers are not editable: don't enter inline edit mode.
-                                    const layer = el.layerId ? template.layers?.find(l => l.id === el.layerId) : undefined;
-                                    if (layer?.locked) return;
-                                    setEditingElementId(el.id);
-                                }}
-                                isEditing={editingElementId === el.id}
-                            />
-                        ))}
+                        {/* isolation: element zIndex is user-editable and unbounded; without its own
+                            stacking context an element with zIndex >= 100 paints over the selection
+                            box (z-100) and select-under hover highlight (z-101) of anything under it. */}
+                        <div style={{ isolation: 'isolate' }}>
+                            {sortElementsForRender(elements, template.layers).map(el => (
+                                <CanvasElement
+                                    key={el.id}
+                                    element={el}
+                                    selected={selectedElementIds.includes(el.id)}
+                                    nodes={nodes}
+                                    currentNodeId={currentNodeId}
+                                    tool={tool}
+                                    showHandles={selectedElementIds.includes(el.id) && selectedElementIds.length === 1}
+                                    onDoubleClick={() => {
+                                        // Locked layers are not editable: don't enter inline edit mode.
+                                        const layer = el.layerId ? template.layers?.find(l => l.id === el.layerId) : undefined;
+                                        if (layer?.locked) return;
+                                        setEditingElementId(el.id);
+                                    }}
+                                    isEditing={editingElementId === el.id}
+                                />
+                            ))}
+                        </div>
 
                         {/* Group Selection Overlay */}
                         {(() => {
