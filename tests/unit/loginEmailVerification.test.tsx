@@ -57,6 +57,19 @@ describe('email verification UX', () => {
         await waitFor(() => screen.getByText(/verify your email/i));
     });
 
+    it('does NOT show the verify panel for a banned user, even though the status is also 403', async () => {
+        signInEmail.mockImplementationOnce(async () => ({
+            data: null,
+            error: { status: 403, code: 'BANNED_USER', message: 'You have been banned from this application.' },
+        }));
+        renderAt();
+        fireEvent.change(screen.getByLabelText(/email/i), { target: { value: 'banned@user.dev' } });
+        fireEvent.change(screen.getByLabelText(/password/i), { target: { value: 'Password-1234!' } });
+        fireEvent.click(screen.getByRole('button', { name: /^sign in$/i }));
+        await waitFor(() => screen.getByText(/banned/i));
+        expect(screen.queryByText(/verify your email/i)).not.toBeInTheDocument();
+    });
+
     it('acknowledges ?verified=1', async () => {
         renderAt('/login?verified=1');
         expect(await screen.findByText(/email verified/i)).toBeTruthy();

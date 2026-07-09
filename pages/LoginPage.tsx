@@ -4,6 +4,22 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { Loader2 } from 'lucide-react';
 import { validatePassword } from '../shared/passwordPolicy.js';
 
+// A 403 from sign-in/email can mean the account is unverified OR (admin plugin)
+// that the user is banned -- both surface as status 403, so the status alone
+// can't distinguish them. better-auth's own APIError derives `code` from the
+// thrown message when no explicit code is given (see better-call's
+// InternalAPIError), which is exactly what happens for the unverified case
+// (sign-in.mjs throws APIError("FORBIDDEN", { message: "Email not verified" })
+// with no explicit code, so it becomes code "EMAIL_NOT_VERIFIED"); the banned
+// case (admin plugin) throws an explicit code: "BANNED_USER". Match on the
+// specific code, falling back to a message substring only if a differently-
+// shaped client ever omits `code`.
+const isUnverifiedEmailError = (error: any): boolean => {
+    if (!error) return false;
+    if (error.code) return error.code === 'EMAIL_NOT_VERIFIED';
+    return typeof error.message === 'string' && /not verified/i.test(error.message);
+};
+
 export const LoginPage = () => {
     const [isLogin, setIsLogin] = useState(true);
     const [email, setEmail] = useState('');
@@ -15,6 +31,7 @@ export const LoginPage = () => {
     const [passwordError, setPasswordError] = useState<string | null>(null);
     const [verifyEmailFor, setVerifyEmailFor] = useState<string | null>(null);
     const [resent, setResent] = useState(false);
+    const [resendError, setResendError] = useState<string | null>(null);
     const navigate = useNavigate();
     const location = useLocation();
     const from = (location.state as { from?: string } | null)?.from;
@@ -56,12 +73,13 @@ export const LoginPage = () => {
                 const result: any = await signIn.email({
                     email,
                     password,
+                    callbackURL: verificationCallbackURL,
                 }, {
                     onSuccess: () => {
                         navigate(from ?? '/app', { replace: true });
                     },
                     onError: (ctx) => {
-                        if (ctx.error?.status === 403) {
+                        if (isUnverifiedEmailError(ctx.error)) {
                             setVerifyEmailFor(email);
                         } else {
                             setError(ctx.error.message);
@@ -69,7 +87,7 @@ export const LoginPage = () => {
                     }
                 });
                 if (result?.error) {
-                    if (result.error.status === 403) {
+                    if (isUnverifiedEmailError(result.error)) {
                         setVerifyEmailFor(email);
                     } else {
                         setError(result.error.message);
@@ -127,19 +145,26 @@ export const LoginPage = () => {
                         <p className="text-slate-600">We sent a verification link to <strong>{verifyEmailFor}</strong>. Click it to finish signing in.</p>
                         <button
                             onClick={async () => {
-                                await authClient.sendVerificationEmail({
+                                const result: any = await authClient.sendVerificationEmail({
                                     email: verifyEmailFor,
                                     callbackURL: verificationCallbackURL,
                                 });
-                                setResent(true);
+                                if (result?.error) {
+                                    setResendError(result.error.message || 'Failed to resend — try again.');
+                                    setResent(false);
+                                } else {
+                                    setResendError(null);
+                                    setResent(true);
+                                }
                             }}
                             className="px-3 py-1.5 border rounded text-sm"
                         >
                             Resend email
                         </button>
                         {resent && <p className="text-sm text-green-600">Sent — check your inbox.</p>}
+                        {resendError && <p className="text-sm text-red-600">{resendError}</p>}
                         <button
-                            onClick={() => { setVerifyEmailFor(null); setResent(false); }}
+                            onClick={() => { setVerifyEmailFor(null); setResent(false); setResendError(null); }}
                             className="text-sm text-slate-500 underline"
                         >
                             Back
