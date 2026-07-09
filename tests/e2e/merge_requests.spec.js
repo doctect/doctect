@@ -13,7 +13,7 @@ const signUp = async (page, { name, username, email }) => {
     await page.locator('label:text-is("Name") + input').fill(name);
     await page.locator('label:text-is("Username") + input').fill(username);
     await page.locator('input[type="email"]').fill(email);
-    await page.locator('input[type="password"]').fill('password1234');
+    await page.locator('input[type="password"]').fill('Password-1234!');
     await page.getByRole('button', { name: 'Sign Up' }).click();
     await page.waitForURL('**/app', { timeout: 15000 });
 };

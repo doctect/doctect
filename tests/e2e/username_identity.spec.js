@@ -29,7 +29,7 @@ test.describe('Username identity', () => {
         await page.locator('label:text-is("Name") + input').fill('Identity Tester');
         await page.locator('label:text-is("Username") + input').fill(oldUsername);
         await page.locator('input[type="email"]').fill(`identity${unique}@test.dev`);
-        await page.locator('input[type="password"]').fill('password1234');
+        await page.locator('input[type="password"]').fill('Password-1234!');
         await page.getByRole('button', { name: 'Sign Up' }).click();
         await page.waitForURL('**/app', { timeout: 15000 });
 
@@ -91,7 +91,7 @@ test.describe('Username identity', () => {
         // Upstream project + owner, set up entirely via direct API calls (no UI needed for this side).
         const ownerCtx = await browser.newContext();
         const ownerSignup = await ownerCtx.request.post(`${API_BASE}/api/auth/sign-up/email`, {
-            data: { email: `owner${unique}@test.dev`, password: 'password1234', name: 'Owner', username: `owner_${unique}` },
+            data: { email: `owner${unique}@test.dev`, password: 'Password-1234!', name: 'Owner', username: `owner_${unique}` },
         });
         expect(ownerSignup.ok()).toBeTruthy();
         const createRes = await ownerCtx.request.post(`${API_BASE}/api/projects`, {
@@ -110,7 +110,7 @@ test.describe('Username identity', () => {
         const ctx = await browser.newContext();
         const page = await ctx.newPage();
         const signupRes = await page.request.post(`${API_BASE}/api/auth/sign-up/email`, {
-            data: { email: `nouser${unique}@test.dev`, password: 'password1234', name: 'No Username Person' },
+            data: { email: `nouser${unique}@test.dev`, password: 'Password-1234!', name: 'No Username Person' },
         });
         expect(signupRes.ok()).toBeTruthy();
 

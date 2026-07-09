@@ -40,10 +40,14 @@ export const initTestApp = async () => {
     return createApp();
 };
 
+// Compliant with shared/passwordPolicy.js (12+ chars, 3+ classes). Exported so
+// tests that sign in as a helper-created user use the same value.
+export const TEST_PASSWORD = 'Password-1234!';
+
 export const signUpUser = async (app, { email, username }) => {
     const res = await request(app)
         .post('/api/auth/sign-up/email')
-        .send({ email, password: 'password1234', name: username, username });
+        .send({ email, password: TEST_PASSWORD, name: username, username });
     if (res.status !== 200) throw new Error(`sign-up failed: ${res.status} ${JSON.stringify(res.body)}`);
     return res.headers['set-cookie'].map(c => c.split(';')[0]).join('; ');
 };
@@ -51,7 +55,7 @@ export const signUpUser = async (app, { email, username }) => {
 export const signUpUserNoUsername = async (app, { email, name }) => {
     const res = await request(app)
         .post('/api/auth/sign-up/email')
-        .send({ email, password: 'password1234', name });
+        .send({ email, password: TEST_PASSWORD, name });
     if (res.status !== 200) throw new Error(`sign-up failed: ${res.status} ${JSON.stringify(res.body)}`);
     return res.headers['set-cookie'].map(c => c.split(';')[0]).join('; ');
 };

@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, it, expect, beforeAll } from 'vitest';
 import request from 'supertest';
-import { initTestApp } from './helpers.js';
+import { initTestApp, TEST_PASSWORD } from './helpers.js';
 
 let app;
 beforeAll(async () => { app = await initTestApp(); });
@@ -18,7 +18,7 @@ describe('app factory', () => {
     it('signs up a user via better-auth and sets a session cookie', async () => {
         const res = await request(app)
             .post('/api/auth/sign-up/email')
-            .send({ email: 'first@test.dev', password: 'password1234', name: 'First' });
+            .send({ email: 'first@test.dev', password: TEST_PASSWORD, name: 'First' });
         expect(res.status).toBe(200);
         expect(res.headers['set-cookie']).toBeDefined();
     });

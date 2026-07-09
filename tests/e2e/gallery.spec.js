@@ -24,7 +24,7 @@ test.describe('Gallery', () => {
         await page.locator('label:text-is("Name") + input').fill('E2E User');
         await page.locator('label:text-is("Username") + input').fill(`e2e_user_${unique}`);
         await page.locator('input[type="email"]').fill(`e2e${unique}@test.dev`);
-        await page.locator('input[type="password"]').fill('password1234');
+        await page.locator('input[type="password"]').fill('Password-1234!');
         // Now the submit button reads "Sign Up" (the toggle now reads "Sign In").
         await page.getByRole('button', { name: 'Sign Up' }).click();
         await page.waitForURL('**/app', { timeout: 15000 });

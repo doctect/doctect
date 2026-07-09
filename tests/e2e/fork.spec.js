@@ -26,7 +26,7 @@ test.describe('Fork', () => {
         await pageA.locator('label:text-is("Name") + input').fill('User A');
         await pageA.locator('label:text-is("Username") + input').fill(`user_a_${unique}`);
         await pageA.locator('input[type="email"]').fill(`usera${unique}@test.dev`);
-        await pageA.locator('input[type="password"]').fill('password1234');
+        await pageA.locator('input[type="password"]').fill('Password-1234!');
         await pageA.getByRole('button', { name: 'Sign Up' }).click();
         await pageA.waitForURL('**/app', { timeout: 15000 });
 
@@ -74,7 +74,7 @@ test.describe('Fork', () => {
         await pageB.locator('label:text-is("Name") + input').fill('User B');
         await pageB.locator('label:text-is("Username") + input').fill(`user_b_${unique}`);
         await pageB.locator('input[type="email"]').fill(`userb${unique}@test.dev`);
-        await pageB.locator('input[type="password"]').fill('password1234');
+        await pageB.locator('input[type="password"]').fill('Password-1234!');
         await pageB.getByRole('button', { name: 'Sign Up' }).click();
         await pageB.waitForURL('**/app', { timeout: 15000 });
 
