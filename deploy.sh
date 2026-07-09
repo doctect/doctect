@@ -43,9 +43,22 @@ sudo docker push $IMAGE_URI
 
 # 5. Deploy to Cloud Run
 echo "Deploying to Cloud Run..."
-# Load environment variables from .env
+# Load environment variables from .env.
+# NOT `export $(grep ... | xargs)`: the command substitution gets re-split on
+# whitespace, so any value with spaces (e.g. EMAIL_FROM="Name <a@b>") breaks —
+# and `source .env` would let unquoted &/? in values (DB URLs) hit the shell.
+# Parse line-by-line instead: everything after the first '=' is the value,
+# with optional dotenv-style surrounding double quotes stripped.
 if [ -f .env ]; then
-  export $(grep -v '^#' .env | xargs)
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in ''|\#*) continue ;; esac
+    key=${line%%=*}
+    value=${line#*=}
+    case "$value" in
+      \"*\") value=${value#\"}; value=${value%\"} ;;
+    esac
+    export "$key=$value"
+  done < .env
 fi
 
 # Fallback prompts if sensitive vars are missing
