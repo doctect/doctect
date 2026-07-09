@@ -1003,7 +1003,9 @@ export const generatePDF = async (state: AppState, options: GeneratePDFOptions =
                     try {
                         const GState = (doc as any).GState;
                         if (GState) {
-                            doc.setGState(new GState({ opacity: opacity }));
+                            // 'opacity' alone only sets /ca (fill alpha); strokes would
+                            // stay fully opaque. /CA must carry the same value.
+                            doc.setGState(new GState({ opacity: opacity, 'stroke-opacity': opacity }));
                         }
                     } catch (e) { }
                 }
