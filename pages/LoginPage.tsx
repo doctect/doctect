@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { signIn, signUp, authClient } from '../lib/auth-client';
+import React, { useState, useEffect } from 'react';
+import { signIn, signUp, authClient, useSession } from '../lib/auth-client';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { Loader2 } from 'lucide-react';
 import { validatePassword } from '../shared/passwordPolicy.js';
@@ -20,6 +20,16 @@ export const LoginPage = () => {
     const from = (location.state as { from?: string } | null)?.from;
     const verifiedBanner = new URLSearchParams(location.search).get('verified') === '1';
     const verificationCallbackURL = `${window.location.origin}/login?verified=1`;
+    const { data: session } = useSession();
+
+    // After clicking the emailed verification link the user lands back on
+    // /login?verified=1 already signed in (autoSignInAfterVerification) —
+    // continue to where they were originally headed.
+    useEffect(() => {
+        if (verifiedBanner && session) {
+            navigate(from ?? '/app', { replace: true });
+        }
+    }, [verifiedBanner, session, from, navigate]);
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
