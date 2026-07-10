@@ -25,7 +25,7 @@ export const LandingPage: React.FC = () => {
       </div>
 
       {/* Navigation */}
-      <nav className="relative z-10 flex items-center justify-between px-6 py-6 max-w-7xl mx-auto">
+      <nav className="relative z-20 flex items-center justify-between px-6 py-6 max-w-7xl mx-auto">
         <div className="flex items-center gap-2 font-bold text-xl text-slate-800">
           <div className="w-9 h-9 bg-blue-600 rounded-xl flex items-center justify-center text-white shadow-lg shadow-blue-600/20 transform hover:rotate-6 transition-transform">
             <Layers size={20} />
