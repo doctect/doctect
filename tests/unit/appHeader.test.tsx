@@ -19,6 +19,11 @@ describe('AppHeader', () => {
         expect(screen.getByRole('link', { name: /^docs$/i })).toHaveProperty('pathname', '/docs');
     });
 
+    it('cannot be squashed by overflowing flex-col parents (shrink-0)', () => {
+        const { container } = renderHeader();
+        expect(container.querySelector('header')!.className).toContain('shrink-0');
+    });
+
     it('renders the account menu (signed-out state shows Sign in)', () => {
         renderHeader();
         expect(screen.getByText(/sign in/i)).toBeTruthy();
