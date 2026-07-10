@@ -43,10 +43,21 @@ module.exports = defineConfig({
         },
     ],
 
-    /* Run your local dev server before starting the tests */
+    /* Run your local dev server before starting the tests.
+     *
+     * RESEND_API_KEY is force-emptied: the dev server loads .env, and a real
+     * key there once made every e2e signup send a REAL email (each full run
+     * burns 10-15 sends of Resend quota on @test.dev addresses). Empty means
+     * server/email.js uses its console fallback — same fail-safe as the unit
+     * suite. reuseExistingServer is intentionally OFF: reusing an already
+     * -running dev server would bypass this env and use whatever key that
+     * server loaded. If port 3000 is busy, stop your dev server before
+     * running e2e — an explicit failure beats silently sending real email.
+     */
     webServer: {
         command: 'npm run dev',
         url: 'http://localhost:3000',
-        reuseExistingServer: !process.env.CI,
+        reuseExistingServer: false,
+        env: { ...process.env, RESEND_API_KEY: '' },
     },
 });

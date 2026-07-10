@@ -34,7 +34,12 @@ describe('email verification flow', () => {
         expect(me.body.user ?? null).toBeNull();
     });
 
-    it('sign-in before verification is refused and re-sends the email', async () => {
+    it('sign-in before verification is refused and re-sends the email (outside the cooldown)', async () => {
+        // Signup just sent one; clear the per-address cooldown so this attempt
+        // is entitled to a re-send (verificationCooldown.test.js covers the
+        // throttled case).
+        const { resetVerificationCooldown } = await import('../../../server/auth.js');
+        resetVerificationCooldown();
         const before = sent.length;
         const res = await request(app).post('/api/auth/sign-in/email')
             .send({ email, password: TEST_PASSWORD });

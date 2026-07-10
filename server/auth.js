@@ -16,6 +16,14 @@ const defaultTrustedOrigins = [
     ...(process.env.TRUSTED_ORIGINS ? process.env.TRUSTED_ORIGINS.split(/[,|]/).map(o => o.trim()).filter(Boolean) : [])
 ];
 
+// One verification email per address per window (see sendVerificationEmail).
+// Module-level so it survives across createAuth calls within one process.
+const VERIFICATION_COOLDOWN_MS = 5 * 60 * 1000;
+const verificationSendTimes = new Map();
+
+/** Test hook: clears the cooldown so a re-send can be asserted immediately. */
+export const resetVerificationCooldown = () => verificationSendTimes.clear();
+
 export const createAuth = (config = {}) => {
     return betterAuth({
         database: db,
@@ -27,6 +35,16 @@ export const createAuth = (config = {}) => {
         },
         emailVerification: {
             sendVerificationEmail: async ({ user, url }) => {
+                // Cooldown: sendOnSignIn re-sends on EVERY refused sign-in of an
+                // unverified account, so repeated attempts (user retries, bots)
+                // burn real Resend quota — one send per address per window is
+                // plenty; the link stays valid for an hour anyway. In-memory is
+                // acceptable for the same reason as the rate limiter: single
+                // instance deploy; worst case after a restart is one extra email.
+                const now = Date.now();
+                const last = verificationSendTimes.get(user.email) || 0;
+                if (now - last < VERIFICATION_COOLDOWN_MS) return;
+                verificationSendTimes.set(user.email, now);
                 await sendEmail({
                     to: user.email,
                     subject: "Verify your email — PDF Architect",
