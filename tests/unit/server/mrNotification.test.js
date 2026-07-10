@@ -7,6 +7,21 @@ import { setSendEmailImpl } from '../../../server/email.js';
 let app;
 const sent = [];
 
+// The notification is fire-and-forget (sent after the response), so poll for
+// the expected message instead of a fixed sleep — slow CI can't flake this.
+const waitForEmail = async (predicate, timeoutMs = 2000) => {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+        const hit = sent.find(predicate);
+        if (hit) return hit;
+        await new Promise(r => setTimeout(r, 10));
+    }
+    return undefined;
+};
+
+// Negative-case settle: a short beat for the fire-and-forget chain to (not) fire.
+const settle = () => new Promise(r => setTimeout(r, 200));
+
 beforeAll(async () => {
     setSendEmailImpl(async (msg) => { sent.push(msg); return { id: `t-${sent.length}` }; });
     app = await initTestApp();
@@ -47,11 +62,9 @@ describe('merge request owner notification', () => {
         sent.length = 0;
         const res = await createMrBetween('owner@test.dev', 'author@test.dev');
         expect(res.status).toBe(201);
-        // fire-and-forget: allow the microtask to flush
-        await new Promise(r => setTimeout(r, 50));
         // Sign-up also sends a verification email to the same address through the same
         // captured sink, so filter on subject too rather than address alone.
-        const msg = sent.find(m => m.to === 'owner@test.dev' && /new merge request/i.test(m.subject));
+        const msg = await waitForEmail(m => m.to === 'owner@test.dev' && /new merge request/i.test(m.subject));
         expect(msg).toBeTruthy();
         expect(msg.subject).toMatch(/new merge request/i);
         expect(msg.text || msg.html).toContain(`/mr/${res.body.mergeRequest.id}`);
@@ -61,7 +74,7 @@ describe('merge request owner notification', () => {
         sent.length = 0;
         const res = await createMrBetween('selfowner@test.dev', 'selfowner@test.dev'); // same account forks own project
         expect(res.status).toBe(201);
-        await new Promise(r => setTimeout(r, 50));
+        await settle();
         expect(sent.filter(m => m.to === 'selfowner@test.dev' && /merge request/i.test(m.subject))).toHaveLength(0);
     });
 

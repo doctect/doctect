@@ -44,7 +44,8 @@ export const DocsPage: React.FC = () => {
       <div className="h-screen w-full bg-white text-slate-900 font-sans flex flex-col overflow-y-auto">
          <AppHeader />
 
-         <div className="flex flex-1 pt-14 max-w-7xl mx-auto w-full">
+         {/* AppHeader is sticky (in-flow), so no top-padding compensation needed */}
+         <div className="flex flex-1 max-w-7xl mx-auto w-full">
             {/* Sidebar */}
             <aside className="w-64 hidden md:block fixed top-14 h-[calc(100vh-56px)] overflow-y-auto border-r bg-slate-50/50 px-6 py-8">
                <div className="space-y-8">
