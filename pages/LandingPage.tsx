@@ -1,7 +1,7 @@
 
 import React from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowRight, Layers, LayoutTemplate, Link as LinkIcon, Download, MousePointer2, Github } from 'lucide-react';
+import { ArrowRight, Layers, LayoutTemplate, Link as LinkIcon, Download, MousePointer2, Github, Image } from 'lucide-react';
 import { AccountMenu } from '../components/AccountMenu';
 
 export const LandingPage: React.FC = () => {
@@ -64,6 +64,10 @@ export const LandingPage: React.FC = () => {
             <Link to="/app" className="group flex items-center gap-2 bg-blue-600 text-white px-8 py-4 rounded-xl text-lg font-semibold hover:bg-blue-700 transition-all shadow-xl shadow-blue-600/20 hover:shadow-blue-600/30 hover:-translate-y-1">
               Start Building Now
               <ArrowRight size={20} className="group-hover:translate-x-1 transition-transform" />
+            </Link>
+            <Link to="/gallery" className="flex items-center gap-2 px-8 py-4 rounded-xl text-lg font-semibold text-slate-700 bg-white border border-slate-200 hover:border-blue-200 hover:text-blue-600 transition-all shadow-lg shadow-slate-200/50 hover:shadow-xl hover:-translate-y-1">
+              <Image size={20} />
+              Explore the Gallery
             </Link>
             <Link to="/docs" className="flex items-center gap-2 px-8 py-4 rounded-xl text-lg font-semibold text-slate-600 hover:bg-white hover:text-slate-900 transition-all border border-transparent hover:border-slate-200 hover:shadow-lg">
               Read the Docs
