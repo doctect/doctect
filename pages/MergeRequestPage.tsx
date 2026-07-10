@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { ArrowLeft, GitMerge, XCircle, AlertTriangle, Eye } from 'lucide-react';
 import { cloudApi, MrDetail, ChangeSetDto, ApiError } from '../services/cloudApi';
-import { AccountMenu } from '../components/AccountMenu';
+import { AppHeader } from '../components/AppHeader';
 import { GalleryLink } from '../components/gallery/GalleryLink';
 import { computePageOrder } from '../services/pdfService';
 import { generateThumbnails } from '../services/thumbnailService';
@@ -13,6 +13,23 @@ const statusStyles: Record<string, string> = {
     merged: 'bg-purple-100 text-purple-700',
     closed: 'bg-slate-200 text-slate-600',
     conflicted: 'bg-red-100 text-red-700'
+};
+
+const statusGuidance = (status: string, isTargetOwner: boolean): string | null => {
+    switch (status) {
+        case 'open':
+            return isTargetOwner
+                ? 'You own the target project — review the changes below, then merge or close.'
+                : 'Waiting for the project owner to review this merge request.';
+        case 'conflicted':
+            return "The target project has changed since this was proposed — it can't be merged as-is. Update your fork and propose the changes again.";
+        case 'merged':
+            return 'This merge request was merged into the target project.';
+        case 'closed':
+            return 'This merge request was closed without merging.';
+        default:
+            return null;
+    }
 };
 
 function ChangeList({ cs }: { cs: ChangeSetDto }) {
@@ -89,17 +106,15 @@ export function MergeRequestPage() {
     // author and the target's owner (a self-fork), since they'd then genuinely be the author too.
     const isOwner = detail.isTargetOwner;
     const actionable = mr.status === 'open' || mr.status === 'conflicted';
+    const guidance = statusGuidance(mr.status, isOwner);
 
     return (
         <div className="h-screen overflow-y-auto bg-slate-50">
-            <header className="h-14 bg-white border-b flex items-center px-6 gap-4">
-                <GalleryLink projectId={mr.targetProjectId} className="flex items-center gap-1 text-sm text-slate-600 hover:text-blue-600">
+            <AppHeader />
+            <main className="max-w-3xl mx-auto p-6">
+                <GalleryLink projectId={mr.targetProjectId} className="flex items-center gap-1 text-sm text-slate-600 hover:text-blue-600 mb-4">
                     <ArrowLeft size={14} /> {mr.targetProjectName}
                 </GalleryLink>
-                <div className="flex-1" />
-                <AccountMenu />
-            </header>
-            <main className="max-w-3xl mx-auto p-6">
                 <div className="flex items-center gap-3">
                     <h1 className="text-xl font-bold text-slate-800">{mr.title}</h1>
                     <span className={`text-[10px] font-semibold rounded-full px-2 py-0.5 uppercase ${statusStyles[mr.status]}`}>{mr.status}</span>
@@ -107,6 +122,7 @@ export function MergeRequestPage() {
                 <div className="text-xs text-slate-500 mt-1">
                     by {mr.authorUsername} · from <span className="font-mono">{mr.sourceProjectName}</span> · {new Date(mr.createdAt).toLocaleString()}
                 </div>
+                {guidance && <p className="text-sm text-slate-500 mt-1">{guidance}</p>}
                 {mr.description && <p className="text-sm text-slate-600 mt-3 whitespace-pre-wrap">{mr.description}</p>}
 
                 {detail.diff && (

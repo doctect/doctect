@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { randomUUID } from 'crypto';
 import { query } from '../db.js';
+import { sendEmail } from '../email.js';
 import { requireAuth, requireUsername } from '../middleware/guards.js';
 import { getProjectRow, loadProject, insertCommit } from './projects.js';
 import { threeWayDiff, applyChangeSet } from '../../shared/diff.js';
@@ -102,6 +103,23 @@ router.post('/api/merge-requests', requireAuth, requireUsername, async (req, res
         [mr.id, mr.source_project_id, mr.source_commit_id, mr.target_project_id, mr.base_commit_id, mr.title, mr.description, status, mr.created_by]
     );
     res.status(201).json({ mergeRequest: await mrDto(await getMrRow(mr.id)) });
+
+    // Notify the target project's owner — fire-and-forget: a delivery failure
+    // must never fail MR creation. Skipped for self-MRs (fork of your own project).
+    if (target.owner_id !== req.user.id) {
+        (async () => {
+            const ownerRows = await query('SELECT email FROM "user" WHERE id = $1', [target.owner_id]);
+            const ownerEmail = ownerRows[0]?.email;
+            if (!ownerEmail) return;
+            const mrUrl = `${process.env.CLIENT_URL || 'http://localhost:3000'}/mr/${mr.id}`;
+            await sendEmail({
+                to: ownerEmail,
+                subject: `New merge request for "${target.name}"`,
+                html: `<p><strong>${req.user.username}</strong> proposed changes to your project "${target.name}".</p><p><a href="${mrUrl}">Review the merge request</a></p>`,
+                text: `${req.user.username} proposed changes to your project "${target.name}". Review: ${mrUrl}`,
+            });
+        })().catch(err => console.error('[mr] owner notification failed:', err));
+    }
 });
 
 router.get('/api/projects/:id/merge-requests', requireAuth, loadProject(true), async (req, res) => {

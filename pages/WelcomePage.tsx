@@ -2,6 +2,7 @@ import React from 'react';
 import { Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { useSession } from '../lib/auth-client';
 import { UsernameForm } from '../components/UsernameForm';
+import { AppHeader } from '../components/AppHeader';
 
 export function WelcomePage() {
     const { data: session, isPending } = useSession();
@@ -19,13 +20,16 @@ export function WelcomePage() {
     }
 
     return (
-        <div className="h-screen overflow-y-auto flex items-center justify-center bg-gray-50 p-4">
-            <div className="w-full max-w-md bg-white rounded-lg shadow-md p-8">
-                <h2 className="text-2xl font-bold mb-2 text-center text-gray-800">Choose a username</h2>
-                <p className="text-sm text-gray-500 text-center mb-6">
-                    You need a public username to save to the cloud, publish, fork, or propose changes.
-                </p>
-                <UsernameForm submitLabel="Continue" onSuccess={() => navigate(from ?? '/gallery', { replace: true })} />
+        <div className="h-screen overflow-y-auto flex flex-col bg-gray-50">
+            <AppHeader />
+            <div className="flex-1 flex items-center justify-center p-4">
+                <div className="w-full max-w-md bg-white rounded-lg shadow-md p-8">
+                    <h2 className="text-2xl font-bold mb-2 text-center text-gray-800">Choose a username</h2>
+                    <p className="text-sm text-gray-500 text-center mb-6">
+                        You need a public username to save to the cloud, publish, fork, or propose changes.
+                    </p>
+                    <UsernameForm submitLabel="Continue" onSuccess={() => navigate(from ?? '/gallery', { replace: true })} />
+                </div>
             </div>
         </div>
     );

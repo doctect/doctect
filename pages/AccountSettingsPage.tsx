@@ -1,9 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
-import { ArrowLeft } from 'lucide-react';
 import { authClient, useSession } from '../lib/auth-client';
 import { UsernameForm } from '../components/UsernameForm';
 import { validatePassword } from '../shared/passwordPolicy.js';
+import { AppHeader } from '../components/AppHeader';
 
 function ChangePasswordSection() {
     const [hasCredential, setHasCredential] = useState(false);
@@ -118,9 +117,7 @@ export function AccountSettingsPage() {
 
     return (
         <div className="h-screen overflow-y-auto bg-slate-50">
-            <header className="h-14 bg-white border-b flex items-center px-6 gap-4">
-                <Link to="/gallery" className="flex items-center gap-1 text-sm text-slate-600 hover:text-blue-600"><ArrowLeft size={14} /> Gallery</Link>
-            </header>
+            <AppHeader />
             <main className="max-w-md mx-auto p-6">
                 <h1 className="text-xl font-bold text-slate-800 mb-1">Account settings</h1>
                 <p className="text-sm text-slate-500 mb-6">Signed in as {user.email}</p>

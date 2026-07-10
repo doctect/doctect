@@ -1,8 +1,8 @@
 
 import React from 'react';
-import { Link } from 'react-router-dom';
-import { Book, Home, Grid3X3, Layers, Settings2, Link as LinkIcon, Command, Zap, CheckCircle2, Code, Wand2, Network, Cloud, Globe, GitFork, Star, FileImage, History, Users } from 'lucide-react';
+import { Home, Grid3X3, Layers, Settings2, Link as LinkIcon, Command, Zap, CheckCircle2, Code, Wand2, Network, Cloud, Globe, GitFork, Star, FileImage, History, Users } from 'lucide-react';
 import { HighlightedCode } from '../components/HighlightedCode';
+import { AppHeader } from '../components/AppHeader';
 
 const Section: React.FC<{ title: string, children: React.ReactNode }> = ({ title, children }) => (
    <div className="mb-12">
@@ -42,23 +42,12 @@ const Shortcut: React.FC<{ k: string, desc: string }> = ({ k, desc }) => (
 export const DocsPage: React.FC = () => {
    return (
       <div className="h-screen w-full bg-white text-slate-900 font-sans flex flex-col overflow-y-auto">
-         <header className="h-16 border-b bg-white/90 backdrop-blur fixed top-0 w-full z-50 flex items-center justify-between px-6 shadow-sm">
-            <div className="flex items-center gap-2 font-bold text-slate-800">
-               <Link to="/" className="hover:opacity-70 transition-opacity flex items-center gap-2">
-                  <div className="w-7 h-7 bg-blue-600 rounded-lg flex items-center justify-center text-white">
-                     <Book size={16} />
-                  </div>
-                  <span>PDF Architect Docs</span>
-               </Link>
-            </div>
-            <Link to="/app" className="px-4 py-2 bg-slate-900 text-white rounded-lg text-sm font-medium hover:bg-slate-800 transition-colors">
-               Go to App &rarr;
-            </Link>
-         </header>
+         <AppHeader />
 
-         <div className="flex flex-1 pt-16 max-w-7xl mx-auto w-full">
+         {/* AppHeader is sticky (in-flow), so no top-padding compensation needed */}
+         <div className="flex flex-1 max-w-7xl mx-auto w-full">
             {/* Sidebar */}
-            <aside className="w-64 hidden md:block fixed top-16 h-[calc(100vh-64px)] overflow-y-auto border-r bg-slate-50/50 px-6 py-8">
+            <aside className="w-64 hidden md:block fixed top-14 h-[calc(100vh-56px)] overflow-y-auto border-r bg-slate-50/50 px-6 py-8">
                <div className="space-y-8">
                   <Section title="Getting Started">
                      <NavLink id="intro">Introduction</NavLink>
