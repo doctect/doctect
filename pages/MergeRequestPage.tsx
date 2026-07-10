@@ -15,6 +15,23 @@ const statusStyles: Record<string, string> = {
     conflicted: 'bg-red-100 text-red-700'
 };
 
+const statusGuidance = (status: string, isTargetOwner: boolean): string | null => {
+    switch (status) {
+        case 'open':
+            return isTargetOwner
+                ? 'You own the target project — review the changes below, then merge or close.'
+                : 'Waiting for the project owner to review this merge request.';
+        case 'conflicted':
+            return "The target project has changed since this was proposed — it can't be merged as-is. Update your fork and propose the changes again.";
+        case 'merged':
+            return 'This merge request was merged into the target project.';
+        case 'closed':
+            return 'This merge request was closed without merging.';
+        default:
+            return null;
+    }
+};
+
 function ChangeList({ cs }: { cs: ChangeSetDto }) {
     const rows: string[] = [];
     cs.variantsAdded.forEach(v => rows.push(`+ Variant added: ${v}`));
@@ -89,6 +106,7 @@ export function MergeRequestPage() {
     // author and the target's owner (a self-fork), since they'd then genuinely be the author too.
     const isOwner = detail.isTargetOwner;
     const actionable = mr.status === 'open' || mr.status === 'conflicted';
+    const guidance = statusGuidance(mr.status, isOwner);
 
     return (
         <div className="h-screen overflow-y-auto bg-slate-50">
@@ -104,6 +122,7 @@ export function MergeRequestPage() {
                 <div className="text-xs text-slate-500 mt-1">
                     by {mr.authorUsername} · from <span className="font-mono">{mr.sourceProjectName}</span> · {new Date(mr.createdAt).toLocaleString()}
                 </div>
+                {guidance && <p className="text-sm text-slate-500 mt-1">{guidance}</p>}
                 {mr.description && <p className="text-sm text-slate-600 mt-3 whitespace-pre-wrap">{mr.description}</p>}
 
                 {detail.diff && (
