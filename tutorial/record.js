@@ -30,7 +30,12 @@ export async function recordEpisode(episode, outDir) {
             timing.push({ scene: i, start, chapter: scene.chapter ?? null });
             process.stdout.write(`scene ${i} @ ${start.toFixed(1)}s${scene.chapter ? ` [${scene.chapter}]` : ''}\n`);
 
-            await scene.actions(page, { servers, resyncCursor: () => resyncCursor(page) });
+            try {
+                await scene.actions(page, { servers, resyncCursor: () => resyncCursor(page) });
+            } catch (err) {
+                await page.screenshot({ path: path.join(outDir, `failure-scene-${i}.png`) }).catch(() => {});
+                throw err;
+            }
 
             const narrationEnd = start + (audio[i]?.duration ?? 0) + BREATH;
             const now = () => (Date.now() - t0) / 1000;
