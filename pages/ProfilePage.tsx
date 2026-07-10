@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { ArrowLeft, User } from 'lucide-react';
+import { User } from 'lucide-react';
 import { GalleryItem, API_BASE } from '../services/cloudApi';
-import { AccountMenu } from '../components/AccountMenu';
+import { AppHeader } from '../components/AppHeader';
 import { ProjectCard } from '../components/gallery/ProjectCard';
 
 export function ProfilePage() {
@@ -22,11 +22,7 @@ export function ProfilePage() {
 
     return (
         <div className="h-screen overflow-y-auto bg-slate-50">
-            <header className="h-14 bg-white border-b flex items-center px-6 gap-4">
-                <Link to="/gallery" className="flex items-center gap-1 text-sm text-slate-600 hover:text-blue-600"><ArrowLeft size={14} /> Gallery</Link>
-                <div className="flex-1" />
-                <AccountMenu />
-            </header>
+            <AppHeader />
             <main className="max-w-6xl mx-auto p-6">
                 <div className="flex items-center gap-3 mb-6">
                     <div className="w-12 h-12 bg-slate-200 rounded-full flex items-center justify-center"><User size={20} className="text-slate-500" /></div>

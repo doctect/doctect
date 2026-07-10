@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { ArrowLeft, GitMerge, XCircle, AlertTriangle, Eye } from 'lucide-react';
 import { cloudApi, MrDetail, ChangeSetDto, ApiError } from '../services/cloudApi';
-import { AccountMenu } from '../components/AccountMenu';
+import { AppHeader } from '../components/AppHeader';
 import { GalleryLink } from '../components/gallery/GalleryLink';
 import { computePageOrder } from '../services/pdfService';
 import { generateThumbnails } from '../services/thumbnailService';
@@ -92,14 +92,11 @@ export function MergeRequestPage() {
 
     return (
         <div className="h-screen overflow-y-auto bg-slate-50">
-            <header className="h-14 bg-white border-b flex items-center px-6 gap-4">
-                <GalleryLink projectId={mr.targetProjectId} className="flex items-center gap-1 text-sm text-slate-600 hover:text-blue-600">
+            <AppHeader />
+            <main className="max-w-3xl mx-auto p-6">
+                <GalleryLink projectId={mr.targetProjectId} className="flex items-center gap-1 text-sm text-slate-600 hover:text-blue-600 mb-4">
                     <ArrowLeft size={14} /> {mr.targetProjectName}
                 </GalleryLink>
-                <div className="flex-1" />
-                <AccountMenu />
-            </header>
-            <main className="max-w-3xl mx-auto p-6">
                 <div className="flex items-center gap-3">
                     <h1 className="text-xl font-bold text-slate-800">{mr.title}</h1>
                     <span className={`text-[10px] font-semibold rounded-full px-2 py-0.5 uppercase ${statusStyles[mr.status]}`}>{mr.status}</span>

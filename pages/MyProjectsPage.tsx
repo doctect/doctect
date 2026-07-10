@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { ArrowLeft, Trash2, Globe, Lock } from 'lucide-react';
+import { Trash2, Globe, Lock } from 'lucide-react';
 import { cloudApi, MyProject, StorageUsage } from '../services/cloudApi';
+import { AppHeader } from '../components/AppHeader';
 
 const formatMB = (bytes: number) => `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 
@@ -44,9 +44,7 @@ export function MyProjectsPage() {
 
     return (
         <div className="h-screen overflow-y-auto bg-slate-50">
-            <header className="h-14 bg-white border-b flex items-center px-6 gap-4">
-                <Link to="/gallery" className="flex items-center gap-1 text-sm text-slate-600 hover:text-blue-600"><ArrowLeft size={14} /> Gallery</Link>
-            </header>
+            <AppHeader />
             <main className="max-w-2xl mx-auto p-6">
                 <h1 className="text-xl font-bold text-slate-800 mb-1">My projects</h1>
                 <p className="text-sm text-slate-500 mb-4">Your cloud-saved projects. Delete old ones to free up storage.</p>

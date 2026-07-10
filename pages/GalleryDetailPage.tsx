@@ -1,7 +1,6 @@
 import React from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { ArrowLeft } from 'lucide-react';
-import { AccountMenu } from '../components/AccountMenu';
+import { AppHeader } from '../components/AppHeader';
 import { GalleryDetailBody } from '../components/gallery/GalleryDetailBody';
 import { useGalleryDetail } from '../hooks/useGalleryDetail';
 
@@ -15,11 +14,7 @@ export function GalleryDetailPage() {
 
     return (
         <div className="h-screen overflow-y-auto bg-slate-50">
-            <header className="h-14 bg-white border-b flex items-center px-6 gap-4">
-                <Link to="/gallery" className="flex items-center gap-1 text-sm text-slate-600 hover:text-blue-600"><ArrowLeft size={14} /> Gallery</Link>
-                <div className="flex-1" />
-                <AccountMenu />
-            </header>
+            <AppHeader />
             <main className="max-w-4xl mx-auto p-6 grid md:grid-cols-2 gap-8">
                 <GalleryDetailBody detail={detail} />
             </main>

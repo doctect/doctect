@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
-import { Search, Square, Star, Flame, Clock, X, ArrowLeft } from 'lucide-react';
+import { useSearchParams } from 'react-router-dom';
+import { Search, Star, Flame, Clock, X, ArrowLeft } from 'lucide-react';
 import { cloudApi, GalleryItem, GalleryTag } from '../services/cloudApi';
-import { AccountMenu } from '../components/AccountMenu';
+import { AppHeader } from '../components/AppHeader';
 import { ProjectCard } from '../components/gallery/ProjectCard';
 
 const SECTION_LIMIT = 8;
@@ -103,11 +103,8 @@ export function GalleryPage() {
     return (
         // h-screen + overflow-y-auto: index.html sets body{overflow:hidden}, so each page owns its scrolling
         <div className="h-screen overflow-y-auto bg-slate-50">
-            <header className="h-14 bg-white border-b flex items-center px-6 gap-4 sticky top-0 z-10">
-                <Link to="/" className="flex items-center gap-2 font-bold text-slate-800">
-                    <div className="w-7 h-7 bg-blue-600 rounded-lg flex items-center justify-center text-white"><Square size={16} fill="currentColor" /></div>
-                    Gallery
-                </Link>
+            <AppHeader />
+            <div className="bg-white border-b flex items-center px-6 py-3 gap-4 sticky top-14 z-10">
                 <div className="flex-1 max-w-md relative">
                     <Search size={14} className="absolute left-2.5 top-2.5 text-slate-400" />
                     <input value={qInput} onChange={e => setQInput(e.target.value)}
@@ -122,9 +119,7 @@ export function GalleryPage() {
                         <option value="rating">Top rated</option>
                     </select>
                 )}
-                <Link to="/app" className="text-xs font-medium text-slate-500 hover:text-blue-600">Editor</Link>
-                <AccountMenu />
-            </header>
+            </div>
 
             {!isFiltered && (
                 <div className="bg-gradient-to-r from-blue-600 via-blue-500 to-indigo-500 text-white">
