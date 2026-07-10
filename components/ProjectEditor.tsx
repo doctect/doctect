@@ -1204,6 +1204,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, initial
                             snapToGrid={state.snapToGrid}
                             showGrid={state.showGrid}
                             activeLayerId={state.activeLayerId}
+                            greyscalePreview={exportGreyscale}
                             onInteractionStart={saveToHistory}
                             onUpdateElements={(els, save) => handleUpdateTemplateElements(els, save)}
                             onSelectElements={(ids) => setState(s => ({ ...s, selectedElementIds: ids }))}

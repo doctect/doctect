@@ -26,6 +26,8 @@ interface CanvasProps {
     onInteractionStart: () => void;
     onSwitchToSelect?: () => void;
     activeLayerId?: string;
+    /** Previews greyscale export: renders the elements layer desaturated. */
+    greyscalePreview?: boolean;
 }
 
 const MIN_DRAG_THRESHOLD = 5;
@@ -188,7 +190,8 @@ export const Canvas: React.FC<CanvasProps> = ({
     onZoom,
     onInteractionStart,
     onSwitchToSelect,
-    activeLayerId
+    activeLayerId,
+    greyscalePreview
 }) => {
     const containerRef = useRef<HTMLDivElement>(null);
     const outerContainerRef = useRef<HTMLDivElement>(null);
@@ -1575,7 +1578,7 @@ export const Canvas: React.FC<CanvasProps> = ({
                         {/* isolation: element zIndex is user-editable and unbounded; without its own
                             stacking context an element with zIndex >= 100 paints over the selection
                             box (z-100) and select-under hover highlight (z-101) of anything under it. */}
-                        <div style={{ isolation: 'isolate' }}>
+                        <div style={{ isolation: 'isolate', filter: greyscalePreview ? 'grayscale(1)' : undefined }}>
                             {sortElementsForRender(elements, template.layers).map(el => (
                                 <CanvasElement
                                     key={el.id}
