@@ -21,10 +21,16 @@ const waitForHttp = async (url, timeoutMs = 30000) => {
 export async function startServers(tag) {
     const apiLog = `/tmp/tutorial-${tag}-api.log`;
     const env = { ...process.env };
-    delete env.RESEND_API_KEY;
-    delete env.DATABASE_URL;
+    // EMPTY STRINGS, not delete: the server loads dotenv, which re-populates
+    // any MISSING var from .env — deleting would hand recordings the real
+    // Resend key and the real DATABASE_URL. Present-but-empty wins over .env
+    // and is falsy to server/db.js and server/email.js (same trick as
+    // playwright.config.cjs's webServer env).
+    env.RESEND_API_KEY = '';
+    env.DATABASE_URL = '';
+    const sqlitePath = `/tmp/tutorial-${tag}-${Date.now()}.db`;
     Object.assign(env, {
-        SQLITE_PATH: `/tmp/tutorial-${tag}-${Date.now()}.db`,
+        SQLITE_PATH: sqlitePath,
         BETTER_AUTH_URL: 'http://localhost:3001/api/auth',
         TRUSTED_ORIGINS: 'http://localhost:5199',
         CLIENT_URL: 'http://localhost:5199',
@@ -45,6 +51,7 @@ export async function startServers(tag) {
 
     return {
         apiLog,
+        sqlitePath,
         baseUrl: 'http://localhost:5199',
         /** Latest verification link logged by the console-fallback mailer. */
         lastVerificationLink() {

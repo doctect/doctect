@@ -22,6 +22,7 @@ export async function recordEpisode(episode, outDir) {
     const page = await context.newPage();
 
     const timing = [];
+    const ctx = { servers, resyncCursor: () => resyncCursor(page) };
     const t0 = Date.now();
     try {
         for (let i = 0; i < episode.scenes.length; i++) {
@@ -31,7 +32,7 @@ export async function recordEpisode(episode, outDir) {
             process.stdout.write(`scene ${i} @ ${start.toFixed(1)}s${scene.chapter ? ` [${scene.chapter}]` : ''}\n`);
 
             try {
-                await scene.actions(page, { servers, resyncCursor: () => resyncCursor(page) });
+                await scene.actions(page, ctx);
             } catch (err) {
                 await page.screenshot({ path: path.join(outDir, `failure-scene-${i}.png`) }).catch(() => {});
                 throw err;
@@ -58,5 +59,13 @@ export async function recordEpisode(episode, outDir) {
 
 if (process.argv[1] && process.argv[1].endsWith('record.js') && process.argv[2]) {
     const episode = await import(path.resolve(process.argv[2]));
-    await recordEpisode(episode, path.resolve(process.argv[3]));
+    const outDir = path.resolve(process.argv[3]);
+    // One retry: recordings depend on the app's CDN assets (Tailwind); a
+    // transient fetch failure mid-episode breaks styling and usually selectors.
+    try {
+        await recordEpisode(episode, outDir);
+    } catch (err) {
+        console.error('episode failed, retrying once:', err.message.split('\n')[0]);
+        await recordEpisode(episode, outDir);
+    }
 }
