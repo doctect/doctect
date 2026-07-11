@@ -34,7 +34,7 @@ export const scenes = [
     },
     {
         chapter: 'Creating a project',
-        narration: 'Clicking Start Building Now opens the editor with a fresh blank project. The fastest way to understand PDF Architect, though, is to start from a preset — a complete, working document you can pick apart. Let\'s open the project menu and create one.',
+        narration: 'Clicking Start Building Now opens the editor with a fresh blank project. The fastest way to get a feel for it, though, is to start from a preset — a complete, working document you can pick apart. Let\'s open the project menu and create one.',
         actions: async (page) => {
             await clickEl(page, 'main a[href="/app"]', 700);
             await page.waitForSelector('[data-testid="editor-canvas"]', { timeout: 20000 });
@@ -43,14 +43,14 @@ export const scenes = [
         },
     },
     {
-        narration: 'The plus button next to the project tabs creates a new project. PDF Architect ships with three presets: a blank canvas, a notebook, and a full twenty-twenty-six planner with a year view, twelve months, and a page for every single day.',
+        narration: 'The plus button next to the project tabs creates a new project. It ships with three presets: a blank canvas, a notebook, and a full twenty-twenty-six planner with a year view, twelve months, and a page for every single day.',
         actions: async (page) => {
             await clickEl(page, 'button[title="New Project"]', 700);
             await settle(page);
         },
     },
     {
-        narration: 'We will take the planner. One click — and PDF Architect generates the entire document structure: hundreds of linked pages, built from just a handful of reusable templates. That difference — pages generated from templates, rather than drawn one by one — is the core idea behind everything in this app.',
+        narration: 'We will take the planner. One click — and the entire document structure is generated for you: hundreds of linked pages, built from just a handful of reusable templates. That difference — pages generated from templates, rather than drawn one by one — is the core idea behind everything else you will see.',
         actions: async (page) => {
             await clickEl(page, 'text=2026 Planner', 800);
             await page.waitForTimeout(2500);
@@ -72,7 +72,7 @@ export const scenes = [
             const q1 = page.locator('aside, [class*="sidebar"], nav').locator('text=Quarter 1').first().or(page.locator('text=Quarter 1').first());
             await page.locator('text=Quarter 1').first().waitFor({ timeout: 10000 });
             const box = await page.locator('text=Quarter 1').first().boundingBox();
-            await humanClick(page, box.x + box.width / 2, box.y + box.height / 2, 800);
+            await humanClick(page, box.x + 12, box.y + box.height / 2, 800);
             await settle(page, 1200);
         },
     },
@@ -85,7 +85,10 @@ export const scenes = [
             const jan = page.locator('text=January').first();
             await jan.waitFor({ timeout: 10000 });
             const box = await jan.boundingBox();
-            await humanClick(page, box.x + box.width / 2, box.y + box.height / 2, 800);
+            // click the LEFT edge of the label: the text wrapper spans the row,
+            // and its center sits under the hover-action buttons (edit pencil)
+            await humanClick(page, box.x + 12, box.y + box.height / 2, 800);
+            await page.keyboard.press('Escape'); // dismiss rename if it opened anyway
             await settle(page, 1200);
         },
     },
@@ -114,11 +117,18 @@ export const scenes = [
         },
     },
     {
-        narration: 'Selecting an element on the canvas highlights it and opens its properties on the right — position, size, colors, fonts, and interactions. Watch the title element: dragging it moves it on every page that uses this template.',
+        narration: 'Selecting an element on the canvas highlights it and opens its properties on the right — position, size, colors, fonts, and interactions. This title bar is one element; every month page rendered from this template shows it with its own name.',
         actions: async (page) => {
-            // click near the top-center of the canvas page where the title sits
-            const canvas = await page.locator('[data-testid="editor-canvas"]:visible').first().boundingBox();
-            await humanClick(page, canvas.x + canvas.width / 2, canvas.y + 60, 800);
+            // click the title element: pick the "January" text whose box sits
+            // INSIDE the canvas page (the preview dropdown matches too)
+            const c = await page.locator('[data-testid="editor-canvas"]:visible').first().boundingBox();
+            let target = null;
+            for (const m of await page.locator('text=January').all()) {
+                const b = await m.boundingBox();
+                if (b && b.x > c.x && b.x < c.x + c.width && b.y > c.y && b.y < c.y + c.height) { target = b; break; }
+            }
+            if (!target) throw new Error('canvas January title not found');
+            await humanClick(page, target.x + target.width / 2, target.y + target.height / 2, 800);
             await settle(page, 800);
         },
     },
