@@ -12,7 +12,42 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 
-const VOICE = 'en-US-JennyNeural';
+// Provider: Google Chirp 3 HD via the local gcloud credentials (default),
+// or the free msedge-tts fallback with TUTORIAL_TTS=edge.
+const PROVIDER = process.env.TUTORIAL_TTS || 'chirp';
+const CHIRP_VOICE = 'en-US-Chirp3-HD-Aoede';
+const EDGE_VOICE = 'en-US-JennyNeural';
+
+let gcloudAuth = null;
+const getGcloudAuth = () => {
+    if (!gcloudAuth) {
+        gcloudAuth = {
+            token: execFileSync('gcloud', ['auth', 'print-access-token']).toString().trim(),
+            project: execFileSync('gcloud', ['config', 'get-value', 'project']).toString().trim(),
+        };
+    }
+    return gcloudAuth;
+};
+
+async function synthesizeChirp(text, file, rate) {
+    const { token, project } = getGcloudAuth();
+    const res = await fetch('https://texttospeech.googleapis.com/v1/text:synthesize', {
+        method: 'POST',
+        headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+            'X-Goog-User-Project': project,
+        },
+        body: JSON.stringify({
+            input: { text },
+            voice: { languageCode: 'en-US', name: CHIRP_VOICE },
+            audioConfig: { audioEncoding: 'MP3', sampleRateHertz: 24000, ...(rate ? { speakingRate: rate } : {}) },
+        }),
+    });
+    const data = await res.json();
+    if (!data.audioContent) throw new Error(`chirp synthesis failed: ${JSON.stringify(data).slice(0, 200)}`);
+    fs.writeFileSync(file, Buffer.from(data.audioContent, 'base64'));
+}
 
 const probeDuration = (file) =>
     parseFloat(execFileSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', file]).toString());
@@ -27,17 +62,21 @@ export async function narrateEpisode(scenes, outDir) {
             entries.push({ scene: i, file: null, duration: 0, narration: '' });
             continue;
         }
-        // one TTS connection per clip: msedge-tts websockets go stale across
-        // many sequential requests, and a fresh connection per scene is cheap.
-        const tts = new MsEdgeTTS();
-        await tts.setMetadata(VOICE, OUTPUT_FORMAT.AUDIO_24KHZ_96KBITRATE_MONO_MP3, {
-            rate: scene.voiceRate ?? '+0%',
-        });
-        const sceneDir = path.join(outDir, `scene-${i}-tmp`);
-        fs.mkdirSync(sceneDir, { recursive: true });
-        const { audioFilePath } = await tts.toFile(sceneDir, scene.narration);
-        fs.renameSync(audioFilePath, file);
-        fs.rmSync(sceneDir, { recursive: true, force: true });
+        if (PROVIDER === 'chirp') {
+            await synthesizeChirp(scene.narration, file, scene.voiceRate);
+        } else {
+            // one TTS connection per clip: msedge-tts websockets go stale across
+            // many sequential requests, and a fresh connection per scene is cheap.
+            const tts = new MsEdgeTTS();
+            await tts.setMetadata(EDGE_VOICE, OUTPUT_FORMAT.AUDIO_24KHZ_96KBITRATE_MONO_MP3, {
+                rate: scene.voiceRate ?? '+0%',
+            });
+            const sceneDir = path.join(outDir, `scene-${i}-tmp`);
+            fs.mkdirSync(sceneDir, { recursive: true });
+            const { audioFilePath } = await tts.toFile(sceneDir, scene.narration);
+            fs.renameSync(audioFilePath, file);
+            fs.rmSync(sceneDir, { recursive: true, force: true });
+        }
         entries.push({ scene: i, file, duration: probeDuration(file), narration: scene.narration });
         process.stdout.write(`scene ${i}: ${entries[i].duration.toFixed(1)}s\n`);
     }
