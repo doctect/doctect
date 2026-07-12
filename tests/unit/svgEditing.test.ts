@@ -37,6 +37,11 @@ describe('validateSvgMarkup', () => {
         expect(validateSvgMarkup('').ok).toBe(false);
         expect(validateSvgMarkup('   \n ').ok).toBe(false);
     });
+
+    it('rejects an uppercase <SVG> root (XML is case-sensitive; the render regex only matches lowercase)', () => {
+        const result = validateSvgMarkup('<SVG xmlns="http://www.w3.org/2000/svg"></SVG>');
+        expect(result.ok).toBe(false);
+    });
 });
 
 describe('PLACEHOLDER_SVG', () => {

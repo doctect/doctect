@@ -21,11 +21,25 @@ export const SvgSourceSection: React.FC<SvgSourceSectionProps> = ({ svgContent, 
     const lastCommittedRef = useRef(svgContent);
     const historySavedRef = useRef(false);
     const timerRef = useRef<number | null>(null);
+    // Always call the latest onCommit from inside the debounce timer — the
+    // timer closure is set up on the render that scheduled it, but an
+    // interleaved edit elsewhere (align, opacity, canvas drag) can re-render
+    // this component with a new onCommit before the timer fires. Without the
+    // ref, the timer would call the stale onCommit and silently revert that
+    // other edit.
+    const onCommitRef = useRef(onCommit);
+    onCommitRef.current = onCommit;
 
     // Re-seed only on EXTERNAL svgContent changes (undo/redo/restore) — our own
     // commits update lastCommittedRef first, so they don't clobber the draft.
     useEffect(() => {
         if (svgContent !== lastCommittedRef.current) {
+            // A pending debounced commit is based on a now-superseded draft;
+            // let it run and it would re-commit stale text over the restore.
+            if (timerRef.current !== null) {
+                window.clearTimeout(timerRef.current);
+                timerRef.current = null;
+            }
             lastCommittedRef.current = svgContent;
             setDraft(svgContent);
             setError(null);
@@ -48,7 +62,7 @@ export const SvgSourceSection: React.FC<SvgSourceSectionProps> = ({ svgContent, 
             setError(null);
             if (text === lastCommittedRef.current) return;
             lastCommittedRef.current = text;
-            onCommit(text, !historySavedRef.current);
+            onCommitRef.current(text, !historySavedRef.current);
             historySavedRef.current = true;
         }, DEBOUNCE_MS);
     };

@@ -4,6 +4,7 @@ import { SvgSourceSection } from '../../components/properties/SvgSourceSection';
 
 const VALID_A = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="5" height="5" fill="red"/></svg>';
 const VALID_B = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><circle cx="5" cy="5" r="4" fill="blue"/></svg>';
+const VALID_C = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><polygon points="0,0 5,10 10,0" fill="green"/></svg>';
 const INVALID = '<svg><rect</svg>';
 
 describe('SvgSourceSection', () => {
@@ -111,5 +112,32 @@ describe('SvgSourceSection', () => {
     it('shows a size hint in KB', () => {
         render(<SvgSourceSection svgContent={VALID_A} onCommit={vi.fn()} />);
         expect(screen.getByTestId('svg-source-size').textContent).toMatch(/KB/);
+    });
+
+    it('invokes the latest onCommit, not a stale closure, when the prop changes before the debounce fires', () => {
+        const first = vi.fn();
+        const second = vi.fn();
+        const { rerender } = render(<SvgSourceSection svgContent={VALID_A} onCommit={first} />);
+        fireEvent.focus(getTextarea());
+        fireEvent.change(getTextarea(), { target: { value: VALID_B } });
+        // Interleaved edit elsewhere re-renders this component with a fresh onCommit
+        // BEFORE the debounce timer fires.
+        rerender(<SvgSourceSection svgContent={VALID_A} onCommit={second} />);
+        act(() => { vi.advanceTimersByTime(400); });
+        expect(second).toHaveBeenCalledTimes(1);
+        expect(second).toHaveBeenCalledWith(VALID_B, true);
+        expect(first).not.toHaveBeenCalled();
+    });
+
+    it('clears a pending debounce timer when svgContent changes externally, so the stale draft never re-commits over the restore', () => {
+        const onCommit = vi.fn();
+        const { rerender } = render(<SvgSourceSection svgContent={VALID_A} onCommit={onCommit} />);
+        fireEvent.focus(getTextarea());
+        fireEvent.change(getTextarea(), { target: { value: VALID_B } });
+        // External change (undo/redo/restore) arrives before the debounce fires.
+        rerender(<SvgSourceSection svgContent={VALID_C} onCommit={onCommit} />);
+        act(() => { vi.advanceTimersByTime(400); });
+        expect(onCommit).not.toHaveBeenCalled();
+        expect(getTextarea().value).toBe(VALID_C);
     });
 });

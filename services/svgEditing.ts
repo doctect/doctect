@@ -13,7 +13,7 @@ export function validateSvgMarkup(text: string): SvgValidation {
     if (doc.querySelector('parsererror')) {
         return { ok: false, error: 'Markup does not parse as SVG' };
     }
-    if (doc.documentElement.nodeName.toLowerCase() !== 'svg') {
+    if (doc.documentElement.nodeName !== 'svg') {
         return { ok: false, error: 'Root element must be <svg>' };
     }
     return { ok: true };

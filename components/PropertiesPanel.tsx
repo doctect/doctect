@@ -299,6 +299,7 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({ state, onUpdat
                         )}
                         <SingleElementEditor
                             key={selectedElements[0].id} // Stable key to avoid remounting jank, but updates on selection change
+                            // (this also remounts SvgSourceSection on selection change, resetting its draft + pending debounce timer)
                             element={displayElement}
                             onUpdate={handleUpdate}
                             onOpenNodeSelector={handleOpenNodeSelector}
