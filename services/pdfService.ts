@@ -795,6 +795,12 @@ export const generatePDF = async (state: AppState, options: GeneratePDFOptions =
         });
     });
 
+    // Default text carries no fontFamily and renders as 'helvetica'. Without this, that text
+    // stays on jsPDF's built-in Helvetica — WinAnsi-only (no Unicode glyphs) and metrically
+    // different from the canvas. Embed the bundled Nimbus Sans (a metric-compatible Helvetica
+    // clone, already configured in FONT_URLS) so default/helvetica text is consistent too.
+    usedFamilies.add('helvetica');
+
     const fontPromises: Promise<void>[] = [];
 
     for (const family of usedFamilies) {
