@@ -24,9 +24,26 @@ describe('AppHeader', () => {
         expect(container.querySelector('header')!.className).toContain('shrink-0');
     });
 
+    it('renders a Ko-fi support link opening in a new tab', () => {
+        renderHeader();
+        const link = screen.getByRole('link', { name: /support/i }) as HTMLAnchorElement;
+        expect(link.href).toBe('https://ko-fi.com/anoopr');
+        expect(link.target).toBe('_blank');
+        expect(link.rel).toContain('noopener');
+    });
+
     it('renders the account menu (signed-out state shows Sign in)', () => {
         renderHeader();
         expect(screen.getByText(/sign in/i)).toBeTruthy();
+    });
+});
+
+describe('landing support link', () => {
+    it('carries the Ko-fi link in the marketing nav', async () => {
+        const { LandingPage } = await import('../../pages/LandingPage');
+        render(<MemoryRouter><LandingPage /></MemoryRouter>);
+        const links = screen.getAllByRole('link', { name: /support/i }) as HTMLAnchorElement[];
+        expect(links.some(l => l.href === 'https://ko-fi.com/anoopr' && l.target === '_blank')).toBe(true);
     });
 });
 

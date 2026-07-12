@@ -106,3 +106,5 @@ export const PAGE_PRESETS: Record<string, { name: string, w: number, h: number }
   // 7" Devices
   'rm_pp_move': { name: 'reMarkable Paper Pro Move', w: 462.55, h: 260.18 },
 };
+// Donation link shown in every header (AppHeader, landing nav, editor header).
+export const KOFI_URL = 'https://ko-fi.com/anoopr';

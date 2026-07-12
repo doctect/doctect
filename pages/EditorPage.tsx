@@ -8,12 +8,13 @@ import { ProjectEditor } from '../components/ProjectEditor';
 import { TabBar } from '../components/TabBar';
 import { NewProjectModal } from '../components/NewProjectModal';
 import { CloseProjectConfirmModal } from '../components/CloseProjectConfirmModal';
-import { Square, Home, Github } from 'lucide-react';
+import { Square, Home, Github, Coffee } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import clsx from 'clsx';
 import { trackEvent } from '../services/analytics';
 import { AccountMenu } from '../components/AccountMenu';
 import { CloudMenu } from '../components/cloud/CloudMenu';
+import { KOFI_URL } from '../constants/editor';
 
 export interface Project {
     id: string;
@@ -243,6 +244,9 @@ export function EditorPage() {
                     )}
                     <a href="https://github.com/doctect/doctect" target="_blank" rel="noopener noreferrer" className="text-slate-400 hover:text-slate-900 transition-colors" title="View on GitHub">
                         <Github size={18} />
+                    </a>
+                    <a href={KOFI_URL} target="_blank" rel="noopener noreferrer" className="text-slate-400 hover:text-rose-600 transition-colors" title="Support the project on Ko-fi">
+                        <Coffee size={18} />
                     </a>
                     <Link to="/gallery" className="text-xs font-medium text-slate-500 hover:text-blue-600">
                         Gallery

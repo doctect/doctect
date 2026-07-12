@@ -1,8 +1,9 @@
 
 import React from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowRight, Layers, LayoutTemplate, Link as LinkIcon, Download, MousePointer2, Github, Image } from 'lucide-react';
+import { ArrowRight, Layers, LayoutTemplate, Link as LinkIcon, Download, MousePointer2, Github, Image, Coffee } from 'lucide-react';
 import { AccountMenu } from '../components/AccountMenu';
+import { KOFI_URL } from '../constants/editor';
 
 export const LandingPage: React.FC = () => {
   return (
@@ -38,6 +39,9 @@ export const LandingPage: React.FC = () => {
           </a>
           <Link to="/docs" className="text-sm font-medium text-slate-600 hover:text-blue-600 transition-colors">Documentation</Link>
           <Link to="/gallery" className="text-sm font-medium text-slate-600 hover:text-blue-600 transition-colors">Gallery</Link>
+          <a href={KOFI_URL} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1.5 text-sm font-medium text-slate-600 hover:text-rose-600 transition-colors" title="Support the project on Ko-fi">
+            <Coffee size={15} /> Support
+          </a>
           <AccountMenu />
           <Link to="/app" className="bg-slate-900 text-white px-5 py-2.5 rounded-lg text-sm font-medium hover:bg-slate-800 transition-all shadow-lg shadow-slate-900/10 hover:shadow-slate-900/20 hover:-translate-y-0.5">
             Launch App

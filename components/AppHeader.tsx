@@ -1,8 +1,9 @@
 import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Layers } from 'lucide-react';
+import { Layers, Coffee } from 'lucide-react';
 import clsx from 'clsx';
 import { AccountMenu } from './AccountMenu';
+import { KOFI_URL } from '../constants/editor';
 
 const NavLink: React.FC<{ to: string; label: string }> = ({ to, label }) => {
     const { pathname } = useLocation();
@@ -39,6 +40,11 @@ export const AppHeader: React.FC = () => (
             <NavLink to="/app" label="Editor" />
             <NavLink to="/gallery" label="Gallery" />
             <NavLink to="/docs" label="Docs" />
+            <a href={KOFI_URL} target="_blank" rel="noopener noreferrer"
+                className="flex items-center gap-1.5 text-sm font-medium text-slate-600 hover:text-rose-600 transition-colors"
+                title="Support the project on Ko-fi">
+                <Coffee size={15} /> Support
+            </a>
             <AccountMenu />
         </div>
     </header>
