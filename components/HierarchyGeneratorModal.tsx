@@ -52,7 +52,11 @@ const SimpleEditor: React.FC<SimpleEditorProps> = ({ value, onChange, fontSize =
         style={sharedStyle}
         aria-hidden="true"
       >
-        <HighlightedCode code={value || ''} />
+        {/* A textarea always reserves a final empty line for a trailing newline, but the
+            highlighted <pre> collapses it — leaving the layers one line apart, so the
+            pre.scrollTop = textarea.scrollTop sync clamps and the caret drifts off the
+            text near the bottom. Pad the highlight layer so both report the same height. */}
+        <HighlightedCode code={value ? (value.endsWith('\n') ? value + ' ' : value) : ''} />
       </pre>
 
       {/* Input Layer */}
