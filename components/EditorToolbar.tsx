@@ -1,5 +1,5 @@
-import React, { useMemo, useRef } from 'react';
-import { MousePointer2, Hand, Type, Square, Circle, Triangle, Minus, Grid3X3, Magnet, GripVertical, ZoomOut, ZoomIn, Wand2, Save, Eye, AlignLeft, AlignCenter, AlignRight, AlignVerticalJustifyStart, AlignVerticalJustifyCenter, AlignVerticalJustifyEnd, AlignHorizontalSpaceAround, AlignVerticalSpaceAround, FileImage } from 'lucide-react';
+import React, { useMemo, useRef, useState, useEffect } from 'react';
+import { MousePointer2, Hand, Type, Square, Circle, Triangle, Minus, Grid3X3, Magnet, GripVertical, ZoomOut, ZoomIn, Wand2, Save, Eye, AlignLeft, AlignCenter, AlignRight, AlignVerticalJustifyStart, AlignVerticalJustifyCenter, AlignVerticalJustifyEnd, AlignHorizontalSpaceAround, AlignVerticalSpaceAround, FileImage, ChevronDown } from 'lucide-react';
 import clsx from 'clsx';
 import { AppState, AppNode } from '../types';
 
@@ -9,6 +9,7 @@ interface EditorToolbarProps {
     onOpenScriptGen?: () => void;
     onSavePreset?: () => void;
     onImportSvg?: (file: File) => void;
+    onInsertSvgPlaceholder?: () => void;
 }
 
 const ToolButton: React.FC<{ active?: boolean, icon: any, onClick: () => void, title?: string }> = ({ active, icon: Icon, onClick, title }) => (
@@ -17,8 +18,18 @@ const ToolButton: React.FC<{ active?: boolean, icon: any, onClick: () => void, t
     </button>
 );
 
-export const EditorToolbar: React.FC<EditorToolbarProps> = ({ state, setState, onOpenScriptGen, onSavePreset, onImportSvg }) => {
+export const EditorToolbar: React.FC<EditorToolbarProps> = ({ state, setState, onOpenScriptGen, onSavePreset, onImportSvg, onInsertSvgPlaceholder }) => {
     const svgInputRef = useRef<HTMLInputElement>(null);
+    const [svgMenuOpen, setSvgMenuOpen] = useState(false);
+    const svgMenuRef = useRef<HTMLDivElement>(null);
+
+    useEffect(() => {
+        const onDocMouseDown = (e: MouseEvent) => {
+            if (svgMenuRef.current && !svgMenuRef.current.contains(e.target as Node)) setSvgMenuOpen(false);
+        };
+        document.addEventListener('mousedown', onDocMouseDown);
+        return () => document.removeEventListener('mousedown', onDocMouseDown);
+    }, []);
     // Compute nodes that use the current template
     const nodesForCurrentTemplate = useMemo(() => {
         if (state.viewMode !== 'templates') return [];
@@ -175,20 +186,47 @@ export const EditorToolbar: React.FC<EditorToolbarProps> = ({ state, setState, o
                 {onImportSvg && (
                     <>
                         <div className="w-px bg-slate-200 mx-1"></div>
-                        <ToolButton icon={FileImage} onClick={() => svgInputRef.current?.click()} title="Import SVG Image" />
-                        <input
-                            ref={svgInputRef}
-                            type="file"
-                            accept=".svg"
-                            className="hidden"
-                            onChange={(e) => {
-                                const file = e.target.files?.[0];
-                                if (file) {
-                                    onImportSvg(file);
-                                    e.target.value = ''; // Reset so same file can be re-imported
-                                }
-                            }}
-                        />
+                        <div className="relative" ref={svgMenuRef}>
+                            <button
+                                onClick={() => setSvgMenuOpen(o => !o)}
+                                title="SVG Tools"
+                                className={clsx("p-1.5 rounded transition-all flex items-center gap-0.5", svgMenuOpen ? "bg-slate-100 text-slate-700" : "text-slate-500 hover:text-slate-700 hover:bg-slate-100")}
+                            >
+                                <FileImage size={16} />
+                                <ChevronDown size={10} />
+                            </button>
+                            {svgMenuOpen && (
+                                <div className="absolute left-0 top-full mt-1 w-48 bg-white border border-slate-200 rounded shadow-lg py-1 z-30">
+                                    <button
+                                        onClick={() => { setSvgMenuOpen(false); svgInputRef.current?.click(); }}
+                                        className="w-full text-left px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50"
+                                    >
+                                        Import SVG file…
+                                    </button>
+                                    {onInsertSvgPlaceholder && (
+                                        <button
+                                            onClick={() => { setSvgMenuOpen(false); onInsertSvgPlaceholder(); }}
+                                            className="w-full text-left px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50"
+                                        >
+                                            Insert placeholder SVG
+                                        </button>
+                                    )}
+                                </div>
+                            )}
+                            <input
+                                ref={svgInputRef}
+                                type="file"
+                                accept=".svg"
+                                className="hidden"
+                                onChange={(e) => {
+                                    const file = e.target.files?.[0];
+                                    if (file) {
+                                        onImportSvg(file);
+                                        e.target.value = ''; // Reset so same file can be re-imported
+                                    }
+                                }}
+                            />
+                        </div>
                     </>
                 )}
             </div>

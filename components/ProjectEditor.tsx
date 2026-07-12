@@ -20,6 +20,7 @@ import { reflowTemplates } from '../services/reflow';
 import clsx from 'clsx';
 import { trackEvent } from '../services/analytics';
 import { resolveActiveLayerId, nextZIndexInLayer, createDefaultLayer } from '../services/layers';
+import { PLACEHOLDER_SVG, createPlacedSvgElement } from '../services/svgEditing';
 
 interface HistoryState {
     past: { nodes: Record<string, AppNode>, variants: Record<string, Variant> }[];
@@ -731,40 +732,35 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, initial
             const finalW = Math.round(svgW * scale);
             const finalH = Math.round(svgH * scale);
 
-            const newElement: TemplateElement = {
-                id: `el_${Math.random().toString(36).substr(2, 8)}`,
-                type: 'svg',
-                x: 20,
-                y: 20,
-                w: finalW,
-                h: finalH,
-                rotation: 0,
-                fill: '',
-                stroke: '',
-                strokeWidth: 0,
-                opacity: 1,
-                svgContent: svgText,
-            };
-
-            saveToHistory();
-            setState(prev => {
-                const activeVariant = prev.variants[prev.activeVariantId];
-                const tplId = prev.selectedTemplateId;
-                const tpl = activeVariant.templates[tplId];
-                if (!tpl) return prev;
-                const layerId = resolveActiveLayerId(tpl, prev.activeLayerId);
-                const placedElement = { ...newElement, layerId, zIndex: nextZIndexInLayer(tpl.elements, layerId) };
-                const updatedTemplate = { ...tpl, elements: [...tpl.elements, placedElement] };
-                const updatedVariant = { ...activeVariant, templates: { ...activeVariant.templates, [tplId]: updatedTemplate } };
-                return {
-                    ...prev,
-                    variants: { ...prev.variants, [prev.activeVariantId]: updatedVariant },
-                    selectedElementIds: [newElement.id],
-                    tool: 'select',
-                };
-            });
+            insertSvgElement(svgText, finalW, finalH);
         };
         reader.readAsText(file);
+    };
+
+    // Shared tail of every svg-adding path (file import, placeholder insert):
+    // one history entry, placement via createPlacedSvgElement, select the new
+    // element, switch to the select tool.
+    const insertSvgElement = (svgText: string, w: number, h: number) => {
+        saveToHistory();
+        setState(prev => {
+            const activeVariant = prev.variants[prev.activeVariantId];
+            const tplId = prev.selectedTemplateId;
+            const tpl = activeVariant.templates[tplId];
+            if (!tpl) return prev;
+            const placedElement = createPlacedSvgElement(svgText, w, h, tpl, prev.activeLayerId);
+            const updatedTemplate = { ...tpl, elements: [...tpl.elements, placedElement] };
+            const updatedVariant = { ...activeVariant, templates: { ...activeVariant.templates, [tplId]: updatedTemplate } };
+            return {
+                ...prev,
+                variants: { ...prev.variants, [prev.activeVariantId]: updatedVariant },
+                selectedElementIds: [placedElement.id],
+                tool: 'select',
+            };
+        });
+    };
+
+    const handleInsertSvgPlaceholder = () => {
+        insertSvgElement(PLACEHOLDER_SVG, 100, 100);
     };
 
     const handleSelectVariant = (variantId: string) => {
@@ -1190,6 +1186,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, initial
                         onOpenScriptGen={() => setShowScriptGenModal(true)}
                         onSavePreset={() => setShowSavePresetModal(true)}
                         onImportSvg={handleImportSvg}
+                        onInsertSvgPlaceholder={handleInsertSvgPlaceholder}
                     />
 
                     <div className="flex-1 bg-slate-200 overflow-hidden relative flex flex-col">
