@@ -18,7 +18,10 @@ export const initTestApp = async () => {
     if (!process.env.SQLITE_PATH) {
         process.env.SQLITE_PATH = path.join(os.tmpdir(), `doctect-app-${Date.now()}-${Math.random().toString(36).slice(2)}.db`);
     }
-    delete process.env.DATABASE_URL;
+    // Present-but-empty (not delete) for the same dotenv-resurrection reason as
+    // RESEND_API_KEY below. Today the sqlite backend is locked in before dotenv
+    // loads (migrations imports db.js first), but that's import-order luck.
+    process.env.DATABASE_URL = '';
     // Force test-safe values for every env var the server reads directly for origin/host
     // checks, regardless of whatever real .env file might already sit in the current working
     // directory (e.g. a developer's own local production-deploy config, which sets
@@ -29,7 +32,7 @@ export const initTestApp = async () => {
     // under test. This mirrors the SQLITE_PATH/DATABASE_URL isolation immediately above.
     process.env.TRUSTED_ORIGINS = 'http://localhost:3000,http://localhost:3001';
     process.env.CLIENT_URL = 'http://localhost:3000';
-    delete process.env.ALLOWED_HOSTS;
+    process.env.ALLOWED_HOSTS = ''; // present-but-empty, same reason (read lazily per request)
     // better-auth caps /sign-up* at 3 requests per 10s (built-in special rule that
     // overrides the configured window/max); any test file that creates 4+ users in its
     // beforeAll would 429. server/auth.js reads this to skip rate limiting under test.
@@ -37,7 +40,12 @@ export const initTestApp = async () => {
     // A developer's local .env may hold a real Resend API key (see .env.example);
     // tests must always exercise the console fallback (or an injected impl via
     // setSendEmailImpl) and never attempt to send a real email.
-    delete process.env.RESEND_API_KEY;
+    // EMPTY STRING, never delete: server/auth.js loads dotenv during the
+    // dynamic imports below, and dotenv re-populates MISSING vars from a
+    // developer's real .env — a deleted key came back and made every suite
+    // signup send real Resend email. Present-but-empty wins over dotenv and
+    // is falsy to server/email.js (console fallback).
+    process.env.RESEND_API_KEY = '';
     const { runMigrations } = await import('../../../server/migrations.js');
     await runMigrations();
     const { createApp } = await import('../../../server/app.js');
