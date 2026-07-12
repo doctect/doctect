@@ -724,8 +724,8 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, initial
                 if (!isNaN(hAttr) && hAttr > 0) svgH = hAttr;
             }
 
-            // Scale down to fit within the template if necessary
-            const template = getActiveTemplates()[state.selectedTemplateId];
+            // Scale down to fit within the destination template (hierarchy-aware) if necessary
+            const template = getCurrentTemplate();
             const maxW = template ? template.width * 0.8 : 400;
             const maxH = template ? template.height * 0.8 : 400;
             const scale = Math.min(1, maxW / svgW, maxH / svgH);
@@ -744,8 +744,13 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, initial
         saveToHistory();
         setState(prev => {
             const activeVariant = prev.variants[prev.activeVariantId];
-            const tplId = prev.selectedTemplateId;
-            const tpl = activeVariant.templates[tplId];
+            // Add to the template currently shown on the canvas. In hierarchy view that's
+            // the selected node's template, not the Templates-tab selection — same
+            // reconciliation the other element-mutating handlers already use.
+            const tplId = prev.viewMode === 'hierarchy'
+                ? prev.nodes[prev.selectedNodeId]?.type
+                : prev.selectedTemplateId;
+            const tpl = tplId ? activeVariant.templates[tplId] : undefined;
             if (!tpl) return prev;
             const placedElement = createPlacedSvgElement(svgText, w, h, tpl, prev.activeLayerId);
             const updatedTemplate = { ...tpl, elements: [...tpl.elements, placedElement] };
