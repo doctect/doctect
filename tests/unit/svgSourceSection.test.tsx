@@ -1,0 +1,101 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, fireEvent, screen, act } from '@testing-library/react';
+import { SvgSourceSection } from '../../components/properties/SvgSourceSection';
+
+const VALID_A = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="5" height="5" fill="red"/></svg>';
+const VALID_B = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><circle cx="5" cy="5" r="4" fill="blue"/></svg>';
+const INVALID = '<svg><rect</svg>';
+
+describe('SvgSourceSection', () => {
+    beforeEach(() => { vi.useFakeTimers(); });
+    afterEach(() => { vi.useRealTimers(); });
+
+    const getTextarea = () => screen.getByTestId('svg-source-textarea') as HTMLTextAreaElement;
+
+    it('shows the current svgContent in the textarea', () => {
+        render(<SvgSourceSection svgContent={VALID_A} onCommit={vi.fn()} />);
+        expect(getTextarea().value).toBe(VALID_A);
+    });
+
+    it('commits a valid edit after the 400ms debounce, with saveHistory=true on the first commit of a burst', () => {
+        const onCommit = vi.fn();
+        render(<SvgSourceSection svgContent={VALID_A} onCommit={onCommit} />);
+        fireEvent.focus(getTextarea());
+        fireEvent.change(getTextarea(), { target: { value: VALID_B } });
+        expect(onCommit).not.toHaveBeenCalled(); // not before debounce
+        act(() => { vi.advanceTimersByTime(400); });
+        expect(onCommit).toHaveBeenCalledTimes(1);
+        expect(onCommit).toHaveBeenCalledWith(VALID_B, true);
+    });
+
+    it('passes saveHistory=false on subsequent commits within the same focus session', () => {
+        const onCommit = vi.fn();
+        render(<SvgSourceSection svgContent={VALID_A} onCommit={onCommit} />);
+        fireEvent.focus(getTextarea());
+        fireEvent.change(getTextarea(), { target: { value: VALID_B } });
+        act(() => { vi.advanceTimersByTime(400); });
+        fireEvent.change(getTextarea(), { target: { value: VALID_A } });
+        act(() => { vi.advanceTimersByTime(400); });
+        expect(onCommit).toHaveBeenCalledTimes(2);
+        expect(onCommit).toHaveBeenNthCalledWith(1, VALID_B, true);
+        expect(onCommit).toHaveBeenNthCalledWith(2, VALID_A, false);
+    });
+
+    it('resets the burst on blur: next focus session saves history again', () => {
+        const onCommit = vi.fn();
+        render(<SvgSourceSection svgContent={VALID_A} onCommit={onCommit} />);
+        fireEvent.focus(getTextarea());
+        fireEvent.change(getTextarea(), { target: { value: VALID_B } });
+        act(() => { vi.advanceTimersByTime(400); });
+        fireEvent.blur(getTextarea());
+        fireEvent.focus(getTextarea());
+        fireEvent.change(getTextarea(), { target: { value: VALID_A } });
+        act(() => { vi.advanceTimersByTime(400); });
+        expect(onCommit).toHaveBeenNthCalledWith(2, VALID_A, true);
+    });
+
+    it('shows an error and does not commit invalid SVG', () => {
+        const onCommit = vi.fn();
+        render(<SvgSourceSection svgContent={VALID_A} onCommit={onCommit} />);
+        fireEvent.focus(getTextarea());
+        fireEvent.change(getTextarea(), { target: { value: INVALID } });
+        act(() => { vi.advanceTimersByTime(400); });
+        expect(onCommit).not.toHaveBeenCalled();
+        expect(screen.getByText('Invalid SVG — canvas shows last valid version')).toBeTruthy();
+    });
+
+    it('clears the error once the draft becomes valid again', () => {
+        const onCommit = vi.fn();
+        render(<SvgSourceSection svgContent={VALID_A} onCommit={onCommit} />);
+        fireEvent.focus(getTextarea());
+        fireEvent.change(getTextarea(), { target: { value: INVALID } });
+        act(() => { vi.advanceTimersByTime(400); });
+        fireEvent.change(getTextarea(), { target: { value: VALID_B } });
+        act(() => { vi.advanceTimersByTime(400); });
+        expect(screen.queryByText('Invalid SVG — canvas shows last valid version')).toBeNull();
+        expect(onCommit).toHaveBeenCalledWith(VALID_B, true);
+    });
+
+    it('re-seeds the draft when svgContent changes externally (undo/redo/restore)', () => {
+        const { rerender } = render(<SvgSourceSection svgContent={VALID_A} onCommit={vi.fn()} />);
+        rerender(<SvgSourceSection svgContent={VALID_B} onCommit={vi.fn()} />);
+        expect(getTextarea().value).toBe(VALID_B);
+    });
+
+    it('does not re-seed (or loop) from its own committed value', () => {
+        const onCommit = vi.fn();
+        const { rerender } = render(<SvgSourceSection svgContent={VALID_A} onCommit={onCommit} />);
+        fireEvent.focus(getTextarea());
+        fireEvent.change(getTextarea(), { target: { value: VALID_B } });
+        act(() => { vi.advanceTimersByTime(400); });
+        // Parent state updated with our own commit — textarea must keep the draft untouched
+        rerender(<SvgSourceSection svgContent={VALID_B} onCommit={onCommit} />);
+        expect(getTextarea().value).toBe(VALID_B);
+        expect(onCommit).toHaveBeenCalledTimes(1);
+    });
+
+    it('shows a size hint in KB', () => {
+        render(<SvgSourceSection svgContent={VALID_A} onCommit={vi.fn()} />);
+        expect(screen.getByTestId('svg-source-size').textContent).toMatch(/KB/);
+    });
+});

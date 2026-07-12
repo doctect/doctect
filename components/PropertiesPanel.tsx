@@ -96,7 +96,7 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({ state, onUpdat
     };
 
     // Hooks must be called before any early returns
-    const handleUpdate = useCallback((updates: Partial<TemplateElement> | ((prev: TemplateElement) => Partial<TemplateElement>)) => {
+    const handleUpdate = useCallback((updates: Partial<TemplateElement> | ((prev: TemplateElement) => Partial<TemplateElement>), saveHistory: boolean = true) => {
         if (selectedElements.length > 0 && template) {
             // Apply updates to ALL selected elements
             const newElements = template.elements.map(el => {
@@ -113,7 +113,7 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({ state, onUpdat
                 }
                 return el;
             });
-            onUpdateElements(newElements, true);
+            onUpdateElements(newElements, saveHistory);
         }
     }, [onUpdateElements, selectedElements, template, selectedElementIds]);
 

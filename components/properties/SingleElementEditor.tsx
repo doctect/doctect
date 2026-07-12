@@ -3,6 +3,7 @@ import React, { useState } from 'react';
 import { AppNode, AppState, TemplateElement, TraversalStep } from '../../types';
 import { Grid3X3, ArrowLeft, Palette, Type, MousePointer2, Bold, Italic, Underline, ArrowUp, ArrowDown, Plus, AlignLeft, AlignCenter, AlignRight, AlignStartVertical, AlignEndVertical, AlignCenterVertical, Trash2, Layers, Network, Trash, Settings2, RectangleHorizontal, RectangleVertical, Share2, Link2, ChevronUp, ChevronDown, PanelTop, PanelRight, PanelBottom, PanelLeft, ToggleRight, ToggleLeft } from 'lucide-react';
 import { ChildIndexSelector } from './ChildIndexSelector';
+import { SvgSourceSection } from './SvgSourceSection';
 import { BORDER_STYLES, FONTS } from '../../constants/editor';
 import clsx from 'clsx';
 
@@ -64,7 +65,7 @@ const getFontFamily = (fontValue: string): string => {
 
 interface SingleElementEditorProps {
     element: TemplateElement;
-    onUpdate: (updates: Partial<TemplateElement> | ((prev: TemplateElement) => Partial<TemplateElement>)) => void;
+    onUpdate: (updates: Partial<TemplateElement> | ((prev: TemplateElement) => Partial<TemplateElement>), saveHistory?: boolean) => void;
     onOpenNodeSelector: (mode: 'grid_source' | 'link_element') => void;
     state: AppState;
     activeNode?: AppNode;
@@ -1153,6 +1154,13 @@ export const SingleElementEditor: React.FC<SingleElementEditorProps> = ({ elemen
                         </div>
                     </div>
                 </div>
+            )}
+
+            {element.type === 'svg' && state.selectedElementIds.length === 1 && (
+                <SvgSourceSection
+                    svgContent={element.svgContent || ''}
+                    onCommit={(svg, saveHistory) => onUpdate({ svgContent: svg }, saveHistory)}
+                />
             )}
 
             {/* Links / Interactions */}
