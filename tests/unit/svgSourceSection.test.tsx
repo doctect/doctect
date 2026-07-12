@@ -54,6 +54,20 @@ describe('SvgSourceSection', () => {
         expect(onCommit).toHaveBeenNthCalledWith(2, VALID_A, true);
     });
 
+    it('keeps saveHistory=false when blur races a pending commit in the same burst', () => {
+        const onCommit = vi.fn();
+        render(<SvgSourceSection svgContent={VALID_A} onCommit={onCommit} />);
+        fireEvent.focus(getTextarea());
+        fireEvent.change(getTextarea(), { target: { value: VALID_B } });
+        act(() => { vi.advanceTimersByTime(400); });
+        expect(onCommit).toHaveBeenNthCalledWith(1, VALID_B, true);
+        fireEvent.change(getTextarea(), { target: { value: VALID_A } }); // schedules commit 2
+        fireEvent.blur(getTextarea()); // blur BEFORE the debounce elapses
+        act(() => { vi.advanceTimersByTime(400); });
+        expect(onCommit).toHaveBeenCalledTimes(2);
+        expect(onCommit).toHaveBeenNthCalledWith(2, VALID_A, false);
+    });
+
     it('shows an error and does not commit invalid SVG', () => {
         const onCommit = vi.fn();
         render(<SvgSourceSection svgContent={VALID_A} onCommit={onCommit} />);

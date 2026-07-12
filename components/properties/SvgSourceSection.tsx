@@ -70,8 +70,9 @@ export const SvgSourceSection: React.FC<SvgSourceSectionProps> = ({ svgContent, 
                     rows={10}
                     spellCheck={false}
                     value={draft}
+                    // Burst flag resets only on focus: a commit that lands after
+                    // blur still belongs to the old session (saveHistory=false).
                     onFocus={() => { historySavedRef.current = false; }}
-                    onBlur={() => { historySavedRef.current = false; }}
                     onChange={e => handleChange(e.target.value)}
                 />
                 {error && <div className="text-[11px] text-red-600">{error}</div>}
