@@ -76,7 +76,7 @@ const parseSolidColor = (value: unknown): SolidColor | null => {
 const isVisibleTextBinding = (element: any, field: string, template: any) => {
     const textColor = parseSolidColor(element?.textColor || '#000000');
     const fillColor = element?.fillType === 'pattern' ? null : parseSolidColor(element?.fill);
-    const effectiveFontSize = Number(element?.fontSize) || 12;
+    const effectiveFontSize = element?.fontSize === undefined ? 12 : Number(element.fontSize);
     const layer = Array.isArray(template?.layers)
         ? template.layers.find((candidate: any) => candidate.id === element?.layerId)
         : undefined;

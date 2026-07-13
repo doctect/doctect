@@ -218,6 +218,27 @@ describe('gallery sample harness', () => {
             error: 'visible text binding for example_label',
         },
         {
+            name: 'example label with numeric zero font size',
+            configure: (sample: LoadedGallerySample) => {
+                sample.templates.page.elements.find((element: any) => element.id === 'page_badge').fontSize = 0;
+            },
+            error: 'visible text binding for example_label',
+        },
+        {
+            name: 'example label with string zero font size',
+            configure: (sample: LoadedGallerySample) => {
+                sample.templates.page.elements.find((element: any) => element.id === 'page_badge').fontSize = '0';
+            },
+            error: 'visible text binding for example_label',
+        },
+        {
+            name: 'example label with non-finite font size',
+            configure: (sample: LoadedGallerySample) => {
+                sample.templates.page.elements.find((element: any) => element.id === 'page_badge').fontSize = Number.POSITIVE_INFINITY;
+            },
+            error: 'visible text binding for example_label',
+        },
+        {
             name: 'transparent skip text color',
             configure: (sample: LoadedGallerySample) => {
                 sample.templates.page.elements.find((element: any) => element.id === 'page_skip').textColor = 'transparent';
@@ -249,13 +270,10 @@ describe('gallery sample harness', () => {
         ]));
     });
 
-    it.each([
-        { name: 'omitted', fontSize: undefined },
-        { name: 'zero', fontSize: 0 },
-    ])('accepts renderer-visible $name font size fallback', ({ fontSize }) => {
+    it('accepts missing font size through renderer fallback', () => {
         const sample = execute();
-        sample.templates.page.elements.find((element: any) => element.id === 'page_badge').fontSize = fontSize;
-        sample.templates.page.elements.find((element: any) => element.id === 'page_skip').fontSize = fontSize;
+        delete sample.templates.page.elements.find((element: any) => element.id === 'page_badge').fontSize;
+        delete sample.templates.page.elements.find((element: any) => element.id === 'page_skip').fontSize;
 
         expect(validateSharedGalleryInvariants(sample)).toEqual([]);
     });
