@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { getElementBounds } from '../../../components/canvas/elementBounds';
+import { computePageOrder } from '../../../services/pdfService';
 import {
     expectValidGallerySample,
     loadGallerySample,
@@ -23,7 +24,7 @@ const contract: GallerySampleContract = {
         'assignments',
         'exam',
     ],
-    pageCount: [115, 190],
+    pageCount: [115, 160],
     palette: ['#496f62', '#bd654f', '#f5f0e5'],
     requiredStableNodeIds: ['root', 'start_here', 'example_workspace', 'blank_workspace'],
 };
@@ -31,10 +32,10 @@ const contract: GallerySampleContract = {
 describe('Academic Success System gallery sample', () => {
     it('generates the complete Study Compass', () => {
         const sample = expectValidGallerySample(contract.slug, contract);
-        const pdfPageCount = Object.values(sample.nodes).filter((node: any) => !node.referenceId).length;
+        const exportedPageCount = computePageOrder({ rootId: sample.rootId, nodes: sample.nodes } as any).length;
 
-        expect(pdfPageCount).toBeGreaterThanOrEqual(115);
-        expect(pdfPageCount).toBeLessThanOrEqual(160);
+        expect(contract.pageCount).toEqual([115, 160]);
+        expect(exportedPageCount).toBe(132);
     });
 
     it('supports a one-course minimum without breaking navigation', () => {
@@ -56,7 +57,7 @@ describe('Academic Success System gallery sample', () => {
             cardsPerCourse: 20,
         });
 
-        expect(validateGallerySample(sample, { ...contract, pageCount: [500, 530] })).toEqual([]);
+        expect(validateGallerySample(sample, { ...contract, pageCount: [350, 380] })).toEqual([]);
 
         const cases = [
             ['semester', 'blank_semester', 'dashboard', 'dashboard_hint'],
