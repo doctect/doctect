@@ -146,50 +146,50 @@ const leafDivider = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 250 50
 
 const pageBase = (templateId, section) => [
   rect(templateId, 'paper', 0, 0, W, H, COLORS.oat),
-  rect(templateId, 'olive_rail', 0, 0, 16, H, COLORS.oliveDeep),
-  rect(templateId, 'tomato_tab', 16, 39, 8, 67, COLORS.tomato),
-  text(templateId, 'example', 35, 12, 100, 24, '{{example_label}}', {
+  rect(templateId, 'editorial_masthead', 0, 0, W, 42, COLORS.oliveDeep),
+  rect(templateId, 'edition_tab', 35, 42, 126, 30, COLORS.tomato),
+  text(templateId, 'example', 35, 9, 100, 24, '{{example_label}}', {
     dataBinding: 'example_label',
     fontSize: 10,
     fontWeight: 'bold',
-    textColor: COLORS.tomatoDeep,
+    textColor: COLORS.oat,
     characterSpacing: 1.1,
   }),
-  text(templateId, 'skip', 244, 12, 237, 24, '{{skip_label}}', {
+  text(templateId, 'skip', 226, 9, 255, 24, '{{skip_label}}', {
     dataBinding: 'skip_label',
     fontSize: 10,
     fontWeight: 'bold',
-    textColor: COLORS.tomatoDeep,
+    textColor: COLORS.oat,
     align: 'right',
     linkTarget: 'specific_node',
     linkValue: 'blank_workspace',
   }),
-  text(templateId, 'section', 35, 46, 446, 18, section.toUpperCase(), {
+  text(templateId, 'section', 43, 47, 110, 18, section.toUpperCase(), {
     fontSize: 9,
     fontWeight: 'bold',
-    textColor: COLORS.oliveDeep,
+    textColor: COLORS.oat,
     characterSpacing: 1.4,
   }),
-  rect(templateId, 'top_rule', 35, 71, 446, 2, COLORS.olive),
+  rect(templateId, 'masthead_rule', 161, 70, 320, 2, COLORS.olive),
   rect(templateId, 'footer_rule', 35, 625, 446, 1, COLORS.rule),
-  text(templateId, 'home', 35, 635, 62, 26, 'HOME', {
+  text(templateId, 'home', 176, 635, 62, 26, 'HOME', {
     fontSize: 9,
     fontWeight: 'bold',
     textColor: COLORS.oliveDeep,
     linkTarget: 'specific_node',
     linkValue: 'root',
   }),
-  text(templateId, 'up', 114, 635, 62, 26, 'UP', {
+  text(templateId, 'up', 272, 635, 62, 26, 'UP', {
     fontSize: 9,
     fontWeight: 'bold',
     textColor: COLORS.oliveDeep,
     linkTarget: 'parent',
   }),
-  text(templateId, 'folio', 343, 635, 138, 26, 'SEASONAL KITCHEN', {
+  text(templateId, 'folio', 35, 635, 119, 26, 'AUTUMN EDITION', {
     fontSize: 8,
     fontWeight: 'bold',
     textColor: COLORS.muted,
-    align: 'right',
+    align: 'left',
   }),
 ];
 

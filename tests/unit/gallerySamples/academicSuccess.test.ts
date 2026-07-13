@@ -93,6 +93,23 @@ describe('Academic Success System gallery sample', () => {
         expect(examRegions).toHaveLength(4);
     });
 
+    it('lets gridConfig exclusively own every grid cell border', () => {
+        const sample = loadGallerySample(contract.slug);
+        const grids = Object.values(sample.templates).flatMap((template: any) =>
+            template.elements.filter((element: any) => element.type === 'grid')) as any[];
+
+        expect(grids.length).toBeGreaterThan(0);
+        grids.forEach(grid => {
+            expect(['', 'none']).toContain(grid.stroke);
+            expect(grid.strokeWidth).toBe(0);
+            if (grid.gridConfig.gridBorderMode === 'none') {
+                expect(grid.gridConfig.gridBorderWidth).toBe(0);
+            } else {
+                expect(grid.gridConfig.gridBorderWidth).toBeGreaterThan(0);
+            }
+        });
+    });
+
     it('resolves question-to-answer links from original and referenced cards', () => {
         const sample = loadGallerySample(contract.slug);
         const answerLink = sample.templates.card_front.elements.find((element: any) =>

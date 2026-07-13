@@ -41,6 +41,23 @@ const resolveAncestorField = (
     return undefined;
 };
 
+const chromeGeometrySignature = (slug: string) => {
+    const sample = loadGallerySample(slug);
+    const template = sample.templates[sample.nodes.example_workspace.type];
+    const chrome = template.elements.filter((element: any) =>
+        element.dataBinding === 'example_label'
+        || element.dataBinding === 'skip_label'
+        || (element.type === 'text' && ['root', 'parent'].includes(element.linkTarget))
+        || (element.y < 82 && element.type !== 'text')
+        || (element.y > 615 && element.type !== 'text'),
+    );
+    const bucket = (value: number) => Math.round(value / 20) * 20;
+    return chrome
+        .map((element: any) => [element.type, bucket(element.x), bucket(element.y), bucket(element.w), bucket(element.h)].join(':'))
+        .sort()
+        .join('|');
+};
+
 describe('gallery sample collection', () => {
     it('contains exactly the eight approved products', () => {
         expect(collectGallerySampleSlugs()).toEqual(EXPECTED_SLUGS);
@@ -49,6 +66,11 @@ describe('gallery sample collection', () => {
     it.each(EXPECTED_SLUGS)('%s has no structural contract errors', slug => {
         const sample = loadGallerySample(slug);
         expect(validateSharedGalleryInvariants(sample)).toEqual([]);
+    });
+
+    it('gives all eight products distinct core chrome geometry', () => {
+        const signatures = EXPECTED_SLUGS.map(chromeGeometrySignature);
+        expect(new Set(signatures).size).toBe(EXPECTED_SLUGS.length);
     });
 
     it.each(EXPECTED_SLUGS)('%s shadows example chrome throughout the blank workspace', slug => {

@@ -113,8 +113,8 @@ const threadMark = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 280 45"
 
 const pageBase = (templateId, section) => [
   rect(templateId, 'paper', 0, 0, W, H, COLORS.paper),
-  rect(templateId, 'structure_rail', 0, 0, 17, H, COLORS.aubergineDeep),
-  rect(templateId, 'gold_tab', 17, 44, 7, 62, COLORS.gold),
+  rect(templateId, 'manuscript_margin', 24, 0, 1, H, COLORS.gold),
+  rect(templateId, 'binding_margin', 29, 0, 1, H, COLORS.auberginePale),
   text(templateId, 'example', 36, 11, 96, 24, '{{example_label}}', {
     dataBinding: 'example_label',
     fontSize: 9,
@@ -137,26 +137,26 @@ const pageBase = (templateId, section) => [
     textColor: COLORS.aubergine,
     characterSpacing: 1.4,
   }),
-  rect(templateId, 'top_rule', 36, 70, 445, 2, COLORS.gold),
+  svg(templateId, 'header_thread', 238, 42, 243, 32, threadMark),
   rect(templateId, 'footer_rule', 36, 624, 445, 1, COLORS.rule),
-  text(templateId, 'home', 36, 634, 58, 26, 'HOME', {
+  text(templateId, 'home', 190, 634, 58, 26, 'HOME', {
     fontSize: 8,
     fontWeight: 'bold',
     textColor: COLORS.aubergine,
     linkTarget: 'specific_node',
     linkValue: 'root',
   }),
-  text(templateId, 'up', 111, 634, 58, 26, 'UP', {
+  text(templateId, 'up', 263, 634, 58, 26, 'UP', {
     fontSize: 8,
     fontWeight: 'bold',
     textColor: COLORS.aubergine,
     linkTarget: 'parent',
   }),
-  text(templateId, 'folio', 281, 634, 200, 26, 'STORY ATELIER / MANUSCRIPT FILE', {
+  text(templateId, 'folio', 36, 634, 132, 26, 'DRAFT / THREAD 01', {
     fontSize: 7,
     fontWeight: 'bold',
     textColor: COLORS.muted,
-    align: 'right',
+    align: 'left',
     characterSpacing: 0.5,
   }),
 ];

@@ -52,8 +52,8 @@ const svg = (templateId, role, x, y, w, h, svgContent) =>
 const navGrid = (templateId, role, x, y, cellW, cellH, cols, extra = {}) =>
   base(templateId, role, 'grid', x, y, cellW, cellH, {
     fill: COLORS.paper,
-    stroke: COLORS.navy,
-    strokeWidth: 0.8,
+    stroke: '',
+    strokeWidth: 0,
     fontSize: 11,
     fontFamily: 'work-sans',
     fontWeight: 'bold',
@@ -95,15 +95,16 @@ const moduleMarkArtwork = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 
 
 const pageFrame = (templateId, section) => [
   rect(templateId, 'stone', 0, 0, W, H, COLORS.stone),
-  rect(templateId, 'rail', 0, 0, 22, H, COLORS.navy),
-  rect(templateId, 'datum', 22, 0, 5, 77, COLORS.ochre),
-  text(templateId, 'example', 39, 14, 94, 22, '{{example_label}}', {
+  rect(templateId, 'top_beam', 0, 0, W, 10, COLORS.navy),
+  rect(templateId, 'beam_joint', 455, 0, 38, 10, COLORS.ochre),
+  rect(templateId, 'project_marker', 493, 0, 16, H, COLORS.navy),
+  text(templateId, 'example', 39, 18, 94, 22, '{{example_label}}', {
     dataBinding: 'example_label',
     fontSize: 11,
     fontWeight: 'bold',
     textColor: COLORS.ochre,
   }),
-  text(templateId, 'skip', 260, 13, 221, 24, '{{skip_label}}', {
+  text(templateId, 'skip', 247, 17, 234, 24, '{{skip_label}}', {
     dataBinding: 'skip_label',
     fontSize: 11,
     fontWeight: 'bold',
@@ -112,7 +113,7 @@ const pageFrame = (templateId, section) => [
     linkTarget: 'specific_node',
     linkValue: 'blank_workspace',
   }),
-  text(templateId, 'section', 39, 48, 360, 18, section.toUpperCase(), {
+  text(templateId, 'section', 39, 49, 360, 18, section.toUpperCase(), {
     fontSize: 11,
     fontWeight: 'bold',
     textColor: COLORS.navy,
@@ -126,17 +127,17 @@ const pageFrame = (templateId, section) => [
     linkTarget: 'specific_node',
     linkValue: 'root',
   }),
-  text(templateId, 'up', 116, 638, 54, 23, 'UP', {
+  text(templateId, 'up', 427, 638, 54, 23, 'UP', {
     fontSize: 11,
     fontWeight: 'bold',
     textColor: COLORS.navy,
     linkTarget: 'parent',
   }),
-  text(templateId, 'folio', 365, 638, 116, 23, 'PROJECT DESK', {
+  text(templateId, 'folio', 187, 638, 168, 23, 'PROJECT / ACTIVE FILE', {
     fontSize: 10,
     fontWeight: 'bold',
     textColor: COLORS.muted,
-    align: 'right',
+    align: 'center',
   }),
 ];
 
@@ -558,8 +559,10 @@ const decisionsElements = [
     fontWeight: 'bold',
     textColor: COLORS.stone,
   }),
-  rect('decisions', 'register_row_1', 39, 575, 442, 24, COLORS.paper, { stroke: COLORS.rule, strokeWidth: 0.8 }),
-  rect('decisions', 'register_row_2', 39, 599, 442, 24, COLORS.paper, { stroke: COLORS.rule, strokeWidth: 0.8 }),
+  rect('decisions', 'register_row_1', 39, 575, 442, 24, COLORS.paper),
+  rect('decisions', 'register_row_2', 39, 599, 442, 24, COLORS.paper),
+  rect('decisions', 'register_boundary', 39, 575, 442, 48, '', { stroke: COLORS.rule, strokeWidth: 0.8 }),
+  rect('decisions', 'register_divider_1', 39, 598.6, 442, 0.8, COLORS.rule),
   text('decisions', 'action_link', 300, 590, 169, 25, 'OPEN BOARD ACTION', {
     fontSize: 9,
     fontWeight: 'bold',
@@ -579,10 +582,14 @@ const risksElements = [
     fontWeight: 'bold',
     textColor: COLORS.stone,
   }),
-  rect('risks', 'risk_row_1', 39, 198, 442, 79, COLORS.paper, { stroke: COLORS.rule, strokeWidth: 0.8 }),
-  rect('risks', 'risk_row_2', 39, 277, 442, 79, COLORS.paper, { stroke: COLORS.rule, strokeWidth: 0.8 }),
-  rect('risks', 'risk_row_3', 39, 356, 442, 79, COLORS.paper, { stroke: COLORS.rule, strokeWidth: 0.8 }),
-  rect('risks', 'risk_row_4', 39, 435, 442, 79, COLORS.paper, { stroke: COLORS.rule, strokeWidth: 0.8 }),
+  rect('risks', 'risk_row_1', 39, 198, 442, 79, COLORS.paper),
+  rect('risks', 'risk_row_2', 39, 277, 442, 79, COLORS.paper),
+  rect('risks', 'risk_row_3', 39, 356, 442, 79, COLORS.paper),
+  rect('risks', 'risk_row_4', 39, 435, 442, 79, COLORS.paper),
+  rect('risks', 'risk_boundary', 39, 198, 442, 316, '', { stroke: COLORS.rule, strokeWidth: 0.8 }),
+  rect('risks', 'risk_divider_1', 39, 276.6, 442, 0.8, COLORS.rule),
+  rect('risks', 'risk_divider_2', 39, 355.6, 442, 0.8, COLORS.rule),
+  rect('risks', 'risk_divider_3', 39, 434.6, 442, 0.8, COLORS.rule),
   text('risks', 'risk', 51, 208, 406, 54, '{{risk}}', {
     dataBinding: 'risk',
     fontSize: 11,

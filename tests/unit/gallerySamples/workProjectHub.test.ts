@@ -117,6 +117,40 @@ describe('Work Project Hub gallery sample', () => {
         expect(wipLabels).toHaveLength(3);
     });
 
+    it('lets gridConfig exclusively own every grid cell border', () => {
+        const sample = loadGallerySample(contract.slug);
+        const grids = Object.values(sample.templates).flatMap((template: any) =>
+            template.elements.filter((element: any) => element.type === 'grid')) as any[];
+
+        expect(grids.length).toBeGreaterThan(0);
+        grids.forEach(grid => {
+            expect(['', 'none']).toContain(grid.stroke);
+            expect(grid.strokeWidth).toBe(0);
+            expect(grid.gridConfig.gridBorderWidth).toBeGreaterThan(0);
+        });
+    });
+
+    it.each([
+        ['decisions', 'register_row_', 'register_boundary', 'register_divider_', 2, 1],
+        ['risks', 'risk_row_', 'risk_boundary', 'risk_divider_', 4, 3],
+    ])('draws each %s register edge exactly once', (templateId, rowRole, boundaryRole, dividerRole, rowCount, dividerCount) => {
+        const sample = loadGallerySample(contract.slug);
+        const elements = sample.templates[templateId].elements;
+        const rows = elements.filter((element: any) => element.id.includes(`_${rowRole}`));
+        const boundaries = elements.filter((element: any) => element.id.includes(`_${boundaryRole}_`));
+        const dividers = elements.filter((element: any) => element.id.includes(`_${dividerRole}`));
+
+        expect(rows).toHaveLength(rowCount);
+        rows.forEach((row: any) => {
+            expect(['', 'none']).toContain(row.stroke);
+            expect(row.strokeWidth).toBe(0);
+        });
+        expect(boundaries).toHaveLength(1);
+        expect(boundaries[0].strokeWidth).toBeGreaterThan(0);
+        expect(dividers).toHaveLength(dividerCount);
+        expect(new Set(dividers.map((divider: any) => divider.y)).size).toBe(dividerCount);
+    });
+
     it('connects the example meeting decision to its board action through references', () => {
         const sample = loadGallerySample(contract.slug);
         const meeting = sample.nodes.example_meeting;

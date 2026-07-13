@@ -1675,11 +1675,12 @@ export const generatePDF = async (state: AppState, options: GeneratePDFOptions =
             }
 
             // Resolve variables using the node and global state (to find ancestors/referrers)
-            textContent = resolveText(textContent, node, state);
+            textContent = resolveText(textContent, node, state).trim();
+            const fontSize = el.fontSize === undefined ? 12 : Number(el.fontSize);
+            const renderText = textContent.length > 0 && Number.isFinite(fontSize) && fontSize > 0;
 
-            if (textContent) {
+            if (renderText) {
                 applyFont(doc, el, options.isGreyscale);
-                const fontSize = Number(el.fontSize) || 12;
 
                 // Line height matching CSS lineHeight: 1.2
                 const lineHeight = fontSize * 1.2;
@@ -1774,7 +1775,7 @@ export const generatePDF = async (state: AppState, options: GeneratePDFOptions =
             if (hasTransform) doc.restoreGraphicsState();
 
             // Apply Link (if resolvedTargetId exists from earlier validation check)
-            if (el.type !== 'text' || textContent) {
+            if (el.type !== 'text' || renderText) {
                 applyElementLink(el, x, y, w, h, angle, resolvedTargetId);
             }
         }

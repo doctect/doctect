@@ -50,8 +50,8 @@ const svg = (templateId, role, x, y, w, h, svgContent) =>
 const grid = (templateId, role, x, y, cellW, cellH, cols, extra = {}) =>
   base(templateId, role, 'grid', x, y, cellW, cellH, {
     fill: COLORS.paper,
-    stroke: COLORS.rule,
-    strokeWidth: 0.8,
+    stroke: '',
+    strokeWidth: 0,
     fontSize: 11,
     fontFamily: 'helvetica',
     textColor: COLORS.ink,

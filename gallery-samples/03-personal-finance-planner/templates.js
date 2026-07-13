@@ -151,15 +151,15 @@ const routeArtwork = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 220 7
 
 const pageBase = (templateId, section) => [
   rect(templateId, 'paper', 0, 0, W, H, COLORS.cream),
-  rect(templateId, 'ledger_edge', 0, 0, 11, H, COLORS.forest),
-  rect(templateId, 'brass_tick', 11, 46, 7, 66, COLORS.brass),
-  text(templateId, 'example', 31, 14, 94, 22, '{{example_label}}', {
+  rect(templateId, 'ledger_top_rule', 31, 18, 450, 1, COLORS.forest),
+  rect(templateId, 'ledger_top_accent', 222, 15, 65, 7, COLORS.brass),
+  text(templateId, 'example', 31, 26, 94, 22, '{{example_label}}', {
     dataBinding: 'example_label',
     fontSize: 10,
     fontWeight: 'bold',
     textColor: COLORS.brass,
   }),
-  text(templateId, 'skip', 264, 13, 217, 24, '{{skip_label}}', {
+  text(templateId, 'skip', 264, 25, 217, 24, '{{skip_label}}', {
     dataBinding: 'skip_label',
     fontSize: 10,
     fontWeight: 'bold',
@@ -168,32 +168,33 @@ const pageBase = (templateId, section) => [
     linkTarget: 'specific_node',
     linkValue: 'blank_workspace',
   }),
-  text(templateId, 'section', 31, 47, 450, 18, section.toUpperCase(), {
+  text(templateId, 'section', 159, 49, 191, 18, section.toUpperCase(), {
     fontSize: 9,
     fontWeight: 'bold',
     textColor: COLORS.forest,
     characterSpacing: 1.2,
+    align: 'center',
   }),
   rect(templateId, 'top_rule', 31, 72, 450, 2, COLORS.forest),
   rect(templateId, 'footer_rule', 31, 625, 450, 1, COLORS.rule),
-  text(templateId, 'home', 31, 635, 72, 26, 'HOME', {
+  text(templateId, 'home', 161, 635, 72, 26, 'HOME', {
     fontSize: 10,
     fontWeight: 'bold',
     textColor: COLORS.forest,
     linkTarget: 'specific_node',
     linkValue: 'root',
   }),
-  text(templateId, 'up', 114, 635, 60, 26, 'UP', {
+  text(templateId, 'up', 278, 635, 60, 26, 'UP', {
     fontSize: 10,
     fontWeight: 'bold',
     textColor: COLORS.forest,
     linkTarget: 'parent',
   }),
-  text(templateId, 'folio', 376, 635, 105, 26, 'MONEY MAP', {
+  text(templateId, 'folio', 31, 635, 105, 26, 'LEDGER / 01', {
     fontSize: 9,
     fontWeight: 'bold',
     textColor: COLORS.muted,
-    align: 'right',
+    align: 'left',
   }),
 ];
 

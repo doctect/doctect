@@ -166,16 +166,17 @@ const routeMark = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 280 55">
 
 const pageBase = (templateId, section) => [
   rect(templateId, 'sand', 0, 0, W, H, COLORS.sand),
-  rect(templateId, 'sea_rail', 0, 0, 14, H, COLORS.seaDeep),
-  rect(templateId, 'rust_waypoint', 14, 43, 8, 57, COLORS.rust),
-  text(templateId, 'example', 34, 12, 100, 24, '{{example_label}}', {
+  rect(templateId, 'route_edge', 19, 0, 2, H, COLORS.seaDeep),
+  rect(templateId, 'origin_waypoint', 13, 20, 14, 14, COLORS.rust, { borderRadius: 7 }),
+  rect(templateId, 'footer_waypoint', 13, 637, 14, 14, COLORS.sea, { borderRadius: 7 }),
+  text(templateId, 'example', 42, 12, 100, 24, '{{example_label}}', {
     dataBinding: 'example_label',
     fontSize: 10,
     fontWeight: 'bold',
     textColor: COLORS.rustDeep,
     characterSpacing: 1,
   }),
-  text(templateId, 'skip', 234, 12, 247, 24, '{{skip_label}}', {
+  text(templateId, 'skip', 230, 12, 251, 24, '{{skip_label}}', {
     dataBinding: 'skip_label',
     fontSize: 10,
     fontWeight: 'bold',
@@ -184,22 +185,22 @@ const pageBase = (templateId, section) => [
     linkTarget: 'specific_node',
     linkValue: 'blank_workspace',
   }),
-  text(templateId, 'section', 34, 47, 447, 18, section.toUpperCase(), {
+  text(templateId, 'section', 42, 47, 205, 18, `WAYPOINT / ${section.toUpperCase()}`, {
     fontSize: 9,
     fontWeight: 'bold',
     textColor: COLORS.seaDeep,
     characterSpacing: 1.3,
   }),
-  rect(templateId, 'top_rule', 34, 72, 447, 2, COLORS.sea),
+  svg(templateId, 'route_header', 259, 40, 222, 35, routeMark),
   rect(templateId, 'footer_rule', 34, 625, 447, 1, COLORS.rule),
-  text(templateId, 'home', 34, 635, 62, 26, 'HOME', {
+  text(templateId, 'home', 42, 635, 62, 26, 'HOME', {
     fontSize: 9,
     fontWeight: 'bold',
     textColor: COLORS.seaDeep,
     linkTarget: 'specific_node',
     linkValue: 'root',
   }),
-  text(templateId, 'up', 110, 635, 62, 26, 'UP', {
+  text(templateId, 'up', 126, 635, 62, 26, 'UP', {
     fontSize: 9,
     fontWeight: 'bold',
     textColor: COLORS.seaDeep,

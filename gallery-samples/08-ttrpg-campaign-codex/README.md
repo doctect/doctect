@@ -11,7 +11,7 @@ Start Here offers two stable destinations:
 - `example_workspace`: guided Ashen Bell adventure.
 - `blank_workspace`: clean configurable campaign codex.
 
-Every guided page displays bound `EXAMPLE` and `Skip to blank workspace ->` controls. Record pages expose only valid Home and Up actions; bank cards open every child record without terminal Previous or Next controls.
+Every guided page displays bound `EXAMPLE` and `Skip to blank workspace →` controls. Record pages expose only valid Home and Up actions; bank cards open every child record without terminal Previous or Next controls.
 
 ## Guided Adventure
 

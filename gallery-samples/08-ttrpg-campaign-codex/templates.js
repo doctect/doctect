@@ -118,8 +118,12 @@ const routeMark = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 340 55">
 
 const pageBase = (templateId, section) => [
   rect(templateId, 'vellum', 0, 0, W, H, COLORS.vellum),
-  rect(templateId, 'moss_rail', 0, 0, 20, H, COLORS.mossDeep),
-  rect(templateId, 'oxblood_notch', 20, 45, 8, 54, COLORS.oxblood),
+  rect(templateId, 'corner_top_left_h', 0, 0, 54, 5, COLORS.mossDeep),
+  rect(templateId, 'corner_top_left_v', 0, 0, 5, 54, COLORS.mossDeep),
+  rect(templateId, 'corner_top_right_h', 455, 0, 54, 5, COLORS.oxblood),
+  rect(templateId, 'corner_top_right_v', 504, 0, 5, 54, COLORS.oxblood),
+  rect(templateId, 'corner_bottom_left_h', 0, 674, 54, 5, COLORS.oxblood),
+  rect(templateId, 'corner_bottom_right_h', 455, 674, 54, 5, COLORS.mossDeep),
   text(templateId, 'example', 40, 10, 96, 24, '{{example_label}}', {
     dataBinding: 'example_label',
     fontSize: 8.5,
@@ -142,26 +146,26 @@ const pageBase = (templateId, section) => [
     textColor: COLORS.oxblood,
     characterSpacing: 1.35,
   }),
-  rect(templateId, 'heading_rule', 40, 68, 441, 2, COLORS.moss),
+  rect(templateId, 'heading_rule', 40, 68, 429, 2, COLORS.moss),
   rect(templateId, 'footer_rule', 40, 620, 441, 1, COLORS.rule),
-  text(templateId, 'home', 40, 631, 54, 25, 'HOME', {
+  text(templateId, 'home', 181, 631, 54, 25, 'HOME', {
     fontSize: 7.5,
     fontWeight: 'bold',
     textColor: COLORS.oxblood,
     linkTarget: 'specific_node',
     linkValue: 'root',
   }),
-  text(templateId, 'up', 113, 631, 54, 25, 'UP', {
+  text(templateId, 'up', 274, 631, 54, 25, 'UP', {
     fontSize: 7.5,
     fontWeight: 'bold',
     textColor: COLORS.mossDeep,
     linkTarget: 'parent',
   }),
-  text(templateId, 'folio', 268, 631, 213, 25, 'WAYFARER CODEX / CAMPAIGN RECORD', {
+  text(templateId, 'folio', 40, 631, 121, 25, 'CODEX / ENTRY I', {
     fontSize: 6.8,
     fontWeight: 'bold',
     textColor: COLORS.muted,
-    align: 'right',
+    align: 'left',
     characterSpacing: 0.35,
   }),
 ];

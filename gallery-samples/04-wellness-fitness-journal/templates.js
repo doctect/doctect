@@ -198,15 +198,16 @@ const smallArc = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 70">
 
 const pageBase = (templateId, section) => [
   rect(templateId, 'paper', 0, 0, W, H, COLORS.warmGray),
-  rect(templateId, 'side_rail', 0, 0, 13, H, COLORS.sage),
-  rect(templateId, 'clay_mark', 13, 44, 7, 54, COLORS.clay),
+  rect(templateId, 'left_soft_tab', 0, 126, 18, 86, COLORS.sage, { borderRadius: 9 }),
+  rect(templateId, 'right_soft_tab', 491, 236, 18, 86, COLORS.clay, { borderRadius: 9 }),
+  svg(templateId, 'header_arc', 294, 39, 187, 34, smallArc),
   text(templateId, 'example', 32, 13, 91, 23, '{{example_label}}', {
     dataBinding: 'example_label',
     fontSize: 10,
     fontWeight: 'bold',
     textColor: COLORS.clay,
   }),
-  text(templateId, 'skip', 244, 12, 237, 25, '{{skip_label}}', {
+  text(templateId, 'skip', 258, 12, 223, 25, '{{skip_label}}', {
     dataBinding: 'skip_label',
     fontSize: 10,
     fontWeight: 'bold',
@@ -221,26 +222,25 @@ const pageBase = (templateId, section) => [
     textColor: COLORS.sageDeep,
     characterSpacing: 1.2,
   }),
-  rect(templateId, 'top_rule', 32, 72, 449, 2, COLORS.sage),
   rect(templateId, 'footer_rule', 32, 625, 449, 1, COLORS.rule),
-  text(templateId, 'home', 32, 635, 62, 26, 'HOME', {
+  text(templateId, 'home', 8, 635, 62, 26, 'HOME', {
     fontSize: 9,
     fontWeight: 'bold',
     textColor: COLORS.sageDeep,
     linkTarget: 'specific_node',
     linkValue: 'root',
   }),
-  text(templateId, 'previous', 110, 635, 88, 26, 'PREVIOUS', {
+  text(templateId, 'previous', 421, 635, 72, 26, 'UP', {
     fontSize: 9,
     fontWeight: 'bold',
     textColor: COLORS.sageDeep,
     linkTarget: 'parent',
   }),
-  text(templateId, 'folio', 355, 635, 126, 26, 'WELLBEING RHYTHM', {
+  text(templateId, 'folio', 173, 635, 163, 26, 'BREATHE / MOVE / REST', {
     fontSize: 8,
     fontWeight: 'bold',
     textColor: COLORS.muted,
-    align: 'right',
+    align: 'center',
   }),
 ];
 

@@ -56,6 +56,9 @@ const exportBytes = async (state: AppState) => {
     return new TextDecoder('latin1').decode(new Uint8Array(buf));
 };
 
+const firstPageTextOperatorCount = (pdf: string) =>
+    (pdf.slice(0, pdf.indexOf('endstream')).match(/\sTj\s/g) || []).length;
+
 describe('PDF export link annotations', () => {
     it('writes URL link annotations for rect elements (control)', async () => {
         const pdf = await exportBytes(makeState([
@@ -98,5 +101,47 @@ describe('PDF export link annotations', () => {
             { ...baseEl('t1', 0), type: 'text', dataBinding: 'skipLabel', linkTarget: 'specific_node', linkValue: 'second' },
         ], true, { skipLabel: 'Skip' }));
         expect(pdf).toContain('/Dest');
+    });
+
+    it.each([
+        ['numeric zero', 0],
+        ['string zero', '0'],
+        ['negative', -1],
+        ['NaN', Number.NaN],
+        ['infinity', Number.POSITIVE_INFINITY],
+    ])('omits text glyphs and links for explicit %s font size', async (_, fontSize) => {
+        const pdf = await exportBytes(makeState([
+            {
+                ...baseEl('hidden-text', 0), type: 'text', text: 'ZERO_FONT_GLYPH', fontSize,
+                linkTarget: 'specific_node', linkValue: 'second',
+            },
+        ], true));
+
+        expect(firstPageTextOperatorCount(pdf)).toBe(0);
+        expect(pdf).not.toContain('/Dest');
+    });
+
+    it('defaults missing font size to visible linked 12pt text', async () => {
+        const pdf = await exportBytes(makeState([
+            {
+                ...baseEl('default-text', 0), type: 'text', text: 'DEFAULT_FONT_GLYPH',
+                linkTarget: 'specific_node', linkValue: 'second',
+            },
+        ], true));
+
+        expect(firstPageTextOperatorCount(pdf)).toBeGreaterThan(0);
+        expect(pdf).toContain('/Dest');
+    });
+
+    it('omits text glyphs and links for whitespace-only resolved text', async () => {
+        const pdf = await exportBytes(makeState([
+            {
+                ...baseEl('blank-text', 0), type: 'text', dataBinding: 'skipLabel',
+                linkTarget: 'specific_node', linkValue: 'second',
+            },
+        ], true, { skipLabel: '  \n\t  ' }));
+
+        expect(pdf).not.toContain('/Dest');
+        expect(firstPageTextOperatorCount(pdf)).toBe(0);
     });
 });

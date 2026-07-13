@@ -375,6 +375,16 @@ const validateDeterministicIds = (sample: LoadedGallerySample, errors: string[])
             errors.push('template IDs are not deterministic across repeated execution');
             return;
         }
+        const nodeKeys = Object.keys(sample.nodes).sort();
+        const repeatedNodeKeys = Object.keys(repeated.nodes).sort();
+        if (JSON.stringify(nodeKeys) !== JSON.stringify(repeatedNodeKeys)) {
+            errors.push('hierarchy node keys are not deterministic across repeated execution');
+        }
+        const nodeIds = Object.values(sample.nodes).map(node => node?.id).sort();
+        const repeatedNodeIds = Object.values(repeated.nodes).map(node => node?.id).sort();
+        if (JSON.stringify(nodeIds) !== JSON.stringify(repeatedNodeIds)) {
+            errors.push('hierarchy node IDs are not deterministic across repeated execution');
+        }
         templateIds.forEach(templateId => {
             const elements = Array.isArray(sample.templates[templateId]?.elements)
                 ? sample.templates[templateId].elements
@@ -425,6 +435,9 @@ const validateTemplates = (sample: LoadedGallerySample, errors: string[]) => {
             }
             if (element?.type === 'grid') {
                 const grid = element.gridConfig;
+                if ((isNonEmptyString(element.stroke) && element.stroke !== 'none') || element.strokeWidth !== 0) {
+                    errors.push(`${element.id} grid element stroke must be empty or none with strokeWidth 0`);
+                }
                 if (!isRecord(grid)) {
                     errors.push(`template '${templateId}' element '${element.id}' gridConfig is missing`);
                 } else {
@@ -435,8 +448,13 @@ const validateTemplates = (sample: LoadedGallerySample, errors: string[]) => {
                     if (typeof grid.gridBorderColor !== 'string' || grid.gridBorderColor.length === 0) {
                         errors.push(`${element.id} gridBorderColor must be explicit`);
                     }
-                    if (typeof grid.gridBorderWidth !== 'number' || !Number.isFinite(grid.gridBorderWidth) || grid.gridBorderWidth < 0) {
-                        errors.push(`${element.id} gridBorderWidth must be a non-negative number`);
+                    const bordered = grid.gridBorderMode !== 'none';
+                    if (typeof grid.gridBorderWidth !== 'number' || !Number.isFinite(grid.gridBorderWidth)
+                        || (bordered ? grid.gridBorderWidth <= 0 : grid.gridBorderWidth < 0)) {
+                        errors.push(`${element.id} gridBorderWidth must be a ${bordered ? 'positive finite' : 'non-negative finite'} number`);
+                    }
+                    if (bordered && grid.gridBorderStyle === 'none') {
+                        errors.push(`${element.id} gridBorderStyle must not be 'none' for bordered mode '${grid.gridBorderMode}'`);
                     }
                     if (grid.sourceType === 'specific' && (typeof grid.sourceId !== 'string' || !sample.nodes[grid.sourceId])) {
                         errors.push(`${element.id} grid source '${grid.sourceId ?? ''}' does not exist`);
