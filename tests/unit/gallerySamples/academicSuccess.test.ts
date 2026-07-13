@@ -23,14 +23,18 @@ const contract: GallerySampleContract = {
         'assignments',
         'exam',
     ],
-    pageCount: [115, 160],
+    pageCount: [115, 190],
     palette: ['#496f62', '#bd654f', '#f5f0e5'],
     requiredStableNodeIds: ['root', 'start_here', 'example_workspace', 'blank_workspace'],
 };
 
 describe('Academic Success System gallery sample', () => {
     it('generates the complete Study Compass', () => {
-        expectValidGallerySample(contract.slug, contract);
+        const sample = expectValidGallerySample(contract.slug, contract);
+        const pdfPageCount = Object.values(sample.nodes).filter((node: any) => !node.referenceId).length;
+
+        expect(pdfPageCount).toBeGreaterThanOrEqual(115);
+        expect(pdfPageCount).toBeLessThanOrEqual(160);
     });
 
     it('supports a one-course minimum without breaking navigation', () => {
@@ -52,7 +56,7 @@ describe('Academic Success System gallery sample', () => {
             cardsPerCourse: 20,
         });
 
-        expect(validateGallerySample(sample, { ...contract, pageCount: [400, 500] })).toEqual([]);
+        expect(validateGallerySample(sample, { ...contract, pageCount: [500, 530] })).toEqual([]);
 
         const cases = [
             ['semester', 'blank_semester', 'dashboard', 'dashboard_hint'],
@@ -103,5 +107,34 @@ describe('Academic Success System gallery sample', () => {
         expect(answerLink).toMatchObject({ linkTarget: 'child_index', linkValue: '0' });
         expect(resolveAnswer('example_card_front')).toBe('example_card_back');
         expect(resolveAnswer('example_note_card_reference')).toBe('example_card_back');
+    });
+
+    it('links every blank Cornell note directly to a two-sided revision card', () => {
+        const sample = loadGallerySample(contract.slug);
+        const blankNotes = Object.values(sample.nodes).filter((node: any) =>
+            node.type === 'cornell' && node.id.startsWith('blank_course_'),
+        ) as any[];
+
+        expect(blankNotes).toHaveLength(24);
+        blankNotes.forEach(note => {
+            const frontReference = sample.nodes[note.children[0]];
+            expect(frontReference, `${note.id} linked child`).toMatchObject({
+                type: 'card_front',
+                referenceId: expect.any(String),
+            });
+
+            const front = sample.nodes[frontReference.referenceId];
+            const answerReference = sample.nodes[frontReference.children[0]];
+            expect(answerReference, `${note.id} forward child`).toMatchObject({
+                type: 'card_back',
+                referenceId: expect.any(String),
+            });
+
+            const answer = sample.nodes[answerReference.referenceId];
+
+            expect(front?.type, `${note.id} referenced target type`).toBe('card_front');
+            expect(answer?.type, `${note.id} forward target type`).toBe('card_back');
+            expect(front.children).toContain(answer.id);
+        });
     });
 });

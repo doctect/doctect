@@ -152,15 +152,23 @@ for (let course = 1; course <= CONFIG.courseCount; course += 1) {
   for (let note = 1; note <= CONFIG.notesPerCourse; note += 1) {
     const noteNumber = String(note).padStart(2, '0');
     const noteId = `${courseId}_note_${noteNumber}`;
+    const linkedFrontId = cardFrontIds[(note - 1) % cardFrontIds.length];
+    const linkedBackId = nodes[linkedFrontId].children[0];
     addNode(noteId, courseId, 'cornell', `Cornell Note ${noteNumber}`, {
       subtitle: 'Topic / date / source',
       cues: '',
       notes: '',
       summary: '',
     });
-    addNode(`${noteId}_deck_reference`, noteId, 'deck', 'Linked Revision Deck', {
-      subtitle: 'Open a card, answer aloud, then reveal its answer face.',
-    }, { referenceId: deckId });
+    const frontReferenceId = `${noteId}_card_reference`;
+    addNode(frontReferenceId, noteId, 'card_front', `Linked Revision Card ${String(((note - 1) % cardFrontIds.length) + 1).padStart(2, '0')}`, {
+      question: '',
+      memory_cue: '',
+    }, { referenceId: linkedFrontId });
+    addNode(`${frontReferenceId}_answer`, frontReferenceId, 'card_back', 'Linked Revision Card | Answer', {
+      answer: '',
+      check: '',
+    }, { referenceId: linkedBackId });
   }
 
   addNode(`${courseId}_assignments`, courseId, 'assignments', `Course ${courseNumber} | Assignments`, {
