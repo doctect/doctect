@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { getElementBounds } from '../../../components/canvas/elementBounds';
 import {
     expectValidGallerySample,
     loadGallerySample,
@@ -41,5 +42,66 @@ describe('Academic Success System gallery sample', () => {
         });
 
         expect(validateGallerySample(sample, { ...contract, pageCount: [20, 45] })).toEqual([]);
+    });
+
+    it('keeps maximum-config navigation grids clear of following content', () => {
+        const sample = loadGallerySample(contract.slug, {
+            courseCount: 6,
+            teachingWeeks: 18,
+            notesPerCourse: 12,
+            cardsPerCourse: 20,
+        });
+
+        expect(validateGallerySample(sample, { ...contract, pageCount: [400, 500] })).toEqual([]);
+
+        const cases = [
+            ['semester', 'blank_semester', 'dashboard', 'dashboard_hint'],
+            ['course', 'blank_course_01', 'materials_grid', 'status'],
+            ['deck', 'blank_course_01_deck', 'cards', 'method'],
+        ] as const;
+
+        cases.forEach(([templateId, nodeId, gridRole, followingRole]) => {
+            const elements = sample.templates[templateId].elements;
+            const grid = elements.find((element: any) => element.id.includes(`_${gridRole}_`));
+            const following = elements.find((element: any) => element.id.includes(`_${followingRole}_`));
+            const bounds = getElementBounds(grid, sample.nodes, nodeId);
+
+            expect(grid.y + bounds.h + 12, `${templateId} dense grid clearance`).toBeLessThanOrEqual(following.y);
+        });
+    });
+
+    it('uses static PDF-visible writable regions for assignments and exams', () => {
+        const sample = loadGallerySample(contract.slug);
+
+        ['assignments', 'exam'].forEach(templateId => {
+            expect(sample.templates[templateId].elements.some((element: any) => element.type === 'grid')).toBe(false);
+        });
+
+        const assignmentRows = sample.templates.assignments.elements.filter((element: any) =>
+            element.type === 'rect' && element.id.includes('_register_row_') && element.strokeWidth > 0,
+        );
+        const examRegions = sample.templates.exam.elements.filter((element: any) =>
+            element.type === 'rect' && element.id.includes('_review_region_') && element.strokeWidth > 0,
+        );
+
+        expect(assignmentRows).toHaveLength(4);
+        expect(examRegions).toHaveLength(4);
+    });
+
+    it('resolves question-to-answer links from original and referenced cards', () => {
+        const sample = loadGallerySample(contract.slug);
+        const answerLink = sample.templates.card_front.elements.find((element: any) =>
+            element.id.includes('_turn_'),
+        );
+        const resolveAnswer = (frontId: string) => {
+            const front = sample.nodes[frontId];
+            const childId = front.children[Number(answerLink.linkValue)];
+            const child = sample.nodes[childId];
+            return child.referenceId || child.id;
+        };
+
+        expect(answerLink).toMatchObject({ linkTarget: 'child_index', linkValue: '0' });
+        expect(resolveAnswer('example_card_front')).toBe('example_card_back');
+        expect(resolveAnswer('example_note_card_reference')).toBe('example_card_back');
     });
 });

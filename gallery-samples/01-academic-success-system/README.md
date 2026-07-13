@@ -8,7 +8,7 @@ Study Compass is an academic success system for reMarkable Paper Pro. It connect
 2. Use the semester overview to enter a course or teaching week.
 3. Plan weekly learning and submission commitments.
 4. Capture lectures with a 30/70 Cornell cue-to-note split and bottom summary.
-5. Open the revision card referenced by each note, answer its question, then reveal the answer face.
+5. Open the guided note's referenced card, or a blank note's referenced course deck; answer a question, then use **Turn over for answer**.
 6. Keep assignments and exam preparation visible from each course dashboard.
 
 The guided branch follows an environmental-science idea from a carbon-cycle lecture through a Cornell note, two-sided revision card, assignment, and exam plan. Every guided page carries an `EXAMPLE` marker and a direct **Skip to blank workspace** link.
@@ -21,10 +21,10 @@ The guided branch follows an environmental-science idea from a carbon-cycle lect
 - Configurable teaching-week plans shared across the semester
 - Configurable course dashboards
 - Reusable Cornell note bank per course
-- Referenced revision-card bank with separate question and answer faces
+- Referenced revision-card bank with linked question and answer faces
 - Assignment register and exam plan per course
 
-Default configuration generates 157 nodes. Minimum configuration generates 27 nodes.
+Default configuration generates 158 nodes. Minimum configuration generates 28 nodes.
 
 ## Configuration
 
@@ -34,7 +34,7 @@ Edit `DEFAULT_CONFIG` in `hierarchy.js`, or pass matching fields through `SAMPLE
 | --- | ---: | ---: | --- |
 | `courseCount` | 4 | 1-6 | Blank semester courses |
 | `teachingWeeks` | 14 | 4-18 | Semester-level weekly plans |
-| `notesPerCourse` | 6 | 1-12 | Cornell notes and note-to-card references per course |
+| `notesPerCourse` | 6 | 1-12 | Cornell notes and note-to-deck references per course |
 | `cardsPerCourse` | 8 | 1-20 | Two-sided revision cards per course |
 
 Values must be integers. Unsupported values stop generation with a field-specific error instead of producing partial navigation.
@@ -45,7 +45,7 @@ Values must be integers. Unsupported values stop generation with a field-specifi
 
 `Workspace` -> `Semester` -> `Teaching Week` or `Course` -> `Cornell Notes` / `Revision Deck` / `Assignments` / `Exam Plan`
 
-Each Cornell note owns a reference to an existing revision-card question face. The reference resolves to the card in its course deck rather than duplicating card content. Stable destinations are `root`, `start_here`, `example_workspace`, and `blank_workspace`. Page chrome provides **Home** and **Up** controls; dashboards and cards provide contextual forward links only where destinations exist.
+The guided Cornell note references an existing question face and answer face. Blank notes reference their course's real deck, avoiding duplicate card pages. Every real or referenced question face resolves **Turn over for answer** to its matching answer. Stable destinations are `root`, `start_here`, `example_workspace`, and `blank_workspace`. Page chrome provides **Home** and **Up** controls; dashboards and cards provide contextual forward links only where destinations exist.
 
 ## Visual System
 

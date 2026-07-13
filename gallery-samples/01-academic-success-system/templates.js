@@ -330,8 +330,8 @@ const semesterElements = [
     align: 'center',
     borderRadius: 8,
   }),
-  grid('semester', 'dashboard', 30, 241, 143, 38, 3, {
-    gapY: 7,
+  grid('semester', 'dashboard', 30, 241, 143, 34, 3, {
+    gapY: 5,
     gridBorderMode: 'none',
     gridBorderColor: COLORS.eucalyptus,
     gridBorderWidth: 0,
@@ -367,8 +367,8 @@ const courseElements = [
     fontWeight: 'bold',
     textColor: COLORS.eucalyptus,
   }),
-  grid('course', 'materials_grid', 30, 338, 143, 45, 3, {
-    gapY: 8,
+  grid('course', 'materials_grid', 30, 338, 143, 38, 3, {
+    gapY: 6,
     gridBorderMode: 'all',
     gridBorderColor: COLORS.rule,
     gridBorderWidth: 0.8,
@@ -487,8 +487,9 @@ const deckElements = [
     fontStyle: 'italic',
     textColor: COLORS.muted,
   }),
-  grid('deck', 'cards', 30, 229, 102, 65, 4, {
+  grid('deck', 'cards', 30, 229, 102, 58, 4, {
     gapX: 10,
+    gapY: 5,
     gridBorderMode: 'all',
     gridBorderColor: COLORS.terracotta,
     gridBorderWidth: 0.9,
@@ -526,13 +527,15 @@ const cardFrontElements = [
     textColor: COLORS.parchment,
     align: 'center',
   }),
-  text('card_front', 'turn', 143, 530, 223, 48, 'ANSWER FOLLOWS THIS CARD', {
+  text('card_front', 'turn', 143, 530, 223, 48, 'TURN OVER FOR ANSWER', {
     fontSize: 11,
     fontWeight: 'bold',
     textColor: COLORS.eucalyptusDark,
     fill: COLORS.paper,
     align: 'center',
     borderRadius: 24,
+    linkTarget: 'child_index',
+    linkValue: '0',
   }),
 ];
 
@@ -591,13 +594,30 @@ const assignmentElements = [
     fontWeight: 'bold',
     textColor: COLORS.eucalyptus,
   }),
-  grid('assignments', 'register', 30, 326, 451, 42, 1, {
-    gridBorderMode: 'all',
-    gridBorderColor: COLORS.rule,
-    gridBorderWidth: 0.8,
-    gridBorderStyle: 'solid',
-    gridBorderRadius: 4,
+  rect('assignments', 'register_header', 30, 326, 451, 30, COLORS.eucalyptus),
+  text('assignments', 'register_task_label', 43, 331, 267, 20, 'TASK / DELIVERABLE', {
+    fontSize: 11,
+    fontWeight: 'bold',
+    textColor: COLORS.parchment,
   }),
+  text('assignments', 'register_due_label', 329, 331, 63, 20, 'DUE', {
+    fontSize: 11,
+    fontWeight: 'bold',
+    textColor: COLORS.parchment,
+  }),
+  text('assignments', 'register_status_label', 410, 331, 58, 20, 'STATUS', {
+    fontSize: 11,
+    fontWeight: 'bold',
+    textColor: COLORS.parchment,
+  }),
+  ...[356, 406, 456, 506].flatMap((y, index) => [
+    rect('assignments', `register_row_${index + 1}`, 30, y, 451, 44, COLORS.paper, {
+      stroke: COLORS.rule,
+      strokeWidth: 0.8,
+    }),
+    rect('assignments', `register_due_rule_${index + 1}`, 317, y, 1, 44, COLORS.rule),
+    rect('assignments', `register_status_rule_${index + 1}`, 399, y, 1, 44, COLORS.rule),
+  ]),
   text('assignments', 'prompt', 30, 589, 451, 23, 'Define done before work begins.', {
     fontSize: 11,
     fontStyle: 'italic',
@@ -626,12 +646,49 @@ const examElements = [
     fontWeight: 'bold',
     textColor: COLORS.terracotta,
   }),
-  grid('exam', 'review_map', 30, 317, 218, 66, 2, {
-    gridBorderMode: 'all',
-    gridBorderColor: COLORS.eucalyptus,
-    gridBorderWidth: 0.8,
-    gridBorderStyle: 'dashed',
-    gridBorderRadius: 8,
+  rect('exam', 'review_region_concepts', 30, 317, 218, 92, COLORS.paper, {
+    stroke: COLORS.eucalyptus,
+    strokeWidth: 0.8,
+    borderStyle: 'dashed',
+    borderRadius: 8,
+  }),
+  rect('exam', 'review_region_connections', 263, 317, 218, 92, COLORS.paper, {
+    stroke: COLORS.eucalyptus,
+    strokeWidth: 0.8,
+    borderStyle: 'dashed',
+    borderRadius: 8,
+  }),
+  rect('exam', 'review_region_practice', 30, 421, 218, 92, COLORS.paper, {
+    stroke: COLORS.eucalyptus,
+    strokeWidth: 0.8,
+    borderStyle: 'dashed',
+    borderRadius: 8,
+  }),
+  rect('exam', 'review_region_evidence', 263, 421, 218, 92, COLORS.paper, {
+    stroke: COLORS.eucalyptus,
+    strokeWidth: 0.8,
+    borderStyle: 'dashed',
+    borderRadius: 8,
+  }),
+  text('exam', 'review_concepts_label', 44, 327, 190, 18, 'CORE CONCEPTS', {
+    fontSize: 11,
+    fontWeight: 'bold',
+    textColor: COLORS.eucalyptus,
+  }),
+  text('exam', 'review_connections_label', 277, 327, 190, 18, 'CONNECTIONS', {
+    fontSize: 11,
+    fontWeight: 'bold',
+    textColor: COLORS.eucalyptus,
+  }),
+  text('exam', 'review_practice_label', 44, 431, 190, 18, 'PRACTICE QUESTIONS', {
+    fontSize: 11,
+    fontWeight: 'bold',
+    textColor: COLORS.eucalyptus,
+  }),
+  text('exam', 'review_evidence_label', 277, 431, 190, 18, 'EVIDENCE / EXAMPLES', {
+    fontSize: 11,
+    fontWeight: 'bold',
+    textColor: COLORS.eucalyptus,
   }),
   text('exam', 'strategy_label', 30, 548, 120, 20, 'EXAM STRATEGY', {
     fontSize: 11,

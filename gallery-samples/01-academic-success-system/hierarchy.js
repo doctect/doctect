@@ -84,6 +84,10 @@ addNode('example_note_card_reference', 'example_cornell', 'card_front', 'Linked 
   question: 'What makes a carbon reservoir a carbon sink?',
   memory_cue: 'Compare what enters with what leaves over time.',
 }, { example: true, referenceId: 'example_card_front' });
+addNode('example_note_card_answer_reference', 'example_note_card_reference', 'card_back', 'Linked Card | Answer', {
+  answer: 'A reservoir is a sink when it absorbs more carbon than it releases over a defined period.',
+  check: 'Can you name one sink and one condition that could weaken it?',
+}, { example: true, referenceId: 'example_card_back' });
 addNode('example_assignments', 'example_course', 'assignments', 'Environmental Science | Assignments', {
   subtitle: 'Make scope and evidence visible before drafting.',
   next_assignment: 'Field observation brief | Due Friday | 800 words',
@@ -148,17 +152,15 @@ for (let course = 1; course <= CONFIG.courseCount; course += 1) {
   for (let note = 1; note <= CONFIG.notesPerCourse; note += 1) {
     const noteNumber = String(note).padStart(2, '0');
     const noteId = `${courseId}_note_${noteNumber}`;
-    const linkedCardId = cardFrontIds[(note - 1) % cardFrontIds.length];
     addNode(noteId, courseId, 'cornell', `Cornell Note ${noteNumber}`, {
       subtitle: 'Topic / date / source',
       cues: '',
       notes: '',
       summary: '',
     });
-    addNode(`${noteId}_card_reference`, noteId, 'card_front', `Linked Revision Card ${String(((note - 1) % cardFrontIds.length) + 1).padStart(2, '0')}`, {
-      question: '',
-      memory_cue: '',
-    }, { referenceId: linkedCardId });
+    addNode(`${noteId}_deck_reference`, noteId, 'deck', 'Linked Revision Deck', {
+      subtitle: 'Open a card, answer aloud, then reveal its answer face.',
+    }, { referenceId: deckId });
   }
 
   addNode(`${courseId}_assignments`, courseId, 'assignments', `Course ${courseNumber} | Assignments`, {
