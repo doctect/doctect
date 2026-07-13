@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { jsPDF } from 'jspdf';
 import { getElementBounds } from '../../../components/canvas/elementBounds';
-import { computePageOrder } from '../../../services/pdfService';
+import { computePageOrder, generatePDF } from '../../../services/pdfService';
 import {
     expectValidGallerySample,
     loadGallerySample,
@@ -25,6 +25,30 @@ const exportedPages = (sample: ReturnType<typeof loadGallerySample>) =>
 
 const role = (sample: ReturnType<typeof loadGallerySample>, templateId: string, name: string) =>
     sample.templates[templateId].elements.find((element: any) => element.id.includes(`_${name}_`));
+
+const descendants = (sample: ReturnType<typeof loadGallerySample>, rootId: string) => {
+    const nodeIds: string[] = [];
+    const pending = [rootId];
+    while (pending.length > 0) {
+        const nodeId = pending.shift()!;
+        nodeIds.push(nodeId);
+        pending.push(...sample.nodes[nodeId].children);
+    }
+    return nodeIds;
+};
+
+const resolveAncestorField = (
+    sample: ReturnType<typeof loadGallerySample>,
+    nodeId: string,
+    field: string,
+) => {
+    let node = sample.nodes[nodeId];
+    while (node) {
+        if (node.data?.[field] !== undefined) return node.data[field];
+        node = node.parentId ? sample.nodes[node.parentId] : undefined;
+    }
+    return undefined;
+};
 
 describe('TTRPG Campaign Codex gallery sample', () => {
     it('generates a cross-referenced campaign codex', () => {
@@ -166,16 +190,12 @@ describe('TTRPG Campaign Codex gallery sample', () => {
 
     it('keeps all guided pages visibly bound to EXAMPLE and Skip chrome', () => {
         const sample = loadGallerySample(contract.slug);
-        const pending = ['example_workspace'];
-        const visited = new Set<string>();
+        const guidedIds = descendants(sample, 'example_workspace');
 
-        while (pending.length > 0) {
-            const id = pending.shift()!;
-            if (visited.has(id)) continue;
-            visited.add(id);
+        guidedIds.forEach(id => {
             const node = sample.nodes[id];
-            expect(node.data.example_label, id).toBe('EXAMPLE');
-            expect(node.data.skip_label, id).toBe('Skip to blank workspace →');
+            expect(resolveAncestorField(sample, id, 'example_label'), id).toBe('EXAMPLE');
+            expect(resolveAncestorField(sample, id, 'skip_label'), id).toBe('Skip to blank workspace →');
             const template = sample.templates[node.type];
             expect(template.elements.some((element: any) =>
                 element.type === 'text' && element.dataBinding === 'example_label',
@@ -186,9 +206,43 @@ describe('TTRPG Campaign Codex gallery sample', () => {
                 && element.linkTarget === 'specific_node'
                 && element.linkValue === 'blank_workspace',
             ), `${id} skip`).toBe(true);
-            pending.push(...node.children);
-        }
-        expect(visited.size).toBe(25);
+        });
+        expect(guidedIds).toHaveLength(25);
+    });
+
+    it('stops example chrome context at the blank workspace boundary', () => {
+        const sample = loadGallerySample(contract.slug);
+
+        descendants(sample, 'blank_workspace').forEach(id => {
+            expect(resolveAncestorField(sample, id, 'example_label'), `${id} example`).toBe('');
+            expect(resolveAncestorField(sample, id, 'skip_label'), `${id} skip`).toBe('');
+        });
+    });
+
+    it('omits the blank skip annotation when its inherited binding resolves empty', async () => {
+        const sample = loadGallerySample(contract.slug);
+        const blankWorkspace = { ...sample.nodes.blank_workspace, children: [] };
+        const skip = sample.templates.workspace.elements.find((element: any) =>
+            element.type === 'text' && element.dataBinding === 'skip_label',
+        );
+        const state = {
+            rootId: 'blank_workspace',
+            nodes: { ...sample.nodes, blank_workspace: blankWorkspace },
+            activeVariantId: 'default',
+            variants: {
+                default: {
+                    id: 'default',
+                    name: 'Default',
+                    templates: {
+                        workspace: { ...sample.templates.workspace, elements: [skip] },
+                    },
+                },
+            },
+        } as any;
+        const buffer = await generatePDF(state, { output: 'arraybuffer' }) as ArrayBuffer;
+        const pdf = new TextDecoder('latin1').decode(new Uint8Array(buffer));
+
+        expect(pdf).not.toContain('/Dest');
     });
 
     it('keeps blank writable data clean', () => {

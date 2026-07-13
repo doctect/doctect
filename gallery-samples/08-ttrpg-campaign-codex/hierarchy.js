@@ -360,6 +360,8 @@ addReference('example_session_faction_ref', 'example_session_01', 'example_facti
 addReference('example_session_encounter_ref', 'example_session_01', 'example_encounter_bell_vault', 'ENCOUNTER / BELL VAULT');
 
 addNode('blank_workspace', 'start_here', 'workspace', 'My Campaign Codex', {
+  example_label: '',
+  skip_label: '',
   subtitle: 'Clean configurable campaign banks with no sample characters, events, places, or outcomes.',
   workspace_mode: 'BLANK CAMPAIGN WORKSPACE',
   hero: 'Establish the campaign charter and party, prepare sessions, then grow quests, people, places, factions, encounters, and lore as play creates them.',
