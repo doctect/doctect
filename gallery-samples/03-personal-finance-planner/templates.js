@@ -50,8 +50,6 @@ const svg = (templateId, role, x, y, w, h, svgContent) =>
 const grid = (templateId, role, x, y, cellW, cellH, cols, extra = {}) =>
   base(templateId, role, 'grid', x, y, cellW, cellH, {
     fill: COLORS.paper,
-    stroke: COLORS.rule,
-    strokeWidth: 0.8,
     fontSize: 10,
     fontFamily: 'helvetica',
     textColor: COLORS.forestDeep,
@@ -74,13 +72,12 @@ const grid = (templateId, role, x, y, cellW, cellH, cols, extra = {}) =>
 
 const staticTable = (templateId, x, y, widths, rowHeight, headers, rows, alignments = []) => {
   const cells = [];
+  const totalWidth = widths.reduce((sum, width) => sum + width, 0);
+  const totalHeight = rowHeight * (rows.length + 1);
   let cursorX = x;
   headers.forEach((header, column) => {
     const width = widths[column];
-    cells.push(rect(templateId, `table_cell_header_${column + 1}`, cursorX, y, width, rowHeight, COLORS.forest, {
-      stroke: COLORS.rule,
-      strokeWidth: 0.8,
-    }));
+    cells.push(rect(templateId, `table_cell_header_${column + 1}`, cursorX, y, width, rowHeight, COLORS.forest));
     cells.push(text(templateId, `table_header_${column + 1}`, cursorX, y, width, rowHeight, header, {
       fontSize: 9,
       fontWeight: 'bold',
@@ -95,10 +92,7 @@ const staticTable = (templateId, x, y, widths, rowHeight, headers, rows, alignme
     row.forEach((field, column) => {
       const width = widths[column];
       const rowY = y + rowHeight * (rowIndex + 1);
-      cells.push(rect(templateId, `table_cell_${rowIndex + 1}_${column + 1}`, cursorX, rowY, width, rowHeight, COLORS.paper, {
-        stroke: COLORS.rule,
-        strokeWidth: 0.8,
-      }));
+      cells.push(rect(templateId, `table_cell_${rowIndex + 1}_${column + 1}`, cursorX, rowY, width, rowHeight, COLORS.paper));
       cells.push(text(templateId, `table_value_${rowIndex + 1}_${column + 1}`, cursorX, rowY, width, rowHeight, `{{${field}}}`, {
         dataBinding: field,
         fontSize: 9,
@@ -107,6 +101,30 @@ const staticTable = (templateId, x, y, widths, rowHeight, headers, rows, alignme
       cursorX += width;
     });
   });
+
+  cursorX = x;
+  widths.slice(0, -1).forEach((width, column) => {
+    cursorX += width;
+    cells.push(rect(templateId, `table_line_vertical_${column + 1}`, cursorX - 0.4, y, 0.8, totalHeight, COLORS.rule));
+  });
+  rows.forEach((_, rowIndex) => {
+    const isHeaderRule = rowIndex === 0;
+    const thickness = isHeaderRule ? 1 : 0.8;
+    const lineY = y + rowHeight * (rowIndex + 1) - thickness / 2;
+    cells.push(rect(
+      templateId,
+      `table_line_horizontal_${rowIndex + 1}`,
+      x,
+      lineY,
+      totalWidth,
+      thickness,
+      isHeaderRule ? COLORS.brass : COLORS.rule,
+    ));
+  });
+  cells.push(rect(templateId, 'table_boundary', x, y, totalWidth, totalHeight, '', {
+    stroke: COLORS.rule,
+    strokeWidth: 0.8,
+  }));
   return cells;
 };
 
@@ -600,11 +618,11 @@ const yearReviewElements = [
     fontWeight: 'bold',
     textColor: COLORS.forest,
   }),
-  rect('year_review', 'table_cell_wins', 31, 412, 213, 113, COLORS.paper, {
+  rect('year_review', 'writing_box_wins', 31, 412, 213, 113, COLORS.paper, {
     stroke: COLORS.rule,
     strokeWidth: 0.8,
   }),
-  rect('year_review', 'table_cell_lesson', 268, 412, 213, 113, COLORS.paper, {
+  rect('year_review', 'writing_box_lesson', 268, 412, 213, 113, COLORS.paper, {
     stroke: COLORS.rule,
     strokeWidth: 0.8,
   }),

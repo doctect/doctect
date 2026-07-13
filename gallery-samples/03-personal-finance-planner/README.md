@@ -40,7 +40,7 @@ Unsupported values stop generation with a contextual error. Default configuratio
 - Configured debt or savings goal pages
 - 1 year review
 
-Blank pages contain prompts, category names, month names, and writing surfaces only. They contain no fake balances, purchases, transfers, debts, or goals. Writable tables use fixed vector cells so every border survives PDF export. Annual Outlook uses one populated dynamic grid solely as child navigation; no writable financial structure depends on an empty dynamic grid.
+Blank pages contain prompts, category names, month names, and writing surfaces only. They contain no fake balances, purchases, transfers, debts, or goals. Writable tables use fill-only cells, one outer boundary, and one vector segment per internal row or column so shared edges never overlap in canvas or PDF output. Annual Outlook uses one populated dynamic grid solely as child navigation; its borders come only from explicit per-cell grid configuration, and no writable financial structure depends on an empty dynamic grid.
 
 ## Navigation Map
 
