@@ -238,6 +238,8 @@ addNode('example_highlights', 'example_trip_lisbon', 'highlights', 'Lisbon | Wha
 }), { example: true });
 
 addNode('blank_workspace', 'start_here', 'workspace', 'My Journey Shelf', {
+  example_label: '',
+  skip_label: '',
   subtitle: 'A clean configurable workspace with no sample destinations, bookings, costs, or journal entries.',
   workspace_mode: 'BLANK WORKSPACE',
   hero: 'Choose a journey, gather practical details, and make room for notes from the field.',

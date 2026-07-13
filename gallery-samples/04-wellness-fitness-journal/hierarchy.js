@@ -191,6 +191,8 @@ addNode('example_reflection', 'example_recovery', 'month_reflection', 'Rhythm Re
 }), { example: true });
 
 addNode('blank_workspace', 'start_here', 'workspace', 'Blank Wellbeing Workspace', {
+  example_label: '',
+  skip_label: '',
   subtitle: 'A clean, configurable journal with no sample ratings, entries, or workout data.',
   workspace_mode: 'BLANK WORKSPACE',
   hero: 'Build a rhythm from your own habits, movement, energy, and recovery.',

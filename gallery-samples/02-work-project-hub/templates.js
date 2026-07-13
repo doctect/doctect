@@ -629,6 +629,10 @@ const weeklyReviewElements = [
   }),
 ];
 
+const weeklyReviewFinalElements = weeklyReviewElements
+  .filter(element => !element.id.includes('_next_review_'))
+  .map(element => ({ ...element, id: element.id.replace(/^weekly_review_/, 'weekly_review_final_') }));
+
 return {
   cover: { id: 'cover', name: 'Project Desk Cover', width: W, height: H, elements: coverElements },
   start: { id: 'start', name: 'Project Desk Start Here', width: W, height: H, elements: startElements },
@@ -641,4 +645,5 @@ return {
   decisions: { id: 'decisions', name: 'Decision Register', width: W, height: H, elements: decisionsElements },
   risks: { id: 'risks', name: 'Risk Register', width: W, height: H, elements: risksElements },
   weekly_review: { id: 'weekly_review', name: 'Weekly Review', width: W, height: H, elements: weeklyReviewElements },
+  weekly_review_final: { id: 'weekly_review_final', name: 'Final Weekly Review', width: W, height: H, elements: weeklyReviewFinalElements },
 };

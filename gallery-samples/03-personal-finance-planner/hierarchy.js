@@ -207,6 +207,8 @@ addNode('example_year_review', 'example_annual', 'year_review', 'Year Review | F
 }, { example: true });
 
 addNode('blank_workspace', 'start_here', 'workspace', 'Blank Money Workspace', {
+  example_label: '',
+  skip_label: '',
   subtitle: 'A complete twelve-month structure with no sample transactions or balances.',
   workspace_mode: 'BLANK WORKSPACE',
   hero: 'Give your own money a clear, flexible route through the year.',

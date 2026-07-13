@@ -300,6 +300,8 @@ addNode('example_continuity', 'example_workspace', 'continuity', 'Continuity | C
 });
 
 addNode('blank_workspace', 'start_here', 'workspace', 'My Story Atelier', {
+  example_label: '',
+  skip_label: '',
   subtitle: 'A clean three-act default with configurable chapters, scenes, characters, and locations.',
   workspace_mode: 'BLANK WORKSPACE',
   hero: 'Begin with premise and structure. Build canonical story-bible records, map chapters, shape every scene, then audit continuity and revise in focused passes.',

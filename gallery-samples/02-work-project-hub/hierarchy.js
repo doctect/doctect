@@ -107,7 +107,7 @@ addNode('example_meeting', 'example_meeting_index', 'meeting', 'Launch Readiness
   decision_id: 'DEC-07',
 }, { example: true });
 addDecisionReference('example_meeting', 'example_meeting', 'example_decisions', 'example_board', true);
-addNode('example_weekly_review', 'example_portfolio', 'weekly_review', 'Week 06 | Launch Review', {
+addNode('example_weekly_review', 'example_portfolio', 'weekly_review_final', 'Week 06 | Launch Review', {
   subtitle: 'Close loops across project delivery, risk, and decisions.',
   week_focus: 'LAUNCH CONFIDENCE  /  redirect ownership is now explicit',
   wins: 'Cutover checklist reviewed. Core content owners confirmed.',
@@ -117,6 +117,8 @@ addNode('example_weekly_review', 'example_portfolio', 'weekly_review', 'Week 06 
 }, { example: true });
 
 addNode('blank_workspace', 'start_here', 'workspace', 'Blank Project Workspace', {
+  example_label: '',
+  skip_label: '',
   subtitle: 'Clean project desks and a portfolio-level weekly review cadence.',
   workspace_mode: 'BLANK WORKSPACE',
   capacity: `${CONFIG.projectCount} PROJECTS`,
@@ -189,7 +191,8 @@ let previousReviewId = 'blank_portfolio';
 for (let week = 1; week <= CONFIG.reviewWeeks; week += 1) {
   const weekNumber = String(week).padStart(2, '0');
   const reviewId = `blank_review_${weekNumber}`;
-  addNode(reviewId, previousReviewId, 'weekly_review', `Week ${weekNumber} | Portfolio Review`, {
+  const reviewType = week === CONFIG.reviewWeeks ? 'weekly_review_final' : 'weekly_review';
+  addNode(reviewId, previousReviewId, reviewType, `Week ${weekNumber} | Portfolio Review`, {
     subtitle: 'Week / date / reviewer',
     week_focus: '',
     wins: '',

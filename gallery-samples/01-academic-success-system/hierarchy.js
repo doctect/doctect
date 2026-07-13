@@ -99,6 +99,8 @@ addNode('example_exam', 'example_course', 'exam', 'Environmental Science | Exam 
 }, { example: true });
 
 addNode('blank_workspace', 'start_here', 'workspace', 'Blank Study Workspace', {
+  example_label: '',
+  skip_label: '',
   subtitle: 'A complete semester structure without sample answers.',
   workspace_mode: 'BLANK WORKSPACE',
   hero: 'Build a semester around your own courses and commitments.',

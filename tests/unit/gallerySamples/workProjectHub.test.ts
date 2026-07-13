@@ -21,6 +21,7 @@ const contract: GallerySampleContract = {
         'decisions',
         'risks',
         'weekly_review',
+        'weekly_review_final',
     ],
     pageCount: [50, 80],
     palette: ['#263f52', '#c79b45', '#eee9dd'],
@@ -30,19 +31,8 @@ const contract: GallerySampleContract = {
 const exportedPageCount = (sample: ReturnType<typeof loadGallerySample>) =>
     computePageOrder({ rootId: sample.rootId, nodes: sample.nodes } as any).length;
 
-const validateProjectDesk = (sample: LoadedGallerySample, productContract: GallerySampleContract) => {
-    const forward = sample.templates.weekly_review.elements.find((element: any) =>
-        element.id.includes('_next_review_'),
-    );
-    const optionalTerminalErrors = new Set(Object.values(sample.nodes)
-        .filter((node: any) => node.type === 'weekly_review' && !node.children?.[0])
-        .map((node: any) =>
-            `template 'weekly_review' element '${forward.id}' child index 0 does not resolve for node '${node.id}'`,
-        ));
-
-    return validateGallerySample(sample, productContract)
-        .filter(error => !optionalTerminalErrors.has(error));
-};
+const validateProjectDesk = (sample: LoadedGallerySample, productContract: GallerySampleContract) =>
+    validateGallerySample(sample, productContract);
 
 describe('Work Project Hub gallery sample', () => {
     it('generates the complete Project Desk', () => {
@@ -101,11 +91,15 @@ describe('Work Project Hub gallery sample', () => {
             linkValue: '0',
         });
         reviews.slice(0, -1).forEach((review, index) => {
+            expect(review.type, `review ${index + 1} template`).toBe('weekly_review');
             expect(resolveForward(review)?.id, `review ${index + 1} forward target`)
                 .toBe(reviews[index + 1].id);
         });
+        expect(reviews[51].type).toBe('weekly_review_final');
         expect(reviews[51].children).toEqual([]);
-        expect(resolveForward(reviews[51])).toBeUndefined();
+        expect(sample.templates.weekly_review_final.elements.some((element: any) =>
+            element.id.includes('_next_review_'),
+        )).toBe(false);
     });
 
     it('uses PDF-visible writable lanes instead of fake board cards', () => {

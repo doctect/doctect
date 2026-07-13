@@ -229,6 +229,8 @@ addNode('example_pantry', 'example_workspace', 'pantry', 'Autumn Pantry Check', 
 }), { example: true });
 
 addNode('blank_workspace', 'start_here', 'workspace', 'My Seasonal Kitchen', {
+  example_label: '',
+  skip_label: '',
   subtitle: 'Clean recipe banks, planning weeks, pantry inventory, and grouped lists.',
   workspace_mode: 'BLANK WORKSPACE',
   hero: 'Build a kitchen record around what you actually cook and want to repeat.',

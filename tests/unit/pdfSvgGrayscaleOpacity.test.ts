@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { generatePDF } from '../../services/pdfService';
 import { AppState } from '../../types';
 
@@ -60,6 +60,63 @@ describe('greyscale export of SVG elements', () => {
     it('keeps SVG colors intact without the greyscale option', async () => {
         const pdf = await exportBytes(makeState([svgEl(COLOR_SVG)]));
         expect(pdf).toContain('1. 0. 0. rg');
+    });
+});
+
+describe('greyscale export of text elements', () => {
+    it('desaturates text color', async () => {
+        const pdf = await exportBytes(makeState([{
+            id: 't1', type: 'text', text: 'Accent', x: 50, y: 50, w: 200, h: 40,
+            rotation: 0, fill: '', stroke: '', strokeWidth: 0, opacity: 1,
+            fontFamily: 'helvetica', fontSize: 16, textColor: '#ff0000',
+            layerId: 'main', zIndex: 1,
+        }]), { isGreyscale: true });
+
+        expect(pdf).toMatch(/\b0\.29\d(?: g| 0\.29\d 0\.29\d rg)\b/);
+        expect(pdf).not.toContain('1. 0. 0. rg');
+    });
+});
+
+describe('greyscale export of grid elements', () => {
+    it('desaturates cell fills, borders, and text', async () => {
+        const state = makeState([{
+            id: 'g1', type: 'grid', x: 50, y: 50, w: 200, h: 40,
+            rotation: 0, fill: '#ff0000', stroke: '#0000ff', strokeWidth: 1,
+            opacity: 1, fontFamily: 'helvetica', fontSize: 12, textColor: '#00ff00',
+            layerId: 'main', zIndex: 1,
+            gridConfig: {
+                cols: 1, sourceType: 'current', displayField: 'title',
+                gridBorderMode: 'all', gridBorderColor: '#0000ff',
+                gridBorderWidth: 1, gridBorderStyle: 'solid',
+            },
+        }]);
+        state.nodes.root.children = ['child'];
+        state.nodes.child = {
+            id: 'child', parentId: 'root', type: 'page', title: 'Cell', data: {}, children: [],
+        };
+
+        const pdf = await exportBytes(state, { isGreyscale: true });
+
+        expect(pdf).not.toContain('1. 0. 0. rg');
+        expect(pdf).not.toContain('0. 1. 0. rg');
+        expect(pdf).not.toContain('0. 0. 1. RG');
+    });
+});
+
+describe('PDF font aliases', () => {
+    it('maps CSS Georgia to a supported PDF serif without warnings', async () => {
+        const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+        const pdf = await exportBytes(makeState([{
+            id: 't1', type: 'text', text: 'Serif', x: 50, y: 50, w: 200, h: 40,
+            rotation: 0, fill: '', stroke: '', strokeWidth: 0, opacity: 1,
+            fontFamily: 'georgia', fontSize: 16, textColor: '#000000',
+            layerId: 'main', zIndex: 1,
+        }]));
+
+        expect(warning).not.toHaveBeenCalled();
+        expect(pdf).toContain('/BaseFont /Times-Roman');
+        warning.mockRestore();
     });
 });
 

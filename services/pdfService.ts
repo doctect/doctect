@@ -611,8 +611,9 @@ const drawPattern = (doc: jsPDF, type: string, x: number, y: number, w: number, 
     }
 };
 
-const applyFont = (doc: jsPDF, el: TemplateElement) => {
+const applyFont = (doc: jsPDF, el: TemplateElement, isGreyscale = false) => {
     let family = el.fontFamily || 'helvetica';
+    if (family.toLowerCase() === 'georgia') family = 'times';
 
     // Normalize family name: If it's a label (e.g. "Playfair Display"), convert to value (e.g. "playfair-display")
     if (!FONT_URLS[family]) {
@@ -656,7 +657,9 @@ const applyFont = (doc: jsPDF, el: TemplateElement) => {
     }
     doc.setFontSize(Number(el.fontSize) || 12);
 
-    const rgb = hexToRgb(el.textColor || "#000000");
+    const rgb = isGreyscale
+        ? hexToGreyscale(el.textColor || "#000000")
+        : hexToRgb(el.textColor || "#000000");
     if (rgb) doc.setTextColor(rgb.r, rgb.g, rgb.b);
 };
 
@@ -1232,7 +1235,7 @@ export const generatePDF = async (state: AppState, options: GeneratePDFOptions =
                         && sides.top.style === sides.right.style && sides.top.style === sides.bottom.style && sides.top.style === sides.left.style) {
                         const side = sides.top;
                         const sw = side.width;
-                        const rgb = hexToRgb(side.color);
+                        const rgb = options.isGreyscale ? hexToGreyscale(side.color) : hexToRgb(side.color);
                         if (!rgb) return;
                         doc.setDrawColor(rgb.r, rgb.g, rgb.b);
                         doc.setLineWidth(sw);
@@ -1250,7 +1253,7 @@ export const generatePDF = async (state: AppState, options: GeneratePDFOptions =
                     const leftW = sides.left?.width || 0;
                     const drawSide = (side: BSide, x1: number, y1: number, x2: number, y2: number) => {
                         if (!side) return;
-                        const rgb = hexToRgb(side.color);
+                        const rgb = options.isGreyscale ? hexToGreyscale(side.color) : hexToRgb(side.color);
                         if (!rgb) return;
                         doc.setDrawColor(rgb.r, rgb.g, rgb.b);
                         doc.setLineWidth(side.width);
@@ -1336,7 +1339,7 @@ export const generatePDF = async (state: AppState, options: GeneratePDFOptions =
                         if (gc.firstColumnFontWeight) cellFontWeight = gc.firstColumnFontWeight;
                     }
 
-                    const cellFillRgb = hexToRgb(cellFillHex);
+                    const cellFillRgb = options.isGreyscale ? hexToGreyscale(cellFillHex) : hexToRgb(cellFillHex);
                     const cellBorderSides = getCellBorderSides(row, col);
                     const hasCellBorder = cellBorderSides && (cellBorderSides.top || cellBorderSides.right || cellBorderSides.bottom || cellBorderSides.left);
 
@@ -1345,7 +1348,12 @@ export const generatePDF = async (state: AppState, options: GeneratePDFOptions =
                         if (cellFillHex) {
                             doc.saveGraphicsState();
                             clipToShape(doc, 'rect', cellX, cellY + yOffset, cellW, cellH, cellRadius, 0);
-                            drawPattern(doc, el.patternType, cellX, cellY + yOffset, cellW, cellH, cellFillHex, Number(el.patternSpacing), Number(el.patternWeight));
+                            let patternFill = cellFillHex;
+                            if (options.isGreyscale) {
+                                const grey = hexToGreyscale(patternFill);
+                                if (grey) patternFill = '#' + ((1 << 24) + (grey.r << 16) + (grey.g << 8) + grey.b).toString(16).slice(1).toUpperCase();
+                            }
+                            drawPattern(doc, el.patternType, cellX, cellY + yOffset, cellW, cellH, patternFill, Number(el.patternSpacing), Number(el.patternWeight));
                             doc.restoreGraphicsState();
                         }
                         if (hasCellBorder) {
@@ -1363,7 +1371,7 @@ export const generatePDF = async (state: AppState, options: GeneratePDFOptions =
                         if (cellRadius > 0 && cellFillRgb && uniformBorder && bs!.top) {
                             const side = bs!.top!;
                             const sw = side.width;
-                            const borderRgb = hexToRgb(side.color);
+                            const borderRgb = options.isGreyscale ? hexToGreyscale(side.color) : hexToRgb(side.color);
                             if (borderRgb) {
                                 doc.setFillColor(cellFillRgb.r, cellFillRgb.g, cellFillRgb.b);
                                 doc.setDrawColor(borderRgb.r, borderRgb.g, borderRgb.b);
@@ -1396,7 +1404,7 @@ export const generatePDF = async (state: AppState, options: GeneratePDFOptions =
                     if (txt) {
                         // Apply font with cell-specific overrides
                         const cellEl = { ...el, textColor: cellTextColorHex, fontWeight: cellFontWeight } as any;
-                        applyFont(doc, cellEl);
+                        applyFont(doc, cellEl, options.isGreyscale);
                         // Vertical Alignment Logic
                         let textY = cellY + cellH / 2;
                         let baseline: any = 'middle';
@@ -1670,7 +1678,7 @@ export const generatePDF = async (state: AppState, options: GeneratePDFOptions =
             textContent = resolveText(textContent, node, state);
 
             if (textContent) {
-                applyFont(doc, el);
+                applyFont(doc, el, options.isGreyscale);
                 const fontSize = Number(el.fontSize) || 12;
 
                 // Line height matching CSS lineHeight: 1.2
