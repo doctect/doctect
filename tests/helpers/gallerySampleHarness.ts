@@ -29,12 +29,24 @@ const GRID_MODES = new Set(['all', 'outside', 'inside', 'none']);
 const LINK_TARGETS = new Set([
     'none', 'url', 'specific_node', 'child_index', 'parent', 'ancestor', 'sibling', 'referrer', 'child_referrer',
 ]);
+const executionConfigs = new WeakMap<LoadedGallerySample, Record<string, unknown>>();
 
 const isRecord = (value: unknown): value is Record<string, any> =>
     value !== null && typeof value === 'object' && !Array.isArray(value);
 
 const hasTextBinding = (element: any, field: string) =>
     element?.dataBinding === field || (typeof element?.text === 'string' && element.text.includes(`{{${field}}}`));
+
+const isVisibleTextBinding = (element: any, field: string) =>
+    element?.type === 'text'
+    && hasTextBinding(element, field)
+    && Number.isFinite(element.w)
+    && element.w > 0
+    && Number.isFinite(element.h)
+    && element.h > 0
+    && (element.opacity === undefined || (Number.isFinite(element.opacity) && element.opacity > 0));
+
+const isNonEmptyString = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0;
 
 const parseInteger = (value: unknown): number | undefined => {
     if (typeof value !== 'string' && typeof value !== 'number') return undefined;
@@ -84,7 +96,7 @@ export function executeGallerySample(
         throw new Error('Hierarchy script must return an object with { nodes, rootId }.');
     }
 
-    return {
+    const sample: LoadedGallerySample = {
         slug: 'fixture',
         templates,
         nodes: result.nodes,
@@ -92,6 +104,8 @@ export function executeGallerySample(
         templateSource,
         hierarchySource,
     };
+    executionConfigs.set(sample, config);
+    return sample;
 }
 
 export function loadGallerySample(slug: string, config: Record<string, unknown> = {}): LoadedGallerySample {
@@ -99,7 +113,9 @@ export function loadGallerySample(slug: string, config: Record<string, unknown> 
     const sampleDir = join(GALLERY_SAMPLES_DIR, slug);
     const templateSource = readFileSync(join(sampleDir, 'templates.js'), 'utf8');
     const hierarchySource = readFileSync(join(sampleDir, 'hierarchy.js'), 'utf8');
-    return { ...executeGallerySample(templateSource, hierarchySource, config), slug };
+    const sample = executeGallerySample(templateSource, hierarchySource, config);
+    sample.slug = slug;
+    return sample;
 }
 
 export function collectGallerySampleSlugs(): string[] {
@@ -216,8 +232,9 @@ const validateElementLink = (
 
 const validateStructure = (sample: LoadedGallerySample, errors: string[]) => {
     const { nodes, templates, rootId } = sample;
-    if (!nodes[rootId]) errors.push(`root '${rootId}' does not exist`);
-    else if (nodes[rootId].parentId !== null) errors.push(`root '${rootId}' must have parentId null`);
+    if (rootId !== 'root') errors.push(`rootId must be 'root', received '${rootId}'`);
+    if (!nodes.root) errors.push("root 'root' does not exist");
+    else if (nodes.root.parentId !== null) errors.push("root 'root' must have parentId null");
 
     Object.entries(nodes).forEach(([nodeId, node]) => {
         if (!isRecord(node)) {
@@ -252,6 +269,79 @@ const validateStructure = (sample: LoadedGallerySample, errors: string[]) => {
             }
         }
     });
+
+    const reachable = new Set<string>();
+    const pending = nodes.root ? ['root'] : [];
+    while (pending.length > 0) {
+        const nodeId = pending.shift()!;
+        if (reachable.has(nodeId)) continue;
+        reachable.add(nodeId);
+        const node = nodes[nodeId];
+        if (isRecord(node) && Array.isArray(node.children)) {
+            node.children.forEach((childId: unknown) => {
+                if (typeof childId === 'string' && nodes[childId]) pending.push(childId);
+            });
+        }
+    }
+    Object.keys(nodes).forEach(nodeId => {
+        if (!reachable.has(nodeId)) errors.push(`node '${nodeId}' is not reachable from root`);
+    });
+
+    const visitState = new Map<string, 'visiting' | 'visited'>();
+    const reportedCycles = new Set<string>();
+    const visit = (nodeId: string, path: string[]) => {
+        if (visitState.get(nodeId) === 'visited') return;
+        if (visitState.get(nodeId) === 'visiting') {
+            const cycleStart = path.indexOf(nodeId);
+            const cycle = [...path.slice(cycleStart), nodeId].join(' -> ');
+            if (!reportedCycles.has(cycle)) {
+                reportedCycles.add(cycle);
+                errors.push(`hierarchy cycle detected: ${cycle}`);
+            }
+            return;
+        }
+        visitState.set(nodeId, 'visiting');
+        const node = nodes[nodeId];
+        if (isRecord(node) && Array.isArray(node.children)) {
+            node.children.forEach((childId: unknown) => {
+                if (typeof childId === 'string' && nodes[childId]) visit(childId, [...path, nodeId]);
+            });
+        }
+        visitState.set(nodeId, 'visited');
+    };
+    Object.keys(nodes).forEach(nodeId => visit(nodeId, []));
+};
+
+const validateDeterministicIds = (sample: LoadedGallerySample, errors: string[]) => {
+    try {
+        const repeated = executeGallerySample(
+            sample.templateSource,
+            sample.hierarchySource,
+            executionConfigs.get(sample) ?? {},
+        );
+        const templateIds = Object.keys(sample.templates).sort();
+        const repeatedTemplateIds = Object.keys(repeated.templates).sort();
+        if (JSON.stringify(templateIds) !== JSON.stringify(repeatedTemplateIds)) {
+            errors.push('template IDs are not deterministic across repeated execution');
+            return;
+        }
+        templateIds.forEach(templateId => {
+            const elements = Array.isArray(sample.templates[templateId]?.elements)
+                ? sample.templates[templateId].elements
+                : [];
+            const repeatedElements = Array.isArray(repeated.templates[templateId]?.elements)
+                ? repeated.templates[templateId].elements
+                : [];
+            const count = Math.max(elements.length, repeatedElements.length);
+            for (let index = 0; index < count; index += 1) {
+                if (elements[index]?.id !== repeatedElements[index]?.id) {
+                    errors.push(`template '${templateId}' element at index ${index} id is not deterministic across repeated execution`);
+                }
+            }
+        });
+    } catch (error) {
+        errors.push(`deterministic ID check failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
 };
 
 const validateTemplates = (sample: LoadedGallerySample, errors: string[]) => {
@@ -261,7 +351,9 @@ const validateTemplates = (sample: LoadedGallerySample, errors: string[]) => {
             errors.push(`template '${templateId}' must be an object`);
             return;
         }
-        if (template.id !== templateId) errors.push(`template key '${templateId}' does not match id '${template.id}'`);
+        if (!isNonEmptyString(templateId)) errors.push('template key must be a non-empty string');
+        if (!isNonEmptyString(template.id)) errors.push(`template '${templateId}' id must be a non-empty string`);
+        else if (template.id !== templateId) errors.push(`template key '${templateId}' does not match id '${template.id}'`);
         if (template.width !== PAGE_WIDTH || template.height !== PAGE_HEIGHT) {
             errors.push(`template '${templateId}' must be ${PAGE_WIDTH}x${PAGE_HEIGHT}`);
         }
@@ -270,12 +362,16 @@ const validateTemplates = (sample: LoadedGallerySample, errors: string[]) => {
             return;
         }
 
-        template.elements.forEach((element: any) => {
-            const previousTemplate = seenElementIds.get(element?.id);
-            if (previousTemplate) {
-                errors.push(`element id '${element.id}' is duplicated in templates '${previousTemplate}' and '${templateId}'`);
-            } else if (typeof element?.id === 'string') {
-                seenElementIds.set(element.id, templateId);
+        template.elements.forEach((element: any, elementIndex: number) => {
+            if (!isNonEmptyString(element?.id)) {
+                errors.push(`template '${templateId}' element at index ${elementIndex} id must be a non-empty string`);
+            } else {
+                const previousTemplate = seenElementIds.get(element.id);
+                if (previousTemplate) {
+                    errors.push(`element id '${element.id}' is duplicated in templates '${previousTemplate}' and '${templateId}'`);
+                } else {
+                    seenElementIds.set(element.id, templateId);
+                }
             }
             if (element?.type === 'grid') {
                 const grid = element.gridConfig;
@@ -305,6 +401,7 @@ const validateTemplates = (sample: LoadedGallerySample, errors: string[]) => {
                     if (![element.x, element.y, bounds.w, bounds.h].every(Number.isFinite)) {
                         errors.push(`template '${templateId}' element '${element.id}' has non-finite bounds for node '${node.id}'`);
                     } else {
+                        if (bounds.w <= 0 || bounds.h <= 0) errors.push(`template '${templateId}' element '${element.id}' has non-positive bounds for node '${node.id}'`);
                         if (element.x < 0) errors.push(`template '${templateId}' element '${element.id}' starts before x=0 for node '${node.id}'`);
                         if (element.y < 0) errors.push(`template '${templateId}' element '${element.id}' starts before y=0 for node '${node.id}'`);
                         if (element.x + bounds.w > PAGE_WIDTH) errors.push(`template '${templateId}' element '${element.id}' overflows width for node '${node.id}'`);
@@ -340,12 +437,19 @@ const validateExampleChrome = (sample: LoadedGallerySample, errors: string[]) =>
         }
         const template = sample.templates[node.type];
         const elements = Array.isArray(template?.elements) ? template.elements : [];
-        if (!elements.some((element: any) => hasTextBinding(element, 'example_label'))) {
+        const exampleElements = elements.filter((element: any) => hasTextBinding(element, 'example_label'));
+        if (exampleElements.length === 0) {
             errors.push(`node '${nodeId}' template '${node.type}' does not bind example_label`);
+        } else if (!exampleElements.some((element: any) => isVisibleTextBinding(element, 'example_label'))) {
+            errors.push(`node '${nodeId}' template '${node.type}' does not have a visible text binding for example_label`);
         }
-        const skipElements = elements.filter((element: any) => hasTextBinding(element, 'skip_label'));
-        if (skipElements.length === 0) errors.push(`node '${nodeId}' template '${node.type}' does not bind skip_label`);
-        else if (!skipElements.some((element: any) => element.linkTarget === 'specific_node' && element.linkValue === 'blank_workspace')) {
+        const boundSkipElements = elements.filter((element: any) => hasTextBinding(element, 'skip_label'));
+        const skipElements = boundSkipElements.filter((element: any) => isVisibleTextBinding(element, 'skip_label'));
+        if (boundSkipElements.length === 0) errors.push(`node '${nodeId}' template '${node.type}' does not bind skip_label`);
+        else if (skipElements.length === 0) {
+            errors.push(`node '${nodeId}' template '${node.type}' does not have a visible text binding for skip_label`);
+        }
+        if (skipElements.length > 0 && !skipElements.some((element: any) => element.linkTarget === 'specific_node' && element.linkValue === 'blank_workspace')) {
             errors.push(`node '${nodeId}' template '${node.type}' skip element must link to 'blank_workspace'`);
         }
         if (Array.isArray(node.children)) pending.push(...node.children);
@@ -354,36 +458,49 @@ const validateExampleChrome = (sample: LoadedGallerySample, errors: string[]) =>
 
 export function validateSharedGalleryInvariants(sample: LoadedGallerySample): string[] {
     const errors: string[] = [];
-    if (!isRecord(sample.templates)) errors.push('templates must be an object');
-    if (!isRecord(sample.nodes)) errors.push('nodes must be an object');
-    if (errors.length > 0) return errors;
-    validateStructure(sample, errors);
-    validateTemplates(sample, errors);
-    validateExampleChrome(sample, errors);
+    const templatesValid = isRecord(sample?.templates);
+    const nodesValid = isRecord(sample?.nodes);
+    if (!templatesValid) errors.push('templates must be an object');
+    if (!nodesValid) errors.push('nodes must be an object');
+    if (!isNonEmptyString(sample?.rootId)) errors.push('rootId must be a non-empty string');
+    if (typeof sample?.templateSource !== 'string') errors.push('templateSource must be a string');
+    if (typeof sample?.hierarchySource !== 'string') errors.push('hierarchySource must be a string');
+    if (templatesValid && nodesValid) {
+        validateStructure(sample, errors);
+        validateTemplates(sample, errors);
+        validateExampleChrome(sample, errors);
+        if (typeof sample.templateSource === 'string' && typeof sample.hierarchySource === 'string') {
+            validateDeterministicIds(sample, errors);
+        }
+    }
     return errors;
 }
 
 export function validateGallerySample(sample: LoadedGallerySample, contract: GallerySampleContract): string[] {
     const errors = validateSharedGalleryInvariants(sample);
-    if (sample.slug !== contract.slug) errors.push(`sample slug '${sample.slug}' does not match contract slug '${contract.slug}'`);
+    if (sample?.slug !== contract.slug) errors.push(`sample slug '${sample?.slug}' does not match contract slug '${contract.slug}'`);
 
+    const templates = isRecord(sample?.templates) ? sample.templates : {};
+    const nodes = isRecord(sample?.nodes) ? sample.nodes : {};
     const expectedTemplates = new Set(contract.expectedTemplateIds);
     contract.expectedTemplateIds.forEach(templateId => {
-        if (!sample.templates[templateId]) errors.push(`expected template '${templateId}' is missing`);
+        if (!templates[templateId]) errors.push(`expected template '${templateId}' is missing`);
     });
-    Object.keys(sample.templates).forEach(templateId => {
+    Object.keys(templates).forEach(templateId => {
         if (!expectedTemplates.has(templateId)) errors.push(`unexpected template '${templateId}' is present`);
     });
 
-    const pageCount = Object.keys(sample.nodes).length;
+    const pageCount = Object.keys(nodes).length;
     if (pageCount < contract.pageCount[0] || pageCount > contract.pageCount[1]) {
         errors.push(`page count ${pageCount} is outside ${contract.pageCount[0]}-${contract.pageCount[1]}`);
     }
     contract.palette.forEach(color => {
-        if (!sample.templateSource.includes(color)) errors.push(`palette color '${color}' does not occur in template source`);
+        if (typeof sample?.templateSource !== 'string' || !sample.templateSource.includes(color)) {
+            errors.push(`palette color '${color}' does not occur in template source`);
+        }
     });
     contract.requiredStableNodeIds.forEach(nodeId => {
-        if (!sample.nodes[nodeId]) errors.push(`required stable node '${nodeId}' is missing`);
+        if (!nodes[nodeId]) errors.push(`required stable node '${nodeId}' is missing`);
     });
     return errors;
 }

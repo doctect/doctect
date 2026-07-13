@@ -1,10 +1,15 @@
-import { describe, expect, it } from 'vitest';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { basename, join } from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
 import {
+    collectGallerySampleSlugs,
     executeGallerySample,
+    expectValidGallerySample,
     loadGallerySample,
     validateGallerySample,
     validateSharedGalleryInvariants,
     type GallerySampleContract,
+    type LoadedGallerySample,
 } from '../helpers/gallerySampleHarness';
 
 const templatesSource = `
@@ -41,6 +46,22 @@ const contract: GallerySampleContract = {
 const execute = (template = templatesSource, hierarchy = hierarchySource) =>
     executeGallerySample(template, hierarchy, { childCount: 3 });
 
+const galleryRoot = join(process.cwd(), 'gallery-samples');
+const temporarySampleDirs: string[] = [];
+
+const createTemporarySample = (complete = true) => {
+    const directory = mkdtempSync(join(galleryRoot, 'harness-test-'));
+    temporarySampleDirs.push(directory);
+    writeFileSync(join(directory, 'templates.js'), templatesSource);
+    writeFileSync(join(directory, 'hierarchy.js'), hierarchySource);
+    if (complete) writeFileSync(join(directory, 'README.md'), '# Test sample\n');
+    return { directory, slug: basename(directory) };
+};
+
+afterEach(() => {
+    temporarySampleDirs.splice(0).forEach(directory => rmSync(directory, { recursive: true, force: true }));
+});
+
 describe('gallery sample harness', () => {
     it('executes generator sources through template normalization', () => {
         const sample = execute();
@@ -51,6 +72,29 @@ describe('gallery sample harness', () => {
         expect(sample.nodes.root.children).toEqual(['start_here']);
         expect(sample.rootId).toBe('root');
         expect(validateGallerySample(sample, contract)).toEqual([]);
+    });
+
+    it('propagates config to the hierarchy generator', () => {
+        const configurableHierarchy = hierarchySource.replace("title: 'Root'", "title: CONFIG.rootTitle || 'Root'");
+
+        expect(executeGallerySample(templatesSource, configurableHierarchy, { rootTitle: 'Configured root' }).nodes.root.title)
+            .toBe('Configured root');
+    });
+
+    it('discovers only complete immediate sample directories in lexical order', () => {
+        const first = createTemporarySample();
+        const second = createTemporarySample();
+        const incomplete = createTemporarySample(false);
+        const expected = [first.slug, second.slug].sort();
+
+        expect(collectGallerySampleSlugs().filter(slug => slug.startsWith('harness-test-'))).toEqual(expected);
+        expect(collectGallerySampleSlugs()).not.toContain(incomplete.slug);
+    });
+
+    it('loads and validates a controlled on-disk sample', () => {
+        const { slug } = createTemporarySample();
+
+        expect(expectValidGallerySample(slug, { ...contract, slug })).toMatchObject({ slug, rootId: 'root' });
     });
 
     it('reports broken parent, child, reference, and template type relationships', () => {
@@ -75,6 +119,25 @@ describe('gallery sample harness', () => {
         );
     });
 
+    it('requires non-empty template and element IDs', () => {
+        const sample = execute();
+        sample.templates.cover.id = '';
+        sample.templates.cover.elements[0].id = '';
+
+        expect(validateSharedGalleryInvariants(sample)).toEqual(expect.arrayContaining([
+            expect.stringContaining("template 'cover' id must be a non-empty string"),
+            expect.stringContaining("template 'cover' element at index 0 id must be a non-empty string"),
+        ]));
+    });
+
+    it('rejects IDs generated randomly by normalization', () => {
+        const randomIdSource = templatesSource.replace("id: 'page_badge', ", '');
+
+        expect(validateSharedGalleryInvariants(execute(randomIdSource))).toEqual(expect.arrayContaining([
+            expect.stringContaining("template 'page' element at index 0 id is not deterministic"),
+        ]));
+    });
+
     it('checks computed element bounds for every rendered node', () => {
         const templates = templatesSource.replace("id: 'page_grid', type: 'grid', x: 20", "id: 'page_grid', type: 'grid', x: 400");
 
@@ -82,6 +145,14 @@ describe('gallery sample harness', () => {
             expect.stringContaining("template 'page' element 'page_grid' overflows width for node 'start_here'"),
             expect.stringContaining("template 'page' element 'page_grid' overflows width for node 'example_workspace'"),
         ]));
+    });
+
+    it('requires positive finite computed element bounds', () => {
+        const templates = templatesSource.replace("id: 'cover_open', type: 'text', x: 20, y: 20, w: 200", "id: 'cover_open', type: 'text', x: 20, y: 20, w: 0");
+
+        expect(validateSharedGalleryInvariants(execute(templates))).toContain(
+            "template 'cover' element 'cover_open' has non-positive bounds for node 'root'",
+        );
     });
 
     it('rejects grid border defaults and invalid explicit border values', () => {
@@ -105,6 +176,71 @@ describe('gallery sample harness', () => {
             expect.stringContaining("node 'example_workspace' data.example_label must be 'EXAMPLE'"),
             expect.stringContaining("node 'example_workspace' template 'page' does not bind example_label"),
             expect.stringContaining("node 'example_workspace' template 'page' skip element must link to 'blank_workspace'"),
+        ]));
+    });
+
+    it.each([
+        {
+            name: 'non-text example label',
+            templates: templatesSource.replace("id: 'page_badge', type: 'text'", "id: 'page_badge', type: 'rect'"),
+            error: "template 'page' does not have a visible text binding for example_label",
+        },
+        {
+            name: 'zero-size example label',
+            templates: templatesSource.replace("id: 'page_badge', type: 'text', x: 20, y: 20, w: 100", "id: 'page_badge', type: 'text', x: 20, y: 20, w: 0"),
+            error: "template 'page' does not have a visible text binding for example_label",
+        },
+        {
+            name: 'transparent skip label',
+            templates: templatesSource.replace("id: 'page_skip', type: 'text'", "id: 'page_skip', type: 'text', opacity: 0"),
+            error: "template 'page' does not have a visible text binding for skip_label",
+        },
+    ])('rejects $name chrome', ({ templates, error }) => {
+        expect(validateSharedGalleryInvariants(execute(templates))).toEqual(expect.arrayContaining([
+            expect.stringContaining(error),
+        ]));
+    });
+
+    it('requires rootId root and reports disconnected stable nodes', () => {
+        const wrongRoot = execute();
+        wrongRoot.rootId = 'start_here';
+        const disconnected = execute();
+        disconnected.nodes.root.children = [];
+
+        expect(validateSharedGalleryInvariants(wrongRoot)).toContain("rootId must be 'root', received 'start_here'");
+        expect(validateSharedGalleryInvariants(disconnected)).toEqual(expect.arrayContaining([
+            "node 'start_here' is not reachable from root",
+            "node 'example_workspace' is not reachable from root",
+            "node 'blank_workspace' is not reachable from root",
+        ]));
+    });
+
+    it('reports cycles reachable from root', () => {
+        const sample = execute();
+        sample.nodes.example_workspace.children = ['blank_workspace'];
+        sample.nodes.blank_workspace.children = ['example_workspace'];
+
+        expect(validateSharedGalleryInvariants(sample)).toEqual(expect.arrayContaining([
+            expect.stringContaining('hierarchy cycle detected:'),
+        ]));
+    });
+
+    it('aggregates malformed top-level fields without throwing', () => {
+        const malformed = {
+            slug: 'fixture',
+            templateSource: undefined,
+            hierarchySource: '',
+            templates: undefined,
+            nodes: null,
+            rootId: undefined,
+        } as unknown as LoadedGallerySample;
+
+        expect(() => validateGallerySample(malformed, contract)).not.toThrow();
+        expect(validateGallerySample(malformed, contract)).toEqual(expect.arrayContaining([
+            'templates must be an object',
+            'nodes must be an object',
+            'rootId must be a non-empty string',
+            'templateSource must be a string',
         ]));
     });
 
@@ -133,21 +269,22 @@ describe('gallery sample harness', () => {
     });
 
     it('reports all contract-specific mismatches', () => {
+        const badSample = execute();
+        delete badSample.nodes.blank_workspace;
         const badContract: GallerySampleContract = {
             ...contract,
             slug: 'other',
             expectedTemplateIds: ['cover', 'missing'],
             pageCount: [5, 6],
             palette: ['#ffffff'],
-            requiredStableNodeIds: ['root', 'start_here', 'example_workspace', 'missing_workspace'],
         };
 
-        expect(validateGallerySample(execute(), badContract)).toEqual(expect.arrayContaining([
+        expect(validateGallerySample(badSample, badContract)).toEqual(expect.arrayContaining([
             expect.stringContaining("sample slug 'fixture' does not match contract slug 'other'"),
             expect.stringContaining("expected template 'missing' is missing"),
-            expect.stringContaining('page count 4 is outside 5-6'),
+            expect.stringContaining('page count 3 is outside 5-6'),
             expect.stringContaining("palette color '#ffffff' does not occur in template source"),
-            expect.stringContaining("required stable node 'missing_workspace' is missing"),
+            expect.stringContaining("required stable node 'blank_workspace' is missing"),
         ]));
     });
 
