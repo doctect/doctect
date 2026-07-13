@@ -78,6 +78,27 @@ describe('greyscale export of text elements', () => {
 });
 
 describe('greyscale export of grid elements', () => {
+    const gridState = (elementOverrides: Record<string, unknown>, gridOverrides: Record<string, unknown> = {}) => {
+        const state = makeState([{
+            id: 'g1', type: 'grid', x: 50, y: 50, w: 200, h: 40,
+            rotation: 0, fill: '#ff0000', stroke: '', strokeWidth: 0,
+            opacity: 1, fontFamily: 'helvetica', fontSize: 12, textColor: '#000000',
+            layerId: 'main', zIndex: 1,
+            gridConfig: {
+                cols: 1, sourceType: 'current', displayField: 'title',
+                gridBorderMode: 'all', gridBorderColor: '#0000ff',
+                gridBorderWidth: 1, gridBorderStyle: 'solid',
+                ...gridOverrides,
+            },
+            ...elementOverrides,
+        }]);
+        state.nodes.root.children = ['child'];
+        state.nodes.child = {
+            id: 'child', parentId: 'root', type: 'page', title: 'Cell', data: {}, children: [],
+        };
+        return state;
+    };
+
     it('desaturates cell fills, borders, and text', async () => {
         const state = makeState([{
             id: 'g1', type: 'grid', x: 50, y: 50, w: 200, h: 40,
@@ -99,6 +120,56 @@ describe('greyscale export of grid elements', () => {
 
         expect(pdf).not.toContain('1. 0. 0. rg');
         expect(pdf).not.toContain('0. 1. 0. rg');
+        expect(pdf).not.toContain('0. 0. 1. RG');
+    });
+
+    it('desaturates patterned cell strokes and rounded borders under element opacity', async () => {
+        const pdf = await exportBytes(gridState({
+            fillType: 'pattern', patternType: 'lines-h', patternSpacing: 5, patternWeight: 1,
+            opacity: 0.4,
+        }, { gridBorderRadius: 6 }), { isGreyscale: true });
+
+        expect(pdf).toMatch(/\/ca 0\.4\b/);
+        expect(pdf).toMatch(/\/CA 0\.4\b/);
+        expect(pdf).toMatch(/\b0\.3 G\b/);
+        expect(pdf).toMatch(/\b0\.11 G\b/);
+        expect(pdf).not.toContain('1. 0. 0. RG');
+        expect(pdf).not.toContain('0. 0. 1. RG');
+    });
+
+    it('desaturates the combined fill and rounded uniform grid border', async () => {
+        const pdf = await exportBytes(gridState({
+            fill: '#00ff00', opacity: 0.5,
+        }, { gridBorderRadius: 6 }), { isGreyscale: true });
+
+        expect(pdf).toMatch(/\/ca 0\.5\b/);
+        expect(pdf).toMatch(/\/CA 0\.5\b/);
+        expect(pdf).toMatch(/\b0\.59 g\b/);
+        expect(pdf).toMatch(/\b0\.11 G\b/);
+        expect(pdf).not.toContain('0. 1. 0. rg');
+        expect(pdf).not.toContain('0. 0. 1. RG');
+    });
+
+    it('desaturates specialized per-side outer borders under element opacity', async () => {
+        const pdf = await exportBytes(gridState({
+            fill: '#ffffff', opacity: 0.25,
+            borderSides: {
+                top: { width: 1, color: '#ff0000', style: 'solid' },
+                right: { width: 1, color: '#00ff00', style: 'solid' },
+                bottom: { width: 1, color: '#0000ff', style: 'solid' },
+                left: { width: 1, color: '#ff0000', style: 'solid' },
+            },
+        }, {
+            gridBorderMode: 'none', gridBorderColor: '', gridBorderWidth: 0,
+        }), { isGreyscale: true });
+
+        expect(pdf).toMatch(/\/ca 0\.25\b/);
+        expect(pdf).toMatch(/\/CA 0\.25\b/);
+        expect(pdf).toMatch(/\b0\.3 G\b/);
+        expect(pdf).toMatch(/\b0\.59 G\b/);
+        expect(pdf).toMatch(/\b0\.11 G\b/);
+        expect(pdf).not.toContain('1. 0. 0. RG');
+        expect(pdf).not.toContain('0. 1. 0. RG');
         expect(pdf).not.toContain('0. 0. 1. RG');
     });
 });

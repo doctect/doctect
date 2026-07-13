@@ -352,7 +352,7 @@ git commit -m "feat: add academic gallery flagship"
 ```ts
 const contract: GallerySampleContract = {
   slug: '02-work-project-hub',
-  expectedTemplateIds: ['cover', 'start', 'workspace', 'portfolio', 'brief', 'board', 'meeting_index', 'meeting', 'decisions', 'risks', 'weekly_review'],
+  expectedTemplateIds: ['cover', 'start', 'workspace', 'portfolio', 'brief', 'board', 'meeting_index', 'meeting', 'decisions', 'risks', 'weekly_review', 'weekly_review_final'],
   pageCount: [50, 80],
   palette: ['#263f52', '#c79b45', '#eee9dd'],
   requiredStableNodeIds: ['root', 'start_here', 'example_workspace', 'blank_workspace'],
@@ -379,7 +379,7 @@ Use:
 const DEFAULT_CONFIG = { projectCount: 3, meetingsPerProject: 8, reviewWeeks: 12 };
 ```
 
-Build 11 contract templates with architectural navy blocks, ochre milestones, stone writing surfaces, and original geometric SVG marks. Guided website-launch example must connect a meeting decision to a referenced decision record and visible board action. Blank projects include brief, outcomes, three-column board with intentional column borders/WIP labels, meeting index/logs, decision table, risk table, and weekly reviews. Do not render fake movable task cards; provide writable operational lanes. README ranges: projects 1–6, meetings 1–20, reviews 4–52.
+Build 12 contract templates with architectural navy blocks, ochre milestones, stone writing surfaces, and original geometric SVG marks. Guided website-launch example must connect a meeting decision to a referenced decision record and visible board action. Blank projects include brief, outcomes, three-column board with intentional column borders/WIP labels, meeting index/logs, decision table, risk table, and weekly reviews. Do not render fake movable task cards; provide writable operational lanes. README ranges: projects 1–6, meetings 1–20, reviews 4–52.
 
 - [ ] **Step 4: Run focused tests**
 

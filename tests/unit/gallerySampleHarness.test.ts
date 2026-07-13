@@ -201,6 +201,65 @@ describe('gallery sample harness', () => {
         ]));
     });
 
+    it.each([
+        {
+            name: 'example label on a hidden layer',
+            configure: (sample: LoadedGallerySample) => {
+                const badge = sample.templates.page.elements.find((element: any) => element.id === 'page_badge');
+                sample.templates.page.layers.find((layer: any) => layer.id === badge.layerId).visible = false;
+            },
+            error: 'visible text binding for example_label',
+        },
+        {
+            name: 'example label with a negative effective font size',
+            configure: (sample: LoadedGallerySample) => {
+                sample.templates.page.elements.find((element: any) => element.id === 'page_badge').fontSize = -1;
+            },
+            error: 'visible text binding for example_label',
+        },
+        {
+            name: 'transparent skip text color',
+            configure: (sample: LoadedGallerySample) => {
+                sample.templates.page.elements.find((element: any) => element.id === 'page_skip').textColor = 'transparent';
+            },
+            error: 'visible text binding for skip_label',
+        },
+        {
+            name: 'alpha-zero skip text color',
+            configure: (sample: LoadedGallerySample) => {
+                sample.templates.page.elements.find((element: any) => element.id === 'page_skip').textColor = '#12345600';
+            },
+            error: 'visible text binding for skip_label',
+        },
+        {
+            name: 'skip text matching its solid background',
+            configure: (sample: LoadedGallerySample) => {
+                const skip = sample.templates.page.elements.find((element: any) => element.id === 'page_skip');
+                skip.textColor = '#f5f0e5';
+                skip.fill = '#F5F0E5';
+            },
+            error: 'visible text binding for skip_label',
+        },
+    ])('rejects $name', ({ configure, error }) => {
+        const sample = execute();
+        configure(sample);
+
+        expect(validateSharedGalleryInvariants(sample)).toEqual(expect.arrayContaining([
+            expect.stringContaining(error),
+        ]));
+    });
+
+    it.each([
+        { name: 'omitted', fontSize: undefined },
+        { name: 'zero', fontSize: 0 },
+    ])('accepts renderer-visible $name font size fallback', ({ fontSize }) => {
+        const sample = execute();
+        sample.templates.page.elements.find((element: any) => element.id === 'page_badge').fontSize = fontSize;
+        sample.templates.page.elements.find((element: any) => element.id === 'page_skip').fontSize = fontSize;
+
+        expect(validateSharedGalleryInvariants(sample)).toEqual([]);
+    });
+
     it('requires rootId root and reports disconnected stable nodes', () => {
         const wrongRoot = execute();
         wrongRoot.rootId = 'start_here';

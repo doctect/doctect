@@ -94,4 +94,56 @@ describe('gallery sample collection', () => {
 
         expect(pdf).not.toContain('/Dest');
     });
+
+    it.each(EXPECTED_SLUGS)('%s emits no Skip annotation from a non-root blank descendant', async slug => {
+        const sample = loadGallerySample(slug);
+        const blankWorkspace = sample.nodes.blank_workspace;
+        const descendantId = blankWorkspace.children.find((nodeId: string) => {
+            const node = sample.nodes[nodeId];
+            const template = node && sample.templates[node.type];
+            return !node?.referenceId && template?.elements.some((element: any) =>
+                element.type === 'text'
+                && element.dataBinding === 'skip_label'
+                && element.linkTarget === 'specific_node'
+                && element.linkValue === 'blank_workspace',
+            );
+        });
+        expect(descendantId).toBeTruthy();
+
+        const descendant = sample.nodes[descendantId!];
+        const descendantTemplate = sample.templates[descendant.type];
+        const skip = descendantTemplate.elements.find((element: any) =>
+            element.type === 'text'
+            && element.dataBinding === 'skip_label'
+            && element.linkTarget === 'specific_node'
+            && element.linkValue === 'blank_workspace',
+        );
+        const blankRootType = '__blank_annotation_root__';
+        const state = {
+            rootId: 'blank_workspace',
+            nodes: {
+                blank_workspace: {
+                    ...blankWorkspace,
+                    type: blankRootType,
+                    children: [descendantId],
+                },
+                [descendantId!]: { ...descendant, parentId: 'blank_workspace', children: [] },
+            },
+            activeVariantId: 'default',
+            variants: {
+                default: {
+                    id: 'default',
+                    name: 'Default',
+                    templates: {
+                        [blankRootType]: { ...descendantTemplate, id: blankRootType, elements: [] },
+                        [descendant.type]: { ...descendantTemplate, elements: [skip] },
+                    },
+                },
+            },
+        } as any;
+        const buffer = await generatePDF(state, { output: 'arraybuffer' }) as ArrayBuffer;
+        const pdf = new TextDecoder('latin1').decode(new Uint8Array(buffer));
+
+        expect(pdf).not.toContain('/Dest');
+    });
 });

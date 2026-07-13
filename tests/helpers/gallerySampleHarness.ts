@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { getElementBounds } from '../../components/canvas/elementBounds';
 import { normalizeGeneratedTemplates } from '../../services/generatorTemplates';
 import { computePageOrder } from '../../services/pdfService';
+import { normalizeCssColor } from '../../services/svgColorNormalize';
 
 export interface LoadedGallerySample {
     slug: string;
@@ -38,14 +39,62 @@ const isRecord = (value: unknown): value is Record<string, any> =>
 const hasTextBinding = (element: any, field: string) =>
     element?.dataBinding === field || (typeof element?.text === 'string' && element.text.includes(`{{${field}}}`));
 
-const isVisibleTextBinding = (element: any, field: string) =>
-    element?.type === 'text'
-    && hasTextBinding(element, field)
-    && Number.isFinite(element.w)
-    && element.w > 0
-    && Number.isFinite(element.h)
-    && element.h > 0
-    && (element.opacity === undefined || (Number.isFinite(element.opacity) && element.opacity > 0));
+type SolidColor = { r: number; g: number; b: number; alpha: number };
+
+const parseSolidColor = (value: unknown): SolidColor | null => {
+    if (typeof value !== 'string') return null;
+    const color = value.trim().toLowerCase();
+    if (color === 'transparent') return { r: 0, g: 0, b: 0, alpha: 0 };
+
+    const normalized = normalizeCssColor(color);
+    if (normalized) {
+        const parsed = parseSolidColor(normalized.color);
+        return parsed ? { ...parsed, alpha: normalized.alpha } : null;
+    }
+
+    const hex = color.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
+    if (hex) {
+        const digits = hex[1].length === 3
+            ? hex[1].split('').map(digit => digit + digit).join('')
+            : hex[1];
+        return {
+            r: parseInt(digits.slice(0, 2), 16),
+            g: parseInt(digits.slice(2, 4), 16),
+            b: parseInt(digits.slice(4, 6), 16),
+            alpha: 1,
+        };
+    }
+
+    const rgb = color.match(/^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)(?:\s*,\s*([\d.]+))?\s*\)$/);
+    if (!rgb) return null;
+    const channels = rgb.slice(1, 4).map(Number);
+    const alpha = rgb[4] === undefined ? 1 : Number(rgb[4]);
+    if (![...channels, alpha].every(Number.isFinite)) return null;
+    return { r: channels[0], g: channels[1], b: channels[2], alpha };
+};
+
+const isVisibleTextBinding = (element: any, field: string, template: any) => {
+    const textColor = parseSolidColor(element?.textColor || '#000000');
+    const fillColor = element?.fillType === 'pattern' ? null : parseSolidColor(element?.fill);
+    const effectiveFontSize = Number(element?.fontSize) || 12;
+    const layer = Array.isArray(template?.layers)
+        ? template.layers.find((candidate: any) => candidate.id === element?.layerId)
+        : undefined;
+
+    return element?.type === 'text'
+        && hasTextBinding(element, field)
+        && Number.isFinite(element.w)
+        && element.w > 0
+        && Number.isFinite(element.h)
+        && element.h > 0
+        && (element.opacity === undefined || (Number.isFinite(element.opacity) && element.opacity > 0))
+        && layer?.visible !== false
+        && Number.isFinite(effectiveFontSize)
+        && effectiveFontSize > 0
+        && textColor?.alpha !== 0
+        && !(textColor && fillColor && fillColor.alpha === 1
+            && textColor.r === fillColor.r && textColor.g === fillColor.g && textColor.b === fillColor.b);
+};
 
 const isNonEmptyString = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0;
 
@@ -441,11 +490,11 @@ const validateExampleChrome = (sample: LoadedGallerySample, errors: string[]) =>
         const exampleElements = elements.filter((element: any) => hasTextBinding(element, 'example_label'));
         if (exampleElements.length === 0) {
             errors.push(`node '${nodeId}' template '${node.type}' does not bind example_label`);
-        } else if (!exampleElements.some((element: any) => isVisibleTextBinding(element, 'example_label'))) {
+        } else if (!exampleElements.some((element: any) => isVisibleTextBinding(element, 'example_label', template))) {
             errors.push(`node '${nodeId}' template '${node.type}' does not have a visible text binding for example_label`);
         }
         const boundSkipElements = elements.filter((element: any) => hasTextBinding(element, 'skip_label'));
-        const skipElements = boundSkipElements.filter((element: any) => isVisibleTextBinding(element, 'skip_label'));
+        const skipElements = boundSkipElements.filter((element: any) => isVisibleTextBinding(element, 'skip_label', template));
         if (boundSkipElements.length === 0) errors.push(`node '${nodeId}' template '${node.type}' does not bind skip_label`);
         else if (skipElements.length === 0) {
             errors.push(`node '${nodeId}' template '${node.type}' does not have a visible text binding for skip_label`);
