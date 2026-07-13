@@ -35,12 +35,14 @@ const addNode = (id, parentId, type, title, data = {}, options = {}) => {
 
 const recipeData = (values = {}) => ({
   subtitle: 'A calm page for ingredients, method, and what to change next time.',
+  menu_label: '',
   fictional_notice: '',
   yield: '',
   prep: '',
   cook: '',
   difficulty: '',
   ingredients: '',
+  ingredient_requirements: [],
   method: '',
   notes: '',
   repeat_rating: '',
@@ -115,12 +117,23 @@ addNode('example_category_autumn', 'example_season_index', 'category', 'Autumn S
 
 addNode('example_recipe_squash', 'example_category_autumn', 'recipe', 'Charred Squash & Barley Bowls', recipeData({
   subtitle: 'A fictional grain bowl with sharp greens and toasted seeds.',
+  menu_label: 'Squash + barley',
   fictional_notice: 'Fictional recipe example - verify ingredients and cooking times for your kitchen.',
   yield: '4 bowls',
   prep: '20 min',
   cook: '42 min',
   difficulty: 'Easy',
-  ingredients: '1 small amber squash\n250 g pearl barley\n2 handfuls bitter greens\n80 g pumpkin seeds\n1 lemon\nOlive oil, salt, pepper',
+  ingredients: '1 small amber squash\n250 g pearl barley\n2 handfuls bitter greens\n80 g pumpkin seeds\n1 lemon\n30 ml olive oil\n1 tsp salt\n1/2 tsp pepper',
+  ingredient_requirements: [
+    { ingredient: 'amber squash', needed: '1 small', source: 'shopping', field: 'produce_1' },
+    { ingredient: 'pearl barley', needed: '250 g', source: 'shopping', field: 'pantry_1' },
+    { ingredient: 'bitter greens', needed: '2 handfuls', source: 'pantry', field: 'use_first_3' },
+    { ingredient: 'pumpkin seeds', needed: '80 g', source: 'pantry', field: 'staple_4' },
+    { ingredient: 'lemon', needed: '1', source: 'pantry', field: 'use_first_4' },
+    { ingredient: 'olive oil', needed: '30 ml', source: 'pantry', field: 'staple_1' },
+    { ingredient: 'salt', needed: '1 tsp', source: 'pantry', field: 'staple_2' },
+    { ingredient: 'pepper', needed: '1/2 tsp', source: 'pantry', field: 'staple_2' },
+  ],
   method: '1. Roast squash wedges until browned.\n2. Simmer barley until tender; drain well.\n3. Wilt greens in the warm pan.\n4. Layer barley, squash, greens, and seeds.\n5. Finish with lemon and olive oil.',
   notes: 'Roast extra squash for Thursday orzo. Keep barley and dressing separate for lunches.',
   repeat_rating: '4 / 5\nRepeat in late autumn',
@@ -128,12 +141,24 @@ addNode('example_recipe_squash', 'example_category_autumn', 'recipe', 'Charred S
 
 addNode('example_recipe_orzo', 'example_category_autumn', 'recipe', 'Tomato-Sage Orzo Bake', recipeData({
   subtitle: 'A fictional one-dish bake using reserved roast squash.',
+  menu_label: 'Tomato-sage orzo',
   fictional_notice: 'Fictional recipe example - verify ingredients and cooking times for your kitchen.',
   yield: '4 portions',
   prep: '15 min',
   cook: '35 min',
   difficulty: 'Easy',
-  ingredients: '300 g orzo\n400 g crushed tomatoes\nReserved roast squash\n120 g feta\n8 sage leaves\n700 ml vegetable stock\nOlive oil, salt, pepper',
+  ingredients: '300 g orzo\n400 g crushed tomatoes\nAmber squash reserved from 1 small squash\n120 g feta\nSage / 8 leaves\n700 ml vegetable stock\n15 ml olive oil\n1 tsp salt\n1/2 tsp pepper',
+  ingredient_requirements: [
+    { ingredient: 'orzo', needed: '300 g', source: 'shopping', field: 'pantry_2' },
+    { ingredient: 'crushed tomatoes', needed: '400 g', source: 'shopping', field: 'pantry_3' },
+    { ingredient: 'amber squash', needed: 'reserved from 1 small squash', source: 'shopping', field: 'produce_1' },
+    { ingredient: 'feta', needed: '120 g', source: 'shopping', field: 'chilled_1' },
+    { ingredient: 'sage', needed: '8 leaves', source: 'shopping', field: 'produce_3' },
+    { ingredient: 'vegetable stock', needed: '700 ml', source: 'pantry', field: 'freezer_1' },
+    { ingredient: 'olive oil', needed: '15 ml', source: 'pantry', field: 'staple_1' },
+    { ingredient: 'salt', needed: '1 tsp', source: 'pantry', field: 'staple_2' },
+    { ingredient: 'pepper', needed: '1/2 tsp', source: 'pantry', field: 'staple_2' },
+  ],
   method: '1. Stir orzo, tomatoes, stock, and chopped sage in a baking dish.\n2. Fold in roast squash.\n3. Bake until the orzo is tender.\n4. Crumble feta over the top and brown briefly.\n5. Rest before serving.',
   notes: 'Add stock only as needed near the end. Pack two portions before serving for Friday lunch.',
   repeat_rating: '5 / 5\nKeep in rotation',
@@ -141,12 +166,22 @@ addNode('example_recipe_orzo', 'example_category_autumn', 'recipe', 'Tomato-Sage
 
 addNode('example_recipe_crumble', 'example_category_autumn', 'recipe', 'Pear, Oat & Thyme Crumble', recipeData({
   subtitle: 'A fictional not-too-sweet bake for the end of the week.',
+  menu_label: 'Pear oat crumble',
   fictional_notice: 'Fictional recipe example - verify ingredients and cooking times for your kitchen.',
   yield: '6 servings',
   prep: '18 min',
   cook: '32 min',
   difficulty: 'Easy',
-  ingredients: '5 ripe pears\n120 g rolled oats\n80 g plain flour\n70 g butter\n55 g brown sugar\n4 thyme sprigs\n1 lemon',
+  ingredients: '5 ripe pears\n120 g rolled oats\n80 g plain flour\n70 g butter\n55 g brown sugar\nThyme / 4 sprigs\n1 lemon',
+  ingredient_requirements: [
+    { ingredient: 'ripe pears', needed: '5', source: 'shopping', field: 'produce_2' },
+    { ingredient: 'rolled oats', needed: '120 g', source: 'shopping', field: 'pantry_3' },
+    { ingredient: 'plain flour', needed: '80 g', source: 'shopping', field: 'pantry_3' },
+    { ingredient: 'butter', needed: '70 g', source: 'shopping', field: 'chilled_2' },
+    { ingredient: 'brown sugar', needed: '55 g', source: 'pantry', field: 'staple_3' },
+    { ingredient: 'thyme', needed: '4 sprigs', source: 'shopping', field: 'produce_3' },
+    { ingredient: 'lemon', needed: '1', source: 'pantry', field: 'use_first_4' },
+  ],
   method: '1. Slice pears and toss with lemon and thyme.\n2. Rub butter into flour, oats, and sugar.\n3. Scatter topping over pears.\n4. Bake until bubbling and deeply golden.\n5. Cool for ten minutes before serving.',
   notes: 'Assemble after Saturday breakfast. Reheat uncovered so the topping stays crisp.',
   repeat_rating: '4 / 5\nTry with apples next',
@@ -166,12 +201,12 @@ addNode('example_meal_plan', 'example_workspace', 'meal_plan', 'Autumn Week Meal
 }), { example: true });
 addNode('example_shopping', 'example_meal_plan', 'shopping', 'Combined Autumn Shopping List', shoppingData('example_meal_plan', {
   subtitle: 'Fictional combined list | Quantities support the three example recipes and planned leftovers.',
-  produce_1: '1 small amber squash', produce_2: '5 ripe pears', produce_3: 'Greens, lemon, sage, thyme',
-  pantry_1: 'Pearl barley, 250 g', pantry_2: 'Orzo, 300 g', pantry_3: 'Oats, flour, tomatoes, stock',
-  chilled_1: 'Feta, 120 g', chilled_2: 'Butter, 70 g', chilled_3: 'Yogurt and eggs',
-  bakery_1: 'Country loaf', bakery_2: 'Optional flatbreads', bakery_3: '-',
-  household_1: 'Baking paper', household_2: 'Freezer labels', household_3: '-',
-  list_note: 'Produce first; bakery last. Check oats, oil, salt, and pepper before leaving.',
+  produce_1: 'Amber squash / 1 small', produce_2: 'Ripe pears / 5', produce_3: 'Sage / 8 leaves\nThyme / 4 sprigs',
+  pantry_1: 'Pearl barley / 250 g', pantry_2: 'Orzo / 300 g', pantry_3: 'Crushed tomatoes / 400 g\nRolled oats / 120 g\nPlain flour / 80 g',
+  chilled_1: 'Feta / 120 g', chilled_2: 'Butter / 70 g', chilled_3: 'Eggs / 6',
+  bakery_1: 'Country loaf / 1', bakery_2: 'Flatbreads / 1 pack (optional)', bakery_3: '',
+  household_1: 'No items needed', household_2: '', household_3: '',
+  list_note: 'Pantry check covers stock, greens, lemons, oil, salt, pepper, sugar, seeds, and yogurt.',
 }), { example: true });
 
 [
@@ -184,10 +219,10 @@ addNode('example_shopping', 'example_meal_plan', 'shopping', 'Combined Autumn Sh
 
 addNode('example_pantry', 'example_workspace', 'pantry', 'Autumn Pantry Check', pantryData({
   subtitle: 'Fictional pantry scan completed before building the combined list.',
-  staple_1: 'Olive oil', freezer_1: 'Vegetable stock', use_first_1: 'Half loaf',
-  staple_2: 'Salt + pepper', freezer_2: 'Cooked beans', use_first_2: 'Open yogurt',
-  staple_3: 'Brown sugar', freezer_3: 'Herb stems', use_first_3: 'Bitter greens',
-  staple_4: 'Pumpkin seeds', freezer_4: '', use_first_4: 'Two lemons',
+  staple_1: 'Olive oil / 500 ml', freezer_1: 'Vegetable stock / 1 L', use_first_1: 'Country loaf / half',
+  staple_2: 'Salt / 200 g; pepper / 50 g', freezer_2: 'Cooked beans / 2 cups', use_first_2: 'Yogurt / 350 g',
+  staple_3: 'Brown sugar / 200 g', freezer_3: 'Herb stems / 1 bag', use_first_3: 'Bitter greens / 2 handfuls',
+  staple_4: 'Pumpkin seeds / 100 g', freezer_4: '', use_first_4: 'Lemons / 2',
   staple_5: '', freezer_5: '', use_first_5: '',
   staple_6: '', freezer_6: '', use_first_6: '',
   pantry_note: 'Use the open yogurt with breakfasts and Sunday crumble; no extra jar needed.',
@@ -219,7 +254,9 @@ for (let category = 1; category <= CONFIG.categoryCount; category += 1) {
   for (let recipe = 1; recipe <= CONFIG.recipesPerCategory; recipe += 1) {
     const recipeNumber = String(recipe).padStart(2, '0');
     const recipeId = `blank_recipe_${categoryNumber}_${recipeNumber}`;
-    addNode(recipeId, categoryId, 'recipe', `${categoryNames[category - 1]} Recipe ${recipeNumber}`, recipeData());
+    addNode(recipeId, categoryId, 'recipe', `${categoryNames[category - 1]} Recipe ${recipeNumber}`, recipeData({
+      menu_label: `Recipe ${recipeNumber}`,
+    }));
     blankRecipeIds.push(recipeId);
   }
 }

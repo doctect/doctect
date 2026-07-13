@@ -48,11 +48,11 @@ const text = (templateId, role, x, y, w, h, value, extra = {}) =>
 const svg = (templateId, role, x, y, w, h, svgContent) =>
   base(templateId, role, 'svg', x, y, w, h, { svgContent });
 
-const grid = (templateId, role, x, y, cellW, cellH, cols, extra = {}) =>
+const grid = (templateId, role, x, y, cellW, cellH, cols, extra = {}, fontFamily = 'georgia') =>
   base(templateId, role, 'grid', x, y, cellW, cellH, {
     fill: COLORS.paper,
     fontSize: 10,
-    fontFamily: 'georgia',
+    fontFamily,
     textColor: COLORS.oliveDeep,
     borderRadius: 3,
     gridConfig: {
@@ -359,7 +359,7 @@ const category = {
     text('category', 'prompt', 35, 166, 446, 34, '{{category_note}}', {
       dataBinding: 'category_note', fontFamily: 'georgia', fontSize: 11, textColor: COLORS.tomatoDeep,
     }),
-    grid('category', 'navigator', 35, 222, 102, 58, 4),
+    grid('category', 'navigator', 35, 222, 102, 58, 4, { displayField: 'menu_label' }, 'helvetica'),
   ],
 };
 

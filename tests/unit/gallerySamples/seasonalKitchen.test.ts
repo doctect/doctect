@@ -1,4 +1,7 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { jsPDF } from 'jspdf';
 import { getElementBounds } from '../../../components/canvas/elementBounds';
 import { computePageOrder } from '../../../services/pdfService';
 import {
@@ -26,6 +29,16 @@ const role = (sample: ReturnType<typeof loadGallerySample>, templateId: string, 
     sample.templates[templateId].elements.find((element: any) => element.id.includes(`_${name}_`));
 
 describe('Seasonal Kitchen gallery sample', () => {
+    it('documents shopping quantities as pantry-checked shortages', () => {
+        const readme = readFileSync(join(
+            process.cwd(),
+            'gallery-samples/05-seasonal-kitchen/README.md',
+        ), 'utf8');
+
+        expect(readme).toMatch(/quantified shopping list includes only ingredients absent or insufficient/i);
+        expect(readme).toMatch(/stocked ingredients are omitted/i);
+    });
+
     it('generates complete default recipe and planning banks', () => {
         const sample = expectValidGallerySample(contract.slug, contract);
         const blankNodes = Object.values(sample.nodes).filter((node: any) =>
@@ -79,6 +92,30 @@ describe('Seasonal Kitchen gallery sample', () => {
     });
 
     it.each([
+        ['default', {}],
+        ['maximum', { categoryCount: 8, recipesPerCategory: 16, mealPlanWeeks: 52 }],
+    ])('fits every %s recipe menu label inside its PDF grid cell', (_, config) => {
+        const sample = loadGallerySample(contract.slug, config);
+        const navigator = role(sample, 'category', 'navigator');
+        const pdf = new jsPDF({ unit: 'pt', format: [509, 679] });
+        const availableTextWidth = navigator.w - 8;
+
+        expect(navigator.gridConfig.displayField).toBe('menu_label');
+        expect(navigator.fontFamily).toBe('helvetica');
+        pdf.setFont(navigator.fontFamily, navigator.fontWeight || 'normal');
+        pdf.setFontSize(navigator.fontSize);
+
+        Object.values(sample.nodes)
+            .filter((node: any) => node.type === 'category')
+            .flatMap((node: any) => node.children.map((childId: string) => sample.nodes[childId]))
+            .forEach((recipe: any) => {
+                expect(recipe.data.menu_label, recipe.id).toBeTruthy();
+                expect(pdf.getTextWidth(recipe.data.menu_label), recipe.id).toBeLessThanOrEqual(availableTextWidth);
+                expect(recipe.title.length, recipe.id).toBeGreaterThanOrEqual(recipe.data.menu_label.length);
+            });
+    });
+
+    it.each([
         ['categoryCount', 0],
         ['categoryCount', 9],
         ['recipesPerCategory', 0],
@@ -107,14 +144,71 @@ describe('Seasonal Kitchen gallery sample', () => {
         expect(plan.children[0]).toBe('example_shopping');
         expect(plan.children.slice(1).map((id: string) => sample.nodes[id].referenceId))
             .toEqual(recipes.map(recipe => recipe.id));
-        expect(shopping.data).toMatchObject({
-            plan_id: 'example_meal_plan',
-            produce_1: '1 small amber squash',
-            pantry_1: 'Pearl barley, 250 g',
-            chilled_1: 'Feta, 120 g',
-            bakery_1: 'Country loaf',
-        });
+        expect(shopping.data.plan_id).toBe('example_meal_plan');
         expect(shopping.data.household_1).toBeTruthy();
+    });
+
+    it('maps every guided recipe ingredient to quantified pantry stock or shopping', () => {
+        const sample = loadGallerySample(contract.slug);
+        const pantry = sample.nodes.example_pantry.data;
+        const shopping = sample.nodes.example_shopping.data;
+        const expected = {
+            example_recipe_squash: [
+                ['amber squash', '1 small', 'shopping', 'produce_1', '1 small'],
+                ['pearl barley', '250 g', 'shopping', 'pantry_1', '250 g'],
+                ['bitter greens', '2 handfuls', 'pantry', 'use_first_3', '2 handfuls'],
+                ['pumpkin seeds', '80 g', 'pantry', 'staple_4', '100 g'],
+                ['lemon', '1', 'pantry', 'use_first_4', '2'],
+                ['olive oil', '30 ml', 'pantry', 'staple_1', '500 ml'],
+                ['salt', '1 tsp', 'pantry', 'staple_2', '200 g'],
+                ['pepper', '1/2 tsp', 'pantry', 'staple_2', '50 g'],
+            ],
+            example_recipe_orzo: [
+                ['orzo', '300 g', 'shopping', 'pantry_2', '300 g'],
+                ['crushed tomatoes', '400 g', 'shopping', 'pantry_3', '400 g'],
+                ['amber squash', 'reserved from 1 small squash', 'shopping', 'produce_1', '1 small'],
+                ['feta', '120 g', 'shopping', 'chilled_1', '120 g'],
+                ['sage', '8 leaves', 'shopping', 'produce_3', '8 leaves'],
+                ['vegetable stock', '700 ml', 'pantry', 'freezer_1', '1 L'],
+                ['olive oil', '15 ml', 'pantry', 'staple_1', '500 ml'],
+                ['salt', '1 tsp', 'pantry', 'staple_2', '200 g'],
+                ['pepper', '1/2 tsp', 'pantry', 'staple_2', '50 g'],
+            ],
+            example_recipe_crumble: [
+                ['ripe pears', '5', 'shopping', 'produce_2', '5'],
+                ['rolled oats', '120 g', 'shopping', 'pantry_3', '120 g'],
+                ['plain flour', '80 g', 'shopping', 'pantry_3', '80 g'],
+                ['butter', '70 g', 'shopping', 'chilled_2', '70 g'],
+                ['brown sugar', '55 g', 'pantry', 'staple_3', '200 g'],
+                ['thyme', '4 sprigs', 'shopping', 'produce_3', '4 sprigs'],
+                ['lemon', '1', 'pantry', 'use_first_4', '2'],
+            ],
+        };
+
+        Object.entries(expected).forEach(([recipeId, requirements]) => {
+            const recipeData = sample.nodes[recipeId].data;
+            const ingredientLines = recipeData.ingredients.split('\n').map((line: string) => line.toLowerCase());
+            expect(ingredientLines, `${recipeId} displayed ingredient count`).toHaveLength(requirements.length);
+            requirements.forEach(([ingredient, needed]) => {
+                expect(ingredientLines.some((line: string) =>
+                    line.includes(ingredient) && line.includes(needed),
+                ), `${recipeId}: displayed ${needed} ${ingredient}`).toBe(true);
+            });
+            expect(recipeData.ingredient_requirements, recipeId).toEqual(
+                requirements.map(([ingredient, needed, source, field]) => ({ ingredient, needed, source, field })),
+            );
+            requirements.forEach(([ingredient, , source, field, coverage]) => {
+                const target = source === 'pantry' ? pantry[field] : shopping[field];
+                expect(target.toLowerCase(), `${recipeId}: ${ingredient}`).toContain(ingredient.split(',')[0]);
+                expect(target, `${recipeId}: ${ingredient} quantity`).toContain(coverage);
+            });
+        });
+
+        const shoppingText = Object.entries(shopping)
+            .filter(([field]) => /^(produce|pantry|chilled|bakery|household)_\d+$/.test(field))
+            .map(([, value]) => value)
+            .join(' ');
+        expect(shoppingText).not.toMatch(/vegetable stock|bitter greens|lemons?/i);
     });
 
     it('keeps every guided page visibly bound to EXAMPLE and Skip chrome', () => {

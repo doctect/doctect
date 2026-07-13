@@ -28,6 +28,8 @@ The fictional example links:
 - One pantry check
 - One combined shopping list with quantities grouped by shop section
 
+The quantified shopping list includes only ingredients absent or insufficient after the pantry check. Stocked ingredients are omitted; the example does not rebuy vegetable stock, bitter greens, lemons, oil, seasonings, sugar, seeds, or yogurt already available in adequate quantities.
+
 Recipe pages return to the meal plan through semantic recipe references. The meal plan opens its own shopping list and first linked recipe. The shopping list returns to its parent plan.
 
 ## Configuration
