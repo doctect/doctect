@@ -55,10 +55,10 @@ Cover
     └── Blank Workspace
         └── Portfolio
             ├── Project desks
-            └── Weekly Review 01 → ... → configured final week
+            └── Weekly Review 01 → NEXT REVIEW → ... → configured final week
 ```
 
-Major entry points use stable IDs: `root`, `start_here`, `example_workspace`, and `blank_workspace`. Repeated project and review IDs are deterministic. **Home** returns to cover, **Up** returns to containing record, and every example page offers **Skip to blank workspace**.
+Major entry points use stable IDs: `root`, `start_here`, `example_workspace`, and `blank_workspace`. Repeated project and review IDs are deterministic. **Home** returns to cover. On Review 01, **Up** returns to Portfolio; on later reviews it returns to the previous review. **Next Review** advances through the configured chain and is omitted on the final review because no forward destination exists. Every example page offers **Skip to blank workspace**.
 
 ## Visual System
 

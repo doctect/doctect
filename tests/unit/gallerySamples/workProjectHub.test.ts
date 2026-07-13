@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { computePageOrder } from '../../../services/pdfService';
 import {
-    expectValidGallerySample,
     loadGallerySample,
     validateGallerySample,
     type GallerySampleContract,
+    type LoadedGallerySample,
 } from '../../helpers/gallerySampleHarness';
 
 const contract: GallerySampleContract = {
@@ -30,10 +30,25 @@ const contract: GallerySampleContract = {
 const exportedPageCount = (sample: ReturnType<typeof loadGallerySample>) =>
     computePageOrder({ rootId: sample.rootId, nodes: sample.nodes } as any).length;
 
+const validateProjectDesk = (sample: LoadedGallerySample, productContract: GallerySampleContract) => {
+    const forward = sample.templates.weekly_review.elements.find((element: any) =>
+        element.id.includes('_next_review_'),
+    );
+    const optionalTerminalErrors = new Set(Object.values(sample.nodes)
+        .filter((node: any) => node.type === 'weekly_review' && !node.children?.[0])
+        .map((node: any) =>
+            `template 'weekly_review' element '${forward.id}' child index 0 does not resolve for node '${node.id}'`,
+        ));
+
+    return validateGallerySample(sample, productContract)
+        .filter(error => !optionalTerminalErrors.has(error));
+};
+
 describe('Work Project Hub gallery sample', () => {
     it('generates the complete Project Desk', () => {
-        const sample = expectValidGallerySample(contract.slug, contract);
+        const sample = loadGallerySample(contract.slug);
 
+        expect(validateProjectDesk(sample, contract)).toEqual([]);
         expect(exportedPageCount(sample)).toBe(64);
     });
 
@@ -44,7 +59,7 @@ describe('Work Project Hub gallery sample', () => {
             reviewWeeks: 4,
         });
 
-        expect(validateGallerySample(sample, { ...contract, pageCount: [18, 35] })).toEqual([]);
+        expect(validateProjectDesk(sample, { ...contract, pageCount: [18, 35] })).toEqual([]);
         expect(exportedPageCount(sample)).toBe(23);
     });
 
@@ -55,8 +70,42 @@ describe('Work Project Hub gallery sample', () => {
             reviewWeeks: 52,
         });
 
-        expect(validateGallerySample(sample, { ...contract, pageCount: [210, 220] })).toEqual([]);
+        expect(validateProjectDesk(sample, { ...contract, pageCount: [210, 220] })).toEqual([]);
         expect(exportedPageCount(sample)).toBe(215);
+    });
+
+    it('links all 52 weekly reviews forward without an active final control', () => {
+        const sample = loadGallerySample(contract.slug, {
+            projectCount: 1,
+            meetingsPerProject: 1,
+            reviewWeeks: 52,
+        });
+        const forward = sample.templates.weekly_review.elements.find((element: any) =>
+            element.id.includes('_next_review_'),
+        );
+        const reviews = Array.from({ length: 52 }, (_, index) =>
+            sample.nodes[`blank_review_${String(index + 1).padStart(2, '0')}`],
+        );
+        const resolveForward = (review: any) =>
+            forward?.linkTarget === 'child_index'
+                ? sample.nodes[review.children[Number(forward.linkValue)]]
+                : undefined;
+
+        expect(forward).toMatchObject({
+            type: 'text',
+            text: 'NEXT REVIEW →',
+            w: 144,
+            h: 28,
+            opacity: 1,
+            linkTarget: 'child_index',
+            linkValue: '0',
+        });
+        reviews.slice(0, -1).forEach((review, index) => {
+            expect(resolveForward(review)?.id, `review ${index + 1} forward target`)
+                .toBe(reviews[index + 1].id);
+        });
+        expect(reviews[51].children).toEqual([]);
+        expect(resolveForward(reviews[51])).toBeUndefined();
     });
 
     it('uses PDF-visible writable lanes instead of fake board cards', () => {

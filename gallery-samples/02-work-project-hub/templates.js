@@ -611,12 +611,21 @@ const weeklyReviewElements = [
   ...field('weekly_review', 'friction', 267, 222, 214, 129, 'Friction / risks', 'friction'),
   ...field('weekly_review', 'decisions', 39, 365, 442, 91, 'Decisions needed', 'decisions_needed'),
   ...field('weekly_review', 'next', 39, 470, 442, 106, 'Next week / one outcome per project', 'next_week'),
-  text('weekly_review', 'close', 39, 592, 442, 28, 'CLOSE LOOPS BEFORE OPENING NEW WORK', {
+  text('weekly_review', 'close', 39, 592, 286, 28, 'CLOSE LOOPS BEFORE OPENING NEW WORK', {
     fontSize: 10,
     fontWeight: 'bold',
     textColor: COLORS.navy,
     fill: COLORS.ochrePale,
     align: 'center',
+  }),
+  text('weekly_review', 'next_review', 337, 592, 144, 28, 'NEXT REVIEW →', {
+    fontSize: 10,
+    fontWeight: 'bold',
+    textColor: COLORS.stone,
+    fill: COLORS.navy,
+    align: 'center',
+    linkTarget: 'child_index',
+    linkValue: '0',
   }),
 ];
 
