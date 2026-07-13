@@ -1766,7 +1766,9 @@ export const generatePDF = async (state: AppState, options: GeneratePDFOptions =
             if (hasTransform) doc.restoreGraphicsState();
 
             // Apply Link (if resolvedTargetId exists from earlier validation check)
-            applyElementLink(el, x, y, w, h, angle, resolvedTargetId);
+            if (el.type !== 'text' || textContent) {
+                applyElementLink(el, x, y, w, h, angle, resolvedTargetId);
+            }
         }
     }
 

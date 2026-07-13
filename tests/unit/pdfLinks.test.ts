@@ -14,10 +14,10 @@ const baseEl = (id: string, zIndex: number) => ({
     layerId: 'main', zIndex,
 });
 
-const makeState = (elements: any[], extraNodesChildren = false): AppState => ({
+const makeState = (elements: any[], extraNodesChildren = false, rootData: Record<string, string> = {}): AppState => ({
     schemaVersion: 8,
     nodes: {
-        root: { id: 'root', parentId: null, type: 'page', title: 'Root', data: {}, children: extraNodesChildren ? ['second'] : [] },
+        root: { id: 'root', parentId: null, type: 'page', title: 'Root', data: rootData, children: extraNodesChildren ? ['second'] : [] },
         ...(extraNodesChildren ? {
             second: { id: 'second', parentId: 'root', type: 'page2', title: 'Second', data: {}, children: [] },
         } : {}),
@@ -83,6 +83,20 @@ describe('PDF export link annotations', () => {
             { ...baseEl('s2', 0), type: 'svg', svgContent: SVG_CONTENT, linkTarget: 'specific_node', linkValue: 'second' },
         ], true));
         // jsPDF serializes internal links as a /Dest entry in the annotation dict
+        expect(pdf).toContain('/Dest');
+    });
+
+    it('omits internal link annotations for text with an empty resolved binding', async () => {
+        const pdf = await exportBytes(makeState([
+            { ...baseEl('t1', 0), type: 'text', dataBinding: 'skipLabel', linkTarget: 'specific_node', linkValue: 'second' },
+        ], true));
+        expect(pdf).not.toContain('/Dest');
+    });
+
+    it('writes internal link annotations for text with a non-empty resolved binding', async () => {
+        const pdf = await exportBytes(makeState([
+            { ...baseEl('t1', 0), type: 'text', dataBinding: 'skipLabel', linkTarget: 'specific_node', linkValue: 'second' },
+        ], true, { skipLabel: 'Skip' }));
         expect(pdf).toContain('/Dest');
     });
 });
