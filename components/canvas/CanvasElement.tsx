@@ -2,6 +2,7 @@
 import React from 'react';
 import DOMPurify from 'dompurify';
 import { TemplateElement, AppNode } from '../../types';
+import { hasVisibleTextFontSize, isVisibleText, resolveTextFontSize } from '../../services/textVisibility';
 import { getElementBounds, traverseGridData } from './elementBounds';
 
 
@@ -247,6 +248,14 @@ export const CanvasElement: React.FC<CanvasElementProps> = (props) => {
     const { element, selected, nodes, currentNodeId, tool, showHandles, onDoubleClick, isEditing } = props;
 
     const contextNode = nodes[currentNodeId];
+    const effectiveFontSize = resolveTextFontSize(element.fontSize);
+    const renderedFontSize = hasVisibleTextFontSize(element.fontSize) ? effectiveFontSize : undefined;
+    const resolvedElementText = resolveText(
+        element.dataBinding ? `{{${element.dataBinding}}}` : (element.text || ""),
+        contextNode,
+        nodes,
+    );
+    const renderElementText = isVisibleText(resolvedElementText, element.fontSize);
 
     const getBackgroundStyle = (el: TemplateElement): React.CSSProperties => {
         if (el.type === 'line') return {};
@@ -545,7 +554,7 @@ export const CanvasElement: React.FC<CanvasElementProps> = (props) => {
                             display: 'flex',
                             justifyContent: element.align === 'left' ? 'flex-start' : element.align === 'right' ? 'flex-end' : 'center',
                             alignItems: element.verticalAlign === 'top' ? 'flex-start' : element.verticalAlign === 'bottom' ? 'flex-end' : 'center',
-                            fontSize: element.fontSize || 12,
+                            fontSize: renderedFontSize,
                             color: cellTextColor,
                             fontFamily: fontFamily,
                             fontWeight: cellFontWeight,
@@ -553,7 +562,9 @@ export const CanvasElement: React.FC<CanvasElementProps> = (props) => {
                             textDecoration: element.textDecoration,
                             textDecorationColor: cellTextColor,
                             overflow: 'hidden'
-                        }}><span className="truncate" style={{ padding: '0 1px' }}>{label}</span></div>
+                        }}>{isVisibleText(label, element.fontSize) && (
+                            <span className="truncate" style={{ padding: '0 1px' }}>{label}</span>
+                        )}</div>
                     );
                 })}
 
@@ -662,7 +673,7 @@ export const CanvasElement: React.FC<CanvasElementProps> = (props) => {
                     </svg>
                 )}
 
-                {(element.text || element.dataBinding) && (
+                {renderElementText && (
                     <div className="absolute inset-0 flex" style={{
                         justifyContent: 'center',
                         alignItems: element.verticalAlign === 'top' ? 'flex-start' : element.verticalAlign === 'bottom' ? 'flex-end' : 'center',
@@ -670,7 +681,7 @@ export const CanvasElement: React.FC<CanvasElementProps> = (props) => {
                         paddingBottom: element.verticalAlign === 'bottom' ? 5 : 0,
                         color: element.textColor,
                         fontFamily: fontFamily,
-                        fontSize: element.fontSize,
+                        fontSize: effectiveFontSize,
                         fontWeight: element.fontWeight,
                         fontStyle: element.fontStyle,
                         textDecoration: element.textDecoration,
@@ -680,7 +691,7 @@ export const CanvasElement: React.FC<CanvasElementProps> = (props) => {
                         pointerEvents: 'none',
                         zIndex: 2
                     }}>
-                        {resolveText(element.dataBinding ? `{{${element.dataBinding}}}` : (element.text || ""), contextNode, nodes)}
+                        {resolvedElementText}
                     </div>
                 )}
 
@@ -708,7 +719,7 @@ export const CanvasElement: React.FC<CanvasElementProps> = (props) => {
                 }} />
             )}
 
-            {(element.text || element.dataBinding) && (
+            {renderElementText && (
                 <div className="absolute flex" style={{
                     // Position at element origin with full height for vertical alignment
                     top: 0, left: 0,
@@ -719,7 +730,7 @@ export const CanvasElement: React.FC<CanvasElementProps> = (props) => {
                     alignItems: element.verticalAlign === 'top' ? 'flex-start' : element.verticalAlign === 'bottom' ? 'flex-end' : 'center',
                     color: element.textColor,
                     fontFamily: fontFamily,
-                    fontSize: element.fontSize,
+                    fontSize: effectiveFontSize,
                     lineHeight: 1.2, // Explicit line-height to match PDF rendering
                     fontWeight: element.fontWeight,
                     fontStyle: element.fontStyle,
@@ -731,7 +742,7 @@ export const CanvasElement: React.FC<CanvasElementProps> = (props) => {
                     zIndex: 2,
                     opacity: isEditing ? 0 : 1
                 }}>
-                    {resolveText(element.dataBinding ? `{{${element.dataBinding}}}` : (element.text || ""), contextNode, nodes)}
+                    {resolvedElementText}
                 </div>
             )}
 

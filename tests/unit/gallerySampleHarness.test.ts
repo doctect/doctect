@@ -184,6 +184,34 @@ describe('gallery sample harness', () => {
         ]));
     });
 
+    it.each([
+        ['all', ''],
+        ['outside', '   '],
+        ['inside', 'transparent'],
+        ['all', '#1234'],
+        ['outside', '#12345678'],
+        ['inside', '#ggg'],
+        ['all', '#12345z'],
+        ['outside', 'red'],
+        ['inside', 'rgba(1, 2, 3, 1)'],
+    ])('requires an opaque renderer-supported hex color for %s grid mode: %j', (mode, color) => {
+        const sample = execute();
+        const grid = sample.templates.page.elements.find((element: any) => element.id === 'page_grid');
+        Object.assign(grid.gridConfig, { gridBorderMode: mode, gridBorderColor: color });
+
+        expect(validateSharedGalleryInvariants(sample)).toEqual(expect.arrayContaining([
+            expect.stringContaining('gridBorderColor must be opaque #RGB or #RRGGBB'),
+        ]));
+    });
+
+    it.each(['#abc', '#A1B2C3'])('accepts bordered grid color %s', color => {
+        const sample = execute();
+        const grid = sample.templates.page.elements.find((element: any) => element.id === 'page_grid');
+        grid.gridConfig.gridBorderColor = color;
+
+        expect(validateSharedGalleryInvariants(sample)).toEqual([]);
+    });
+
     it('allows a deliberately borderless grid with zero width and none style', () => {
         const sample = execute();
         const grid = sample.templates.page.elements.find((element: any) => element.id === 'page_grid');
@@ -192,6 +220,19 @@ describe('gallery sample harness', () => {
             gridBorderWidth: 0,
             gridBorderStyle: 'none',
         });
+
+        expect(validateSharedGalleryInvariants(sample)).toEqual([]);
+    });
+
+    it('allows a borderless grid to omit its unused color', () => {
+        const sample = execute();
+        const grid = sample.templates.page.elements.find((element: any) => element.id === 'page_grid');
+        Object.assign(grid.gridConfig, {
+            gridBorderMode: 'none',
+            gridBorderWidth: 0,
+            gridBorderStyle: 'none',
+        });
+        delete grid.gridConfig.gridBorderColor;
 
         expect(validateSharedGalleryInvariants(sample)).toEqual([]);
     });
@@ -277,6 +318,13 @@ describe('gallery sample harness', () => {
             name: 'example label with non-finite font size',
             configure: (sample: LoadedGallerySample) => {
                 sample.templates.page.elements.find((element: any) => element.id === 'page_badge').fontSize = Number.POSITIVE_INFINITY;
+            },
+            error: 'visible text binding for example_label',
+        },
+        {
+            name: 'example label with NaN font size',
+            configure: (sample: LoadedGallerySample) => {
+                sample.templates.page.elements.find((element: any) => element.id === 'page_badge').fontSize = Number.NaN;
             },
             error: 'visible text binding for example_label',
         },

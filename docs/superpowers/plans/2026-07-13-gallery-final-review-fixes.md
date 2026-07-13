@@ -4,7 +4,7 @@
 
 **Goal:** Close all final whole-branch reviewer findings for gallery chrome, grid ownership, PDF text visibility, deterministic hierarchy IDs, and TTRPG documentation.
 
-**Architecture:** Gallery collection tests define cross-product geometry and grid contracts while focused product tests define Academic/Work border structure. PDF export resolves and trims text once, computes an explicit-font visibility predicate, and uses that predicate for glyph and annotation emission. Hierarchy determinism re-executes scripts with the same injected deterministic `createId` sequence and compares node keys and IDs.
+**Architecture:** Gallery collection tests define cross-product geometry and grid contracts while focused product tests define Academic/Work border structure. PDF export resolves text once, uses trimming only for its visibility predicate, and preserves original visible text for glyph emission. Hierarchy determinism re-executes scripts with the same injected deterministic `createId` sequence and compares node keys and IDs.
 
 **Tech Stack:** TypeScript, JavaScript generator scripts, Vitest, jsPDF, React/Vite, Playwright Chromium, PDF.js, Poppler.
 
@@ -116,7 +116,7 @@ Expected: explicit zero currently falls back to 12 and whitespace remains truthy
 
 - [ ] **Step 3: Implement one visibility predicate**
 
-Trim `resolveText` output. Compute `fontSize = el.fontSize === undefined ? 12 : Number(el.fontSize)` and `renderText = textContent.length > 0 && Number.isFinite(fontSize) && fontSize > 0`. Use `renderText` around `applyFont`, text drawing, decoration, and text-element `applyElementLink`; retain non-text link behavior and grid/runtime defaults.
+Retain `resolveText` output unchanged. Compute visibility from `textContent.trim()` and shared font-size semantics, then use that predicate around `applyFont`, text drawing, decoration, and text-element `applyElementLink`; retain non-text link behavior and grid/runtime defaults.
 
 - [ ] **Step 4: Run GREEN**
 

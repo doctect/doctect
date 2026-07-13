@@ -13,7 +13,7 @@
 - Never open or inspect archived PDF/PNG artifacts.
 - Keep all generated PDFs, images, browser harnesses, servers, and logs under `/tmp/opencode` and remove them before completion.
 - Use red-green TDD for every permanent behavior change.
-- Do not reject missing or zero `fontSize` when renderer fallback makes text visible; reject only non-positive effective sizes.
+- Missing `fontSize` defaults to 12; explicit non-positive or non-finite sizes make text invisible and non-interactive.
 - Browser proof must click rendered PDF.js annotation-layer anchors, not stop at annotation metadata.
 - Run full tests and production build before completion.
 - Produce one final Task 11 review-fix commit containing only intended source, tests, and docs.
@@ -32,7 +32,7 @@
 
 - [ ] **Step 1: Add failing parameterized regressions**
 
-Add cases for a binding on `visible: false` layer, negative `fontSize`, transparent `textColor`, alpha-zero text color, and identical solid `textColor`/`fill`. Add passing controls for omitted and zero `fontSize`, because PDF rendering uses `Number(fontSize) || 12`.
+Add cases for a binding on `visible: false` layer, zero/negative/non-finite `fontSize`, transparent `textColor`, alpha-zero text color, and identical solid `textColor`/`fill`. Keep omitted `fontSize` as a passing 12pt fallback control.
 
 - [ ] **Step 2: Verify RED**
 

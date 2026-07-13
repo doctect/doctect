@@ -7,6 +7,7 @@ import { AppState, AppNode, PageTemplate, TemplateElement, RM_PP_WIDTH, RM_PP_HE
 import { FONTS } from "../constants/editor";
 import { normalizeSvgColorsInTree, desaturateSvgColorsInTree, bakeElementOpacityIntoSvg } from "./svgColorNormalize";
 import { sortElementsForRender } from "./layers";
+import { isVisibleText, resolveTextFontSize } from "./textVisibility";
 
 const DEBUG_PDF = false; // Set to true to see debug visuals
 
@@ -655,7 +656,7 @@ const applyFont = (doc: jsPDF, el: TemplateElement, isGreyscale = false) => {
         console.warn(`[PDFService] Failed to set font ${family} ${style}. Falling back to helvetica.`, e);
         doc.setFont('helvetica', 'normal');
     }
-    doc.setFontSize(Number(el.fontSize) || 12);
+    doc.setFontSize(resolveTextFontSize(el.fontSize));
 
     const rgb = isGreyscale
         ? hexToGreyscale(el.textColor || "#000000")
@@ -1401,7 +1402,7 @@ export const generatePDF = async (state: AppState, options: GeneratePDFOptions =
                         txt = resolveText(templatePattern, childNode, state);
                     }
 
-                    if (txt) {
+                    if (isVisibleText(txt, el.fontSize)) {
                         // Apply font with cell-specific overrides
                         const cellEl = { ...el, textColor: cellTextColorHex, fontWeight: cellFontWeight } as any;
                         applyFont(doc, cellEl, options.isGreyscale);
@@ -1675,9 +1676,9 @@ export const generatePDF = async (state: AppState, options: GeneratePDFOptions =
             }
 
             // Resolve variables using the node and global state (to find ancestors/referrers)
-            textContent = resolveText(textContent, node, state).trim();
-            const fontSize = el.fontSize === undefined ? 12 : Number(el.fontSize);
-            const renderText = textContent.length > 0 && Number.isFinite(fontSize) && fontSize > 0;
+            textContent = resolveText(textContent, node, state);
+            const fontSize = resolveTextFontSize(el.fontSize);
+            const renderText = isVisibleText(textContent, el.fontSize);
 
             if (renderText) {
                 applyFont(doc, el, options.isGreyscale);

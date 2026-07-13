@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { generatePDF } from '../../services/pdfService';
 import { AppState } from '../../types';
 
@@ -108,7 +108,8 @@ describe('PDF export link annotations', () => {
         ['string zero', '0'],
         ['negative', -1],
         ['NaN', Number.NaN],
-        ['infinity', Number.POSITIVE_INFINITY],
+        ['positive infinity', Number.POSITIVE_INFINITY],
+        ['negative infinity', Number.NEGATIVE_INFINITY],
     ])('omits text glyphs and links for explicit %s font size', async (_, fontSize) => {
         const pdf = await exportBytes(makeState([
             {
@@ -143,5 +144,18 @@ describe('PDF export link annotations', () => {
 
         expect(pdf).not.toContain('/Dest');
         expect(firstPageTextOperatorCount(pdf)).toBe(0);
+    });
+
+    it('preserves surrounding whitespace in visible resolved text', async () => {
+        const fontWarning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+        const pdf = await exportBytes(makeState([
+            {
+                ...baseEl('spaced-text', 0), type: 'text', dataBinding: 'label',
+                fontFamily: '__builtin_fallback__',
+            },
+        ], false, { label: '  PADDED_TEXT  ' }));
+        fontWarning.mockRestore();
+
+        expect(pdf).toContain('(  PADDED_TEXT  ) Tj');
     });
 });

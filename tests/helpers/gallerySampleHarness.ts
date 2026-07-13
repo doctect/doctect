@@ -5,6 +5,7 @@ import { getElementBounds } from '../../components/canvas/elementBounds';
 import { normalizeGeneratedTemplates } from '../../services/generatorTemplates';
 import { computePageOrder } from '../../services/pdfService';
 import { normalizeCssColor } from '../../services/svgColorNormalize';
+import { hasVisibleTextFontSize } from '../../services/textVisibility';
 
 export interface LoadedGallerySample {
     slug: string;
@@ -76,7 +77,6 @@ const parseSolidColor = (value: unknown): SolidColor | null => {
 const isVisibleTextBinding = (element: any, field: string, template: any) => {
     const textColor = parseSolidColor(element?.textColor || '#000000');
     const fillColor = element?.fillType === 'pattern' ? null : parseSolidColor(element?.fill);
-    const effectiveFontSize = element?.fontSize === undefined ? 12 : Number(element.fontSize);
     const layer = Array.isArray(template?.layers)
         ? template.layers.find((candidate: any) => candidate.id === element?.layerId)
         : undefined;
@@ -89,8 +89,7 @@ const isVisibleTextBinding = (element: any, field: string, template: any) => {
         && element.h > 0
         && (element.opacity === undefined || (Number.isFinite(element.opacity) && element.opacity > 0))
         && layer?.visible !== false
-        && Number.isFinite(effectiveFontSize)
-        && effectiveFontSize > 0
+        && hasVisibleTextFontSize(element?.fontSize)
         && textColor?.alpha !== 0
         && !(textColor && fillColor && fillColor.alpha === 1
             && textColor.r === fillColor.r && textColor.g === fillColor.g && textColor.b === fillColor.b);
@@ -445,10 +444,11 @@ const validateTemplates = (sample: LoadedGallerySample, errors: string[]) => {
                     else if (!GRID_MODES.has(grid.gridBorderMode)) errors.push(`${element.id} gridBorderMode '${grid.gridBorderMode}' is invalid`);
                     if (grid.gridBorderStyle === undefined) errors.push(`${element.id} gridBorderStyle must be explicit`);
                     else if (!GRID_STYLES.has(grid.gridBorderStyle)) errors.push(`${element.id} gridBorderStyle '${grid.gridBorderStyle}' is invalid`);
-                    if (typeof grid.gridBorderColor !== 'string' || grid.gridBorderColor.length === 0) {
-                        errors.push(`${element.id} gridBorderColor must be explicit`);
-                    }
                     const bordered = grid.gridBorderMode !== 'none';
+                    if (bordered && (typeof grid.gridBorderColor !== 'string'
+                        || !/^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(grid.gridBorderColor))) {
+                        errors.push(`${element.id} gridBorderColor must be opaque #RGB or #RRGGBB for bordered mode '${grid.gridBorderMode}'`);
+                    }
                     if (typeof grid.gridBorderWidth !== 'number' || !Number.isFinite(grid.gridBorderWidth)
                         || (bordered ? grid.gridBorderWidth <= 0 : grid.gridBorderWidth < 0)) {
                         errors.push(`${element.id} gridBorderWidth must be a ${bordered ? 'positive finite' : 'non-negative finite'} number`);
