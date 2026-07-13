@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { jsPDF } from 'jspdf';
 import { getElementBounds, traverseGridData } from '../../../components/canvas/elementBounds';
-import { computePageOrder } from '../../../services/pdfService';
+import { computePageOrder, generatePDF } from '../../../services/pdfService';
 import {
     expectValidGallerySample,
     loadGallerySample,
@@ -25,6 +25,23 @@ const exportedPageCount = (sample: ReturnType<typeof loadGallerySample>) =>
 
 const role = (sample: ReturnType<typeof loadGallerySample>, templateId: string, name: string) =>
     sample.templates[templateId].elements.find((element: any) => element.id.includes(`_${name}_`));
+
+const annotationTargetsByRect = (buffer: ArrayBuffer, sourcePage: number) => {
+    const pdf = new TextDecoder('latin1').decode(new Uint8Array(buffer));
+    const objects = new Map<number, string>();
+    for (const match of pdf.matchAll(/^(\d+) 0 obj\s*([\s\S]*?)^endobj/gm)) {
+        objects.set(Number(match[1]), match[2]);
+    }
+    const pageObjects = [...objects.entries()]
+        .filter(([, body]) => /\/Type \/Page(?:\s|\/)/.test(body))
+        .map(([objectId]) => objectId);
+    const pageBody = objects.get(pageObjects[sourcePage - 1]) || '';
+
+    return [...pageBody.matchAll(/\/Rect \[([^\]]+)\][\s\S]*?\/Dest \[(\d+) 0 R/g)].map(match => ({
+        rect: match[1].trim().split(/\s+/).map(Number),
+        targetPage: pageObjects.indexOf(Number(match[2])) + 1,
+    }));
+};
 
 describe('Novel Story Studio gallery sample', () => {
     it('generates linked story-bible and manuscript planning pages', () => {
@@ -160,6 +177,43 @@ describe('Novel Story Studio gallery sample', () => {
             expect(locationIds.at(-1)).toBe(locationBank.children.at(-1));
         });
     });
+
+    it('exports companion PDF annotations to canonical records and navigation pages', async () => {
+        const sample = loadGallerySample(contract.slug, {
+            actCount: 1,
+            chaptersPerAct: 1,
+            scenesPerChapter: 1,
+            characterCount: 2,
+            locationCount: 2,
+        });
+        const pageOrder = computePageOrder({ rootId: sample.rootId, nodes: sample.nodes } as any);
+        const linksId = sample.nodes.blank_scene_01_01_01.children[0];
+        const state = {
+            rootId: sample.rootId,
+            nodes: sample.nodes,
+            activeVariantId: 'default',
+            variants: {
+                default: { id: 'default', name: 'Default', templates: sample.templates },
+            },
+        } as any;
+        const buffer = await generatePDF(state, { output: 'arraybuffer' }) as ArrayBuffer;
+        const annotations = annotationTargetsByRect(buffer, pageOrder.indexOf(linksId) + 1);
+        const targetAt = (x: number, y: number, w: number, h: number) => {
+            const expected = [x, 679 - y, x + w, 679 - y - h];
+            const annotation = annotations.find(candidate => candidate.rect.every(
+                (coordinate, index) => Math.abs(coordinate - expected[index]) < 0.01,
+            ));
+            expect(annotation, `annotation at ${x},${y}`).toBeDefined();
+            return pageOrder[annotation!.targetPage - 1];
+        };
+
+        expect(targetAt(36, 184, 137, 18)).toBe('blank_character_01');
+        expect(targetAt(181, 184, 137, 18)).toBe('blank_character_02');
+        expect(targetAt(181, 424, 137, 18)).toBe('blank_location_01');
+        expect(targetAt(326, 424, 137, 18)).toBe('blank_location_02');
+        expect(targetAt(263, 634, 58, 26)).toBe('blank_scene_01_01_01');
+        expect(targetAt(190, 634, 58, 26)).toBe('root');
+    }, 30_000);
 
     it('keeps maximum banks, maps, and navigation complete and in bounds', () => {
         const sample = loadGallerySample(contract.slug, {
