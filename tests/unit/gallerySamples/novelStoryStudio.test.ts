@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { jsPDF } from 'jspdf';
-import { getElementBounds } from '../../../components/canvas/elementBounds';
+import { getElementBounds, traverseGridData } from '../../../components/canvas/elementBounds';
 import { computePageOrder } from '../../../services/pdfService';
 import {
     expectValidGallerySample,
@@ -13,9 +13,9 @@ const contract: GallerySampleContract = {
     slug: '07-novel-story-studio',
     expectedTemplateIds: [
         'cover', 'start', 'workspace', 'premise', 'structure', 'bank', 'character',
-        'location', 'chapter_map', 'chapter', 'scene', 'continuity', 'revision',
+        'location', 'chapter_map', 'chapter', 'scene', 'scene_links', 'continuity', 'revision',
     ],
-    pageCount: [120, 155],
+    pageCount: [220, 235],
     palette: ['#4a405c', '#b18b54', '#eee4d4'],
     requiredStableNodeIds: ['root', 'start_here', 'example_workspace', 'blank_workspace'],
 };
@@ -30,7 +30,7 @@ describe('Novel Story Studio gallery sample', () => {
     it('generates linked story-bible and manuscript planning pages', () => {
         const sample = expectValidGallerySample(contract.slug, contract);
 
-        expect(exportedPageCount(sample)).toBe(151);
+        expect(exportedPageCount(sample)).toBe(226);
         expect(Object.values(sample.nodes).filter((node: any) =>
             node.id.startsWith('blank_chapter_') && node.type === 'chapter',
         )).toHaveLength(24);
@@ -48,11 +48,117 @@ describe('Novel Story Studio gallery sample', () => {
             locationCount: 1,
         });
 
-        expect(validateGallerySample(sample, { ...contract, pageCount: [18, 35] })).toEqual([]);
-        expect(exportedPageCount(sample)).toBe(35);
+        expect(validateGallerySample(sample, { ...contract, pageCount: [39, 39] })).toEqual([]);
+        expect(exportedPageCount(sample)).toBe(39);
         expect(sample.nodes.blank_workspace.children).toHaveLength(10);
         expect(sample.nodes.blank_chapter_map_01.children).toEqual(['blank_chapter_01_01']);
         expect(sample.nodes.blank_chapter_01_01.children).toEqual(['blank_scene_01_01_01']);
+    });
+
+    it('exports one Cast & Places companion per scene', () => {
+        const defaults = loadGallerySample(contract.slug);
+        const minimum = loadGallerySample(contract.slug, {
+            actCount: 1,
+            chaptersPerAct: 1,
+            scenesPerChapter: 1,
+            characterCount: 1,
+            locationCount: 1,
+        });
+        const maximum = loadGallerySample(contract.slug, {
+            actCount: 5,
+            chaptersPerAct: 12,
+            scenesPerChapter: 6,
+            characterCount: 30,
+            locationCount: 20,
+        });
+
+        expect(exportedPageCount(defaults)).toBe(226);
+        expect(exportedPageCount(minimum)).toBe(39);
+        expect(exportedPageCount(maximum)).toBe(872);
+        expect(validateGallerySample(defaults, contract)).toEqual([]);
+        expect(validateGallerySample(minimum, { ...contract, pageCount: [39, 39] })).toEqual([]);
+        expect(validateGallerySample(maximum, { ...contract, pageCount: [872, 872] })).toEqual([]);
+    });
+
+    it('gives every scene one companion with ordered bank references', () => {
+        const sample = loadGallerySample(contract.slug);
+        const scenes = Object.values(sample.nodes).filter((node: any) => node.type === 'scene');
+
+        scenes.forEach((scene: any) => {
+            expect(scene.children, scene.id).toHaveLength(1);
+            const links = sample.nodes[scene.children[0]];
+            expect(links.type, scene.id).toBe('scene_links');
+            expect(links.parentId, links.id).toBe(scene.id);
+            expect(links.children, links.id).toHaveLength(2);
+            expect(sample.nodes[links.children[0]].referenceId, links.id).toMatch(/character_bank$/);
+            expect(sample.nodes[links.children[1]].referenceId, links.id).toMatch(/location_bank$/);
+        });
+    });
+
+    it('traverses every canonical character and location from companion grids', () => {
+        const defaults = loadGallerySample(contract.slug);
+        const maximum = loadGallerySample(contract.slug, {
+            actCount: 5,
+            chaptersPerAct: 12,
+            scenesPerChapter: 6,
+            characterCount: 30,
+            locationCount: 20,
+        });
+        expect(defaults.templates.scene_links).toBeDefined();
+        const characterGrid = role(defaults, 'scene_links', 'character_grid');
+        const locationGrid = role(defaults, 'scene_links', 'location_grid');
+
+        expect(characterGrid.gridConfig).toMatchObject({
+            cols: 3,
+            sourceType: 'current',
+            displayField: 'link_label',
+            offsetMode: 'static',
+            offsetStart: 0,
+            traversalPath: [
+                { sliceStart: 0, sliceCount: 1 },
+                { sliceStart: 0 },
+            ],
+        });
+        expect(locationGrid.gridConfig).toMatchObject({
+            cols: 3,
+            sourceType: 'current',
+            displayField: 'link_label',
+            offsetMode: 'static',
+            offsetStart: 1,
+            traversalPath: [
+                { sliceStart: 1, sliceCount: 1 },
+                { sliceStart: 0 },
+            ],
+        });
+
+        const traversalCases: Array<[ReturnType<typeof loadGallerySample>, number, number]> = [
+            [defaults, 12, 8],
+            [maximum, 30, 20],
+        ];
+        traversalCases.forEach(([sample, characterCount, locationCount]) => {
+            const links = sample.nodes[sample.nodes.blank_scene_01_01_01.children[0]];
+            const characterIds = traverseGridData(
+                [links.id],
+                characterGrid.gridConfig.traversalPath,
+                0,
+                sample.nodes,
+            );
+            const locationIds = traverseGridData(
+                [links.id],
+                locationGrid.gridConfig.traversalPath,
+                0,
+                sample.nodes,
+            );
+            const characterBank = sample.nodes.blank_character_bank;
+            const locationBank = sample.nodes.blank_location_bank;
+
+            expect(characterIds).toHaveLength(characterCount);
+            expect(characterIds[0]).toBe(characterBank.children[0]);
+            expect(characterIds.at(-1)).toBe(characterBank.children.at(-1));
+            expect(locationIds).toHaveLength(locationCount as number);
+            expect(locationIds[0]).toBe(locationBank.children[0]);
+            expect(locationIds.at(-1)).toBe(locationBank.children.at(-1));
+        });
     });
 
     it('keeps maximum banks, maps, and navigation complete and in bounds', () => {
@@ -64,8 +170,8 @@ describe('Novel Story Studio gallery sample', () => {
             locationCount: 20,
         });
 
-        expect(validateGallerySample(sample, { ...contract, pageCount: [509, 509] })).toEqual([]);
-        expect(exportedPageCount(sample)).toBe(509);
+        expect(validateGallerySample(sample, { ...contract, pageCount: [872, 872] })).toEqual([]);
+        expect(exportedPageCount(sample)).toBe(872);
         expect(sample.nodes.blank_character_bank.children).toHaveLength(30);
         expect(sample.nodes.blank_location_bank.children).toHaveLength(20);
         expect(sample.nodes.blank_chapter_map_05.children).toHaveLength(12);
@@ -80,13 +186,25 @@ describe('Novel Story Studio gallery sample', () => {
             reachable.add(nodeId);
             const node = sample.nodes[nodeId];
             if (node.children.length > 0) {
-                const navigator = role(sample, node.type, 'navigator');
-                expect(navigator, `${nodeId} navigator`).toBeTruthy();
-                expect(navigator.gridConfig.sourceType, `${nodeId} source`).toBe('current');
-                expect(navigator.gridConfig.dataSliceCount, `${nodeId} truncation`).toBeUndefined();
-                const bounds = getElementBounds(navigator, sample.nodes, node.id);
-                expect(navigator.x + bounds.w, `${nodeId} width`).toBeLessThanOrEqual(509);
-                expect(navigator.y + bounds.h, `${nodeId} height`).toBeLessThanOrEqual(615);
+                if (node.type === 'scene') {
+                    expect(role(sample, node.type, 'cast_places')).toMatchObject({
+                        linkTarget: 'child_index',
+                        linkValue: '0',
+                    });
+                    pending.push(...node.children);
+                    continue;
+                }
+                const grids = node.type === 'scene_links'
+                    ? [role(sample, node.type, 'character_grid'), role(sample, node.type, 'location_grid')]
+                    : [role(sample, node.type, 'navigator')];
+                grids.forEach(grid => {
+                    expect(grid, `${nodeId} grid`).toBeTruthy();
+                    expect(grid.gridConfig.sourceType, `${nodeId} source`).toBe('current');
+                    expect(grid.gridConfig.dataSliceCount, `${nodeId} truncation`).toBeUndefined();
+                    const bounds = getElementBounds(grid, sample.nodes, node.id);
+                    expect(grid.x + bounds.w, `${nodeId} width`).toBeLessThanOrEqual(509);
+                    expect(grid.y + bounds.h, `${nodeId} height`).toBeLessThanOrEqual(615);
+                });
                 pending.push(...node.children);
             }
         }
@@ -111,7 +229,7 @@ describe('Novel Story Studio gallery sample', () => {
         expect(() => loadGallerySample(contract.slug, { [key]: value })).toThrow(/Story Atelier config/);
     });
 
-    it('assembles one mystery chapter from three scenes and referenced story-bible records', () => {
+    it('assembles one mystery chapter from three scenes and pre-linked story-bible banks', () => {
         const sample = loadGallerySample(contract.slug);
         const chapter = sample.nodes.example_chapter_01;
         const sceneIds = ['example_scene_01', 'example_scene_02', 'example_scene_03'];
@@ -141,17 +259,16 @@ describe('Novel Story Studio gallery sample', () => {
             }),
         ]);
 
-        const expectedTargets: Record<string, string[]> = {
-            example_scene_01: ['example_character_detective', 'example_location_platform'],
-            example_scene_02: ['example_character_detective', 'example_character_witness', 'example_location_platform'],
-            example_scene_03: ['example_character_detective', 'example_character_witness', 'example_location_platform'],
-        };
-        Object.entries(expectedTargets).forEach(([sceneId, targets]) => {
-            const references = sample.nodes[sceneId].children.map((id: string) => sample.nodes[id]);
-            expect(references.map((node: any) => node.referenceId)).toEqual(targets);
+        sceneIds.forEach(sceneId => {
+            const links = sample.nodes[sample.nodes[sceneId].children[0]];
+            const references = links.children.map((id: string) => sample.nodes[id]);
+            expect(references.map((node: any) => node.referenceId)).toEqual([
+                'example_character_bank',
+                'example_location_bank',
+            ]);
             references.forEach((reference: any) => {
-                expect(reference.type).toBe(sample.nodes[reference.referenceId].type);
-                expect(reference.parentId).toBe(sceneId);
+                expect(reference.type).toBe('bank');
+                expect(reference.parentId).toBe(links.id);
             });
         });
     });
@@ -180,7 +297,7 @@ describe('Novel Story Studio gallery sample', () => {
             ), `${id} skip`).toBe(true);
             pending.push(...node.children);
         }
-        expect(visited.size).toBe(26);
+        expect(visited.size).toBe(27);
     });
 
     it('keeps blank writable data clean', () => {
@@ -196,7 +313,7 @@ describe('Novel Story Studio gallery sample', () => {
             });
     });
 
-    it('fits maximum bank and scene labels in their navigation cards', () => {
+    it('fits maximum hierarchy labels in their navigation cards', () => {
         const sample = loadGallerySample(contract.slug, {
             actCount: 5,
             chaptersPerAct: 12,
@@ -206,7 +323,7 @@ describe('Novel Story Studio gallery sample', () => {
         });
         const pdf = new jsPDF({ unit: 'pt', format: [509, 679] });
 
-        ['workspace', 'bank', 'chapter_map', 'chapter', 'scene'].forEach(templateId => {
+        ['workspace', 'bank', 'chapter_map', 'chapter'].forEach(templateId => {
             const navigator = role(sample, templateId, 'navigator');
             pdf.setFont(navigator.fontFamily, navigator.fontWeight || 'normal');
             pdf.setFontSize(navigator.fontSize);
@@ -218,6 +335,74 @@ describe('Novel Story Studio gallery sample', () => {
                     expect(pdf.getTextWidth(child.data.menu_label), child.id).toBeLessThanOrEqual(navigator.w - 12);
                 });
         });
+    });
+
+    it('fits numbered canonical labels inside companion cells', () => {
+        const defaults = loadGallerySample(contract.slug);
+        const maximum = loadGallerySample(contract.slug, {
+            actCount: 5,
+            chaptersPerAct: 12,
+            scenesPerChapter: 6,
+            characterCount: 30,
+            locationCount: 20,
+        });
+        const pdf = new jsPDF({ unit: 'pt', format: [509, 679] });
+
+        [defaults, maximum].forEach(sample => {
+            expect(sample.templates.scene_links).toBeDefined();
+            [
+                ['character', role(sample, 'scene_links', 'character_grid')],
+                ['location', role(sample, 'scene_links', 'location_grid')],
+            ].forEach(([templateId, companionGrid]) => {
+                pdf.setFont(companionGrid.fontFamily, companionGrid.fontWeight || 'normal');
+                pdf.setFontSize(companionGrid.fontSize);
+                Object.values(sample.nodes)
+                    .filter((node: any) => node.type === templateId && !node.referenceId)
+                    .forEach((node: any) => {
+                        expect(node.data.link_label, node.id).toBeTruthy();
+                        expect(pdf.getTextWidth(node.data.link_label), node.id)
+                            .toBeLessThanOrEqual(companionGrid.w - 8);
+                    });
+            });
+        });
+    });
+
+    it('exports companions once while retaining one copy of every canonical record', () => {
+        const sample = loadGallerySample(contract.slug);
+        const pageOrder = computePageOrder({ rootId: sample.rootId, nodes: sample.nodes } as any);
+        const scenes = Object.values(sample.nodes).filter((node: any) => node.type === 'scene');
+        const sceneLinks = Object.values(sample.nodes).filter((node: any) => node.type === 'scene_links');
+        const bankReferences = sceneLinks.flatMap((node: any) => node.children);
+        const canonicalRecords = Object.values(sample.nodes)
+            .filter((node: any) => ['character', 'location'].includes(node.type) && !node.referenceId);
+
+        expect(sceneLinks).toHaveLength(scenes.length);
+        sceneLinks.forEach((node: any) => {
+            expect(pageOrder.filter(id => id === node.id), node.id).toHaveLength(1);
+        });
+        bankReferences.forEach((id: string) => {
+            expect(pageOrder, id).not.toContain(id);
+        });
+        canonicalRecords.forEach((node: any) => {
+            expect(pageOrder.filter(id => id === node.id), node.id).toHaveLength(1);
+        });
+    });
+
+    it('keeps maximum companion grids at their designed bounds', () => {
+        const sample = loadGallerySample(contract.slug, {
+            actCount: 5,
+            chaptersPerAct: 12,
+            scenesPerChapter: 6,
+            characterCount: 30,
+            locationCount: 20,
+        });
+        const linksId = sample.nodes.blank_scene_01_01_01.children[0];
+        expect(sample.templates.scene_links).toBeDefined();
+        const characterGrid = role(sample, 'scene_links', 'character_grid');
+        const locationGrid = role(sample, 'scene_links', 'location_grid');
+
+        expect(characterGrid.y + getElementBounds(characterGrid, sample.nodes, linksId).h).toBe(382);
+        expect(locationGrid.y + getElementBounds(locationGrid, sample.nodes, linksId).h).toBe(562);
     });
 
     it('provides PDF-visible scene writing regions and intentional non-doubled grids', () => {

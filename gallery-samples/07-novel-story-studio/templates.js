@@ -438,13 +438,62 @@ const scene = {
     ...field('scene', 'setting', 'Setting', 'setting', 267, 359, 214, 57, { fontSize: 8.5 }),
     ...field('scene', 'story_time', 'Story time', 'story_time', 36, 425, 214, 57, { fontSize: 8.5 }),
     ...field('scene', 'continuity', 'Continuity in / out', 'continuity', 267, 425, 214, 57, { fontSize: 8.5 }),
-    text('scene', 'reference_label', 36, 494, 445, 17, 'LINKED STORY-BIBLE RECORDS', {
-      fontSize: 7.5,
+    text('scene', 'cast_places', 36, 500, 445, 48, 'CAST & PLACES  →', {
+      fontSize: 10,
       fontWeight: 'bold',
-      textColor: COLORS.goldDeep,
-      characterSpacing: 0.7,
+      textColor: COLORS.aubergineDeep,
+      fill: COLORS.auberginePale,
+      align: 'center',
+      linkTarget: 'child_index',
+      linkValue: '0',
+      borderRadius: 3,
     }),
-    grid('scene', 'navigator', 36, 518, 137, 35, 3),
+  ],
+};
+
+const scene_links = {
+  id: 'scene_links',
+  name: 'Scene Cast & Places',
+  width: W,
+  height: H,
+  elements: [
+    ...pageBase('scene_links', 'scene cast & places'),
+    ...titleBlock('scene_links'),
+    text('scene_links', 'character_heading', 36, 160, 445, 18, 'CHARACTERS', {
+      fontSize: 8,
+      fontWeight: 'bold',
+      textColor: COLORS.writing,
+      fill: COLORS.aubergine,
+      characterSpacing: 0.8,
+    }),
+    grid('scene_links', 'character_grid', 36, 184, 137, 18, 3, {
+      gapY: 2,
+      displayField: 'link_label',
+      offsetMode: 'static',
+      offsetStart: 0,
+      traversalPath: [
+        { sliceStart: 0, sliceCount: 1 },
+        { sliceStart: 0 },
+      ],
+    }),
+    text('scene_links', 'location_heading', 36, 400, 445, 18, 'PLACES', {
+      fontSize: 8,
+      fontWeight: 'bold',
+      textColor: COLORS.aubergineDeep,
+      fill: COLORS.gold,
+      characterSpacing: 0.8,
+    }),
+    grid('scene_links', 'location_grid', 36, 424, 137, 18, 3, {
+      gapY: 2,
+      displayField: 'link_label',
+      offsetMode: 'static',
+      offsetStart: 1,
+      showEmptyCellBorders: false,
+      traversalPath: [
+        { sliceStart: 1, sliceCount: 1 },
+        { sliceStart: 0 },
+      ],
+    }),
   ],
 };
 
@@ -490,6 +539,7 @@ return {
   chapter_map,
   chapter,
   scene,
+  scene_links,
   continuity,
   revision,
 };

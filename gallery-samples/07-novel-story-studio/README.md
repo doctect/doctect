@@ -9,7 +9,8 @@ Editorial novel-planning studio for reMarkable Paper Pro. Aubergine structure ra
 3. Build canonical character and location records in stable story-bible banks.
 4. Map chapters, then assemble each chapter from directly accessible scene cards.
 5. Give every scene a goal, conflict, outcome, POV, setting, story time, and continuity state.
-6. Audit continuity and complete four focused revision passes.
+6. Open each scene's Cast & Places companion and write names into numbered slots already linked to every canonical record.
+7. Audit continuity and complete four focused revision passes.
 
 Start Here offers a guided short mystery and a direct path to the clean blank workspace. Every guided page, including reference wrappers, displays **EXAMPLE** and a visible **Skip to blank workspace** control.
 
@@ -20,7 +21,7 @@ Start Here offers a guided short mystery and a direct path to the clean blank wo
 - Scene 01 identifies seven minutes missing from a railway arrival ledger.
 - Scene 02 tests a witness account against official timing.
 - Scene 03 reconstructs the platform route from a signal thread before the last train departs.
-- Scene cards reference canonical records for detective Mara Venn, witness Elian Rowe, and Northbridge railway platform.
+- Every scene opens a Cast & Places companion pre-linked to canonical records for detective Mara Venn, witness Elian Rowe, and Northbridge railway platform.
 - A continuity ledger tracks time, knowledge, objects, weather, and movement across all three scenes.
 - Four revision pages demonstrate structure, character, continuity, and line-edit passes.
 
@@ -54,16 +55,16 @@ Unsupported or non-integer values fail with a clear `Story Atelier config` error
 
 ## Inventory
 
-Default configuration exports 151 pages:
+Default configuration exports 226 pages:
 
 - 1 cover and 1 Start Here guide
-- 18 guided mystery pages; eight reference wrappers do not duplicate exported pages
+- 21 guided mystery pages, including 3 Cast & Places companions; six bank-reference children do not duplicate exported pages
 - 1 blank workspace, 1 premise, and 3 act-structure pages
 - 12 character records and 8 location records, each behind a stable bank index
-- 3 chapter maps, 24 chapter planners, and 72 scene cards
+- 3 chapter maps, 24 chapter planners, 72 scene cards, and 72 Cast & Places companions
 - 1 continuity ledger and 4 revision passes
 
-Minimum configuration exports 35 pages. Maximum configuration exports 509 pages. All supported banks and maps remain complete and within page bounds.
+Minimum configuration exports 39 pages. Maximum configuration exports 872 pages. All supported banks, maps, and companion grids remain complete and within page bounds.
 
 ## Navigation
 
@@ -73,13 +74,15 @@ Minimum configuration exports 35 pages. Maximum configuration exports 509 pages.
 - Character/location bank cards -> every canonical record
 - Chapter-map cards -> every chapter in that act
 - Chapter cards -> every scene in that chapter
-- Guided scene cards -> reference wrappers for canonical character and location records
+- Scene cards -> their Cast & Places companion through the scene's only child
+- Cast & Places character grid -> Character Bank reference -> every canonical character record
+- Cast & Places location grid -> Location Bank reference -> every canonical location record
 - **Up** follows the hierarchy parent; **Home** returns to `root`
 
-Indexes use complete hierarchy-backed grids with stable semantic node IDs. No long bank is truncated, no fragile child-index link is used, and no inactive previous/next control is shown.
+Companion grids use children-of-children traversal through two non-exported bank references, so every slot is a direct PDF link to its canonical exported page. Blank records use numbered writable labels such as `01  __________________`; location slots begin with one empty offset cell to keep places visually distinct from cast. Indexes use complete hierarchy-backed grids with stable semantic node IDs. No long bank is truncated and no inactive previous/next control is shown.
 
 ## Visual And Border Construction
 
 Original manuscript-page, thread, and stitch SVG motifs were authored for Story Atelier. Aubergine establishes structural hierarchy; antique gold marks metadata and transitions; warm paper keeps writing regions calm. Contrast and hierarchy remain readable in grayscale.
 
-Navigation grids explicitly use solid 0.8 px aubergine borders. Grid elements have no second stroke, preventing duplicate edges. Writable regions use visible `#fffaf3` fill with unstroked surfaces so scene planning, continuity, and revision space remains clear in PDF output.
+Navigation and companion grids explicitly use solid 0.8 px aubergine borders. Grid elements have no second stroke, preventing duplicate edges. Empty location-offset cells hide their border. Writable regions use visible `#fffaf3` fill with unstroked surfaces so scene planning, continuity, and revision space remains clear in PDF output.

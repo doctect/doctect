@@ -64,30 +64,38 @@ const structureData = (actNumber, values = {}) => ({
   ...values,
 });
 
-const characterData = (number, values = {}) => ({
-  subtitle: 'Desire, contradiction, voice, and scene-ready detail.',
-  menu_label: `CHARACTER ${String(number).padStart(2, '0')}`,
-  role: '',
-  want: '',
-  need: '',
-  secret: '',
-  voice: '',
-  appearance: '',
-  history: '',
-  notes: '',
-  ...values,
-});
+const characterData = (number, values = {}) => {
+  const label = String(number).padStart(2, '0');
+  return {
+    subtitle: 'Desire, contradiction, voice, and scene-ready detail.',
+    menu_label: `CHARACTER ${label}`,
+    link_label: `${label}  __________________`,
+    role: '',
+    want: '',
+    need: '',
+    secret: '',
+    voice: '',
+    appearance: '',
+    history: '',
+    notes: '',
+    ...values,
+  };
+};
 
-const locationData = (number, values = {}) => ({
-  subtitle: 'A place as pressure system, social space, and continuity anchor.',
-  menu_label: `LOCATION ${String(number).padStart(2, '0')}`,
-  sensory: '',
-  function: '',
-  change: '',
-  history: '',
-  notes: '',
-  ...values,
-});
+const locationData = (number, values = {}) => {
+  const label = String(number).padStart(2, '0');
+  return {
+    subtitle: 'A place as pressure system, social space, and continuity anchor.',
+    menu_label: `LOCATION ${label}`,
+    link_label: `${label}  __________________`,
+    sensory: '',
+    function: '',
+    change: '',
+    history: '',
+    notes: '',
+    ...values,
+  };
+};
 
 const chapterMapData = (actNumber, values = {}) => ({
   subtitle: `Act ${String(actNumber).padStart(2, '0')} | Open every chapter directly from one bounded map.`,
@@ -141,14 +149,20 @@ const revisionData = (passNumber, values = {}) => ({
   ...values,
 });
 
-const addReference = (id, sceneId, targetId, menuLabel) => addNode(
-  id,
-  sceneId,
-  nodes[targetId].type,
-  nodes[targetId].title,
-  { menu_label: menuLabel },
-  { example: true, referenceId: targetId },
-);
+const addSceneLinks = (sceneId, linksId, characterBankId, locationBankId, sceneNumber, example = false) => {
+  addNode(linksId, sceneId, 'scene_links', `Scene ${String(sceneNumber).padStart(2, '0')} | Cast & Places`, {
+    subtitle: 'Write the names used in this scene. Every slot already links to its canonical story-bible record.',
+    menu_label: 'CAST & PLACES',
+  }, { example });
+
+  addNode(`${linksId}_characters`, linksId, 'bank', 'Character Links', {
+    menu_label: 'CHARACTERS',
+  }, { example, referenceId: characterBankId });
+
+  addNode(`${linksId}_locations`, linksId, 'bank', 'Location Links', {
+    menu_label: 'LOCATIONS',
+  }, { example, referenceId: locationBankId });
+};
 
 addNode('root', null, 'cover', 'Story Atelier', {});
 addNode('start_here', 'root', 'start', 'Start Here', {
@@ -188,6 +202,7 @@ addNode('example_character_bank', 'example_workspace', 'bank', 'Character Files'
 }, { example: true });
 addNode('example_character_detective', 'example_character_bank', 'character', 'Mara Venn | Detective', characterData(1, {
   menu_label: 'MARA VENN / DETECTIVE',
+  link_label: '01  MARA VENN',
   role: 'Railway investigator / point-of-view detective',
   want: 'A complete account before the midnight record closes.',
   need: 'Trust observed behavior without forcing it into her first theory.',
@@ -199,6 +214,7 @@ addNode('example_character_detective', 'example_character_bank', 'character', 'M
 }), { example: true });
 addNode('example_character_witness', 'example_character_bank', 'character', 'Elian Rowe | Witness', characterData(2, {
   menu_label: 'ELIAN ROWE / WITNESS',
+  link_label: '02  ELIAN ROWE',
   role: 'Tea-stall assistant / reluctant witness',
   want: 'Board the last train without involving his employer.',
   need: 'Name what he saw rather than protect himself with silence.',
@@ -216,6 +232,7 @@ addNode('example_location_bank', 'example_workspace', 'bank', 'Location Files', 
 }, { example: true });
 addNode('example_location_platform', 'example_location_bank', 'location', 'Northbridge Railway Platform', locationData(1, {
   menu_label: 'NORTHBRIDGE PLATFORM',
+  link_label: '01  NORTHBRIDGE PLATFORM',
   sensory: 'Coal rain, cooling iron, tea steam, signal bell, wet gold bunting thread.',
   function: 'A public space whose clocks and sightlines appear objective but can be manipulated.',
   change: 'Crowd thins from arrival rush to one last-train queue; rain exposes fresh footprints.',
@@ -247,6 +264,7 @@ addNode('example_scene_01', 'example_chapter_01', 'scene', 'Scene 01 | The Clock
   story_time: '23:18 / rain beginning',
   continuity: 'IN: dry ledger copy. OUT: circled gap; damp coat; last train in 22 minutes.',
 }), { example: true });
+addSceneLinks('example_scene_01', 'example_scene_01_links', 'example_character_bank', 'example_location_bank', 1, true);
 addNode('example_scene_02', 'example_chapter_01', 'scene', 'Scene 02 | The Witness Revises', sceneData(2, {
   menu_label: 'SCENE 02 / WITNESS',
   goal: 'Get the witness to place movement inside the missing interval.',
@@ -257,6 +275,7 @@ addNode('example_scene_02', 'example_chapter_01', 'scene', 'Scene 02 | The Witne
   story_time: '23:28 / steady rain',
   continuity: 'IN: last train in 12 minutes. OUT: witness cuff thread; porter excluded from timing.',
 }), { example: true });
+addSceneLinks('example_scene_02', 'example_scene_02_links', 'example_character_bank', 'example_location_bank', 2, true);
 addNode('example_scene_03', 'example_chapter_01', 'scene', 'Scene 03 | The Threaded Route', sceneData(3, {
   menu_label: 'SCENE 03 / ROUTE',
   goal: 'Reconstruct who crossed the platform during the erased interval.',
@@ -267,15 +286,7 @@ addNode('example_scene_03', 'example_chapter_01', 'scene', 'Scene 03 | The Threa
   story_time: '23:38 / train entering',
   continuity: 'IN: wet thread on cuff. OUT: thread matched to bunting; ledger sealed; witness remains.',
 }), { example: true });
-
-addReference('example_scene_01_detective_ref', 'example_scene_01', 'example_character_detective', 'MARA VENN / DETECTIVE');
-addReference('example_scene_01_platform_ref', 'example_scene_01', 'example_location_platform', 'NORTHBRIDGE PLATFORM');
-addReference('example_scene_02_detective_ref', 'example_scene_02', 'example_character_detective', 'MARA VENN / DETECTIVE');
-addReference('example_scene_02_witness_ref', 'example_scene_02', 'example_character_witness', 'ELIAN ROWE / WITNESS');
-addReference('example_scene_02_platform_ref', 'example_scene_02', 'example_location_platform', 'NORTHBRIDGE PLATFORM');
-addReference('example_scene_03_detective_ref', 'example_scene_03', 'example_character_detective', 'MARA VENN / DETECTIVE');
-addReference('example_scene_03_witness_ref', 'example_scene_03', 'example_character_witness', 'ELIAN ROWE / WITNESS');
-addReference('example_scene_03_platform_ref', 'example_scene_03', 'example_location_platform', 'NORTHBRIDGE PLATFORM');
+addSceneLinks('example_scene_03', 'example_scene_03_links', 'example_character_bank', 'example_location_bank', 3, true);
 
 addNode('example_continuity', 'example_workspace', 'continuity', 'Continuity | Chapter 01', continuityData({
   check_1: '23:18 -> 23:28 -> 23:38. Last train countdown: 22 -> 12 -> 2 minutes.',
@@ -345,12 +356,20 @@ for (let actNumber = 1; actNumber <= CONFIG.actCount; actNumber += 1) {
     addNode(chapterId, mapId, 'chapter', `Act ${actLabel} | Chapter ${chapterLabel}`, chapterData(actNumber, chapterNumber));
     for (let sceneNumber = 1; sceneNumber <= CONFIG.scenesPerChapter; sceneNumber += 1) {
       const sceneLabel = String(sceneNumber).padStart(2, '0');
+      const sceneId = `blank_scene_${actLabel}_${chapterLabel}_${sceneLabel}`;
       addNode(
-        `blank_scene_${actLabel}_${chapterLabel}_${sceneLabel}`,
+        sceneId,
         chapterId,
         'scene',
         `Act ${actLabel} | Chapter ${chapterLabel} | Scene ${sceneLabel}`,
         sceneData(sceneNumber),
+      );
+      addSceneLinks(
+        sceneId,
+        `${sceneId}_links`,
+        'blank_character_bank',
+        'blank_location_bank',
+        sceneNumber,
       );
     }
   }
