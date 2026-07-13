@@ -3,6 +3,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getElementBounds } from '../../components/canvas/elementBounds';
 import { normalizeGeneratedTemplates } from '../../services/generatorTemplates';
+import { computePageOrder } from '../../services/pdfService';
 
 export interface LoadedGallerySample {
     slug: string;
@@ -490,8 +491,13 @@ export function validateGallerySample(sample: LoadedGallerySample, contract: Gal
         if (!expectedTemplates.has(templateId)) errors.push(`unexpected template '${templateId}' is present`);
     });
 
-    const pageCount = Object.keys(nodes).length;
-    if (pageCount < contract.pageCount[0] || pageCount > contract.pageCount[1]) {
+    let pageCount: number | undefined;
+    try {
+        pageCount = computePageOrder({ rootId: sample?.rootId, nodes } as any).length;
+    } catch (error) {
+        errors.push(`page count could not be computed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    if (pageCount !== undefined && (pageCount < contract.pageCount[0] || pageCount > contract.pageCount[1])) {
         errors.push(`page count ${pageCount} is outside ${contract.pageCount[0]}-${contract.pageCount[1]}`);
     }
     contract.palette.forEach(color => {

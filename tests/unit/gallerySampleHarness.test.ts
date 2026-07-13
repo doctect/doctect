@@ -288,6 +288,37 @@ describe('gallery sample harness', () => {
         ]));
     });
 
+    it('counts exported pages without reference wrappers', () => {
+        const sample = execute();
+        const exampleData = { example_label: 'EXAMPLE', skip_label: 'Skip to blank workspace →' };
+        sample.nodes.example_workspace.children = ['answer'];
+        sample.nodes.answer = {
+            id: 'answer', parentId: 'example_workspace', type: 'page', title: 'Answer',
+            data: exampleData, children: ['answer_wrapper'],
+        };
+        sample.nodes.answer_wrapper = {
+            id: 'answer_wrapper', parentId: 'answer', referenceId: 'blank_workspace', type: 'page', title: 'Answer wrapper',
+            data: exampleData, children: ['nested_answer_wrapper'],
+        };
+        sample.nodes.nested_answer_wrapper = {
+            id: 'nested_answer_wrapper', parentId: 'answer_wrapper', referenceId: 'blank_workspace', type: 'page', title: 'Nested answer wrapper',
+            data: exampleData, children: [],
+        };
+        const fivePageContract: GallerySampleContract = { ...contract, pageCount: [5, 5] };
+
+        expect(validateGallerySample(sample, fivePageContract)).not.toEqual(expect.arrayContaining([
+            expect.stringContaining('page count'),
+        ]));
+
+        sample.nodes.real_answer_page = {
+            id: 'real_answer_page', parentId: 'answer', type: 'page', title: 'Real answer page',
+            data: exampleData, children: [],
+        };
+        sample.nodes.answer.children.unshift('real_answer_page');
+
+        expect(validateGallerySample(sample, fivePageContract)).toContain('page count 6 is outside 5-5');
+    });
+
     it.each(['../archives', 'nested/sample', 'nested\\sample'])('rejects unsafe sample slug %s', (slug) => {
         expect(() => loadGallerySample(slug)).toThrow(/invalid gallery sample slug/i);
     });
