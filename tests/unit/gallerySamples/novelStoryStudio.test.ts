@@ -32,6 +32,7 @@ const annotationTargetsByRect = (buffer: ArrayBuffer, sourcePage: number) => {
     for (const match of pdf.matchAll(/^(\d+) 0 obj\s*([\s\S]*?)^endobj/gm)) {
         objects.set(Number(match[1]), match[2]);
     }
+    // jsPDF serializes /Page objects in page-tree order; this focused test intentionally relies on that output.
     const pageObjects = [...objects.entries()]
         .filter(([, body]) => /\/Type \/Page(?:\s|\/)/.test(body))
         .map(([objectId]) => objectId);
@@ -114,6 +115,13 @@ describe('Novel Story Studio gallery sample', () => {
 
     it('traverses every canonical character and location from companion grids', () => {
         const defaults = loadGallerySample(contract.slug);
+        const minimum = loadGallerySample(contract.slug, {
+            actCount: 1,
+            chaptersPerAct: 1,
+            scenesPerChapter: 1,
+            characterCount: 1,
+            locationCount: 1,
+        });
         const maximum = loadGallerySample(contract.slug, {
             actCount: 5,
             chaptersPerAct: 12,
@@ -131,6 +139,7 @@ describe('Novel Story Studio gallery sample', () => {
             displayField: 'link_label',
             offsetMode: 'static',
             offsetStart: 0,
+            showEmptyCellBorders: false,
             traversalPath: [
                 { sliceStart: 0, sliceCount: 1 },
                 { sliceStart: 0 },
@@ -142,6 +151,7 @@ describe('Novel Story Studio gallery sample', () => {
             displayField: 'link_label',
             offsetMode: 'static',
             offsetStart: 1,
+            showEmptyCellBorders: false,
             traversalPath: [
                 { sliceStart: 1, sliceCount: 1 },
                 { sliceStart: 0 },
@@ -149,6 +159,7 @@ describe('Novel Story Studio gallery sample', () => {
         });
 
         const traversalCases: Array<[ReturnType<typeof loadGallerySample>, number, number]> = [
+            [minimum, 1, 1],
             [defaults, 12, 8],
             [maximum, 30, 20],
         ];
@@ -175,6 +186,11 @@ describe('Novel Story Studio gallery sample', () => {
             expect(locationIds).toHaveLength(locationCount as number);
             expect(locationIds[0]).toBe(locationBank.children[0]);
             expect(locationIds.at(-1)).toBe(locationBank.children.at(-1));
+
+            if (sample === minimum) {
+                expect(characterIds).toEqual(['blank_character_01']);
+                expect(locationIds).toEqual(['blank_location_01']);
+            }
         });
     });
 
@@ -209,6 +225,12 @@ describe('Novel Story Studio gallery sample', () => {
 
         expect(targetAt(36, 184, 137, 18)).toBe('blank_character_01');
         expect(targetAt(181, 184, 137, 18)).toBe('blank_character_02');
+        expect(annotations.some(candidate => {
+            const emptyOffsetRect = [36, 679 - 424, 36 + 137, 679 - 424 - 18];
+            return candidate.rect.every(
+                (coordinate, index) => Math.abs(coordinate - emptyOffsetRect[index]) < 0.01,
+            );
+        })).toBe(false);
         expect(targetAt(181, 424, 137, 18)).toBe('blank_location_01');
         expect(targetAt(326, 424, 137, 18)).toBe('blank_location_02');
         expect(targetAt(263, 634, 58, 26)).toBe('blank_scene_01_01_01');
