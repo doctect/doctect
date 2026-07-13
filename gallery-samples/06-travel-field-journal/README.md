@@ -22,7 +22,7 @@ The concise fictional branch includes:
 - Daily timelines plus quiet field-note regions
 - Packing notes, an amount-free expense sketch, and closing highlights
 
-Provider names, addresses, schedules, and reservations are teaching fiction. Verify all real opening times, fares, routes, accessibility, and requirements independently.
+All provider names and reservation records are invented teaching fiction. Lisbon neighborhood names and general travel context are real; verify current opening times, fares, routes, accessibility, and requirements independently.
 
 ## Configuration
 

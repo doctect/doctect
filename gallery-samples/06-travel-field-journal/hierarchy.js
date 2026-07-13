@@ -153,15 +153,15 @@ addNode('example_reservation_lodging', 'example_reservations', 'reservation', 'M
   notes: 'Ask about luggage storage. Confirm steep approach before arrival.',
 }), { example: true });
 
-addNode('example_reservation_transit', 'example_reservations', 'reservation', 'Metro + Carris | Transit', reservationData({
-  menu_label: 'TRANSIT / METRO + CARRIS',
+addNode('example_reservation_transit', 'example_reservations', 'reservation', 'Tejo Loop Transit | Local Travel', reservationData({
+  menu_label: 'TRANSIT / TEJO LOOP',
   kind: 'TRANSIT',
-  provider: 'Lisbon Metro + Carris (fictional)',
-  address: 'Airport station to Alameda, then local connection',
+  provider: 'Tejo Loop Transit (fictional)',
+  address: 'Airport arrival hall to Alameda interchange, then neighborhood shuttle',
   arrival: 'Day 01 / daytime arrival',
   departure: 'Day 04 / allow 75 minutes',
   booking_reference: 'Not required - fictional example',
-  contact: 'Station information desk',
+  contact: 'Transit desk / fictional',
   notes: 'Buy a reloadable local card on arrival. Verify current service before travel.',
 }), { example: true });
 

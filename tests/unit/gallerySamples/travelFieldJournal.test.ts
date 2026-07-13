@@ -61,6 +61,41 @@ describe('Travel Field Journal gallery sample', () => {
         expect(exportedPageCount(sample)).toBe(226);
         expect(sample.nodes.blank_workspace.children).toHaveLength(6);
 
+        const terminalTrip = sample.nodes.blank_trip_06;
+        const terminalReservations = sample.nodes.blank_trip_06_reservations;
+        const terminalItinerary = sample.nodes.blank_trip_06_itinerary;
+        expect(terminalReservations.children).toHaveLength(8);
+        expect(terminalReservations.children.at(-1)).toBe('blank_trip_06_reservation_08');
+        expect(terminalItinerary.children).toHaveLength(21);
+        expect(terminalItinerary.children.at(-1)).toBe('blank_trip_06_day_21');
+        expect(terminalTrip.children).toEqual([
+            'blank_trip_06_reservations',
+            'blank_trip_06_itinerary',
+            'blank_trip_06_packing',
+            'blank_trip_06_expenses',
+            'blank_trip_06_highlights',
+        ]);
+
+        const reachable = new Set<string>();
+        const pending = ['blank_workspace'];
+        while (pending.length > 0) {
+            const nodeId = pending.shift()!;
+            if (reachable.has(nodeId)) continue;
+            reachable.add(nodeId);
+            const node = sample.nodes[nodeId];
+            if (node.children.length > 0) {
+                const navigator = role(sample, node.type, 'navigator');
+                expect(navigator, `${nodeId} navigator`).toBeTruthy();
+                expect(navigator.gridConfig.sourceType, `${nodeId} source`).toBe('current');
+                expect(navigator.gridConfig.dataSliceCount, `${nodeId} truncation`).toBeUndefined();
+                pending.push(...node.children);
+            }
+        }
+        const blankPageIds = Object.keys(sample.nodes).filter(nodeId => nodeId.startsWith('blank_'));
+        expect([...reachable].sort()).toEqual(blankPageIds.sort());
+        expect(reachable.has('blank_trip_06_reservation_08')).toBe(true);
+        expect(reachable.has('blank_trip_06_day_21')).toBe(true);
+
         Object.values(sample.nodes)
             .filter((node: any) => ['workspace', 'trip', 'reservations', 'itinerary'].includes(node.type))
             .forEach((node: any) => {
@@ -101,7 +136,7 @@ describe('Travel Field Journal gallery sample', () => {
         });
         expect(transit.data).toMatchObject({
             kind: 'TRANSIT',
-            provider: 'Lisbon Metro + Carris (fictional)',
+            provider: 'Tejo Loop Transit (fictional)',
             booking_reference: 'Not required - fictional example',
         });
         expect(days).toHaveLength(3);
@@ -112,6 +147,7 @@ describe('Travel Field Journal gallery sample', () => {
         ]);
         expect(days.every((day: any) => day.data.timeline && day.data.field_notes)).toBe(true);
         expect(guidedData).not.toMatch(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}|passport\s*[:#]|ticket\s*(number|#)\s*[:=]/i);
+        expect(guidedData).not.toMatch(/Lisbon Metro|Carris/i);
     });
 
     it('keeps every trip dashboard destination complete and semantically stable', () => {
@@ -223,6 +259,53 @@ describe('Travel Field Journal gallery sample', () => {
                 expect(grid.strokeWidth, grid.id).toBe(0);
             });
         });
+    });
+
+    it('draws every expense table edge exactly once around fill-only cells', () => {
+        const sample = loadGallerySample(contract.slug);
+        const elements = sample.templates.expenses.elements;
+        const cells = elements.filter((element: any) =>
+            element.type === 'rect' && element.id.includes('_table_cell_'),
+        );
+        const boundaries = elements.filter((element: any) =>
+            element.type === 'rect' && element.id.includes('_table_boundary_'),
+        );
+        const vertical = elements.filter((element: any) =>
+            element.type === 'rect' && element.id.includes('_table_line_ledger_vertical_'),
+        );
+        const horizontal = elements.filter((element: any) =>
+            element.type === 'rect' && element.id.includes('_table_line_ledger_horizontal_'),
+        );
+        const segmentKey = (line: any) => [line.x, line.y, line.w, line.h].join(':');
+
+        expect(cells).toHaveLength(36);
+        cells.forEach((cell: any) => {
+            expect(cell.fill, cell.id).not.toBe('');
+            expect(cell.stroke, cell.id).toBe('');
+            expect(cell.strokeWidth, cell.id).toBe(0);
+        });
+
+        expect(boundaries).toHaveLength(1);
+        expect(boundaries[0]).toMatchObject({
+            x: 34,
+            y: 220,
+            w: 447,
+            h: 288,
+            fill: '',
+            stroke: '#9e988b',
+            strokeWidth: 0.8,
+        });
+        expect(vertical).toHaveLength(3);
+        expect(horizontal).toHaveLength(8);
+        expect(vertical.map((line: any) => line.x)).toEqual([107.6, 290.6, 390.6]);
+        expect(vertical.every((line: any) => line.y === 220 && line.w === 0.8 && line.h === 288)).toBe(true);
+        expect(horizontal.map((line: any) => line.y)).toEqual([
+            251.6, 283.6, 315.6, 347.6, 379.6, 411.6, 443.6, 475.6,
+        ]);
+        expect(horizontal.every((line: any) => line.x === 34 && line.w === 447 && line.h === 0.8)).toBe(true);
+
+        const segments = [...vertical, ...horizontal].map(segmentKey);
+        expect(new Set(segments).size).toBe(segments.length);
     });
 
     it('uses newly authored route, compass, and topographic SVG motifs', () => {
