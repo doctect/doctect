@@ -4,7 +4,7 @@ import { signUpAndVerify, apiSignUpAndVerify, TEST_PASSWORD } from './helpers.js
 
 // The API server (server/index.js) listens on a different origin than the Vite
 // dev server that Playwright's baseURL points at (see .env: VITE_API_BASE).
-const API_BASE = 'http://localhost:3001';
+const API_BASE = process.env.E2E_API_BASE || 'http://localhost:3001';
 
 const unique = Date.now();
 

@@ -1,6 +1,11 @@
 
 import { test, expect } from '@playwright/test';
 
+const openGenerator = async (page) => {
+    await page.getByTitle('Generate Hierarchy via Script').click();
+    await expect(page.getByRole('heading', { name: 'Hierarchy Generator' })).toBeVisible();
+};
+
 test.describe('Editor Advanced Features', () => {
     test.beforeEach(async ({ page }) => {
         await page.goto('/app');
@@ -80,7 +85,74 @@ test.describe('Editor Advanced Features', () => {
         await expect(page.getByLabel('Hierarchy script')).toHaveValue(hierarchySource);
     });
 
-    test('should Trigger PDF Export', async ({ page }) => {
+    test('sandbox removes DOM, network, storage, cookie, and loader globals', async ({ page }) => {
+        await openGenerator(page);
+        const templateSource = await page.getByLabel('Template script').inputValue();
+        const blockedGlobals = `
+if (typeof window !== 'undefined' || typeof document !== 'undefined') throw new Error('DOM exposed');
+if (typeof fetch !== 'undefined' || typeof XMLHttpRequest !== 'undefined') throw new Error('network exposed');
+if (typeof WebSocket !== 'undefined' || typeof indexedDB !== 'undefined') throw new Error('browser capability exposed');
+if (typeof localStorage !== 'undefined' || typeof sessionStorage !== 'undefined') throw new Error('storage exposed');
+if (typeof cookieStore !== 'undefined') throw new Error('cookies exposed');
+if (typeof caches !== 'undefined' || typeof importScripts !== 'undefined') throw new Error('loader exposed');
+`;
+        await page.getByLabel('Template script').fill(blockedGlobals + templateSource);
+
+        await page.getByRole('button', { name: 'Preview', exact: true }).click();
+
+        await expect(page.getByText('1 variant', { exact: true })).toBeVisible();
+        await expect(page.getByText('2 templates', { exact: true })).toBeVisible();
+        await expect(page.getByTestId('project-tab').filter({ hasText: 'Blank Project' })).toBeVisible();
+        await expect(page.locator('[data-element-id]')).toHaveCount(0);
+    });
+
+    test('sandbox rejects dynamic import without requesting the module', async ({ page }) => {
+        const requested = [];
+        page.on('request', request => {
+            if (request.url().includes('generator-sandbox-must-not-load.js')) requested.push(request.url());
+        });
+        await openGenerator(page);
+        await page.getByLabel('Template script').fill("return import('/generator-sandbox-must-not-load.js');");
+
+        await page.getByRole('button', { name: 'Preview', exact: true }).click();
+
+        await expect(page.getByRole('alert')).toContainText('Runtime: Template script must return synchronously.');
+        await page.waitForTimeout(250);
+        expect(requested).toEqual([]);
+        await expect(page.getByTestId('project-tab').filter({ hasText: 'Blank Project' })).toBeVisible();
+        await expect(page.locator('[data-element-id]')).toHaveCount(0);
+    });
+
+    test('sandbox times out after 10 seconds without changing the canvas or freezing the modal', async ({ page }) => {
+        test.setTimeout(25000);
+        const requested = [];
+        page.on('request', request => {
+            if (request.url().includes('generator-sandbox-timeout-must-not-request.js')) requested.push(request.url());
+        });
+        await openGenerator(page);
+        await page.getByLabel('Template script').fill(`
+if (typeof fetch !== 'undefined') fetch('/generator-sandbox-timeout-must-not-request.js');
+while (true) {}
+`);
+        const startedAt = Date.now();
+
+        await page.getByRole('button', { name: 'Preview', exact: true }).click();
+
+        await expect(page.getByRole('alert')).toContainText('Timeout: Generator exceeded the 10000 ms execution limit.', { timeout: 15000 });
+        const elapsedMs = Date.now() - startedAt;
+        expect(elapsedMs).toBeGreaterThanOrEqual(9500);
+        expect(elapsedMs).toBeLessThan(15000);
+        expect(requested).toEqual([]);
+        await expect(page.getByRole('button', { name: 'Preview', exact: true })).toBeEnabled();
+
+        page.once('dialog', dialog => dialog.accept());
+        await page.getByRole('button', { name: 'Close generator' }).click();
+        await expect(page.getByRole('heading', { name: 'Hierarchy Generator' })).toBeHidden();
+        await expect(page.getByTestId('project-tab').filter({ hasText: 'Blank Project' })).toBeVisible();
+        await expect(page.locator('[data-element-id]')).toHaveCount(0);
+    });
+
+    test('should Trigger PDF Export', async ({ page }, testInfo) => {
         // 1. Setup download listener
         const downloadPromise = page.waitForEvent('download');
 
@@ -92,7 +164,6 @@ test.describe('Editor Advanced Features', () => {
         const download = await downloadPromise;
         expect(download.suggestedFilename()).toContain('.pdf');
 
-        // Save to 'test-results' for manual inspection
-        await download.saveAs('test-results/exported_project.pdf');
+        await download.saveAs(testInfo.outputPath('exported_project.pdf'));
     });
 });

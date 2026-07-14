@@ -5,9 +5,34 @@ import { signUpAndVerify, TEST_PASSWORD } from './helpers.js';
 // The API server (server/index.js) listens on a different origin than the Vite
 // dev server that Playwright's baseURL points at (see .env: VITE_API_BASE).
 // Direct API assertions below hit it explicitly rather than relying on DOM text.
-const API_BASE = 'http://localhost:3001';
+const API_BASE = process.env.E2E_API_BASE || 'http://localhost:3001';
 
 const unique = Date.now();
+
+const waitForPersistedGenerator = async (page, expected) => {
+    await expect.poll(() => page.evaluate(() => {
+        const projects = JSON.parse(localStorage.getItem('hype_projects') || '[]');
+        const activeId = localStorage.getItem('hype_active_project');
+        const generator = projects.find(project => project.id === activeId)?.initialState?.generator;
+        return generator && { templateScript: generator.templateScript, hierarchyScript: generator.hierarchyScript };
+    })).toEqual(expected);
+};
+
+const applyDistinctiveGenerator = async (page) => {
+    await page.getByTitle('Generate Hierarchy via Script').click();
+    const baseTemplateSource = await page.getByLabel('Template script').inputValue();
+    const baseHierarchySource = await page.getByLabel('Hierarchy script').inputValue();
+    const templateSource = `${baseTemplateSource}\n\n// fork source:   café 雪   \n`;
+    const hierarchySource = `${baseHierarchySource}\n\n// fork hierarchy:   λ   \n`;
+    await page.getByLabel('Template script').fill(templateSource);
+    await page.getByLabel('Hierarchy script').fill(hierarchySource);
+    await page.getByRole('button', { name: 'Preview', exact: true }).click();
+    await expect(page.getByText('3 nodes', { exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Apply Generated Project' }).click();
+    await expect(page.getByTestId('project-tab').filter({ hasText: 'My Simple Book' })).toBeVisible();
+    await waitForPersistedGenerator(page, { templateScript: templateSource, hierarchyScript: hierarchySource });
+    return { templateSource, hierarchySource };
+};
 
 test.describe('Fork', () => {
     test('two-user fork loop: publish, fork, edit, save; fork stays private', async ({ browser }) => {
@@ -30,6 +55,7 @@ test.describe('Fork', () => {
         });
 
         await pageA.goto('/app');
+        const generatorSource = await applyDistinctiveGenerator(pageA);
         await pageA.getByTitle('Cloud').click();
         const [createRes] = await Promise.all([
             pageA.waitForResponse(
@@ -76,11 +102,10 @@ test.describe('Fork', () => {
         });
 
         // B opens the gallery detail page for A's published project and forks it.
-        // (GalleryDetailPage's <h1> shows the project *name*, which stays as the
-        // tab's original name, e.g. "Blank Project" -- the publish description,
-        // which we set to a unique string, renders as a plain paragraph below it.)
+        // GalleryDetailPage's heading shows the generated project name; publish
+        // description renders separately below it.
         await pageB.goto(`/gallery/${projectId}`);
-        await expect(pageB.getByRole('heading', { name: 'Blank Project' })).toBeVisible({ timeout: 10000 });
+        await expect(pageB.getByRole('heading', { name: 'My Simple Book' })).toBeVisible({ timeout: 10000 });
         await expect(pageB.getByText(`Forkable planner ${unique}`)).toBeVisible();
 
         const [forkRes] = await Promise.all([
@@ -96,6 +121,13 @@ test.describe('Fork', () => {
 
         // Lands in /app with a new cloud-linked tab.
         await pageB.waitForURL('**/app', { timeout: 15000 });
+        await expect(pageB.getByTitle('Close Project')).toHaveCount(2, { timeout: 10000 });
+
+        const activePane = pageB.locator('.absolute.inset-0.w-full.h-full.opacity-100');
+        await activePane.getByTitle('Generate Hierarchy via Script').click();
+        await expect(pageB.getByLabel('Template script')).toHaveValue(generatorSource.templateSource);
+        await expect(pageB.getByLabel('Hierarchy script')).toHaveValue(generatorSource.hierarchySource);
+        await pageB.getByRole('button', { name: 'Close generator' }).click();
 
         // CloudMenu surfaces the upstream lineage.
         await pageB.getByTitle('Cloud').click();
@@ -107,11 +139,11 @@ test.describe('Fork', () => {
         await expect(lineageLink).toBeHidden();
 
         // Edit the (forked) template: draw a rectangle on the canvas.
-        // Note: inactive tabs stay mounted (just visually hidden), so a second
-        // "Blank Project" tab's toolbar/canvas also exists in the DOM -- scope to
+        // Note: inactive tabs stay mounted (just visually hidden), so the default
+        // tab's toolbar/canvas also exists in the DOM -- scope to
         // the active pane (the only one with the "opacity-100" wrapper class,
         // see EditorPage.tsx) to avoid ambiguous matches.
-        const activePane = pageB.locator('.absolute.inset-0.w-full.h-full.opacity-100');
+        const initialElementCount = await activePane.locator('[data-element-id]').count();
         await activePane.getByTitle('Rectangle (R)').click();
         const canvas = activePane.getByTestId('editor-canvas');
         const box = await canvas.boundingBox();
@@ -120,7 +152,7 @@ test.describe('Fork', () => {
         await pageB.mouse.down();
         await pageB.mouse.move(box.x + 200, box.y + 200);
         await pageB.mouse.up();
-        await expect(activePane.locator('[data-element-id]')).toHaveCount(1);
+        await expect(activePane.locator('[data-element-id]')).toHaveCount(initialElementCount + 1);
 
         // Save to cloud succeeds (button reads "Save to cloud", no "(new)" suffix,
         // since this tab is already cloud-linked from the fork).

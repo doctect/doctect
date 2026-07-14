@@ -4,33 +4,34 @@ import { signUpAndVerify as signUp } from './helpers.js';
 
 // The API server (server/index.js) listens on a different origin than the Vite
 // dev server that Playwright's baseURL points at (see .env: VITE_API_BASE).
-const API_BASE = 'http://localhost:3001';
+const API_BASE = process.env.E2E_API_BASE || 'http://localhost:3001';
 
 const unique = Date.now();
 
-// Draws a rectangle on the active project's canvas, mutating its currently active
-// template's `elements` (a fresh, random element id each time -- see
-// components/ProjectEditor.tsx's `el_${Math.random()...}` -- guarantees two
-// independent draws are never byte-identical, which is what makes them "changes"
-// to the shared/diff.js structural differ, and what makes two independent edits to
-// the same template a genuine conflict).
-const drawRectangle = async (page, { x = 100, y = 100 } = {}) => {
+const waitForPersistedGenerator = async (page, expected) => {
+    await expect.poll(() => page.evaluate(() => {
+        const projects = JSON.parse(localStorage.getItem('hype_projects') || '[]');
+        const activeId = localStorage.getItem('hype_active_project');
+        const generator = projects.find(project => project.id === activeId)?.initialState?.generator;
+        return generator && { templateScript: generator.templateScript, hierarchyScript: generator.hierarchyScript };
+    })).toEqual(expected);
+};
+
+const applyGeneratorSource = async (page, title, marker) => {
     const activePane = page.locator('.absolute.inset-0.w-full.h-full.opacity-100');
-    await activePane.getByTitle('Rectangle (R)').click();
-    const canvas = activePane.getByTestId('editor-canvas');
-    const box = await canvas.boundingBox();
-    if (!box) throw new Error('Canvas not found');
-    await page.mouse.move(box.x + x, box.y + y);
-    await page.mouse.down();
-    await page.mouse.move(box.x + x + 80, box.y + y + 80);
-    await page.mouse.up();
-    await expect(activePane.locator('[data-element-id]')).toHaveCount(1, { timeout: 10000 });
-    // ProjectEditor debounces propagating state up to the parent (and thus into
-    // what CloudMenu's "Save to cloud" actually sends) by 1000ms -- see
-    // components/ProjectEditor.tsx's `setTimeout(..., 1000)`. Without this wait,
-    // an immediate "Save to cloud" click races the debounce and persists the
-    // pre-edit state.
-    await page.waitForTimeout(1200);
+    await activePane.getByTitle('Generate Hierarchy via Script').click();
+    const baseTemplateSource = await page.getByLabel('Template script').inputValue();
+    const baseHierarchySource = await page.getByLabel('Hierarchy script').inputValue();
+    const templateSource = `${baseTemplateSource}\n\n// ${marker}:   café 雪   \n`;
+    const hierarchySource = `${baseHierarchySource.replace("title: 'My Simple Book'", `title: '${title}'`)}\n\n// ${marker}:   λ   \n`;
+    await page.getByLabel('Template script').fill(templateSource);
+    await page.getByLabel('Hierarchy script').fill(hierarchySource);
+    await page.getByRole('button', { name: 'Preview', exact: true }).click();
+    await expect(page.getByText('3 nodes', { exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Apply Generated Project' }).click();
+    await expect(page.getByTestId('project-tab').filter({ hasText: title })).toBeVisible();
+    await waitForPersistedGenerator(page, { templateScript: templateSource, hierarchyScript: hierarchySource });
+    return { templateSource, hierarchySource };
 };
 
 // Creates+publishes a fresh public project as the given (already signed-in) page's
@@ -105,7 +106,8 @@ test.describe('Merge requests', () => {
         // the CloudMenu's lineage link first).
         await expect(pageB.getByTitle('Close Project')).toHaveCount(2, { timeout: 10000 });
 
-        await drawRectangle(pageB);
+        const generatedTitle = `Generated MR ${u}`;
+        const generatedSource = await applyGeneratorSource(pageB, generatedTitle, `fork-${u}`);
 
         await pageB.getByTitle('Cloud').click();
         const [saveRes] = await Promise.all([
@@ -131,7 +133,8 @@ test.describe('Merge requests', () => {
         // The proposed change list shows the structured diff (not raw JSON).
         await expect(pageB.getByText(mrTitle)).toBeVisible();
         await expect(pageB.getByText('open', { exact: true })).toBeVisible();
-        await expect(pageB.getByText('~ Template modified: default/a4_blank')).toBeVisible();
+        await expect(pageB.getByText('~ Generator source changed')).toBeVisible();
+        await expect(pageB.getByText('~ Page hierarchy (nodes) changed')).toBeVisible();
 
         // ---------------------------------------------------------------
         // A: sees the incoming MR on the gallery detail page, reviews it,
@@ -141,7 +144,8 @@ test.describe('Merge requests', () => {
         await expect(pageA.getByRole('heading', { name: 'Merge requests' })).toBeVisible({ timeout: 10000 });
         await pageA.getByRole('link', { name: new RegExp(mrTitle) }).click();
         await pageA.waitForURL(`**/mr/${mrId}`, { timeout: 15000 });
-        await expect(pageA.getByText('~ Template modified: default/a4_blank')).toBeVisible();
+        await expect(pageA.getByText('~ Generator source changed')).toBeVisible();
+        await expect(pageA.getByText('~ Page hierarchy (nodes) changed')).toBeVisible();
 
         await pageA.getByRole('button', { name: /render before\/after preview/i }).click();
         await expect(pageA.locator('img[alt="before"]')).toBeVisible({ timeout: 30000 });
@@ -174,7 +178,11 @@ test.describe('Merge requests', () => {
 
         await pageA.getByRole('button', { name: /restore/i }).first().click();
         const activePaneA = pageA.locator('.absolute.inset-0.w-full.h-full.opacity-100');
-        await expect(activePaneA.locator('[data-element-id]')).toHaveCount(1, { timeout: 10000 });
+        await expect(pageA.getByTestId('project-tab').filter({ hasText: generatedTitle })).toBeVisible({ timeout: 10000 });
+        await expect(activePaneA.locator('[data-element-id]')).toHaveCount(2, { timeout: 10000 });
+        await activePaneA.getByTitle('Generate Hierarchy via Script').click();
+        await expect(pageA.getByLabel('Template script')).toHaveValue(generatedSource.templateSource);
+        await expect(pageA.getByLabel('Hierarchy script')).toHaveValue(generatedSource.hierarchySource);
 
         await ctxA.close();
         await ctxB.close();
@@ -213,7 +221,7 @@ test.describe('Merge requests', () => {
         await pageD.waitForURL('**/app', { timeout: 15000 });
         await expect(pageD.getByTitle('Close Project')).toHaveCount(2, { timeout: 10000 });
 
-        await drawRectangle(pageD, { x: 60, y: 60 });
+        await applyGeneratorSource(pageD, `Fork Generator ${u}`, `fork-conflict-${u}`);
         await pageD.getByTitle('Cloud').click();
         const [saveResD] = await Promise.all([
             pageD.waitForResponse(res => res.url().includes(`/api/projects/`) && res.url().includes('/commits') && res.request().method() === 'POST', { timeout: 15000 }),
@@ -233,10 +241,10 @@ test.describe('Merge requests', () => {
         const mrId = (await createMrRes.json()).mergeRequest.id;
 
         // ---------------------------------------------------------------
-        // C: independently edits the SAME template on the upstream project,
-        // after the MR was opened -- a genuine conflicting change.
+        // C: independently regenerates the upstream from different source after
+        // the MR was opened, creating a generator-source conflict.
         // ---------------------------------------------------------------
-        await drawRectangle(pageC, { x: 300, y: 300 });
+        await applyGeneratorSource(pageC, `Target Generator ${u}`, `target-conflict-${u}`);
         await pageC.getByTitle('Cloud').click();
         const [saveResC] = await Promise.all([
             pageC.waitForResponse(res => res.url().includes(`/api/projects/${upstreamId}/commits`) && res.request().method() === 'POST', { timeout: 15000 }),
@@ -248,7 +256,7 @@ test.describe('Merge requests', () => {
         await pageC.goto(`/mr/${mrId}`);
         await expect(pageC.getByText('conflicted', { exact: true })).toBeVisible({ timeout: 10000 });
         await expect(pageC.getByText(/conflicts/i)).toBeVisible();
-        await expect(pageC.getByText('Template "a4_blank" in variant "default" was changed on both sides')).toBeVisible();
+        await expect(pageC.getByText('Generator source changed differently on both branches.')).toBeVisible();
 
         // Merge is refused: the button isn't even rendered for a conflicted MR; only Close is.
         await expect(pageC.getByRole('button', { name: 'Merge', exact: true })).toHaveCount(0);
