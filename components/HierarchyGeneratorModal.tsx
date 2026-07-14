@@ -1,5 +1,5 @@
 
-import React, { useState, useRef, useEffect, useMemo } from 'react';
+import React, { useState, useRef, useEffect, useLayoutEffect, useMemo } from 'react';
 import { GeneratorProvenance, RM_PP_WIDTH, RM_PP_HEIGHT, A4_WIDTH, A4_HEIGHT } from '../types';
 import { runGeneratorSandbox } from '../services/generatorSandbox';
 import { GeneratedProject, GeneratedProjectSummary, validateGeneratedProject } from '../services/validateGeneratedProject';
@@ -151,6 +151,7 @@ const InfoTooltip: React.FC<InfoTooltipProps> = ({ content, position = 'above', 
     <div className="relative inline-flex items-center">
       <button
         ref={buttonRef}
+        aria-label={title ? `${title} help` : 'Help'}
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
         onClick={handleClick}
@@ -167,8 +168,9 @@ const InfoTooltip: React.FC<InfoTooltipProps> = ({ content, position = 'above', 
           {isPinned && (
             <div className="flex justify-between items-center mb-2 pb-2 border-b border-slate-600">
               <span className="font-semibold text-amber-400">{title || 'Quick Reference'}</span>
-              <button
-                onClick={handleClose}
+               <button
+                 aria-label={`Close ${title || 'help'}`}
+                 onClick={handleClose}
                 className="text-slate-400 hover:text-white"
               >
                 <X size={14} />
@@ -2025,8 +2027,13 @@ type PreviewState =
 const utf8Bytes = (value: string) => new TextEncoder().encode(value).byteLength;
 const countLabel = (count: number, singular: string) => `${count} ${singular}${count === 1 ? '' : 's'}`;
 
-export const HierarchyGeneratorModal: React.FC<HierarchyGeneratorModalProps> = ({
-  isOpen,
+type HierarchyGeneratorSessionProps = Omit<HierarchyGeneratorModalProps, 'isOpen'>;
+
+export const HierarchyGeneratorModal: React.FC<HierarchyGeneratorModalProps> = ({ isOpen, ...sessionProps }) => (
+  isOpen ? <HierarchyGeneratorSession {...sessionProps} /> : null
+);
+
+const HierarchyGeneratorSession: React.FC<HierarchyGeneratorSessionProps> = ({
   savedGenerator,
   onClose,
   onApplyGenerated,
@@ -2047,27 +2054,20 @@ export const HierarchyGeneratorModal: React.FC<HierarchyGeneratorModalProps> = (
     templateScript: initialSource.templateScript,
     hierarchyScript: initialSource.hierarchyScript,
   });
-  const wasOpenRef = useRef(false);
   const previewRequestRef = useRef(0);
+  const dialogRef = useRef<HTMLDivElement>(null);
 
   const isDirty = templateScript !== baselineRef.current.templateScript
     || hierarchyScript !== baselineRef.current.hierarchyScript;
 
-  useEffect(() => {
-    if (isOpen && !wasOpenRef.current) {
-      const source = savedGenerator ?? simplePreset;
-      setTemplateScript(source.templateScript);
-      setHierarchyScript(source.hierarchyScript);
-      setSelectedPreset(savedGenerator ? 'saved' : 'simple');
-      baselineRef.current = {
-        templateScript: source.templateScript,
-        hierarchyScript: source.hierarchyScript,
-      };
+  useLayoutEffect(() => {
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    dialogRef.current?.focus();
+    return () => {
       previewRequestRef.current += 1;
-      setPreviewState({ status: 'idle' });
-    }
-    wasOpenRef.current = isOpen;
-  }, [isOpen, savedGenerator, simplePreset]);
+      if (previousFocus?.isConnected) previousFocus.focus();
+    };
+  }, []);
 
   const setDraft = (field: 'templateScript' | 'hierarchyScript', value: string) => {
     previewRequestRef.current += 1;
@@ -2093,8 +2093,6 @@ export const HierarchyGeneratorModal: React.FC<HierarchyGeneratorModalProps> = (
     previewRequestRef.current += 1;
     setPreviewState({ status: 'idle' });
   };
-
-  if (!isOpen) return null;
 
   const handleClose = () => {
     if (isDirty && !window.confirm('Discard draft generator changes?')) return;
@@ -2152,8 +2150,37 @@ export const HierarchyGeneratorModal: React.FC<HierarchyGeneratorModalProps> = (
   };
 
   const detachSavedGenerator = () => {
+    if (isDirty && !window.confirm('Discard draft generator changes?')) return;
     if (!window.confirm('Detach saved generator source? Generated document content will remain unchanged.')) return;
     if (onDetachSavedGenerator()) onClose();
+  };
+
+  const handleDialogKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      handleClose();
+      return;
+    }
+    if (event.key !== 'Tab' || !dialogRef.current) return;
+
+    const focusable = Array.from(dialogRef.current.querySelectorAll<HTMLElement>(
+      'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    )).filter(element => element.getAttribute('aria-hidden') !== 'true' && !element.hasAttribute('hidden'));
+    if (focusable.length === 0) {
+      event.preventDefault();
+      dialogRef.current.focus();
+      return;
+    }
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && (document.activeElement === first || document.activeElement === dialogRef.current)) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && (document.activeElement === last || document.activeElement === dialogRef.current)) {
+      event.preventDefault();
+      first.focus();
+    }
   };
 
   const resetCurrentPreset = () => {
@@ -2176,7 +2203,15 @@ export const HierarchyGeneratorModal: React.FC<HierarchyGeneratorModalProps> = (
 
   return (
     <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center backdrop-blur-sm p-4">
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-[95vw] h-[90vh] flex flex-col overflow-hidden animate-in fade-in zoom-in duration-200">
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="hierarchy-generator-title"
+        tabIndex={-1}
+        onKeyDown={handleDialogKeyDown}
+        className="bg-white rounded-xl shadow-2xl w-full max-w-[95vw] h-[90vh] flex flex-col overflow-hidden animate-in fade-in zoom-in duration-200 outline-none"
+      >
         {/* Header */}
         <div className="flex justify-between items-center p-4 border-b bg-slate-50">
           <div className="flex items-center gap-3">
@@ -2184,7 +2219,7 @@ export const HierarchyGeneratorModal: React.FC<HierarchyGeneratorModalProps> = (
               <Network size={20} />
             </div>
             <div>
-              <h2 className="text-xl font-bold text-slate-800">Hierarchy Generator</h2>
+              <h2 id="hierarchy-generator-title" className="text-xl font-bold text-slate-800">Hierarchy Generator</h2>
               <p className="text-xs text-slate-500">Programmatically generate nodes and templates using JavaScript.</p>
             </div>
           </div>
@@ -2193,8 +2228,9 @@ export const HierarchyGeneratorModal: React.FC<HierarchyGeneratorModalProps> = (
           <div className="flex items-center gap-3">
             <div className="flex items-center gap-2 bg-white border border-slate-200 rounded-lg px-3 py-2 shadow-sm">
               <Sparkles size={16} className="text-amber-500" />
-              <span className="text-xs text-slate-500 font-medium">Preset:</span>
+              <label htmlFor="generator-preset" className="text-xs text-slate-500 font-medium">Preset:</label>
               <select
+                id="generator-preset"
                 value={selectedPreset}
                 onChange={(e) => loadPreset(e.target.value)}
                 className="text-sm font-medium text-slate-700 bg-transparent border-none focus:outline-none cursor-pointer"
@@ -2273,7 +2309,7 @@ export const HierarchyGeneratorModal: React.FC<HierarchyGeneratorModalProps> = (
                 <CheckCircle2 size={14} /> Saved Generator
               </span>
             )}
-            {previewState.status === 'error' && <span className="text-red-600 text-xs flex items-center gap-1 font-medium"><AlertTriangle size={14} /> {previewState.message}</span>}
+            {previewState.status === 'error' && <span role="alert" aria-live="assertive" className="text-red-600 text-xs flex items-center gap-1 font-medium"><AlertTriangle size={14} /> {previewState.message}</span>}
             {savedGenerator && (
               <button onClick={detachSavedGenerator} className="text-xs text-red-600 hover:text-red-700 px-2">
                 Detach Saved Generator
