@@ -85,7 +85,7 @@ test.describe('Editor Canvas Interactions', () => {
         await page.keyboard.type(textToType);
 
         // Verify text update in overlay
-        await expect(overlay).toHaveValue(textToType);
+        await expect(overlay).toHaveText(textToType);
 
         // Blur/Escape to finish editing
         await page.keyboard.press('Escape');
@@ -126,17 +126,15 @@ test.describe('Editor Canvas Interactions', () => {
         await page.getByTitle('Select Tool (V)').click();
 
         // 3. Drag element
-        // Center of rect is roughly (startX + 50, startY + 50) relative to page
-        // Wait, element is at local coords.
-        // We can just drag the element center.
+        // Avoid center transform-origin handle and edge resize handles.
         if (!initialBox) throw new Error('Element not rendered');
 
-        const dragStartX = initialBox.x + initialBox.width / 2;
-        const dragStartY = initialBox.y + initialBox.height / 2;
+        const dragStartX = initialBox.x + initialBox.width / 4;
+        const dragStartY = initialBox.y + initialBox.height / 4;
 
         await page.mouse.move(dragStartX, dragStartY);
         await page.mouse.down();
-        await page.mouse.move(dragStartX + 50, dragStartY + 50);
+        await page.mouse.move(dragStartX + 50, dragStartY + 50, { steps: 5 });
         await page.mouse.up();
 
         // Verify position changed
