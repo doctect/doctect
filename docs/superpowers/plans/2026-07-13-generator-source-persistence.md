@@ -24,6 +24,8 @@
 - Generator metadata merges atomically; divergent two-sided edits conflict instead of line-merging.
 - No new runtime dependency.
 - Existing untracked `.superpowers/brainstorm/` and `scratch/` files remain untouched.
+- Public gallery content is pinned to `published_commit_id`; save and MR merge never republish implicitly.
+- Ordinary saves require quoted `If-Match` from `lastSyncedCommitId` and stale writes return `409 PROJECT_HEAD_CHANGED` without orphan commits.
 
 ---
 
@@ -770,7 +772,7 @@ Return a valid one-page project afterward and verify preview succeeds. Add a sep
 
 - [ ] **Step 2: Add publish/open/fork persistence browser flow**
 
-Generate/apply source containing distinctive whitespace and Unicode, save cloud project, publish, assert public-source warning, open gallery project in a second context, and verify source appears but does not run. Edit, preview, apply, save, reload, and verify exact edited source. Fork and assert fork starts with exact source.
+Generate/apply source containing distinctive whitespace and Unicode, save cloud project, publish, assert public-source warning, open gallery project in a second context, and verify source appears but does not run. Save a newer owner commit and verify gallery/open/PDF remain pinned; explicitly republish and verify they advance. Edit, preview, apply, save, reload, and verify exact edited source. Fork and assert fork starts with exact published source.
 
 - [ ] **Step 3: Add merge-request source cases**
 
@@ -815,3 +817,21 @@ git diff --check
 ```
 
 Expected: no tracked changes and no whitespace errors. Do not create an empty commit.
+
+---
+
+### Task 7: Whole-Branch Publication and Transaction Blockers
+
+**Files:**
+- Modify: `server/migrations/index.js`, `server/db.js`, `server/routes/projects.js`, `server/routes/gallery.js`, `server/routes/me.js`, `server/routes/mergeRequests.js`, `server/middleware/limits.js`
+- Modify: `services/cloudApi.ts`, `components/cloud/CloudMenu.tsx`
+- Test: `tests/unit/server/publishedSnapshots.test.js`, `tests/unit/server/publishedSnapshotMigration.test.js`, `tests/unit/server/projectWriteTransactions.test.js`, related server/cloud/browser suites
+
+- [x] Add SQLite/PostgreSQL-compatible published commit/history and public metadata migrations with existing-public backfill.
+- [x] Restrict gallery state/detail/open/PDF/fork and non-owner history to explicit publication snapshots.
+- [x] Require ordinary-save `If-Match`; lock, compare, insert, CAS-advance, prune, and commit transactionally.
+- [x] Make initial project and fork writes transaction-scoped; retain MR target-head CAS without publishing the merge.
+- [x] Gather merge response DTO inside the transaction and discard PostgreSQL clients when rollback fails.
+- [x] Serialize first-publish allowance under the owner lock and publish snapshot/record/metadata/thumbnails atomically.
+- [x] Add migration, stale-save, interleaving, rollback, access-control, fork-source, merge, and CloudMenu reload tests.
+- [ ] Update and run full Chromium/Firefox browser expectations, full unit/build/type checks, and final report.

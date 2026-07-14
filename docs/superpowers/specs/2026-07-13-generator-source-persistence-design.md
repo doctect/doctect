@@ -20,6 +20,7 @@ Manual canvas edits mutate `AppState.variants[*].templates` directly. The DOM is
 - Preview generated output before replacing the current document.
 - Preserve generator-source changes correctly through three-way merge requests.
 - Introduce project JSON schema v9 through the existing sequential migration pattern.
+- Publish an explicit immutable cloud commit snapshot; later saves and merges remain private until republished.
 
 ## 3. Non-goals
 
@@ -172,12 +173,20 @@ Because metadata is inside `AppState`, existing full-state paths carry it:
 3. JSON import migrates and validates it.
 4. Cloud commits gzip and hash it with document state.
 5. Version-history restore restores matching source and output snapshot.
-6. Gallery publish exposes the current head commit, including source after owner warning.
+6. Gallery publish pins the exact inspected head commit, including source after owner warning.
 7. Gallery **Open in editor** stages and migrates it unchanged.
-8. Gallery fork copies it into the fork's first commit.
+8. Gallery fork copies the pinned published commit into the fork's first commit.
 9. PDF/ZIP generation ignores it.
 
 Private cloud projects keep source private under existing project authorization. Published gallery projects expose source to anyone who can fetch and open the public project.
+
+### 9.1 Explicit publication snapshots
+
+`projects.head_commit_id` remains the owner's mutable cloud head. `projects.published_commit_id` separately identifies the only commit exposed by gallery detail/state, Open in editor, PDF/ZIP download, and fork. Publishing uses a strong quoted `If-Match` precondition and atomically records that commit, public metadata, and thumbnails. Ordinary saves and merge-request merges advance only `head_commit_id`; public content does not change until the owner explicitly republishes and receives the source disclosure again.
+
+Each successful publish records its commit in `project_publications`. Anonymous and non-owner history APIs expose only these explicitly published commits, never intervening private cloud commits or their identifiers. Existing public projects migrate with their then-current head as the initial published snapshot. Unpublishing clears current public visibility and `published_commit_id`; retained publication history remains inaccessible while private.
+
+Ordinary saves also require a strong quoted `If-Match` containing the editor's `lastSyncedCommitId`. Project creation, save, fork, and merge commit insertion plus head advancement are transaction-scoped; stale saves return stable `409 PROJECT_HEAD_CHANGED` without an orphan commit. Public-project forks always use `published_commit_id`, including forks requested by the owner.
 
 ## 10. Three-way Diff and Merge
 
@@ -232,6 +241,8 @@ These units communicate through typed plain-data interfaces. Sandbox code does n
 - Wrong version/type/timestamp and per-script/combined byte-limit cases fail as specified.
 - Malformed imported metadata detaches with warning while document opens.
 - Local JSON, cloud compressed commit, publish/open, fork, and version-history round trips preserve exact source.
+- A private save or MR merge after publication leaves gallery state/PDF/open/fork pinned until republish.
+- Public history lists only explicitly published commits; private intermediate commits remain owner-only.
 - Gallery PDF/ZIP behavior remains unchanged.
 
 ### 12.3 Sandbox
@@ -267,7 +278,7 @@ These units communicate through typed plain-data interfaces. Sandbox code does n
 
 1. Generate and apply a project; save and reload; source remains exact.
 2. Publish with source warning; open gallery copy; source is visible but inert.
-3. Edit gallery source, preview, apply, save, reload, and verify persistence.
+3. Save an edited published project and verify gallery remains on the old snapshot; republish and verify it advances.
 4. Fork project and verify source in initial fork commit.
 5. Create merge request changing source/output and verify summary and merge result.
 6. Attempt network/storage access and an infinite loop; verify isolation, timeout, and unchanged project.
@@ -284,3 +295,4 @@ These units communicate through typed plain-data interfaces. Sandbox code does n
 - Merge requests preserve or conflict generator metadata correctly instead of silently dropping it.
 - Manual edits never attempt reverse synchronization.
 - Legacy projects, projects without generator metadata, and PDF exports retain current behavior.
+- Gallery state, public history, metadata, PDF/open, and forks resolve only the explicit published snapshot.

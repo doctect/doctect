@@ -4,6 +4,7 @@ import { getCloudHead, signIn, signUpAndVerify, TEST_PASSWORD } from './helpers.
 import { MIN_NO_HIT_OBSERVATION_MS, startMarkerServer } from './markerServer.js';
 
 const API_BASE = process.env.E2E_API_BASE || 'http://localhost:3001';
+const PNG_1X1 = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
 const test = base.extend({
     markerServer: async ({}, use) => {
         const marker = await startMarkerServer();
@@ -291,6 +292,30 @@ test.describe('Gallery', () => {
         // The modal only closes once `onPublished` fires, i.e. the success path.
         await expect(page.getByRole('heading', { name: /publish to gallery/i })).toBeHidden({ timeout: 10000 });
 
+        // Saving a newer owner head must not silently change public open/PDF/fork state.
+        const ownerProject = await (await page.request.get(`${API_BASE}/api/projects/${projectId}`)).json();
+        const ownerCommit = await (await page.request.get(
+            `${API_BASE}/api/projects/${projectId}/commits/${ownerProject.project.headCommitId}`
+        )).json();
+        const privateState = structuredClone(ownerCommit.commit.state);
+        privateState.nodes[privateState.rootId].title = `Private newer ${unique}`;
+        const privateSave = await page.request.post(`${API_BASE}/api/projects/${projectId}/commits`, {
+            headers: { 'If-Match': `"${ownerProject.project.headCommitId}"` },
+            data: { state: privateState, message: 'private newer snapshot' },
+        });
+        expect(privateSave.status()).toBe(201);
+        const privateHead = (await privateSave.json()).commit.id;
+        const stillPublished = await (await page.request.get(`${API_BASE}/api/gallery/${projectId}/state`)).json();
+        expect(stillPublished.state.nodes[stillPublished.state.rootId].title).not.toBe(`Private newer ${unique}`);
+
+        const republish = await page.request.post(`${API_BASE}/api/projects/${projectId}/publish`, {
+            headers: { 'If-Match': `"${privateHead}"` },
+            data: { description: 'E2E republished planner', tags: ['republished'], thumbnails: [PNG_1X1] },
+        });
+        expect(republish.ok()).toBeTruthy();
+        const advanced = await (await page.request.get(`${API_BASE}/api/gallery/${projectId}/state`)).json();
+        expect(advanced.state.nodes[advanced.state.rootId].title).toBe(`Private newer ${unique}`);
+
         // Confirm listing, then use a genuinely separate user/session for open/edit/fork.
         await page.goto('/gallery');
         await expect(page.getByText('My Simple Book').first()).toBeVisible({ timeout: 10000 });
@@ -314,7 +339,7 @@ test.describe('Gallery', () => {
         await pageB.getByRole('button', { name: 'Close generator' }).click();
 
         await pageB.reload();
-        await expect(pageB.getByTestId('project-tab').filter({ hasText: 'My Simple Book' })).toBeVisible();
+        await expect(pageB.getByTestId('project-tab').filter({ hasText: `Private newer ${unique}` })).toBeVisible();
         await openAndAssertIdleSource(pageB, trapSource, markerServer);
 
         const editedTitle = `Gallery Edited ${unique}`;
