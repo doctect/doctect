@@ -1,17 +1,17 @@
 import { PageTemplate, Variant } from '../types';
 import { ensureTemplateLayers } from './layers';
 
-// Auto-generates element ids missing from a hand-written generator template, mutating in place
-// (matches the generator's existing tolerance for scripts that omit per-element ids).
+// Auto-generates element ids missing from a hand-written generator template without mutating
+// sandbox output (matches the generator's existing tolerance for omitted per-element ids).
 function autoIdElements(tpl: any): PageTemplate {
-    if (tpl.elements && Array.isArray(tpl.elements)) {
-        tpl.elements.forEach((el: any, idx: number) => {
-            if (!el.id) {
-                el.id = `gen_${tpl.id}_${idx}_${Math.random().toString(36).substr(2, 5)}`;
-            }
-        });
-    }
-    return tpl as PageTemplate;
+    if (!Array.isArray(tpl.elements)) return { ...tpl } as PageTemplate;
+    return {
+        ...tpl,
+        elements: tpl.elements.map((el: any, idx: number) => el?.id
+            ? { ...el }
+            : { ...el, id: `gen_${tpl.id}_${idx}_${Math.random().toString(36).substr(2, 5)}` }),
+        layers: Array.isArray(tpl.layers) ? tpl.layers.map((layer: any) => ({ ...layer })) : tpl.layers,
+    } as PageTemplate;
 }
 
 function normalizeFlatTemplates(raw: Record<string, any>): Record<string, PageTemplate> {

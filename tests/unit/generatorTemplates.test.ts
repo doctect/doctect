@@ -13,6 +13,17 @@ describe('normalizeGeneratedTemplates', () => {
         expect(result.templates!.tpl_home.elements[0].id).toBeTruthy();
     });
 
+    it('does not mutate sandbox output while adding element ids and layers', () => {
+        const raw = {
+            tpl_home: { id: 'tpl_home', name: 'Home', width: 509, height: 679, elements: [{ type: 'rect' }] },
+        };
+        const before = structuredClone(raw);
+
+        normalizeGeneratedTemplates(raw);
+
+        expect(raw).toEqual(before);
+    });
+
     it('normalizes a { variants, activeVariantId } script return (documented multi-device shape) without dropping templates', () => {
         const raw = {
             variants: {

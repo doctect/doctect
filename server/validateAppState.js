@@ -1,4 +1,6 @@
-export const MAX_STATE_BYTES = 5 * 1024 * 1024;
+import { MAX_ELEMENTS, MAX_NODES, MAX_STATE_BYTES, MAX_VARIANTS } from '../shared/projectLimits.js';
+
+export { MAX_STATE_BYTES };
 
 const fail = (error) => ({ ok: false, error });
 const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -15,7 +17,7 @@ export const validateAppState = (state) => {
 
     if (!isObj(state.nodes)) return fail('nodes must be an object');
     if (!isStr(state.rootId) || !state.nodes[state.rootId]) return fail('rootId must reference an existing node');
-    if (Object.keys(state.nodes).length > 20000) return fail('too many nodes (max 20000)');
+    if (Object.keys(state.nodes).length > MAX_NODES) return fail('too many nodes (max 20000)');
 
     for (const [id, node] of Object.entries(state.nodes)) {
         if (!isObj(node)) return fail(`node ${id} must be an object`);
@@ -28,7 +30,7 @@ export const validateAppState = (state) => {
     }
 
     if (!isObj(state.variants) || Object.keys(state.variants).length === 0) return fail('variants must be a non-empty object');
-    if (Object.keys(state.variants).length > 50) return fail('too many variants (max 50)');
+    if (Object.keys(state.variants).length > MAX_VARIANTS) return fail('too many variants (max 50)');
 
     let totalElements = 0;
     for (const [vid, variant] of Object.entries(state.variants)) {
@@ -55,7 +57,7 @@ export const validateAppState = (state) => {
             totalElements += tpl.elements.length;
         }
     }
-    if (totalElements > 50000) return fail('too many elements (max 50000)');
+    if (totalElements > MAX_ELEMENTS) return fail('too many elements (max 50000)');
 
     return { ok: true };
 };
