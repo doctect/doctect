@@ -29,6 +29,17 @@ const nextState = {
     rootId: 'next',
 };
 
+const cloudHeadState = {
+    ...state,
+    nodes: { cloud: { id: 'cloud', parentId: null, type: 'page', title: 'Cloud Head Page', data: {}, children: [] } },
+    rootId: 'cloud',
+    activeVariantId: 'print',
+    variants: {
+        ...state.variants,
+        print: { id: 'print', name: 'Print', templates: state.variants.default.templates },
+    },
+};
+
 const cloudProject = { id: 'cloud-1', name: 'Cloud Project', headCommitId: 'head-1' } as any;
 
 const modal = (cloudProjectId = 'cloud-1', withLocalGenerator = false) => (
@@ -127,6 +138,25 @@ describe('PublishModal generator source warning', () => {
         expect(props.onPublished).toHaveBeenCalledOnce();
     });
 
+    it('derives pages, selection, active variant, and thumbnails from the cloud head', async () => {
+        vi.spyOn(cloudApi, 'getCommit').mockResolvedValue({
+            id: 'head-1', message: 'Head', createdAt: '2026-07-14T12:40:00.000Z', state: cloudHeadState,
+        });
+        generateThumbnails.mockResolvedValue(['data:image/png;base64,preview']);
+        vi.spyOn(cloudApi, 'publish').mockResolvedValue({} as any);
+        renderModal(false);
+
+        expect(await screen.findByRole('checkbox', { name: 'Cloud Head Page' })).toBeChecked();
+        expect(screen.queryByRole('checkbox', { name: 'Root' })).not.toBeInTheDocument();
+        fireEvent.click(screen.getByRole('button', { name: 'Publish' }));
+
+        await waitFor(() => expect(generateThumbnails).toHaveBeenCalledWith(
+            cloudHeadState,
+            ['cloud'],
+            'print',
+        ));
+    });
+
     it('reloads changed head disclosure after a conditional publish conflict', async () => {
         vi.spyOn(cloudApi, 'getProject')
             .mockResolvedValueOnce(cloudProject)
@@ -147,7 +177,7 @@ describe('PublishModal generator source warning', () => {
 
         fireEvent.click(button);
 
-        expect(await screen.findByRole('alert')).toHaveTextContent('Publishing makes both scripts public');
+        expect(await screen.findByText(/Publishing makes both scripts public/)).toBeInTheDocument();
         expect(cloudApi.getCommit).toHaveBeenLastCalledWith('cloud-1', 'head-2');
         expect(publish).toHaveBeenCalledOnce();
         expect(publish).toHaveBeenCalledWith('cloud-1', 'head-1', expect.any(Object));
@@ -204,7 +234,7 @@ describe('PublishModal generator source warning', () => {
         await waitFor(() => {
             expect(screen.getByLabelText('Description')).toHaveValue('');
             expect(screen.getByLabelText('Tags (comma-separated)')).toHaveValue('');
-            expect(screen.getByRole('checkbox', { name: 'Next Project Page' })).toBeChecked();
+            expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
             expect(screen.queryByAltText('Preview 1')).not.toBeInTheDocument();
             expect(screen.queryByText('Old project publish failed')).not.toBeInTheDocument();
         });
@@ -214,6 +244,7 @@ describe('PublishModal generator source warning', () => {
 
         nextProject.resolve({ ...cloudProject, id: 'cloud-2', headCommitId: 'head-2' });
         await waitFor(() => expect(screen.getByRole('button', { name: 'Publish' })).toBeEnabled());
+        expect(screen.getByRole('checkbox', { name: 'Next Project Page' })).toBeChecked();
     });
 
     it('does not let an operation started for the old project publish after rerender', async () => {
@@ -231,5 +262,51 @@ describe('PublishModal generator source warning', () => {
 
         await waitFor(() => expect(screen.getByRole('button', { name: 'Publish' })).toBeDisabled());
         expect(publish).not.toHaveBeenCalled();
+    });
+
+    it('provides labelled modal semantics, initial focus, and an accessible close name', async () => {
+        const props = renderModal(false);
+
+        expect(screen.getByRole('dialog', { name: 'Publish to gallery' })).toHaveAttribute('aria-modal', 'true');
+        expect(screen.getByLabelText('Description')).toHaveFocus();
+        await waitFor(() => expect(screen.getByRole('button', { name: 'Publish' })).toBeEnabled());
+        fireEvent.click(screen.getByRole('button', { name: 'Close publish dialog' }));
+
+        expect(props.onClose).toHaveBeenCalledOnce();
+    });
+
+    it('contains Tab focus and closes on Escape', async () => {
+        const props = renderModal(false);
+        await waitFor(() => expect(screen.getByRole('button', { name: 'Publish' })).toBeEnabled());
+        const dialog = screen.getByRole('dialog');
+        const close = screen.getByRole('button', { name: 'Close publish dialog' });
+        const publish = screen.getByRole('button', { name: 'Publish' });
+
+        publish.focus();
+        fireEvent.keyDown(dialog, { key: 'Tab' });
+        expect(close).toHaveFocus();
+
+        close.focus();
+        fireEvent.keyDown(dialog, { key: 'Tab', shiftKey: true });
+        expect(publish).toHaveFocus();
+
+        fireEvent.keyDown(dialog, { key: 'Escape' });
+        expect(props.onClose).toHaveBeenCalledOnce();
+    });
+
+    it('restores focus after unmount and announces publish errors', async () => {
+        const trigger = document.createElement('button');
+        document.body.appendChild(trigger);
+        trigger.focus();
+        generateThumbnails.mockRejectedValue(new Error('Thumbnail rendering failed'));
+        const result = renderModal(false);
+        await waitFor(() => expect(screen.getByRole('button', { name: 'Publish' })).toBeEnabled());
+
+        fireEvent.click(screen.getByRole('button', { name: 'Publish' }));
+        expect(await screen.findByRole('alert')).toHaveTextContent('Thumbnail rendering failed');
+
+        result.unmount();
+        expect(trigger).toHaveFocus();
+        trigger.remove();
     });
 });

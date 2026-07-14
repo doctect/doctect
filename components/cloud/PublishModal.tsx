@@ -14,25 +14,33 @@ interface PublishModalProps {
 
 type DisclosureState =
     | { status: 'loading'; projectId: string }
-    | { status: 'ready'; projectId: string; headCommitId: string; hasGenerator: boolean }
+    | { status: 'ready'; projectId: string; headCommitId: string; state: Project['initialState']; hasGenerator: boolean }
     | { status: 'error'; projectId: string; message: string };
 
 export function PublishModal({ project, cloudProjectId, onClose, onPublished }: PublishModalProps) {
     const [description, setDescription] = useState('');
     const [tagsText, setTagsText] = useState('');
-    const [selected, setSelected] = useState<string[]>(() => computePageOrder(project.initialState).slice(0, 1));
+    const [selected, setSelected] = useState<string[]>([]);
     const [previews, setPreviews] = useState<string[]>([]);
     const [phase, setPhase] = useState<'form' | 'rendering' | 'uploading'>('form');
     const [error, setError] = useState<string | null>(null);
     const [disclosure, setDisclosure] = useState<DisclosureState>({ status: 'loading', projectId: cloudProjectId });
     const [disclosureAttempt, setDisclosureAttempt] = useState(0);
     const currentProjectId = useRef(cloudProjectId);
+    const descriptionRef = useRef<HTMLTextAreaElement>(null);
+    const previousFocus = useRef<HTMLElement | null>(null);
     currentProjectId.current = cloudProjectId;
+
+    useEffect(() => {
+        previousFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+        descriptionRef.current?.focus();
+        return () => previousFocus.current?.focus();
+    }, []);
 
     useEffect(() => {
         setDescription('');
         setTagsText('');
-        setSelected(computePageOrder(project.initialState).slice(0, 1));
+        setSelected([]);
         setPreviews([]);
         setPhase('form');
         setError(null);
@@ -49,12 +57,15 @@ export function PublishModal({ project, cloudProjectId, onClose, onPublished }: 
                 if (!cloudProject.headCommitId) throw new Error('Cloud project has no head commit.');
                 const head = await cloudApi.getCommit(cloudProjectId, cloudProject.headCommitId);
                 if (!cancelled) {
+                    const state = head.state as Project['initialState'];
                     setDisclosure({
                         status: 'ready',
                         projectId: cloudProjectId,
                         headCommitId: cloudProject.headCommitId,
-                        hasGenerator: head.state?.generator !== undefined,
+                        state,
+                        hasGenerator: state.generator !== undefined,
                     });
+                    setSelected(computePageOrder(state).slice(0, 1));
                 }
             } catch (e) {
                 if (!cancelled) {
@@ -68,9 +79,10 @@ export function PublishModal({ project, cloudProjectId, onClose, onPublished }: 
     }, [cloudProjectId, disclosureAttempt]);
 
     const pages = useMemo(() => {
-        const order = computePageOrder(project.initialState);
-        return order.slice(0, 100).map(id => ({ id, title: project.initialState.nodes[id]?.title || id }));
-    }, [project.initialState]);
+        if (disclosure.status !== 'ready' || disclosure.projectId !== cloudProjectId) return [];
+        const order = computePageOrder(disclosure.state);
+        return order.slice(0, 100).map(id => ({ id, title: disclosure.state.nodes[id]?.title || id }));
+    }, [cloudProjectId, disclosure]);
 
     const toggle = (id: string) => {
         setSelected(prev => prev.includes(id) ? prev.filter(x => x !== id) : (prev.length >= 4 ? prev : [...prev, id]));
@@ -83,7 +95,7 @@ export function PublishModal({ project, cloudProjectId, onClose, onPublished }: 
         setError(null);
         try {
             setPhase('rendering');
-            const thumbs = await generateThumbnails(project.initialState, selected, project.initialState.activeVariantId);
+            const thumbs = await generateThumbnails(inspected.state, selected, inspected.state.activeVariantId);
             if (currentProjectId.current !== cloudProjectId) return;
             setPreviews(thumbs);
             if (thumbs.length === 0) throw new Error('Could not render previews');
@@ -104,12 +116,39 @@ export function PublishModal({ project, cloudProjectId, onClose, onPublished }: 
 
     const hasCurrentDisclosure = disclosure.status === 'ready' && disclosure.projectId === cloudProjectId;
 
+    const handleDialogKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+        if (event.key === 'Escape') {
+            event.preventDefault();
+            onClose();
+            return;
+        }
+        if (event.key !== 'Tab') return;
+        const focusable = Array.from(event.currentTarget.querySelectorAll<HTMLElement>(
+            'button:not([disabled]), textarea:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ));
+        if (focusable.length === 0) {
+            event.preventDefault();
+            return;
+        }
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (event.shiftKey && document.activeElement === first) {
+            event.preventDefault();
+            last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+            event.preventDefault();
+            first.focus();
+        }
+    };
+
     return (
         <div className="fixed inset-0 bg-black/40 z-[100] flex items-center justify-center" onClick={onClose}>
-            <div className="bg-white rounded-xl shadow-2xl w-[560px] max-h-[80vh] flex flex-col" onClick={e => e.stopPropagation()}>
+            <div role="dialog" aria-modal="true" aria-labelledby="publish-dialog-title"
+                className="bg-white rounded-xl shadow-2xl w-[560px] max-h-[80vh] flex flex-col"
+                onClick={e => e.stopPropagation()} onKeyDown={handleDialogKeyDown}>
                 <div className="flex items-center justify-between px-4 py-3 border-b">
-                    <h2 className="font-semibold text-slate-800 text-sm flex items-center gap-1.5"><Globe size={14} /> Publish to gallery</h2>
-                    <button onClick={onClose} className="text-slate-400 hover:text-slate-700"><X size={16} /></button>
+                    <h2 id="publish-dialog-title" className="font-semibold text-slate-800 text-sm flex items-center gap-1.5"><Globe size={14} /> Publish to gallery</h2>
+                    <button type="button" aria-label="Close publish dialog" onClick={onClose} className="text-slate-400 hover:text-slate-700"><X size={16} /></button>
                 </div>
                 <div className="p-4 overflow-y-auto space-y-3 text-sm">
                     <p className="text-xs text-slate-500">
@@ -136,7 +175,7 @@ export function PublishModal({ project, cloudProjectId, onClose, onPublished }: 
                     )}
                     <label className="block">
                         <span className="text-xs font-medium text-slate-600">Description</span>
-                        <textarea value={description} onChange={e => setDescription(e.target.value)} maxLength={2000}
+                        <textarea ref={descriptionRef} value={description} onChange={e => setDescription(e.target.value)} maxLength={2000}
                             className="mt-1 w-full border rounded p-2 text-xs" rows={3} placeholder="What is this planner for?" />
                     </label>
                     <label className="block">
@@ -160,7 +199,7 @@ export function PublishModal({ project, cloudProjectId, onClose, onPublished }: 
                             {previews.map((src, i) => <img key={i} src={src} alt={`Preview ${i + 1}`} className="h-24 border rounded" />)}
                         </div>
                     )}
-                    {error && <div className="text-xs text-red-600">{error}</div>}
+                    {error && <div role="alert" className="text-xs text-red-600">{error}</div>}
                 </div>
                 <div className="px-4 py-3 border-t flex justify-end gap-2">
                     <button onClick={onClose} className="text-xs px-3 py-1.5 rounded border text-slate-600">Cancel</button>
