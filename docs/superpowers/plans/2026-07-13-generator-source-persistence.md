@@ -834,4 +834,4 @@ Expected: no tracked changes and no whitespace errors. Do not create an empty co
 - [x] Gather merge response DTO inside the transaction and discard PostgreSQL clients when rollback fails.
 - [x] Serialize first-publish allowance under the owner lock and publish snapshot/record/metadata/thumbnails atomically.
 - [x] Add migration, stale-save, interleaving, rollback, access-control, fork-source, merge, and CloudMenu reload tests.
-- [ ] Update and run full Chromium/Firefox browser expectations, full unit/build/type checks, and final report.
+- [x] Update and run full Chromium/Firefox browser expectations, full unit/build/type checks, and final report.
