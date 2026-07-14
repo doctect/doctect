@@ -25,4 +25,17 @@ describe('security guards', () => {
             .send({ type: 'x', payload: {} });
         expect(res.status).toBe(201);
     });
+    it('allows the If-Match header used by cross-origin conditional publishes', async () => {
+        const res = await request(app)
+            .options('/api/projects/project-1/publish')
+            .set('Origin', 'http://localhost:3000')
+            .set('Access-Control-Request-Method', 'POST')
+            .set('Access-Control-Request-Headers', 'content-type,if-match');
+
+        const allowedHeaders = res.headers['access-control-allow-headers']
+            .toLowerCase()
+            .split(',')
+            .map(header => header.trim());
+        expect(allowedHeaders).toContain('if-match');
+    });
 });

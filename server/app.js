@@ -30,7 +30,7 @@ export const createApp = () => {
         origin: trustedOrigins,
         credentials: true,
         methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-        allowedHeaders: ['Content-Type', 'Authorization', 'Cookie']
+        allowedHeaders: ['Content-Type', 'Authorization', 'Cookie', 'If-Match']
     }));
 
     app.use((req, res, next) => {
