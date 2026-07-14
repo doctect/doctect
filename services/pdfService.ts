@@ -8,7 +8,7 @@ import { FONTS } from "../constants/editor";
 import { normalizeSvgColorsInTree, desaturateSvgColorsInTree, bakeElementOpacityIntoSvg } from "./svgColorNormalize";
 import { sortElementsForRender } from "./layers";
 import { isVisibleText, resolveTextFontSize } from "./textVisibility";
-import { MAX_NODES } from "../shared/projectLimits.js";
+import { MAX_NODES, MAX_REFERENCE_DEPTH, MAX_TRAVERSAL_DEPTH } from "../shared/projectLimits.js";
 
 const DEBUG_PDF = false; // Set to true to see debug visuals
 
@@ -346,6 +346,23 @@ const findChildReferrerNode = (
     return undefined;
 };
 
+const resolveReferenceNode = (
+    startNode: AppNode,
+    nodes: Record<string, AppNode>,
+): AppNode | undefined => {
+    const visited = new Set<string>();
+    let current = startNode;
+    for (let depth = 0; depth <= MAX_REFERENCE_DEPTH; depth += 1) {
+        if (visited.has(current.id)) return undefined;
+        visited.add(current.id);
+        if (!current.referenceId) return current;
+        const target = nodes[current.referenceId];
+        if (!target) return undefined;
+        current = target;
+    }
+    return undefined;
+};
+
 // Helper: Get all nodes that provide context to the current node (Ancestors, Referrers, Children)
 const getContextNodes = (startNode: AppNode, state: AppState): AppNode[] => {
     const nodes: AppNode[] = [];
@@ -366,8 +383,8 @@ const getContextNodes = (startNode: AppNode, state: AppState): AppNode[] => {
     }
 
     // 2. Reference Target & its Ancestors (if startNode is a reference)
-    if (startNode.referenceId && state.nodes[startNode.referenceId]) {
-        let target: AppNode | undefined = state.nodes[startNode.referenceId];
+    if (startNode.referenceId) {
+        let target: AppNode | undefined = resolveReferenceNode(startNode, state.nodes);
         while (target) {
             add(target);
             target = target.parentId ? state.nodes[target.parentId] : undefined;
@@ -395,8 +412,9 @@ const getContextNodes = (startNode: AppNode, state: AppState): AppNode[] => {
     startNode.children.forEach(childId => {
         if (state.nodes[childId]) add(state.nodes[childId]);
     });
-    if (startNode.referenceId && state.nodes[startNode.referenceId]) {
-        state.nodes[startNode.referenceId].children.forEach(childId => {
+    const referenceTarget = startNode.referenceId ? resolveReferenceNode(startNode, state.nodes) : undefined;
+    if (referenceTarget) {
+        referenceTarget.children.forEach(childId => {
             if (state.nodes[childId]) add(state.nodes[childId]);
         });
     }
@@ -703,29 +721,33 @@ const traverseGridData = (
 ): string[] => {
     if (depth >= steps.length) return currentNodes;
     if (!currentNodes || currentNodes.length === 0) return [];
+    if (steps.length - depth > MAX_TRAVERSAL_DEPTH) return [];
 
-    const step = steps[depth];
-    const nextLevelNodes: string[] = [];
+    let levelNodes = currentNodes;
+    for (let stepIndex = depth; stepIndex < steps.length; stepIndex += 1) {
+        if (levelNodes.length === 0) return [];
+        const step = steps[stepIndex];
+        const nextLevelNodes: string[] = [];
 
-    currentNodes.forEach(nodeId => {
-        const node = nodes[nodeId];
-        if (!node) return;
+        levelNodes.forEach(nodeId => {
+            const node = nodes[nodeId];
+            if (!node) return;
 
-        let targetNode = node;
-        if (node.referenceId && nodes[node.referenceId]) {
-            targetNode = nodes[node.referenceId];
-        }
+            const targetNode = resolveReferenceNode(node, nodes);
+            if (!targetNode) return;
 
-        const children = targetNode.children || [];
+            const children = targetNode.children || [];
 
-        const start = step.sliceStart || 0;
-        const end = step.sliceCount !== undefined ? start + step.sliceCount : undefined;
-        const sliced = children.slice(start, end);
+            const start = step.sliceStart || 0;
+            const end = step.sliceCount !== undefined ? start + step.sliceCount : undefined;
+            const sliced = children.slice(start, end);
 
-        nextLevelNodes.push(...sliced);
-    });
+            nextLevelNodes.push(...sliced);
+        });
+        levelNodes = nextLevelNodes;
+    }
 
-    return traverseGridData(nextLevelNodes, steps, depth + 1, nodes);
+    return levelNodes;
 };
 
 interface GeneratePDFOptions {
@@ -759,9 +781,16 @@ export const generatePDF = async (state: AppState, options: GeneratePDFOptions =
     const pageMap = new Map<string, number>(pageNodes.map((id, i) => [id, i + 1]));
 
     const resolvePage = (id: string): number | undefined => {
-        if (pageMap.has(id)) return pageMap.get(id);
-        const node = state.nodes[id];
-        if (node && node.referenceId) return resolvePage(node.referenceId);
+        const visited = new Set<string>();
+        let currentId = id;
+        for (let depth = 0; depth <= MAX_REFERENCE_DEPTH; depth += 1) {
+            if (pageMap.has(currentId)) return pageMap.get(currentId);
+            if (visited.has(currentId)) return undefined;
+            visited.add(currentId);
+            const node = state.nodes[currentId];
+            if (!node?.referenceId) return undefined;
+            currentId = node.referenceId;
+        }
         return undefined;
     };
 
@@ -966,7 +995,7 @@ export const generatePDF = async (state: AppState, options: GeneratePDFOptions =
                     if (curr) resolvedTargetId = curr.id;
                 }
                 else if (el.linkTarget === 'referrer') {
-                    const myId = node.referenceId || node.id;
+                    const myId = resolveReferenceNode(node, state.nodes)?.id || node.id;
                     const referrers = Object.values(state.nodes).filter(n => n.referenceId === myId);
                     if (referrers.length > 0) {
                         const refNode = referrers[0];
@@ -1157,10 +1186,9 @@ export const generatePDF = async (state: AppState, options: GeneratePDFOptions =
 
                 if (offsetMode === 'dynamic' && el.gridConfig.offsetField && items.length > 0) {
                     const firstId = items[0];
-                    let firstNode = state.nodes[firstId];
-                    if (firstNode && firstNode.referenceId && state.nodes[firstNode.referenceId]) {
-                        firstNode = state.nodes[firstNode.referenceId];
-                    }
+                    const firstNode = state.nodes[firstId]
+                        ? resolveReferenceNode(state.nodes[firstId], state.nodes)
+                        : undefined;
                     if (firstNode && firstNode.data[el.gridConfig.offsetField]) {
                         const parsed = parseInt(firstNode.data[el.gridConfig.offsetField]);
                         if (!isNaN(parsed)) {
@@ -1314,10 +1342,9 @@ export const generatePDF = async (state: AppState, options: GeneratePDFOptions =
                     const cellX = lx + col * (cellW + sGapX);
                     const cellY = ly + row * (cellH + sGapY);
 
-                    let childNode = state.nodes[childId];
-                    if (childNode && childNode.referenceId && state.nodes[childNode.referenceId]) {
-                        childNode = state.nodes[childNode.referenceId];
-                    }
+                    const childNode = state.nodes[childId]
+                        ? resolveReferenceNode(state.nodes[childId], state.nodes)
+                        : undefined;
 
                     // Determine cell fill color (with overrides)
                     let cellFillHex = el.fill;

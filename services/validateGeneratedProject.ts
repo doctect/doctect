@@ -3,8 +3,10 @@ import {
     MAX_ELEMENTS,
     MAX_LAYERS_PER_TEMPLATE,
     MAX_NODES,
+    MAX_REFERENCE_DEPTH,
     MAX_STATE_BYTES,
     MAX_TEMPLATE_DIMENSION,
+    MAX_TRAVERSAL_DEPTH,
     MAX_VARIANTS,
 } from '../shared/projectLimits.js';
 import type { GeneratorSandboxRawResult } from './generatorSandbox';
@@ -84,34 +86,64 @@ const jsonIssue = (root: unknown): string | undefined => {
 
 const utf8Bytes = (value: string): number => new TextEncoder().encode(value).byteLength;
 
-const validateRawTemplateMap = (raw: unknown, context: string): string | undefined => {
-    if (!isRecord(raw)) return `${context} templates must be an object.`;
-    for (const [templateId, value] of Object.entries(raw)) {
-        if (!isRecord(value)) return `Template ${context}/${templateId} must be an object.`;
-        if (typeof value.width !== 'number' || !Number.isFinite(value.width) || value.width <= 0 || value.width > MAX_TEMPLATE_DIMENSION
-            || typeof value.height !== 'number' || !Number.isFinite(value.height) || value.height <= 0 || value.height > MAX_TEMPLATE_DIMENSION) {
-            return `Template ${context}/${templateId} has invalid dimensions.`;
+type RawTemplateIssue = { category: 'template' | 'limits'; message: string };
+
+const validateTraversalPath = (value: unknown, context: string): RawTemplateIssue | undefined => {
+    if (value === undefined) return undefined;
+    if (!Array.isArray(value)) return { category: 'template', message: `${context} traversalPath must be an array.` };
+    if (value.length > MAX_TRAVERSAL_DEPTH) {
+        return { category: 'limits', message: `${context} traversal depth exceeds ${MAX_TRAVERSAL_DEPTH}.` };
+    }
+    for (let index = 0; index < value.length; index += 1) {
+        const step = value[index];
+        if (!isRecord(step) || Object.keys(step).some(key => key !== 'sliceStart' && key !== 'sliceCount')) {
+            return { category: 'template', message: `${context} traversal step ${index} is malformed.` };
         }
-        if (!Array.isArray(value.elements)) return `Template ${context}/${templateId} elements must be an array.`;
-        if (value.layers !== undefined) {
-            if (!Array.isArray(value.layers)) return `Template ${context}/${templateId} layers must be an array.`;
-            if (value.layers.length > MAX_LAYERS_PER_TEMPLATE) return `Template ${context}/${templateId} has too many layers.`;
-        }
-        for (const element of value.elements) {
-            if (isRecord(element) && element.layerId !== undefined && typeof element.layerId !== 'string') {
-                return `Template ${context}/${templateId} has an element with a non-string layerId.`;
+        for (const field of ['sliceStart', 'sliceCount'] as const) {
+            if (step[field] !== undefined && (!Number.isSafeInteger(step[field]) || (step[field] as number) < 0)) {
+                return { category: 'template', message: `${context} traversal step ${index} ${field} must be a non-negative safe integer.` };
             }
         }
     }
     return undefined;
 };
 
-const validateRawTemplates = (raw: unknown): string | undefined => {
-    if (!isRecord(raw)) return 'Templates must be an object.';
+const validateRawTemplateMap = (raw: unknown, context: string): RawTemplateIssue | undefined => {
+    if (!isRecord(raw)) return { category: 'template', message: `${context} templates must be an object.` };
+    for (const [templateId, value] of Object.entries(raw)) {
+        if (!isRecord(value)) return { category: 'template', message: `Template ${context}/${templateId} must be an object.` };
+        if (typeof value.width !== 'number' || !Number.isFinite(value.width) || value.width <= 0 || value.width > MAX_TEMPLATE_DIMENSION
+            || typeof value.height !== 'number' || !Number.isFinite(value.height) || value.height <= 0 || value.height > MAX_TEMPLATE_DIMENSION) {
+            return { category: 'template', message: `Template ${context}/${templateId} has invalid dimensions.` };
+        }
+        if (!Array.isArray(value.elements)) return { category: 'template', message: `Template ${context}/${templateId} elements must be an array.` };
+        if (value.layers !== undefined) {
+            if (!Array.isArray(value.layers)) return { category: 'template', message: `Template ${context}/${templateId} layers must be an array.` };
+            if (value.layers.length > MAX_LAYERS_PER_TEMPLATE) return { category: 'template', message: `Template ${context}/${templateId} has too many layers.` };
+        }
+        for (let index = 0; index < value.elements.length; index += 1) {
+            const element = value.elements[index];
+            if (isRecord(element) && element.layerId !== undefined && typeof element.layerId !== 'string') {
+                return { category: 'template', message: `Template ${context}/${templateId} has an element with a non-string layerId.` };
+            }
+            if (isRecord(element) && element.gridConfig !== undefined) {
+                if (!isRecord(element.gridConfig)) {
+                    return { category: 'template', message: `Template ${context}/${templateId} grid ${index} config must be an object.` };
+                }
+                const issue = validateTraversalPath(element.gridConfig.traversalPath, `Template ${context}/${templateId} grid ${index}`);
+                if (issue) return issue;
+            }
+        }
+    }
+    return undefined;
+};
+
+const validateRawTemplates = (raw: unknown): RawTemplateIssue | undefined => {
+    if (!isRecord(raw)) return { category: 'template', message: 'Templates must be an object.' };
     if (!Object.hasOwn(raw, 'variants')) return validateRawTemplateMap(raw, 'default');
-    if (!isRecord(raw.variants)) return 'Variants must be an object.';
+    if (!isRecord(raw.variants)) return { category: 'template', message: 'Variants must be an object.' };
     for (const [variantId, variant] of Object.entries(raw.variants)) {
-        if (!isRecord(variant)) return `Variant ${variantId} must be an object.`;
+        if (!isRecord(variant)) return { category: 'template', message: `Variant ${variantId} must be an object.` };
         const issue = validateRawTemplateMap(variant.templates, variantId);
         if (issue) return issue;
     }
@@ -139,7 +171,7 @@ export function validateGeneratedProject(raw: GeneratorSandboxRawResult): Genera
 
     const cloned = JSON.parse(serialized) as GeneratorSandboxRawResult;
     const rawTemplateIssue = validateRawTemplates(cloned.templates);
-    if (rawTemplateIssue) return fail('template', rawTemplateIssue);
+    if (rawTemplateIssue) return fail(rawTemplateIssue.category, rawTemplateIssue.message);
     let normalized;
     try {
         normalized = normalizeGeneratedTemplates(cloned.templates);
@@ -226,6 +258,23 @@ export function validateGeneratedProject(raw: GeneratorSandboxRawResult): Genera
             data: (value.data ?? {}) as Record<string, string>,
             children: (value.children ?? []) as string[],
         };
+    }
+
+    for (const nodeId of Object.keys(nodes)) {
+        const visited = new Set<string>([nodeId]);
+        let current = nodes[nodeId];
+        let depth = 0;
+        while (current.referenceId !== undefined) {
+            const targetId = current.referenceId;
+            if (!Object.hasOwn(nodes, targetId)) {
+                return fail('hierarchy', `Node '${current.id}' reference '${targetId}' does not exist.`);
+            }
+            if (visited.has(targetId)) return fail('hierarchy', `Node '${nodeId}' has a reference cycle.`);
+            depth += 1;
+            if (depth > MAX_REFERENCE_DEPTH) return fail('limits', `Reference depth exceeds ${MAX_REFERENCE_DEPTH}.`);
+            visited.add(targetId);
+            current = nodes[targetId];
+        }
     }
 
     const rootNode = nodes[cloned.hierarchy.rootId];

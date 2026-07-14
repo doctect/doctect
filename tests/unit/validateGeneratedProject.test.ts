@@ -141,6 +141,93 @@ describe('validateGeneratedProject', () => {
         expect(validateGeneratedProject({ templates: validTemplates(), hierarchy })).toMatchObject({ ok: false, category: 'hierarchy' });
     });
 
+    it('rejects references to missing nodes', () => {
+        const hierarchy = {
+            nodes: {
+                root: { id: 'root', parentId: null, type: 'page', title: 'Root', children: ['ref'] },
+                ref: { id: 'ref', parentId: 'root', type: 'page', title: 'Ref', children: [], referenceId: 'missing' },
+            },
+            rootId: 'root',
+        };
+
+        expect(validateGeneratedProject({ templates: validTemplates(), hierarchy })).toMatchObject({
+            ok: false,
+            category: 'hierarchy',
+            message: expect.stringContaining("reference 'missing'"),
+        });
+    });
+
+    it('rejects reference cycles', () => {
+        const hierarchy = {
+            nodes: {
+                root: { id: 'root', parentId: null, type: 'page', title: 'Root', children: ['a', 'b'] },
+                a: { id: 'a', parentId: 'root', type: 'page', title: 'A', children: [], referenceId: 'b' },
+                b: { id: 'b', parentId: 'root', type: 'page', title: 'B', children: [], referenceId: 'a' },
+            },
+            rootId: 'root',
+        };
+
+        expect(validateGeneratedProject({ templates: validTemplates(), hierarchy })).toMatchObject({
+            ok: false,
+            category: 'hierarchy',
+            message: expect.stringMatching(/reference cycle/i),
+        });
+    });
+
+    it('rejects reference chains deeper than 100 hops and accepts the boundary', () => {
+        const makeHierarchy = (hops: number) => {
+            const nodes: Record<string, any> = {
+                root: { id: 'root', parentId: null, type: 'page', title: 'Root', children: [] },
+            };
+            for (let index = 0; index <= hops; index += 1) {
+                const id = `ref_${index}`;
+                nodes.root.children.push(id);
+                nodes[id] = {
+                    id,
+                    parentId: 'root',
+                    type: 'page',
+                    title: id,
+                    children: [],
+                    ...(index < hops ? { referenceId: `ref_${index + 1}` } : {}),
+                };
+            }
+            return { nodes, rootId: 'root' };
+        };
+
+        expect(validateGeneratedProject({ templates: validTemplates(), hierarchy: makeHierarchy(100) })).toMatchObject({ ok: true });
+        expect(validateGeneratedProject({ templates: validTemplates(), hierarchy: makeHierarchy(101) })).toMatchObject({
+            ok: false,
+            category: 'limits',
+            message: expect.stringMatching(/reference depth/i),
+        });
+    });
+
+    it.each([
+        ['non-array path', { traversalPath: {} }],
+        ['negative slice start', { traversalPath: [{ sliceStart: -1 }] }],
+        ['fractional slice count', { traversalPath: [{ sliceCount: 1.5 }] }],
+        ['unknown step fields', { traversalPath: [{ sliceStart: 0, extra: true }] }],
+        ['excessive depth', { traversalPath: Array.from({ length: 101 }, () => ({ sliceStart: 0 })) }],
+    ])('rejects invalid grid traversal: %s', (_name, gridConfig) => {
+        expect(validateGeneratedProject({
+            templates: { page: template('page', [{ id: 'grid', type: 'grid', gridConfig }]) },
+            hierarchy: validHierarchy(),
+        })).toMatchObject({ ok: false, category: expect.stringMatching(/template|limits/) });
+    });
+
+    it('accepts a bounded traversal path', () => {
+        expect(validateGeneratedProject({
+            templates: {
+                page: template('page', [{
+                    id: 'grid',
+                    type: 'grid',
+                    gridConfig: { traversalPath: [{ sliceStart: 0, sliceCount: 2 }] },
+                }]),
+            },
+            hierarchy: validHierarchy(),
+        })).toMatchObject({ ok: true });
+    });
+
     it('rejects inherited object keys as unknown node types', () => {
         const hierarchy = validHierarchy();
         hierarchy.nodes.root.type = 'toString';

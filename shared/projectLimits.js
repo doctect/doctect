@@ -4,3 +4,5 @@ export const MAX_VARIANTS = 50;
 export const MAX_ELEMENTS = 50000;
 export const MAX_TEMPLATE_DIMENSION = 20000;
 export const MAX_LAYERS_PER_TEMPLATE = 200;
+export const MAX_REFERENCE_DEPTH = 100;
+export const MAX_TRAVERSAL_DEPTH = 100;
