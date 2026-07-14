@@ -27,7 +27,7 @@ async function api<T>(path: string, opts: RequestInit = {}): Promise<T> {
 export interface MeUser { id: string; email: string; username: string | null; role: string | null; }
 export interface CloudProject {
     id: string; ownerId: string; name: string; description: string; tags: string[];
-    visibility: 'private' | 'public'; headCommitId: string | null;
+    visibility: 'private' | 'public'; headCommitId: string | null; publishedCommitId: string | null;
     forkedFromProjectId: string | null; forkedFromCommitId: string | null;
     downloadCount: number; forkCount: number; createdAt: string; updatedAt: string;
 }

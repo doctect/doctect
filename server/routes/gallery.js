@@ -8,7 +8,11 @@ import { decodeStateRow } from '../stateCodec.js';
 const router = Router();
 
 router.get('/api/thumbnails/:thumbId', async (req, res) => {
-    const rows = await query('SELECT mime, image FROM thumbnails WHERE id = $1', [req.params.thumbId]);
+    const rows = await query(
+        `SELECT t.mime, t.image FROM thumbnails t
+         JOIN projects p ON p.id = t.project_id
+         WHERE t.id = $1 AND p.visibility = 'public' AND p.published_commit_id IS NOT NULL`,
+        [req.params.thumbId]);
     if (!rows[0]) return res.status(404).json({ error: 'Not found' });
     const img = Buffer.isBuffer(rows[0].image) ? rows[0].image : Buffer.from(rows[0].image);
     res.set('Content-Type', rows[0].mime)
@@ -61,7 +65,7 @@ router.get('/api/gallery', async (req, res) => {
     const limit = Math.min(PAGE_SIZE, Math.max(1, parseInt(req.query.limit ?? '0', 10) || PAGE_SIZE));
 
     const params = [`%${q}%`, `%${q}%`, `%${q}%`];
-    let where = `p.visibility = 'public'
+    let where = `p.visibility = 'public' AND p.published_commit_id IS NOT NULL
            AND (LOWER(p.name) LIKE $1 OR LOWER(p.description) LIKE $2 OR LOWER(p.tags) LIKE $3)`;
     if (tag) {
         // Tags are stored as a JSON array string; matching the JSON-quoted encoding of the
@@ -86,7 +90,7 @@ router.get('/api/gallery', async (req, res) => {
 });
 
 router.get('/api/gallery/tags', async (req, res) => {
-    const rows = await query(`SELECT tags FROM projects WHERE visibility = 'public'`, []);
+    const rows = await query(`SELECT tags FROM projects WHERE visibility = 'public' AND published_commit_id IS NOT NULL`, []);
     const counts = new Map();
     for (const r of rows) {
         for (const t of JSON.parse(r.tags || '[]')) {
@@ -103,7 +107,7 @@ router.get('/api/gallery/tags', async (req, res) => {
 const loadPublicProject = async (req, res, next) => {
     const rows = await query(
         `SELECT p.*, u.username AS author FROM projects p JOIN "user" u ON u.id = p.owner_id
-         WHERE p.id = $1 AND p.visibility = 'public'`, [req.params.id]);
+         WHERE p.id = $1 AND p.visibility = 'public' AND p.published_commit_id IS NOT NULL`, [req.params.id]);
     if (!rows[0]) return res.status(404).json({ error: 'Project not found' });
     req.publicProject = rows[0];
     next();
@@ -139,7 +143,7 @@ router.get('/api/gallery/:id', loadPublicProject, async (req, res) => {
         project: {
             id: p.id, name: p.name, description: p.description, tags: JSON.parse(p.tags || '[]'),
             author: p.author, ownerId: p.owner_id, forkCount: p.fork_count, downloadCount: p.download_count,
-            updatedAt: p.updated_at, headCommitId: p.head_commit_id,
+            updatedAt: p.updated_at, headCommitId: p.published_commit_id,
             thumbnailIds: thumbs.map(t => t.id), forkedFrom,
             ...ratingDtoFields(agg[0])
         }
@@ -148,8 +152,8 @@ router.get('/api/gallery/:id', loadPublicProject, async (req, res) => {
 
 router.get('/api/gallery/:id/state', loadPublicProject, async (req, res) => {
     const p = req.publicProject;
-    if (!p.head_commit_id) return res.status(404).json({ error: 'Project has no content' });
-    const rows = await query('SELECT state_json, state_gzip FROM commits WHERE id = $1', [p.head_commit_id]);
+    if (!p.published_commit_id) return res.status(404).json({ error: 'Project has no content' });
+    const rows = await query('SELECT state_json, state_gzip FROM commits WHERE id = $1', [p.published_commit_id]);
     if (!rows[0]) return res.status(404).json({ error: 'Commit not found' });
     await query('UPDATE projects SET download_count = download_count + 1 WHERE id = $1', [p.id]);
     res.json({ name: p.name, state: decodeStateRow(rows[0]) });
@@ -174,7 +178,7 @@ router.get('/api/admin/reports', requireAdmin, async (req, res) => {
 });
 
 router.post('/api/admin/projects/:id/unpublish', requireAdmin, async (req, res) => {
-    await query(`UPDATE projects SET visibility = 'private' WHERE id = $1`, [req.params.id]);
+    await query(`UPDATE projects SET visibility = 'private', published_commit_id = NULL WHERE id = $1`, [req.params.id]);
     res.json({ success: true });
 });
 

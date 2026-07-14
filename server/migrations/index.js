@@ -227,5 +227,52 @@ export const migrations = [
             CREATE INDEX IF NOT EXISTS idx_reviews_project ON reviews(project_id);
             ALTER TABLE reports ADD COLUMN review_id TEXT
         `
+    },
+    {
+        id: '009_published_snapshots',
+        pg: `
+            ALTER TABLE projects ADD COLUMN IF NOT EXISTS published_commit_id TEXT;
+            CREATE TABLE IF NOT EXISTS project_publications (
+                project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                commit_id TEXT NOT NULL REFERENCES commits(id) ON DELETE CASCADE,
+                published_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (project_id, commit_id)
+            );
+            UPDATE projects
+            SET published_commit_id = head_commit_id
+            WHERE visibility = 'public' AND published_commit_id IS NULL;
+            INSERT INTO project_publications (project_id, commit_id)
+            SELECT p.id, p.published_commit_id
+            FROM projects p
+            WHERE p.published_commit_id IS NOT NULL
+              AND NOT EXISTS (
+                  SELECT 1 FROM project_publications pp
+                  WHERE pp.project_id = p.id AND pp.commit_id = p.published_commit_id
+              );
+            CREATE INDEX IF NOT EXISTS idx_project_publications_project
+                ON project_publications(project_id, published_at DESC)
+        `,
+        sqlite: `
+            ALTER TABLE projects ADD COLUMN published_commit_id TEXT;
+            CREATE TABLE IF NOT EXISTS project_publications (
+                project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                commit_id TEXT NOT NULL REFERENCES commits(id) ON DELETE CASCADE,
+                published_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (project_id, commit_id)
+            );
+            UPDATE projects
+            SET published_commit_id = head_commit_id
+            WHERE visibility = 'public' AND published_commit_id IS NULL;
+            INSERT INTO project_publications (project_id, commit_id)
+            SELECT p.id, p.published_commit_id
+            FROM projects p
+            WHERE p.published_commit_id IS NOT NULL
+              AND NOT EXISTS (
+                  SELECT 1 FROM project_publications pp
+                  WHERE pp.project_id = p.id AND pp.commit_id = p.published_commit_id
+              );
+            CREATE INDEX IF NOT EXISTS idx_project_publications_project
+                ON project_publications(project_id, published_at DESC)
+        `
     }
 ];

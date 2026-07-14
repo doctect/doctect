@@ -13,14 +13,15 @@ export const getProjectRow = async (id, queryFn = query) => {
     return rows[0];
 };
 
-const projectDto = (row) => ({
+const projectDto = (row, usePublishedHead = false) => ({
     id: row.id,
     ownerId: row.owner_id,
     name: row.name,
     description: row.description,
     tags: JSON.parse(row.tags || '[]'),
     visibility: row.visibility,
-    headCommitId: row.head_commit_id,
+    headCommitId: usePublishedHead ? row.published_commit_id : row.head_commit_id,
+    publishedCommitId: row.published_commit_id,
     forkedFromProjectId: row.forked_from_project_id,
     forkedFromCommitId: row.forked_from_commit_id,
     downloadCount: row.download_count,
@@ -44,8 +45,9 @@ export const pruneCommits = async (projectId, queryFn = query) => {
          WHERE project_id = $1
            AND id NOT IN (SELECT id FROM commits WHERE project_id = $2 ORDER BY created_at DESC, id DESC LIMIT $3)
            AND id NOT IN (SELECT source_commit_id FROM merge_requests WHERE status = 'open')
-           AND id NOT IN (SELECT base_commit_id FROM merge_requests WHERE status = 'open')`,
-        [projectId, projectId, retentionLimit()]
+           AND id NOT IN (SELECT base_commit_id FROM merge_requests WHERE status = 'open')
+           AND id NOT IN (SELECT commit_id FROM project_publications WHERE project_id = $4)`,
+        [projectId, projectId, retentionLimit(), projectId]
     );
 };
 
@@ -126,7 +128,7 @@ export const loadProject = (requireOwner) => async (req, res, next) => {
 };
 
 router.get('/api/projects/:id', optionalAuth, loadProject(false), (req, res) => {
-    res.json({ project: projectDto(req.project) });
+    res.json({ project: projectDto(req.project, !req.isOwner) });
 });
 
 router.patch('/api/projects/:id', requireAuth, loadProject(true), async (req, res) => {
@@ -200,9 +202,12 @@ router.post('/api/projects/:id/commits', requireAuth, requireUsername, userWrite
 });
 
 router.get('/api/projects/:id/commits', optionalAuth, loadProject(false), async (req, res) => {
+    const publicFilter = req.isOwner
+        ? ''
+        : ' AND EXISTS (SELECT 1 FROM project_publications pp WHERE pp.project_id = commits.project_id AND pp.commit_id = commits.id)';
     const rows = await query(
         `SELECT id, parent_commit_id, message, schema_version, created_by, created_at
-         FROM commits WHERE project_id = $1 ORDER BY created_at DESC, id DESC LIMIT 200`, [req.project.id]);
+         FROM commits WHERE project_id = $1${publicFilter} ORDER BY created_at DESC, id DESC LIMIT 200`, [req.project.id]);
     res.json({
         commits: rows.map(r => ({
             id: r.id, parentCommitId: r.parent_commit_id, message: r.message,
@@ -212,7 +217,10 @@ router.get('/api/projects/:id/commits', optionalAuth, loadProject(false), async 
 });
 
 router.get('/api/projects/:id/commits/:commitId', optionalAuth, loadProject(false), async (req, res) => {
-    const rows = await query('SELECT id, message, created_at, state_json, state_gzip FROM commits WHERE id = $1 AND project_id = $2',
+    const publicFilter = req.isOwner
+        ? ''
+        : ' AND EXISTS (SELECT 1 FROM project_publications pp WHERE pp.project_id = commits.project_id AND pp.commit_id = commits.id)';
+    const rows = await query(`SELECT id, message, created_at, state_json, state_gzip FROM commits WHERE id = $1 AND project_id = $2${publicFilter}`,
         [req.params.commitId, req.project.id]);
     if (!rows[0]) return res.status(404).json({ error: 'Commit not found' });
     res.json({ commit: { id: rows[0].id, message: rows[0].message, createdAt: rows[0].created_at, state: decodeStateRow(rows[0]) } });
@@ -280,12 +288,18 @@ router.post('/api/projects/:id/publish', requireAuth, requireUsername, loadProje
         if (!current[0] || current[0].head_commit_id !== expectedHead) return null;
 
         const updated = await txQuery(
-            `UPDATE projects SET visibility = 'public', description = $1, tags = $2, updated_at = CURRENT_TIMESTAMP
-             WHERE id = $3 AND head_commit_id = $4
+            `UPDATE projects SET visibility = 'public', published_commit_id = $1, description = $2, tags = $3, updated_at = CURRENT_TIMESTAMP
+             WHERE id = $4 AND head_commit_id = $5
              RETURNING *`,
-            [d, JSON.stringify(tags), current[0].id, expectedHead]
+            [expectedHead, d, JSON.stringify(tags), current[0].id, expectedHead]
         );
         if (!updated[0]) return null;
+
+        await txQuery(
+            `INSERT INTO project_publications (project_id, commit_id)
+             VALUES ($1, $2) ON CONFLICT (project_id, commit_id) DO NOTHING`,
+            [current[0].id, expectedHead]
+        );
 
         await txQuery('DELETE FROM thumbnails WHERE project_id = $1', [current[0].id]);
         for (let i = 0; i < parsed.length; i++) {
@@ -303,14 +317,15 @@ router.post('/api/projects/:id/publish', requireAuth, requireUsername, loadProje
 });
 
 router.post('/api/projects/:id/unpublish', requireAuth, loadProject(true), async (req, res) => {
-    await query(`UPDATE projects SET visibility = 'private' WHERE id = $1`, [req.project.id]);
+    await query(`UPDATE projects SET visibility = 'private', published_commit_id = NULL WHERE id = $1`, [req.project.id]);
     res.json({ project: projectDto(await getProjectRow(req.project.id)) });
 });
 
 router.post('/api/projects/:id/fork', requireAuth, requireUsername, userWriteLimiter, loadProject(false), async (req, res) => {
     const src = req.project;
-    if (!src.head_commit_id) return res.status(400).json({ error: 'Source project has no content' });
-    const headRows = await query('SELECT state_json, state_gzip, state_bytes FROM commits WHERE id = $1', [src.head_commit_id]);
+    const sourceCommitId = src.visibility === 'public' ? src.published_commit_id : src.head_commit_id;
+    if (!sourceCommitId) return res.status(400).json({ error: 'Source project has no content' });
+    const headRows = await query('SELECT state_json, state_gzip, state_bytes FROM commits WHERE id = $1', [sourceCommitId]);
     if (!headRows[0]) return res.status(404).json({ error: 'Source commit not found' });
 
     try {
@@ -325,7 +340,7 @@ router.post('/api/projects/:id/fork', requireAuth, requireUsername, userWriteLim
     await query(
         `INSERT INTO projects (id, owner_id, name, description, tags, forked_from_project_id, forked_from_commit_id)
          VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-        [forkId, req.user.id, src.name, src.description, src.tags, src.id, src.head_commit_id]
+        [forkId, req.user.id, src.name, src.description, src.tags, src.id, sourceCommitId]
     );
     await insertCommit({
         projectId: forkId,

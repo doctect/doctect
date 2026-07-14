@@ -7,8 +7,8 @@ const dbInterleave = vi.hoisted(() => ({ beforeConditionalPublish: null, failThu
 vi.mock('../../../server/db.js', async importOriginal => {
     const actual = await importOriginal();
     const intercept = async (baseQuery, text, params = []) => {
-        if (/UPDATE projects SET visibility = 'public'/.test(text)
-            && /WHERE id = \$3 AND head_commit_id = \$4/.test(text)
+        if (/UPDATE projects SET visibility = 'public', published_commit_id =/.test(text)
+            && /WHERE id = \$4 AND head_commit_id = \$5/.test(text)
             && dbInterleave.beforeConditionalPublish) {
             const hook = dbInterleave.beforeConditionalPublish;
             dbInterleave.beforeConditionalPublish = null;
