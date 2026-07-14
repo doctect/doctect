@@ -5,7 +5,7 @@ import { normalizeGeneratorProvenance } from '../shared/generatorMetadata.js';
 export interface ProjectLoadResult { state: AppState; warnings: string[] }
 
 export const loadProjectState = (raw: unknown): ProjectLoadResult => {
-  const migrated = migrateState(raw);
+  const migrated = migrateState(structuredClone(raw));
   const normalized = normalizeGeneratorProvenance((migrated as AppState).generator);
   if (!normalized.warning) return { state: { ...migrated, ...(normalized.generator ? { generator: normalized.generator } : {}) } as AppState, warnings: [] };
   const state = { ...migrated } as AppState;

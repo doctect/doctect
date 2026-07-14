@@ -39,4 +39,15 @@ describe('loadProjectState', () => {
       'Saved generator was detached: Hierarchy script must be text.',
     ]);
   });
+
+  it('returns a current-v9 state independent from its input', () => {
+    const raw = { ...validV8State(), schemaVersion: 9, generator: { ...source, unknown: true } } as any;
+    const original = structuredClone(raw);
+
+    const result = loadProjectState(raw);
+    result.state.nodes.root.title = 'Edited after load';
+
+    expect(raw).toEqual(original);
+    expect(result.state.generator).toEqual(source);
+  });
 });

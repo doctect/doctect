@@ -20,7 +20,8 @@ export const validateGeneratorProvenance = (value, { strictUnknownFields = false
   if (templateBytes > GENERATOR_SCRIPT_MAX_BYTES) return { ok: false, issue: 'template_script_too_large', message: 'Template script exceeds 512 KiB.' };
   if (hierarchyBytes > GENERATOR_SCRIPT_MAX_BYTES) return { ok: false, issue: 'hierarchy_script_too_large', message: 'Hierarchy script exceeds 512 KiB.' };
   if (templateBytes + hierarchyBytes > GENERATOR_COMBINED_MAX_BYTES) return { ok: false, issue: 'combined_scripts_too_large', message: 'Combined generator source exceeds 1 MiB.' };
-  if (typeof value.generatedAt !== 'string' || Number.isNaN(Date.parse(value.generatedAt))) {
+  const generatedDate = typeof value.generatedAt === 'string' ? new Date(value.generatedAt) : null;
+  if (!generatedDate || Number.isNaN(generatedDate.getTime()) || generatedDate.toISOString() !== value.generatedAt) {
     return { ok: false, issue: 'generated_at', message: 'Generator timestamp must be ISO 8601 text.' };
   }
   return { ok: true, value: {

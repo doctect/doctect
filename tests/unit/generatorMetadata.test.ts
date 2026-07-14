@@ -35,6 +35,27 @@ describe('generator provenance metadata', () => {
       hierarchyScript: 'y'.repeat(512 * 1024 + 1),
     }).ok).toBe(false);
     expect(validateGeneratorProvenance({ ...source, templateScript: '☕'.repeat(174_763) }).ok).toBe(false);
+    expect(validateGeneratorProvenance({
+      ...source,
+      templateScript: `${'☕'.repeat(174_762)}ab`,
+      hierarchyScript: 'y'.repeat(512 * 1024),
+    }).ok).toBe(true);
+  });
+
+  it.each([
+    '2026-07-13T12:00:00Z',
+    '2026-07-13T13:00:00.000+01:00',
+    'Mon, 13 Jul 2026 12:00:00 GMT',
+    '2026-07-13T12:00:00.0000Z',
+  ])('rejects non-canonical generator timestamp %s', generatedAt => {
+    expect(validateGeneratorProvenance({ ...source, generatedAt })).toMatchObject({
+      ok: false,
+      issue: 'generated_at',
+    });
+  });
+
+  it('strips unknown fields in lenient normalization', () => {
+    expect(normalizeGeneratorProvenance({ ...source, unknown: 'remove me' })).toEqual({ generator: source });
   });
 
   it('normalizes absent metadata and detaches invalid metadata with a warning', () => {
