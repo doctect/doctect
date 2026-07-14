@@ -1,5 +1,12 @@
 import type { AppNode, Variant } from '../types';
-import { MAX_ELEMENTS, MAX_NODES, MAX_STATE_BYTES, MAX_VARIANTS } from '../shared/projectLimits.js';
+import {
+    MAX_ELEMENTS,
+    MAX_LAYERS_PER_TEMPLATE,
+    MAX_NODES,
+    MAX_STATE_BYTES,
+    MAX_TEMPLATE_DIMENSION,
+    MAX_VARIANTS,
+} from '../shared/projectLimits.js';
 import type { GeneratorSandboxRawResult } from './generatorSandbox';
 import { normalizeGeneratedTemplates } from './generatorTemplates';
 import { migrateState } from './migration';
@@ -77,6 +84,40 @@ const jsonIssue = (root: unknown): string | undefined => {
 
 const utf8Bytes = (value: string): number => new TextEncoder().encode(value).byteLength;
 
+const validateRawTemplateMap = (raw: unknown, context: string): string | undefined => {
+    if (!isRecord(raw)) return `${context} templates must be an object.`;
+    for (const [templateId, value] of Object.entries(raw)) {
+        if (!isRecord(value)) return `Template ${context}/${templateId} must be an object.`;
+        if (typeof value.width !== 'number' || !Number.isFinite(value.width) || value.width <= 0 || value.width > MAX_TEMPLATE_DIMENSION
+            || typeof value.height !== 'number' || !Number.isFinite(value.height) || value.height <= 0 || value.height > MAX_TEMPLATE_DIMENSION) {
+            return `Template ${context}/${templateId} has invalid dimensions.`;
+        }
+        if (!Array.isArray(value.elements)) return `Template ${context}/${templateId} elements must be an array.`;
+        if (value.layers !== undefined) {
+            if (!Array.isArray(value.layers)) return `Template ${context}/${templateId} layers must be an array.`;
+            if (value.layers.length > MAX_LAYERS_PER_TEMPLATE) return `Template ${context}/${templateId} has too many layers.`;
+        }
+        for (const element of value.elements) {
+            if (isRecord(element) && element.layerId !== undefined && typeof element.layerId !== 'string') {
+                return `Template ${context}/${templateId} has an element with a non-string layerId.`;
+            }
+        }
+    }
+    return undefined;
+};
+
+const validateRawTemplates = (raw: unknown): string | undefined => {
+    if (!isRecord(raw)) return 'Templates must be an object.';
+    if (!Object.hasOwn(raw, 'variants')) return validateRawTemplateMap(raw, 'default');
+    if (!isRecord(raw.variants)) return 'Variants must be an object.';
+    for (const [variantId, variant] of Object.entries(raw.variants)) {
+        if (!isRecord(variant)) return `Variant ${variantId} must be an object.`;
+        const issue = validateRawTemplateMap(variant.templates, variantId);
+        if (issue) return issue;
+    }
+    return undefined;
+};
+
 export function validateGeneratedProject(raw: GeneratorSandboxRawResult): GeneratedProjectValidation {
     if (!isRecord(raw) || !Object.hasOwn(raw, 'templates') || !Object.hasOwn(raw, 'hierarchy')) {
         return fail('template', 'Generator output must contain templates and hierarchy.');
@@ -97,6 +138,8 @@ export function validateGeneratedProject(raw: GeneratorSandboxRawResult): Genera
     }
 
     const cloned = JSON.parse(serialized) as GeneratorSandboxRawResult;
+    const rawTemplateIssue = validateRawTemplates(cloned.templates);
+    if (rawTemplateIssue) return fail('template', rawTemplateIssue);
     let normalized;
     try {
         normalized = normalizeGeneratedTemplates(cloned.templates);
@@ -111,7 +154,7 @@ export function validateGeneratedProject(raw: GeneratorSandboxRawResult): Genera
     if (variantIds.length === 0) return fail('template', 'Template script produced no variants.');
     if (variantIds.length > MAX_VARIANTS) return fail('limits', `Generated project exceeds ${MAX_VARIANTS} variants.`);
     const activeVariantId = normalized.variants ? normalized.activeVariantId : 'default';
-    if (!activeVariantId || !variants[activeVariantId]) return fail('template', 'Generated project has no active variant.');
+    if (!activeVariantId || !Object.hasOwn(variants, activeVariantId)) return fail('template', 'Generated project has no active variant.');
 
     let templateCount = 0;
     let elementCount = 0;
@@ -126,10 +169,21 @@ export function validateGeneratedProject(raw: GeneratorSandboxRawResult): Genera
             if (!template || typeof template.id !== 'string' || typeof template.name !== 'string') {
                 return fail('template', `Template ${variantId}/${templateId} is missing id or name.`);
             }
-            if (!Number.isFinite(template.width) || !Number.isFinite(template.height) || template.width <= 0 || template.height <= 0) {
+            if (!Number.isFinite(template.width) || !Number.isFinite(template.height)
+                || template.width <= 0 || template.height <= 0
+                || template.width > MAX_TEMPLATE_DIMENSION || template.height > MAX_TEMPLATE_DIMENSION) {
                 return fail('template', `Template ${variantId}/${templateId} has invalid dimensions.`);
             }
             if (!Array.isArray(template.elements)) return fail('template', `Template ${variantId}/${templateId} elements must be an array.`);
+            if (template.layers !== undefined) {
+                if (!Array.isArray(template.layers)) return fail('template', `Template ${variantId}/${templateId} layers must be an array.`);
+                if (template.layers.length > MAX_LAYERS_PER_TEMPLATE) return fail('template', `Template ${variantId}/${templateId} has too many layers.`);
+            }
+            for (const element of template.elements) {
+                if (element?.layerId !== undefined && typeof element.layerId !== 'string') {
+                    return fail('template', `Template ${variantId}/${templateId} has an element with a non-string layerId.`);
+                }
+            }
             elementCount += template.elements.length;
             if (elementCount > MAX_ELEMENTS) return fail('limits', `Generated project exceeds ${MAX_ELEMENTS} elements.`);
         }
@@ -173,6 +227,29 @@ export function validateGeneratedProject(raw: GeneratorSandboxRawResult): Genera
             children: (value.children ?? []) as string[],
         };
     }
+
+    const rootNode = nodes[cloned.hierarchy.rootId];
+    if (rootNode.parentId !== null) return fail('hierarchy', 'Root node parentId must be null.');
+    const owned = new Set<string>([cloned.hierarchy.rootId]);
+    const pendingOwnership: Array<{ nodeId: string; depth: number }> = [{ nodeId: cloned.hierarchy.rootId, depth: 0 }];
+    let ownershipEdges = 0;
+    while (pendingOwnership.length > 0) {
+        const { nodeId, depth } = pendingOwnership.pop()!;
+        const node = nodes[nodeId];
+        if (node.children.length > MAX_NODES) return fail('limits', `Node ${nodeId} exceeds ${MAX_NODES} children.`);
+        for (const childId of node.children) {
+            ownershipEdges += 1;
+            if (ownershipEdges > MAX_NODES) return fail('limits', `Hierarchy exceeds ${MAX_NODES} ownership edges.`);
+            if (!Object.hasOwn(nodes, childId)) return fail('hierarchy', `Node ${nodeId} references missing child '${childId}'.`);
+            if (owned.has(childId)) return fail('hierarchy', `Node '${childId}' has repeated or cyclic ownership.`);
+            if (nodes[childId].parentId !== nodeId) return fail('hierarchy', `Node '${childId}' parentId does not match owner '${nodeId}'.`);
+            const childDepth = depth + 1;
+            if (childDepth >= MAX_NODES) return fail('limits', `Hierarchy depth exceeds ${MAX_NODES}.`);
+            owned.add(childId);
+            pendingOwnership.push({ nodeId: childId, depth: childDepth });
+        }
+    }
+    if (owned.size !== nodeEntries.length) return fail('hierarchy', 'Hierarchy contains nodes not owned by the root tree.');
 
     let project: GeneratedProject;
     try {

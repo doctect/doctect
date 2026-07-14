@@ -8,6 +8,7 @@ import { FONTS } from "../constants/editor";
 import { normalizeSvgColorsInTree, desaturateSvgColorsInTree, bakeElementOpacityIntoSvg } from "./svgColorNormalize";
 import { sortElementsForRender } from "./layers";
 import { isVisibleText, resolveTextFontSize } from "./textVisibility";
+import { MAX_NODES } from "../shared/projectLimits.js";
 
 const DEBUG_PDF = false; // Set to true to see debug visuals
 
@@ -736,15 +737,20 @@ interface GeneratePDFOptions {
 
 export const computePageOrder = (state: AppState): string[] => {
     const pageNodes: string[] = [];
-    const traverse = (nodeId: string) => {
+    const visited = new Set<string>();
+    const pending = state.rootId ? [state.rootId] : [];
+    while (pending.length > 0 && visited.size < MAX_NODES) {
+        const nodeId = pending.pop()!;
+        if (visited.has(nodeId) || !Object.hasOwn(state.nodes, nodeId)) continue;
+        visited.add(nodeId);
         const node = state.nodes[nodeId];
-        if (!node) return;
-        if (!node.referenceId) {
-            pageNodes.push(nodeId);
-            if (node.children) node.children.forEach(childId => traverse(childId));
+        if (node.referenceId) continue;
+        pageNodes.push(nodeId);
+        const children = Array.isArray(node.children) ? node.children : [];
+        for (let index = Math.min(children.length, MAX_NODES) - 1; index >= 0; index -= 1) {
+            pending.push(children[index]);
         }
-    };
-    if (state.rootId) traverse(state.rootId);
+    }
     return pageNodes;
 };
 

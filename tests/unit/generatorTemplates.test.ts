@@ -24,6 +24,29 @@ describe('normalizeGeneratedTemplates', () => {
         expect(raw).toEqual(before);
     });
 
+    it('preserves prototype-named template ids as own keys', () => {
+        const raw = Object.create(null);
+        raw.toString = { id: 'toString', name: 'String', width: 1, height: 1, elements: [] };
+        raw.__proto__ = { id: '__proto__', name: 'Proto', width: 1, height: 1, elements: [] };
+
+        const { templates } = normalizeGeneratedTemplates(raw);
+
+        expect(Object.hasOwn(templates!, 'toString')).toBe(true);
+        expect(Object.hasOwn(templates!, '__proto__')).toBe(true);
+    });
+
+    it('preserves prototype-named variant ids and active selection as own keys', () => {
+        const variants = Object.create(null);
+        variants.toString = { id: 'toString', name: 'String', templates: { page: { id: 'page', name: 'Page', width: 1, height: 1, elements: [] } } };
+        variants.__proto__ = { id: '__proto__', name: 'Proto', templates: { page: { id: 'page', name: 'Page', width: 1, height: 1, elements: [] } } };
+
+        const result = normalizeGeneratedTemplates({ variants, activeVariantId: '__proto__' });
+
+        expect(Object.hasOwn(result.variants!, 'toString')).toBe(true);
+        expect(Object.hasOwn(result.variants!, '__proto__')).toBe(true);
+        expect(result.activeVariantId).toBe('__proto__');
+    });
+
     it('normalizes a { variants, activeVariantId } script return (documented multi-device shape) without dropping templates', () => {
         const raw = {
             variants: {

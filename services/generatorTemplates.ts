@@ -15,7 +15,7 @@ function autoIdElements(tpl: any): PageTemplate {
 }
 
 function normalizeFlatTemplates(raw: Record<string, any>): Record<string, PageTemplate> {
-    const normalized: Record<string, PageTemplate> = {};
+    const normalized: Record<string, PageTemplate> = Object.create(null);
     Object.values(raw || {}).forEach((tpl: any) => {
         if (!tpl || !tpl.id) return;
         normalized[tpl.id] = ensureTemplateLayers(autoIdElements(tpl));
@@ -34,8 +34,9 @@ export interface NormalizedGeneratedTemplates {
 // shape (see the generator's own LLM prompt / schema docs). Both are normalized here so the
 // caller doesn't need to special-case which one it got.
 export function normalizeGeneratedTemplates(raw: any): NormalizedGeneratedTemplates {
-    if (raw && typeof raw === 'object' && raw.variants && typeof raw.variants === 'object') {
-        const variants: Record<string, Variant> = {};
+    if (raw && typeof raw === 'object' && !Array.isArray(raw)
+        && Object.hasOwn(raw, 'variants') && raw.variants && typeof raw.variants === 'object' && !Array.isArray(raw.variants)) {
+        const variants: Record<string, Variant> = Object.create(null);
         Object.entries(raw.variants).forEach(([key, v]: [string, any]) => {
             variants[key] = {
                 id: (v && v.id) || key,
@@ -43,7 +44,7 @@ export function normalizeGeneratedTemplates(raw: any): NormalizedGeneratedTempla
                 templates: normalizeFlatTemplates(v && v.templates)
             };
         });
-        const activeVariantId = raw.activeVariantId && variants[raw.activeVariantId]
+        const activeVariantId = typeof raw.activeVariantId === 'string' && Object.hasOwn(variants, raw.activeVariantId)
             ? raw.activeVariantId
             : Object.keys(variants)[0];
         return { variants, activeVariantId };

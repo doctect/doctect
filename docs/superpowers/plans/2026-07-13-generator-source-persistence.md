@@ -14,7 +14,7 @@
 - Project JSON schema increases exactly from v8 to v9 through a sequential `migrateV8ToV9` migration.
 - Generator metadata `formatVersion` is exactly `1`.
 - Each script is limited to 512 KiB UTF-8; combined scripts are limited to 1 MiB UTF-8.
-- Sandbox execution timeout is exactly 5,000 ms.
+- Sandbox execution timeout is fixed at exactly 10,000 ms and is not caller-configurable.
 - Existing state ceilings remain 5 MiB, 20,000 nodes, 50 variants, and 50,000 elements.
 - Saved and gallery-provided source is inert until explicit Preview; no load/open/fork path executes it.
 - Generator code receives no DOM, parent, cookie, storage, IndexedDB, cache, network, WebSocket, dynamic-import, or application-state access.
@@ -247,7 +247,7 @@ git commit -m "feat(generator): persist source metadata in schema v9"
 
 - [ ] **Step 1: Add failing validator and sandbox lifecycle tests**
 
-Cover valid flat/variant output, missing root, unknown node type, functions/custom prototypes/cycles, 20,001 nodes, 51 variants, 50,001 elements, and >5 MiB output. Add sandbox transport tests using fake iframe/clock hooks for success, runtime failure, malformed protocol, 5,000 ms timeout, cancellation, and teardown exactly once.
+Cover valid flat/variant output, missing root, unknown node type, functions/custom prototypes/cycles, 20,001 nodes, 51 variants, 50,001 elements, and >5 MiB output. Add sandbox transport tests using fake iframe/injected-clock hooks for success, runtime failure, malformed protocol, fixed 10,000 ms timeout, cancellation, and teardown exactly once.
 
 Core assertions:
 
@@ -258,14 +258,20 @@ expect(validation).toMatchObject({
   summary: { variantCount: 1, templateCount: 1, nodeCount: 1, estimatedPageCount: 1 },
 });
 
-vi.useFakeTimers();
 const dispose = vi.fn();
+let fireTimeout = () => {};
 const environment: GeneratorSandboxEnvironment = {
   createRequestToken: () => 'test-token',
   createFrame: () => ({ post: vi.fn(), dispose }),
+  scheduleTimeout: (callback, delayMs) => {
+    expect(delayMs).toBe(10_000);
+    fireTimeout = callback;
+    return 'test-timeout';
+  },
+  cancelTimeout: vi.fn(),
 };
 const pending = runGeneratorSandbox(validRequest(), environment);
-await vi.advanceTimersByTimeAsync(5000);
+fireTimeout();
 await expect(pending).resolves.toMatchObject({ ok: false, category: 'timeout' });
 expect(dispose).toHaveBeenCalledTimes(1);
 ```
@@ -329,7 +335,6 @@ export interface GeneratorSandboxRequest {
   templateScript: string;
   hierarchyScript: string;
   constants: { RM_PP_WIDTH: number; RM_PP_HEIGHT: number; A4_WIDTH: number; A4_HEIGHT: number };
-  timeoutMs?: number;
 }
 export interface GeneratorSandboxRawResult { templates: unknown; hierarchy: unknown }
 export interface GeneratorSandboxEnvironment {
@@ -338,6 +343,9 @@ export interface GeneratorSandboxEnvironment {
     requestToken: string;
     onMessage: (message: unknown) => void;
   }): { post: (request: GeneratorSandboxRequest) => void; dispose: () => void };
+  signal?: AbortSignal;
+  scheduleTimeout?(callback: () => void, delayMs: number): unknown;
+  cancelTimeout?(handle: unknown): void;
 }
 export type GeneratorSandboxResult =
   | { ok: true; value: GeneratorSandboxRawResult }
@@ -356,7 +364,7 @@ The generated iframe document must contain this CSP and no `allow-same-origin` t
       content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval'; worker-src blob:; connect-src 'none'">
 ```
 
-Trusted iframe bootloader creates one blob Worker. Before evaluating source, worker sets `fetch`, `XMLHttpRequest`, `WebSocket`, `localStorage`, `sessionStorage`, `cookieStore`, `indexedDB`, `caches`, and `importScripts` to `undefined`; it exposes only page constants, normalized templates, and `createId`. Parent accepts messages only from the created iframe window with a cryptographically random request token, validates protocol shape, clears timeout, removes listener, terminates worker through iframe teardown, revokes URLs, and removes iframe on every exit path.
+Trusted iframe bootloader creates one blob Worker and transfers a closure-private `MessagePort`; default Worker messages are ignored so evaluated source cannot forge success. Before evaluating source, worker sets `fetch`, `XMLHttpRequest`, `WebSocket`, `localStorage`, `sessionStorage`, `cookieStore`, `indexedDB`, `caches`, and `importScripts` to `undefined`; it exposes only page constants, normalized templates, and `createId`. Worker serializes and measures output against the exact 5 MiB ceiling before sending it through the private port. Parent accepts messages only from the created iframe window with a cryptographically random request token, validates protocol shape, clears timeout, removes listener, terminates worker through iframe teardown, revokes URLs, and removes iframe on every exit path.
 
 Use destructured constants instead of current `with (consts)`:
 
@@ -758,7 +766,7 @@ if (typeof cookieStore !== 'undefined') throw new Error('cookies exposed');
 if (typeof caches !== 'undefined' || typeof importScripts !== 'undefined') throw new Error('loader exposed');
 ```
 
-Return a valid one-page project afterward and verify preview succeeds. Add a separate script that returns `import('/generator-sandbox-must-not-load.js')`; assert preview rejects the Promise/dynamic import and the test server receives no request. Then use `while (true) {}` and assert timeout appears after 5 seconds, current canvas remains unchanged, and modal remains responsive. Verify no request reaches test server during either attack case.
+Return a valid one-page project afterward and verify preview succeeds. Add a separate script that returns `import('/generator-sandbox-must-not-load.js')`; assert preview rejects the Promise/dynamic import and the test server receives no request. Then use `while (true) {}` and assert timeout appears after 10 seconds, current canvas remains unchanged, and modal remains responsive. Verify no request reaches test server during either attack case.
 
 - [ ] **Step 2: Add publish/open/fork persistence browser flow**
 

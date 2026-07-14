@@ -109,7 +109,7 @@ Generator preview uses a disposable sandbox with these layers:
 7. Parent accepts only plain JSON-compatible objects and arrays, then runs normal template normalization, hierarchy validation, schema migration, and project limits.
 8. Iframe and worker are destroyed after success, failure, cancellation, or timeout.
 
-Generator code must have no access to parent DOM, cookies, local/session storage, IndexedDB, caches, network requests, WebSockets, dynamic imports, or application state. A preview has a five-second execution timeout. Timeout, cloning failure, non-plain output, malformed output, or generated state above the existing 5 MiB/20,000-node/50-variant/50,000-element ceilings fails safely.
+Generator code must have no access to parent DOM, cookies, local/session storage, IndexedDB, caches, network requests, WebSockets, dynamic imports, or application state. A preview has a fixed ten-second execution timeout; callers cannot shorten or extend it. Timeout, cloning failure, non-plain output, malformed output, or generated state above the existing 5 MiB/20,000-node/50-variant/50,000-element ceilings fails safely. The trusted Worker serializes and enforces the 5 MiB ceiling before sending output over a closure-private `MessagePort`; the parent independently revalidates size and structure.
 
 Sandbox failure never mutates current project state or saved generator metadata.
 

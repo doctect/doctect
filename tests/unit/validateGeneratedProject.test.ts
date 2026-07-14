@@ -67,6 +67,74 @@ describe('validateGeneratedProject', () => {
         expect(validateGeneratedProject({ templates: validTemplates(), hierarchy })).toMatchObject({ ok: false, category: 'hierarchy' });
     });
 
+    it.each([
+        ['a cycle', () => ({
+            nodes: {
+                root: { id: 'root', parentId: null, type: 'page', title: 'Root', children: ['child'] },
+                child: { id: 'child', parentId: 'root', type: 'page', title: 'Child', children: ['root'] },
+            },
+            rootId: 'root',
+        })],
+        ['repeated child ownership', () => ({
+            nodes: {
+                root: { id: 'root', parentId: null, type: 'page', title: 'Root', children: ['child', 'child'] },
+                child: { id: 'child', parentId: 'root', type: 'page', title: 'Child', children: [] },
+            },
+            rootId: 'root',
+        })],
+        ['a missing child', () => ({
+            nodes: { root: { id: 'root', parentId: null, type: 'page', title: 'Root', children: ['missing'] } },
+            rootId: 'root',
+        })],
+        ['a parent mismatch', () => ({
+            nodes: {
+                root: { id: 'root', parentId: null, type: 'page', title: 'Root', children: ['child'] },
+                child: { id: 'child', parentId: 'other', type: 'page', title: 'Child', children: [] },
+            },
+            rootId: 'root',
+        })],
+        ['an orphan node', () => ({
+            nodes: {
+                root: { id: 'root', parentId: null, type: 'page', title: 'Root', children: [] },
+                orphan: { id: 'orphan', parentId: 'root', type: 'page', title: 'Orphan', children: [] },
+            },
+            rootId: 'root',
+        })],
+    ])('rejects ownership hierarchy containing %s', (_name, hierarchy) => {
+        expect(validateGeneratedProject({ templates: validTemplates(), hierarchy: hierarchy() })).toMatchObject({ ok: false, category: 'hierarchy' });
+    });
+
+    it('rejects fan-out beyond the node ceiling before traversal expansion', () => {
+        const hierarchy = {
+            nodes: {
+                root: { id: 'root', parentId: null, type: 'page', title: 'Root', children: Array(20_001).fill('child') },
+                child: { id: 'child', parentId: 'root', type: 'page', title: 'Child', children: [] },
+            },
+            rootId: 'root',
+        };
+
+        expect(validateGeneratedProject({ templates: validTemplates(), hierarchy })).toMatchObject({ ok: false, category: 'limits' });
+    });
+
+    it('accepts and counts a 20,000-deep ownership hierarchy iteratively', () => {
+        const nodes: Record<string, any> = Object.create(null);
+        for (let index = 0; index < 20_000; index += 1) {
+            const id = `node_${index}`;
+            nodes[id] = {
+                id,
+                parentId: index === 0 ? null : `node_${index - 1}`,
+                type: 'page',
+                title: id,
+                children: index === 19_999 ? [] : [`node_${index + 1}`],
+            };
+        }
+
+        expect(validateGeneratedProject({
+            templates: validTemplates(),
+            hierarchy: { nodes, rootId: 'node_0' },
+        })).toMatchObject({ ok: true, summary: { nodeCount: 20_000, estimatedPageCount: 20_000 } });
+    });
+
     it('rejects node types absent from any generated variant', () => {
         const hierarchy = validHierarchy();
         hierarchy.nodes.root.type = 'missing';
@@ -136,6 +204,19 @@ describe('validateGeneratedProject', () => {
             templates: { page: template('page', elements) },
             hierarchy: validHierarchy(),
         })).toMatchObject({ ok: false, category: 'limits' });
+    });
+
+    it.each([
+        ['zero width', { ...template(), width: 0 }],
+        ['oversized height', { ...template(), height: 20_001 }],
+        ['non-array layers', { ...template(), layers: {} }],
+        ['too many layers', { ...template(), layers: Array.from({ length: 201 }, (_, index) => ({ id: `layer_${index}` })) }],
+        ['non-string layerId', { ...template(), elements: [{ id: 'element', type: 'rect', layerId: 42 }] }],
+    ])('rejects server-incompatible template data: %s', (_name, invalidTemplate) => {
+        expect(validateGeneratedProject({
+            templates: { page: invalidTemplate },
+            hierarchy: validHierarchy(),
+        })).toMatchObject({ ok: false, category: 'template' });
     });
 
     it('rejects output larger than 5 MiB', () => {

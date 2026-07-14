@@ -18,4 +18,26 @@ describe('computePageOrder', () => {
     it('returns depth-first page order, skipping reference nodes', () => {
         expect(computePageOrder(state)).toEqual(['root', 'a', 'b']);
     });
+
+    it('handles a 20,000-deep hierarchy without recursive stack growth', () => {
+        const nodes: Record<string, any> = Object.create(null);
+        for (let index = 0; index < 20_000; index += 1) {
+            const id = `node_${index}`;
+            nodes[id] = {
+                id,
+                children: index === 19_999 ? [] : [`node_${index + 1}`],
+            };
+        }
+
+        expect(computePageOrder({ rootId: 'node_0', nodes } as any)).toHaveLength(20_000);
+    });
+
+    it('bounds repeated and cyclic ownership edges', () => {
+        const nodes = {
+            root: { id: 'root', children: ['child', 'child'] },
+            child: { id: 'child', children: ['root'] },
+        };
+
+        expect(computePageOrder({ rootId: 'root', nodes } as any)).toEqual(['root', 'child']);
+    });
 });

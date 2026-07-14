@@ -1,4 +1,11 @@
-import { MAX_ELEMENTS, MAX_NODES, MAX_STATE_BYTES, MAX_VARIANTS } from '../shared/projectLimits.js';
+import {
+    MAX_ELEMENTS,
+    MAX_LAYERS_PER_TEMPLATE,
+    MAX_NODES,
+    MAX_STATE_BYTES,
+    MAX_TEMPLATE_DIMENSION,
+    MAX_VARIANTS,
+} from '../shared/projectLimits.js';
 
 export { MAX_STATE_BYTES };
 
@@ -40,14 +47,14 @@ export const validateAppState = (state) => {
         for (const [tid, tpl] of Object.entries(variant.templates)) {
             if (!isObj(tpl)) return fail(`template ${vid}/${tid} must be an object`);
             if (!isStr(tpl.id) || !isStr(tpl.name)) return fail(`template ${vid}/${tid} missing id/name`);
-            if (!isNum(tpl.width) || !isNum(tpl.height) || tpl.width <= 0 || tpl.height <= 0 || tpl.width > 20000 || tpl.height > 20000) {
+            if (!isNum(tpl.width) || !isNum(tpl.height) || tpl.width <= 0 || tpl.height <= 0 || tpl.width > MAX_TEMPLATE_DIMENSION || tpl.height > MAX_TEMPLATE_DIMENSION) {
                 return fail(`template ${vid}/${tid} has invalid dimensions`);
             }
             if (!Array.isArray(tpl.elements)) return fail(`template ${vid}/${tid} elements must be an array`);
             // Layers (v8+): light, optional checks — legacy/un-migrated states must still validate
             if (tpl.layers !== undefined) {
                 if (!Array.isArray(tpl.layers)) return fail(`template ${vid}/${tid} layers must be an array`);
-                if (tpl.layers.length > 200) return fail(`template ${vid}/${tid} has too many layers (max 200)`);
+                if (tpl.layers.length > MAX_LAYERS_PER_TEMPLATE) return fail(`template ${vid}/${tid} has too many layers (max 200)`);
             }
             for (const el of tpl.elements) {
                 if (el && typeof el === 'object' && el.layerId !== undefined && !isStr(el.layerId)) {
