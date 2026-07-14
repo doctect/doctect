@@ -33,6 +33,12 @@ const galleryState = {
     generator,
 };
 
+const rawGalleryState = {
+    ...galleryState,
+    schemaVersion: 8,
+    generator: { ...generator, formatVersion: 2, legacyNote: 'keep raw until EditorPage' },
+};
+
 const renderAt = () => render(
     <MemoryRouter initialEntries={['/gallery/proj-1']}>
         <Routes>
@@ -130,12 +136,12 @@ describe('GalleryDetailPage generator source staging', () => {
 
     it('stages gallery open source byte-for-byte without normalizing it', async () => {
         mockUseSession.mockReturnValue({ data: null });
-        vi.spyOn(cloudApi, 'galleryState').mockResolvedValue({ name: 'Test Project', state: galleryState });
+        vi.spyOn(cloudApi, 'galleryState').mockResolvedValue({ name: 'Test Project', state: rawGalleryState });
         renderAt();
 
         fireEvent.click(await screen.findByRole('button', { name: /open in editor/i }));
         expect(await screen.findByText('APP_MARKER')).toBeInTheDocument();
-        expect(consumeImport()).toEqual({ name: 'Test Project', state: galleryState });
+        expect(consumeImport()).toEqual({ name: 'Test Project', state: rawGalleryState });
     });
 
     it('stages fork first-commit source byte-for-byte with cloud linkage', async () => {
@@ -144,7 +150,7 @@ describe('GalleryDetailPage generator source staging', () => {
             project: { id: 'fork-1', name: 'Forked Project', headCommitId: 'fork-commit-1' },
         } as any);
         vi.spyOn(cloudApi, 'getCommit').mockResolvedValue({
-            id: 'fork-commit-1', message: 'Fork', createdAt: '2026-07-14T12:40:00.000Z', state: galleryState,
+            id: 'fork-commit-1', message: 'Fork', createdAt: '2026-07-14T12:40:00.000Z', state: rawGalleryState,
         });
         renderAt();
 
@@ -152,7 +158,7 @@ describe('GalleryDetailPage generator source staging', () => {
         expect(await screen.findByText('APP_MARKER')).toBeInTheDocument();
         expect(consumeImport()).toEqual({
             name: 'Forked Project',
-            state: galleryState,
+            state: rawGalleryState,
             cloud: { projectId: 'fork-1', lastSyncedCommitId: 'fork-commit-1' },
         });
     });

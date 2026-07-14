@@ -24,6 +24,12 @@ const commitState = {
     generator,
 };
 
+const rawCloneState = {
+    ...commitState,
+    schemaVersion: 8,
+    generator: { ...generator, formatVersion: 2, legacyNote: 'keep raw until EditorPage' },
+};
+
 describe('HistoryModal', () => {
     beforeEach(() => {
         vi.restoreAllMocks();
@@ -106,12 +112,16 @@ describe('HistoryModal', () => {
             expect(confirmSpy).not.toHaveBeenCalled();
         });
 
-        it('calls onClone with the raw (non-migrated) state', async () => {
+        it('keeps legacy malformed metadata raw for EditorPage to normalize once', async () => {
+            vi.spyOn(cloudApi, 'getCommit').mockResolvedValue({
+                id: 'c2', message: 'Second save', createdAt: '2026-02-01T00:00:00.000Z', state: rawCloneState,
+            });
             const onClone = vi.fn();
             render(<HistoryModal cloudProjectId="proj-1" mode="clone" onClone={onClone} onClose={vi.fn()} />);
             fireEvent.click((await screen.findAllByRole('button', { name: 'Open in editor' }))[0]);
-            await waitFor(() => expect(onClone).toHaveBeenCalledWith({ state: commitState }));
-            expect(onClone.mock.calls[0][0].state.generator).toEqual(generator);
+            await waitFor(() => expect(onClone).toHaveBeenCalledWith({ state: rawCloneState }));
+            expect(onClone.mock.calls[0][0].state.schemaVersion).toBe(8);
+            expect(onClone.mock.calls[0][0].state.generator).toEqual(rawCloneState.generator);
         });
 
         it('shows a fallback error message when opening a version fails', async () => {

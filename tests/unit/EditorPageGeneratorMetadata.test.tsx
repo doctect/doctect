@@ -65,13 +65,14 @@ describe('EditorPage generator metadata loads', () => {
     it('normalizes a staged gallery import exactly once and appends its warning banner', async () => {
         stageImport({
             name: 'Gallery Project',
-            state: { ...state, generator: { ...generator, secret: true, formatVersion: 2 } },
+            state: { ...state, schemaVersion: 8, generator: { ...generator, secret: true, formatVersion: 2 } },
         });
         renderEditor();
 
         expect(await screen.findByRole('alert')).toHaveTextContent('Saved generator was detached');
         await screen.findByText('Gallery Project');
         const imported = JSON.parse(screen.getAllByTestId('project-state').at(-1)?.textContent || '{}');
+        expect(imported.schemaVersion).toBe(9);
         expect(imported.generator).toBeUndefined();
     });
 

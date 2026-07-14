@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { X, Globe, Loader } from 'lucide-react';
 import { cloudApi, ApiError } from '../../services/cloudApi';
 import { computePageOrder } from '../../services/pdfService';
@@ -12,6 +12,11 @@ interface PublishModalProps {
     onPublished: () => void;
 }
 
+type DisclosureState =
+    | { status: 'loading' }
+    | { status: 'ready'; hasGenerator: boolean }
+    | { status: 'error'; message: string };
+
 export function PublishModal({ project, cloudProjectId, onClose, onPublished }: PublishModalProps) {
     const [description, setDescription] = useState('');
     const [tagsText, setTagsText] = useState('');
@@ -19,6 +24,30 @@ export function PublishModal({ project, cloudProjectId, onClose, onPublished }: 
     const [previews, setPreviews] = useState<string[]>([]);
     const [phase, setPhase] = useState<'form' | 'rendering' | 'uploading'>('form');
     const [error, setError] = useState<string | null>(null);
+    const [disclosure, setDisclosure] = useState<DisclosureState>({ status: 'loading' });
+    const [disclosureAttempt, setDisclosureAttempt] = useState(0);
+
+    useEffect(() => {
+        let cancelled = false;
+        setDisclosure({ status: 'loading' });
+        const loadDisclosure = async () => {
+            try {
+                const cloudProject = await cloudApi.getProject(cloudProjectId);
+                if (!cloudProject.headCommitId) throw new Error('Cloud project has no head commit.');
+                const head = await cloudApi.getCommit(cloudProjectId, cloudProject.headCommitId);
+                if (!cancelled) {
+                    setDisclosure({ status: 'ready', hasGenerator: head.state?.generator !== undefined });
+                }
+            } catch (e) {
+                if (!cancelled) {
+                    const message = e instanceof Error ? e.message : 'Could not inspect cloud source disclosure.';
+                    setDisclosure({ status: 'error', message });
+                }
+            }
+        };
+        loadDisclosure();
+        return () => { cancelled = true; };
+    }, [cloudProjectId, disclosureAttempt]);
 
     const pages = useMemo(() => {
         const order = computePageOrder(project.initialState);
@@ -30,6 +59,7 @@ export function PublishModal({ project, cloudProjectId, onClose, onPublished }: 
     };
 
     const publish = async () => {
+        if (disclosure.status !== 'ready') return;
         if (selected.length === 0) { setError('Pick at least one page for the preview.'); return; }
         setError(null);
         try {
@@ -59,7 +89,20 @@ export function PublishModal({ project, cloudProjectId, onClose, onPublished }: 
                         Publishing makes this project's latest cloud version and previews visible to everyone.
                         Make sure you've saved to cloud first.
                     </p>
-                    {project.initialState.generator && (
+                    {disclosure.status === 'loading' && (
+                        <div role="status" className="rounded border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600 flex items-center gap-2">
+                            <Loader size={12} className="animate-spin" /> Checking cloud source disclosure…
+                        </div>
+                    )}
+                    {disclosure.status === 'error' && (
+                        <div role="alert" className="rounded border border-red-200 bg-red-50 p-3 text-xs text-red-700 flex items-center justify-between gap-3">
+                            <span>{disclosure.message}</span>
+                            <button type="button" onClick={() => setDisclosureAttempt(value => value + 1)} className="font-semibold hover:text-red-900">
+                                Retry
+                            </button>
+                        </div>
+                    )}
+                    {disclosure.status === 'ready' && disclosure.hasGenerator && (
                         <div role="alert" className="rounded border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">
                             This project includes saved generator source. Publishing makes both scripts public. Review them for secrets, private comments, or identifying information. To exclude source, cancel, use “Detach Saved Generator” in Hierarchy Generator, and save to cloud before publishing.
                         </div>
@@ -94,7 +137,7 @@ export function PublishModal({ project, cloudProjectId, onClose, onPublished }: 
                 </div>
                 <div className="px-4 py-3 border-t flex justify-end gap-2">
                     <button onClick={onClose} className="text-xs px-3 py-1.5 rounded border text-slate-600">Cancel</button>
-                    <button onClick={publish} disabled={phase !== 'form'}
+                    <button onClick={publish} disabled={phase !== 'form' || disclosure.status !== 'ready'}
                         className="text-xs px-3 py-1.5 rounded bg-blue-600 text-white disabled:opacity-50 flex items-center gap-1">
                         {phase !== 'form' && <Loader size={11} className="animate-spin" />}
                         {phase === 'rendering' ? 'Rendering previews…' : phase === 'uploading' ? 'Publishing…' : 'Publish'}
