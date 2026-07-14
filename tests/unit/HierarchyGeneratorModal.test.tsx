@@ -62,6 +62,13 @@ describe('HierarchyGeneratorModal', () => {
         expect(screen.getByRole('button', { name: 'Apply Generated Project' })).toBeDisabled();
     });
 
+    it('explains retained source safety, replacement, detach, and no reverse synchronization', () => {
+        renderModal();
+        expect(screen.getByText(/Saved generator source is retained with the project/)).toHaveTextContent(
+            'Saved generator source is retained with the project and becomes public when published. Opening source never runs it; Preview uses the sandbox. Apply replaces the generated document. Manual edits are not written back to JavaScript. Use Detach Saved Generator to remove retained source.',
+        );
+    });
+
     it('previews without applying, shows summary, then applies exact preview source after confirmation', async () => {
         const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
         const props = renderModal();

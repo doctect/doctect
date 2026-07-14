@@ -607,8 +607,14 @@ nodes[refId] = {
                      </ul>
 
                      <p className="bg-amber-50 border-l-4 border-amber-400 p-4 text-amber-900 text-sm mt-8">
-                        <strong>Warning:</strong> The generated code replaces the current project state. If you want to merge, you need to manually handle that in the JSON editor, or rely on the fact that this tool is primarily for starting new complex projects.
+                         <strong>Saved generator source:</strong> Apply retains both scripts with local saves, JSON downloads, cloud history, gallery copies, and forks. Publishing makes both scripts public, so review them for secrets, private comments, and identifying information. To exclude them, use <strong>Detach Saved Generator</strong> and save to cloud before publishing.
                      </p>
+                     <ul className="list-disc pl-5 space-y-2">
+                        <li><strong>Opening is inert:</strong> Loading saved or gallery source never runs it.</li>
+                        <li><strong>Preview is sandboxed:</strong> Preview runs drafts only in an isolated disposable sandbox with a fixed 10-second timeout, then validates output.</li>
+                        <li><strong>Apply replaces:</strong> Apply Generated Project requires a successful preview and confirmation, then replaces the generated document.</li>
+                        <li><strong>No reverse synchronization:</strong> Manual project edits are not written back to JavaScript; saved source remains from the last successful generator apply.</li>
+                     </ul>
                   </section>
 
                   <section id="accounts">
@@ -645,6 +651,9 @@ nodes[refId] = {
                         <li><strong>Describe it</strong> — a description and tags. Tags power the gallery's filtering, so pick ones people will actually search for.</li>
                         <li><strong>Publish.</strong> You can unpublish at any time, which removes the project (and its reviews) from public view without deleting anything.</li>
                      </ol>
+                     <p className="bg-amber-50 border-l-4 border-amber-400 p-4 text-amber-900 text-sm">
+                        Projects with saved Hierarchy Generator source publish both scripts with the project. The publish wizard warns you to review source or detach it before saving and publishing.
+                     </p>
                   </section>
 
                   <section id="gallery">

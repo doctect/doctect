@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { X, RotateCcw, ExternalLink } from 'lucide-react';
 import { cloudApi, CommitMeta, ApiError } from '../../services/cloudApi';
-import { migrateState } from '../../services/migration';
+import { loadProjectState } from '../../services/loadProjectState';
 import { AppState } from '../../types';
 
 type HistoryModalProps =
@@ -33,13 +33,15 @@ export function HistoryModal(props: HistoryModalProps) {
         try {
             const commit = await cloudApi.getCommit(cloudProjectId, commitId);
             if (props.mode === 'clone') {
-                // No migrateState here: EditorPage already runs migrateState exactly once when
+                // Keep clone state raw: EditorPage runs loadProjectState exactly once when
                 // it consumes a staged import (see consumeImport() in pages/EditorPage.tsx),
                 // matching how GalleryDetailPage's existing openInEditor/fork handlers already
                 // pass raw state into stageImport without migrating it themselves.
                 props.onClone({ state: commit.state });
             } else {
-                props.onRestore(migrateState(commit.state));
+                const loaded = loadProjectState(commit.state);
+                props.onRestore(loaded.state);
+                if (loaded.warnings.length > 0) window.alert(loaded.warnings.join('\n'));
             }
         } catch (e) {
             setError(e instanceof ApiError ? e.message : (props.mode === 'clone' ? 'Could not open this version' : 'Restore failed'));

@@ -59,6 +59,11 @@ export function PublishModal({ project, cloudProjectId, onClose, onPublished }: 
                         Publishing makes this project's latest cloud version and previews visible to everyone.
                         Make sure you've saved to cloud first.
                     </p>
+                    {project.initialState.generator && (
+                        <div role="alert" className="rounded border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">
+                            This project includes saved generator source. Publishing makes both scripts public. Review them for secrets, private comments, or identifying information. To exclude source, cancel, use “Detach Saved Generator” in Hierarchy Generator, and save to cloud before publishing.
+                        </div>
+                    )}
                     <label className="block">
                         <span className="text-xs font-medium text-slate-600">Description</span>
                         <textarea value={description} onChange={e => setDescription(e.target.value)} maxLength={2000}

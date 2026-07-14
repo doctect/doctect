@@ -3,12 +3,13 @@ import React, { useState, useEffect } from 'react';
 import { AppState } from '../types';
 import { createPlannerProject, createBlankProject, createNotebookProject, ProjectPreset, getCustomPresets } from '../services/presets';
 import { migrateState } from '../services/migration';
+import { loadProjectState } from '../services/loadProjectState';
 import { consumeImport } from '../services/importProject';
 import { ProjectEditor } from '../components/ProjectEditor';
 import { TabBar } from '../components/TabBar';
 import { NewProjectModal } from '../components/NewProjectModal';
 import { CloseProjectConfirmModal } from '../components/CloseProjectConfirmModal';
-import { Square, Home, Github, Coffee } from 'lucide-react';
+import { Square, Home, Github, Coffee, AlertTriangle, X } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import clsx from 'clsx';
 import { trackEvent } from '../services/analytics';
@@ -24,24 +25,32 @@ export interface Project {
     revision?: number;
 }
 
-export function EditorPage() {
-    // Load projects from local storage or initialize with default
-    const [projects, setProjects] = useState<Project[]>(() => {
-        try {
-            const saved = localStorage.getItem('hype_projects');
-            if (saved) {
-                const parsed = JSON.parse(saved);
-                // Migrate each project's state to current schema
-                return parsed.map((proj: Project) => ({
-                    ...proj,
-                    initialState: migrateState(proj.initialState)
-                }));
-            }
-        } catch (e) {
-            console.warn("Failed to load projects from storage", e);
+export const loadSavedProjects = (): { projects: Project[]; warnings: string[] } => {
+    try {
+        const saved = localStorage.getItem('hype_projects');
+        if (saved) {
+            const parsed = JSON.parse(saved);
+            const warnings: string[] = [];
+            const projects = parsed.map((project: Project) => {
+                const loaded = loadProjectState(project.initialState);
+                warnings.push(...loaded.warnings);
+                return { ...project, initialState: loaded.state };
+            });
+            return { projects, warnings };
         }
-        return [{ id: 'proj_1', name: 'Blank Project', initialState: createBlankProject() }];
-    });
+    } catch (e) {
+        console.warn("Failed to load projects from storage", e);
+    }
+    return {
+        projects: [{ id: 'proj_1', name: 'Blank Project', initialState: createBlankProject() }],
+        warnings: [],
+    };
+};
+
+export function EditorPage() {
+    const [initialLoad] = useState(loadSavedProjects);
+    const [projects, setProjects] = useState<Project[]>(initialLoad.projects);
+    const [loadWarnings, setLoadWarnings] = useState<string[]>(initialLoad.warnings);
 
     // Load active project ID or default to first
     const [activeProjectId, setActiveProjectId] = useState<string>(() => {
@@ -82,15 +91,17 @@ export function EditorPage() {
     useEffect(() => {
         const pending = consumeImport();
         if (!pending) return;
+        const loaded = loadProjectState(pending.state);
         const newId = `proj_${Date.now()}`;
         const newProject: Project = {
             id: newId,
             name: pending.name,
-            initialState: migrateState(pending.state),
+            initialState: loaded.state,
             cloud: pending.cloud,
             revision: 0
         };
         setProjects(prev => [...prev, newProject]);
+        setLoadWarnings(prev => [...prev, ...loaded.warnings]);
         setActiveProjectId(newId);
         trackEvent('project_imported_from_gallery', { name: pending.name });
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -256,6 +267,23 @@ export function EditorPage() {
                     </Link>
                 </div>
             </header>
+
+            {loadWarnings.length > 0 && (
+                <div role="alert" className="bg-amber-50 border-b border-amber-200 px-4 py-2 text-xs text-amber-900 flex items-start gap-2">
+                    <AlertTriangle size={15} className="flex-shrink-0 mt-0.5" />
+                    <div className="flex-1 space-y-1">
+                        {loadWarnings.map((warning, index) => <div key={`${index}:${warning}`}>{warning}</div>)}
+                    </div>
+                    <button
+                        type="button"
+                        aria-label="Dismiss project load warnings"
+                        onClick={() => setLoadWarnings([])}
+                        className="text-amber-700 hover:text-amber-950"
+                    >
+                        <X size={15} />
+                    </button>
+                </div>
+            )}
 
             {/* Project Workspace Area */}
             <div className="flex-1 relative overflow-hidden bg-slate-100">

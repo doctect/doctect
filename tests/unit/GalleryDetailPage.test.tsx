@@ -17,6 +17,22 @@ const detail: GalleryDetail = {
     ratingAvg: null, ratingCount: 0,
 };
 
+const generator = {
+    formatVersion: 1 as const,
+    templateScript: '  const café = "☕";\r\nreturn { café };\n',
+    hierarchyScript: '\n\treturn { nodes: { "根": true } };\r\n',
+    generatedAt: '2026-07-14T12:34:56.000Z',
+};
+
+const galleryState = {
+    nodes: { root: { id: 'root', parentId: null, type: 'page', title: 'Root', data: {}, children: [] } },
+    rootId: 'root',
+    variants: { default: { id: 'default', name: 'Default', templates: {} } },
+    activeVariantId: 'default',
+    schemaVersion: 9,
+    generator,
+};
+
 const renderAt = () => render(
     <MemoryRouter initialEntries={['/gallery/proj-1']}>
         <Routes>
@@ -89,7 +105,7 @@ describe('GalleryDetailPage version history', () => {
         ]);
         vi.spyOn(cloudApi, 'getCommit').mockResolvedValue({
             id: 'c1', message: 'Initial save', createdAt: '2026-01-01T00:00:00.000Z',
-            state: { nodes: {}, rootId: 'root', variants: {}, activeVariantId: 'default' },
+            state: galleryState,
         });
         renderAt();
         fireEvent.click(await screen.findByRole('button', { name: /version history/i }));
@@ -99,7 +115,45 @@ describe('GalleryDetailPage version history', () => {
         expect(await screen.findByText('APP_MARKER')).toBeInTheDocument();
         expect(consumeImport()).toEqual({
             name: 'Test Project',
-            state: { nodes: {}, rootId: 'root', variants: {}, activeVariantId: 'default' },
+            state: galleryState,
+        });
+    });
+});
+
+describe('GalleryDetailPage generator source staging', () => {
+    beforeEach(() => {
+        vi.restoreAllMocks();
+        localStorage.clear();
+        vi.spyOn(cloudApi, 'galleryDetail').mockResolvedValue(detail);
+        vi.spyOn(cloudApi, 'listIncomingMrs').mockResolvedValue([]);
+    });
+
+    it('stages gallery open source byte-for-byte without normalizing it', async () => {
+        mockUseSession.mockReturnValue({ data: null });
+        vi.spyOn(cloudApi, 'galleryState').mockResolvedValue({ name: 'Test Project', state: galleryState });
+        renderAt();
+
+        fireEvent.click(await screen.findByRole('button', { name: /open in editor/i }));
+        expect(await screen.findByText('APP_MARKER')).toBeInTheDocument();
+        expect(consumeImport()).toEqual({ name: 'Test Project', state: galleryState });
+    });
+
+    it('stages fork first-commit source byte-for-byte with cloud linkage', async () => {
+        mockUseSession.mockReturnValue({ data: { user: { id: 'user-2', username: 'planner_pro' } } });
+        vi.spyOn(cloudApi, 'fork').mockResolvedValue({
+            project: { id: 'fork-1', name: 'Forked Project', headCommitId: 'fork-commit-1' },
+        } as any);
+        vi.spyOn(cloudApi, 'getCommit').mockResolvedValue({
+            id: 'fork-commit-1', message: 'Fork', createdAt: '2026-07-14T12:40:00.000Z', state: galleryState,
+        });
+        renderAt();
+
+        fireEvent.click(await screen.findByRole('button', { name: /fork this project/i }));
+        expect(await screen.findByText('APP_MARKER')).toBeInTheDocument();
+        expect(consumeImport()).toEqual({
+            name: 'Forked Project',
+            state: galleryState,
+            cloud: { projectId: 'fork-1', lastSyncedCommitId: 'fork-commit-1' },
         });
     });
 });

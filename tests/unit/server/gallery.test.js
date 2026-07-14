@@ -4,11 +4,17 @@ import request from 'supertest';
 import { initTestApp, signUpUser, minimalState, PNG_1X1 } from './helpers.js';
 
 let app, cookie, publicId, privateId;
+const generator = {
+    formatVersion: 1,
+    templateScript: '  const café = "☕";\r\nreturn { café };\n',
+    hierarchyScript: '\n\treturn { nodes: { "根": true } };\r\n',
+    generatedAt: '2026-07-14T12:34:56.000Z',
+};
 beforeAll(async () => {
     app = await initTestApp();
     cookie = await signUpUser(app, { email: 'gal@test.dev', username: 'gallerist' });
     const pub = await request(app).post('/api/projects').set('Cookie', cookie)
-        .send({ name: 'Public Planner', state: minimalState() });
+        .send({ name: 'Public Planner', state: { ...minimalState(), generator } });
     publicId = pub.body.project.id;
     await request(app).post(`/api/projects/${publicId}/publish`).set('Cookie', cookie)
         .send({ description: 'shiny', tags: ['planner'], thumbnails: [PNG_1X1] });
@@ -50,6 +56,7 @@ describe('gallery', () => {
         const res = await request(app).get(`/api/gallery/${publicId}/state`);
         expect(res.status).toBe(200);
         expect(res.body.state.rootId).toBe('root');
+        expect(res.body.state.generator).toEqual(generator);
         const detail = await request(app).get(`/api/gallery/${publicId}`);
         expect(detail.body.project.downloadCount).toBe(1);
     });

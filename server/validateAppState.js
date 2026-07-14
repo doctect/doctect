@@ -6,6 +6,7 @@ import {
     MAX_TEMPLATE_DIMENSION,
     MAX_VARIANTS,
 } from '../shared/projectLimits.js';
+import { validateGeneratorProvenance } from '../shared/generatorMetadata.js';
 
 export { MAX_STATE_BYTES };
 
@@ -21,6 +22,11 @@ export const validateAppState = (state) => {
     try { bytes = Buffer.byteLength(JSON.stringify(state), 'utf8'); }
     catch { return fail('state is not serializable'); }
     if (bytes > MAX_STATE_BYTES) return fail(`state exceeds ${MAX_STATE_BYTES} bytes`);
+
+    if (state.generator !== undefined) {
+        const generatorResult = validateGeneratorProvenance(state.generator, { strictUnknownFields: true });
+        if (!generatorResult.ok) return fail(generatorResult.message);
+    }
 
     if (!isObj(state.nodes)) return fail('nodes must be an object');
     if (!isStr(state.rootId) || !state.nodes[state.rootId]) return fail('rootId must reference an existing node');

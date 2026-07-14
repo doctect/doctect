@@ -2341,6 +2341,10 @@ const HierarchyGeneratorSession: React.FC<HierarchyGeneratorSessionProps> = ({
           </div>
         </div>
 
+        <p className="px-4 py-2 border-b bg-indigo-50 text-xs text-indigo-900">
+          Saved generator source is retained with the project and becomes public when published. Opening source never runs it; Preview uses the sandbox. Apply replaces the generated document. Manual edits are not written back to JavaScript. Use Detach Saved Generator to remove retained source.
+        </p>
+
         {previewState.status === 'ready' && (
           <div className="px-4 py-3 border-b bg-emerald-50 text-sm text-slate-700" aria-live="polite">
             <div className="flex flex-wrap gap-x-5 gap-y-1 font-semibold text-emerald-800">

@@ -14,6 +14,13 @@ const twoVariantState: any = {
     activeVariantId: 'rm',
 };
 
+const generator = {
+    formatVersion: 1 as const,
+    templateScript: '  const café = "☕";\r\nreturn { café };\n',
+    hierarchyScript: '\n\treturn { nodes: { "根": true } };\r\n',
+    generatedAt: '2026-07-14T12:34:56.000Z',
+};
+
 describe('generateVariantsZip', () => {
     it('produces a zip with one PDF entry per variant, named after the variant', async () => {
         const blob = await generateVariantsZip(twoVariantState, 'My Planner');
@@ -40,5 +47,12 @@ describe('generateVariantsZip', () => {
         const blob = await generateVariantsZip(collidingState, 'Proj');
         const zip = await JSZip.loadAsync(blob);
         expect(Object.keys(zip.files).sort()).toEqual(['A_B Test.pdf', 'A_B Test_2.pdf']);
+    });
+
+    it('ignores generator metadata and keeps PDF entry names and count unchanged', async () => {
+        const blob = await generateVariantsZip({ ...twoVariantState, generator }, 'Generated Planner');
+        const zip = await JSZip.loadAsync(blob);
+        expect(Object.keys(zip.files).sort()).toEqual(['iPad.pdf', 'reMarkable.pdf']);
+        expect(Object.keys(zip.files)).toHaveLength(2);
     });
 });

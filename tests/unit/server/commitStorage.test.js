@@ -4,6 +4,12 @@ import request from 'supertest';
 import { initTestApp, signUpUser, minimalState } from './helpers.js';
 
 let app, cookie, query;
+const generator = {
+    formatVersion: 1,
+    templateScript: '  const café = "☕";\r\nreturn { café };\n',
+    hierarchyScript: '\n\treturn { nodes: { "根": true } };\r\n',
+    generatedAt: '2026-07-14T12:34:56.000Z',
+};
 beforeAll(async () => {
     app = await initTestApp();
     ({ query } = await import('../../../server/db.js'));
@@ -23,7 +29,7 @@ describe('compressed commit storage', () => {
     });
 
     it('round-trips state through the commit-detail endpoint', async () => {
-        const state = minimalState('RoundTrip');
+        const state = { ...minimalState('RoundTrip'), generator };
         const created = await request(app).post('/api/projects').set('Cookie', cookie)
             .send({ name: 'RT', state });
         const res = await request(app)
@@ -31,6 +37,7 @@ describe('compressed commit storage', () => {
             .set('Cookie', cookie);
         expect(res.status).toBe(200);
         expect(res.body.commit.state).toEqual(state);
+        expect(res.body.commit.state.generator).toEqual(generator);
     });
 
     it('still reads legacy rows that only have state_json', async () => {
@@ -49,7 +56,7 @@ describe('compressed commit storage', () => {
     });
 
     it('forking a compressed commit round-trips correctly', async () => {
-        const state = minimalState('ForkMe');
+        const state = { ...minimalState('ForkMe'), generator };
         const created = await request(app).post('/api/projects').set('Cookie', cookie)
             .send({ name: 'ForkSrc', state });
         await request(app).post(`/api/projects/${created.body.project.id}/publish`).set('Cookie', cookie)
@@ -61,5 +68,6 @@ describe('compressed commit storage', () => {
             .get(`/api/projects/${fork.body.project.id}/commits/${fork.body.project.headCommitId}`)
             .set('Cookie', cookieB);
         expect(detail.body.commit.state).toEqual(state);
+        expect(detail.body.commit.state.generator).toEqual(generator);
     });
 });

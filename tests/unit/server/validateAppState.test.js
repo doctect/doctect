@@ -10,6 +10,13 @@ const goodState = () => ({
     schemaVersion: 7
 });
 
+const validGenerator = () => ({
+    formatVersion: 1,
+    templateScript: '  const café = "☕";\r\nreturn { café };\n',
+    hierarchyScript: '\n\treturn { nodes: { "根": true } };\r\n',
+    generatedAt: '2026-07-14T12:34:56.000Z',
+});
+
 describe('validateAppState', () => {
     it('accepts a minimal valid state', () => {
         expect(validateAppState(goodState()).ok).toBe(true);
@@ -63,5 +70,28 @@ describe('validateAppState', () => {
         const s = goodState();
         s.variants.default.templates.page.elements = [{ id: 'e1', layerId: 42 }];
         expect(validateAppState(s).ok).toBe(false);
+    });
+
+    it('accepts valid generator metadata', () => {
+        expect(validateAppState({ ...goodState(), generator: validGenerator() })).toEqual({ ok: true });
+    });
+
+    it.each([
+        ['a non-object', null],
+        ['an unknown field', { ...validGenerator(), secret: true }],
+        ['an unsupported format', { ...validGenerator(), formatVersion: 2 }],
+        ['a non-text template script', { ...validGenerator(), templateScript: 42 }],
+        ['a non-text hierarchy script', { ...validGenerator(), hierarchyScript: null }],
+        ['an invalid timestamp', { ...validGenerator(), generatedAt: 'not-a-date' }],
+        ['an oversized template script', { ...validGenerator(), templateScript: 'x'.repeat(512 * 1024 + 1) }],
+        ['an oversized hierarchy script', { ...validGenerator(), hierarchyScript: 'x'.repeat(512 * 1024 + 1) }],
+    ])('rejects generator metadata with %s', (_label, generator) => {
+        expect(validateAppState({ ...goodState(), generator })).toMatchObject({ ok: false });
+    });
+
+    it('enforces total state size before generator detail validation', () => {
+        const state = { ...goodState(), generator: { secret: true } };
+        state.nodes.root.data.padding = 'x'.repeat(5 * 1024 * 1024);
+        expect(validateAppState(state)).toMatchObject({ ok: false, error: expect.stringContaining('state exceeds') });
     });
 });

@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { AppState } from '../types';
-import { migrateState } from '../services/migration';
+import { loadProjectState } from '../services/loadProjectState';
 import { X, Save, AlertTriangle, FileJson, CheckCircle, Braces, AlignLeft, ListTree, FileText, Plus, Copy, MoreHorizontal } from 'lucide-react';
 import clsx from 'clsx';
 import { JsonTreeItem, NodeOption } from './json/JsonTreeItem';
@@ -224,11 +224,10 @@ export const JsonModal: React.FC<JsonModalProps> = ({ isOpen, onClose, currentSt
                 throw new Error("Missing required properties (nodes, rootId, and templates or variants)");
             }
 
-            // Migrate to current schema version
-            const migratedState = migrateState(finalState);
-
-            onSave(migratedState);
+            const loaded = loadProjectState(finalState);
+            onSave(loaded.state);
             onClose();
+            if (loaded.warnings.length > 0) window.alert(loaded.warnings.join('\n'));
         } catch (e: any) {
             setError(e.message);
         }

@@ -10,6 +10,13 @@ const state = {
     schemaVersion: 7
 };
 
+const generator = {
+    formatVersion: 1,
+    templateScript: '  const café = "☕";\r\nreturn { café };\n',
+    hierarchyScript: '\n\treturn { nodes: { "根": true } };\r\n',
+    generatedAt: '2026-07-14T12:34:56.000Z',
+};
+
 describe('stateCodec', () => {
     it('round-trips a state through gzip', () => {
         const enc = encodeState(state);
@@ -41,5 +48,11 @@ describe('stateCodec', () => {
     it('normalizes non-Buffer blob values (some drivers return Uint8Array)', () => {
         const enc = encodeState(state);
         expect(decodeStateRow({ state_gzip: new Uint8Array(enc.gzip), state_json: '' })).toEqual(state);
+    });
+
+    it('round-trips generator scripts byte-for-byte through gzip', () => {
+        const sourceState = { ...state, generator };
+        const encoded = encodeState(sourceState);
+        expect(decodeStateRow({ state_gzip: encoded.gzip, state_json: '' }).generator).toEqual(generator);
     });
 });

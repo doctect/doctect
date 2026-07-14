@@ -3,16 +3,26 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { HistoryModal } from '../../components/cloud/HistoryModal';
 import { cloudApi, CommitMeta } from '../../services/cloudApi';
 
-vi.mock('../../services/migration', () => ({
-    migrateState: vi.fn((s: any) => ({ ...s, migrated: true })),
-}));
-
 const commits: CommitMeta[] = [
     { id: 'c2', parentCommitId: 'c1', message: 'Second save', schemaVersion: 1, createdBy: 'u1', createdAt: '2026-02-01T00:00:00.000Z' },
     { id: 'c1', parentCommitId: null, message: 'Initial save', schemaVersion: 1, createdBy: 'u1', createdAt: '2026-01-01T00:00:00.000Z' },
 ];
 
-const commitState = { nodes: {}, rootId: 'root', variants: {}, activeVariantId: 'default' };
+const generator = {
+    formatVersion: 1 as const,
+    templateScript: '  const café = "☕";\r\nreturn { café };\n',
+    hierarchyScript: '\n\treturn { nodes: { "根": true } };\r\n',
+    generatedAt: '2026-07-14T12:34:56.000Z',
+};
+
+const commitState = {
+    nodes: { root: { id: 'root', parentId: null, type: 'page', title: 'Root', data: {}, children: [] } },
+    rootId: 'root',
+    variants: { default: { id: 'default', name: 'Default', templates: {} } },
+    activeVariantId: 'default',
+    schemaVersion: 9,
+    generator,
+};
 
 describe('HistoryModal', () => {
     beforeEach(() => {
@@ -44,12 +54,31 @@ describe('HistoryModal', () => {
             expect(onRestore).not.toHaveBeenCalled();
         });
 
-        it('calls onRestore with the migrated state when confirmed', async () => {
+        it('restores generator scripts byte-for-byte when confirmed', async () => {
             vi.spyOn(window, 'confirm').mockReturnValue(true);
             const onRestore = vi.fn();
             render(<HistoryModal cloudProjectId="proj-1" onRestore={onRestore} onClose={vi.fn()} />);
             fireEvent.click((await screen.findAllByRole('button', { name: 'Restore' }))[0]);
-            await waitFor(() => expect(onRestore).toHaveBeenCalledWith({ ...commitState, migrated: true }));
+            await waitFor(() => expect(onRestore).toHaveBeenCalledWith(commitState));
+            expect(onRestore.mock.calls[0][0].generator).toEqual(generator);
+        });
+
+        it('detaches malformed generator metadata, restores the document, then warns once', async () => {
+            vi.spyOn(window, 'confirm').mockReturnValue(true);
+            vi.spyOn(cloudApi, 'getCommit').mockResolvedValue({
+                id: 'c2', message: 'Second save', createdAt: '2026-02-01T00:00:00.000Z',
+                state: { ...commitState, generator: { ...generator, formatVersion: 2 } as any },
+            });
+            const onRestore = vi.fn();
+            const alert = vi.spyOn(window, 'alert').mockImplementation(() => {});
+            render(<HistoryModal cloudProjectId="proj-1" onRestore={onRestore} onClose={vi.fn()} />);
+            fireEvent.click((await screen.findAllByRole('button', { name: 'Restore' }))[0]);
+
+            await waitFor(() => expect(onRestore).toHaveBeenCalled());
+            expect(onRestore.mock.calls[0][0].generator).toBeUndefined();
+            expect(alert).toHaveBeenCalledOnce();
+            expect(alert).toHaveBeenCalledWith(expect.stringContaining('Saved generator was detached'));
+            expect(onRestore.mock.invocationCallOrder[0]).toBeLessThan(alert.mock.invocationCallOrder[0]);
         });
 
         it('shows a fallback error message when restoring fails', async () => {
@@ -82,6 +111,7 @@ describe('HistoryModal', () => {
             render(<HistoryModal cloudProjectId="proj-1" mode="clone" onClone={onClone} onClose={vi.fn()} />);
             fireEvent.click((await screen.findAllByRole('button', { name: 'Open in editor' }))[0]);
             await waitFor(() => expect(onClone).toHaveBeenCalledWith({ state: commitState }));
+            expect(onClone.mock.calls[0][0].state.generator).toEqual(generator);
         });
 
         it('shows a fallback error message when opening a version fails', async () => {
