@@ -35,8 +35,8 @@ const retentionLimit = () => {
     return Number.isFinite(v) && v > 0 ? v : 50;
 };
 
-// Deletes commits beyond the newest N for a project. Commits referenced by an OPEN
-// merge request must survive — the MR detail page recomputes its diff from them live.
+// Deletes commits beyond the newest N for a project. Commits referenced by an active
+// merge request must survive because detail recomputes its diff from them live.
 // Note $1 and $2 are the same projectId passed twice: the SQLite adapter rewrites
 // placeholders positionally, so a reused $1 would mis-bind (see Global Constraints).
 export const pruneCommits = async (projectId, queryFn = query) => {
@@ -44,8 +44,8 @@ export const pruneCommits = async (projectId, queryFn = query) => {
         `DELETE FROM commits
          WHERE project_id = $1
            AND id NOT IN (SELECT id FROM commits WHERE project_id = $2 ORDER BY created_at DESC, id DESC LIMIT $3)
-           AND id NOT IN (SELECT source_commit_id FROM merge_requests WHERE status = 'open')
-           AND id NOT IN (SELECT base_commit_id FROM merge_requests WHERE status = 'open')
+           AND id NOT IN (SELECT source_commit_id FROM merge_requests WHERE status IN ('open', 'conflicted'))
+           AND id NOT IN (SELECT base_commit_id FROM merge_requests WHERE status IN ('open', 'conflicted'))
            AND id NOT IN (SELECT commit_id FROM project_publications WHERE project_id = $4)`,
         [projectId, projectId, retentionLimit(), projectId]
     );
