@@ -58,6 +58,7 @@ export interface ChangeSetDto {
     variantsAdded: string[]; variantsRemoved: string[]; variantsRenamed: Record<string, string>;
     templatesAdded: Record<string, string[]>; templatesModified: Record<string, string[]>; templatesRemoved: Record<string, string[]>;
     nodesChanged: boolean;
+    generatorChange: null | 'added' | 'modified' | 'removed';
 }
 export interface MrDetail {
     mergeRequest: MergeRequestDto;

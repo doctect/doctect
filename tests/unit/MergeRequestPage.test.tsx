@@ -19,6 +19,7 @@ vi.mock('../../services/thumbnailService', () => ({ generateThumbnails: vi.fn() 
 const emptyChangeSet = {
     variantsAdded: [], variantsRemoved: [], variantsRenamed: {},
     templatesAdded: {}, templatesModified: {}, templatesRemoved: {}, nodesChanged: false,
+    generatorChange: null,
 };
 
 const baseMr = {
@@ -84,5 +85,24 @@ describe('MergeRequestPage merge-button visibility', () => {
         vi.spyOn(cloudApi, 'getMr').mockResolvedValue(makeDetail({ createdBy: 'author-id' }, false));
         renderAt();
         expect(await screen.findByRole('button', { name: /close/i })).toBeInTheDocument();
+    });
+});
+
+describe('MergeRequestPage change summary', () => {
+    beforeEach(() => vi.restoreAllMocks());
+
+    it.each(['added', 'modified', 'removed'] as const)('shows one generator row when provenance was %s', async generatorChange => {
+        vi.spyOn(cloudApi, 'getMr').mockResolvedValue({
+            ...makeDetail(),
+            diff: {
+                source: { ...emptyChangeSet, generatorChange },
+                target: emptyChangeSet,
+                conflicts: [],
+            },
+        });
+
+        renderAt();
+
+        expect(await screen.findAllByText('~ Generator source changed')).toHaveLength(1);
     });
 });

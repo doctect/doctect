@@ -16,6 +16,7 @@ vi.mock('../../services/thumbnailService', () => ({ generateThumbnails: vi.fn() 
 const emptyChangeSet = {
     variantsAdded: [], variantsRemoved: [], variantsRenamed: {},
     templatesAdded: {}, templatesModified: {}, templatesRemoved: {}, nodesChanged: false,
+    generatorChange: null,
 };
 
 const baseMr = {

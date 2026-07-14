@@ -41,6 +41,7 @@ function ChangeList({ cs }: { cs: ChangeSetDto }) {
     Object.entries(cs.templatesModified).forEach(([v, ts]) => ts.forEach(t => rows.push(`~ Template modified: ${v}/${t}`)));
     Object.entries(cs.templatesRemoved).forEach(([v, ts]) => ts.forEach(t => rows.push(`− Template removed: ${v}/${t}`)));
     if (cs.nodesChanged) rows.push('~ Page hierarchy (nodes) changed');
+    if (cs.generatorChange !== null) rows.push('~ Generator source changed');
     if (rows.length === 0) return <div className="text-xs text-slate-400">No changes.</div>;
     return (
         <ul className="text-xs font-mono space-y-1">

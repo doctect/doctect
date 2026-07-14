@@ -15,6 +15,13 @@ const mkState = () => ({
     }
 });
 const clone = (s) => JSON.parse(JSON.stringify(s));
+const generator = (overrides = {}) => ({
+    formatVersion: 1,
+    templateScript: 'return { elements: [] };',
+    hierarchyScript: 'return { nodes: {} };',
+    generatedAt: '2026-07-14T10:00:00.000Z',
+    ...overrides,
+});
 
 describe('stableStringify', () => {
     it('is key-order independent', () => {
@@ -73,6 +80,20 @@ describe('computeChangeSet', () => {
         const cs = computeChangeSet(mkState(), side);
         expect(cs.templatesModified).toEqual({});
     });
+
+    it('classifies generator provenance additions, modifications, and removals', () => {
+        const withoutGenerator = mkState();
+        const withGenerator = { ...mkState(), generator: generator() };
+        const changedGenerator = {
+            ...withGenerator,
+            generator: generator({ generatedAt: '2026-07-14T11:00:00.000Z' }),
+        };
+
+        expect(computeChangeSet(withoutGenerator, withGenerator).generatorChange).toBe('added');
+        expect(computeChangeSet(withGenerator, changedGenerator).generatorChange).toBe('modified');
+        expect(computeChangeSet(withGenerator, withoutGenerator).generatorChange).toBe('removed');
+        expect(computeChangeSet(withoutGenerator, clone(withoutGenerator)).generatorChange).toBeNull();
+    });
 });
 
 describe('threeWayDiff', () => {
@@ -125,6 +146,35 @@ describe('threeWayDiff', () => {
         const d = threeWayDiff(base, source, target);
         expect(d.conflicts.some(c => c.kind === 'variant' && c.variantId === 'ipad')).toBe(true);
     });
+
+    it.each([
+        ['different additions', undefined, generator(), generator({ templateScript: 'return 2;' })],
+        ['different timestamp modifications', generator(), generator({ generatedAt: '2026-07-14T11:00:00.000Z' }), generator({ generatedAt: '2026-07-14T12:00:00.000Z' })],
+        ['source modification vs target removal', generator(), generator({ templateScript: 'return 2;' }), undefined],
+        ['source removal vs target modification', generator(), undefined, generator({ templateScript: 'return 2;' })],
+    ])('flags generator conflicts for %s', (_label, baseGenerator, sourceGenerator, targetGenerator) => {
+        const base = { ...mkState(), ...(baseGenerator ? { generator: baseGenerator } : {}) };
+        const source = { ...mkState(), ...(sourceGenerator ? { generator: sourceGenerator } : {}) };
+        const target = { ...mkState(), ...(targetGenerator ? { generator: targetGenerator } : {}) };
+
+        expect(threeWayDiff(base, source, target).conflicts).toContainEqual({
+            kind: 'generator',
+            id: 'generator',
+            description: 'Generator source changed differently on both branches.',
+        });
+    });
+
+    it.each([
+        ['same addition', undefined, generator()],
+        ['same modification', generator(), generator({ templateScript: 'return 2;' })],
+        ['same removal', generator(), undefined],
+    ])('accepts convergent generator changes for %s', (_label, baseGenerator, changedGenerator) => {
+        const base = { ...mkState(), ...(baseGenerator ? { generator: baseGenerator } : {}) };
+        const source = { ...mkState(), ...(changedGenerator ? { generator: changedGenerator } : {}) };
+        const target = clone(source);
+
+        expect(threeWayDiff(base, source, target).conflicts).toEqual([]);
+    });
 });
 
 describe('applyChangeSet', () => {
@@ -173,5 +223,41 @@ describe('applyChangeSet', () => {
         const source = clone(base); source.variants.rm.name = 'RM Pro Max';
         const merged = applyChangeSet(base, source, clone(base));
         expect(merged.variants.rm.name).toBe('RM Pro Max');
+    });
+
+    it('applies source generator provenance as one atomic value', () => {
+        const base = { ...mkState(), generator: generator() };
+        const source = {
+            ...mkState(),
+            generator: generator({
+                templateScript: 'return sourceTemplate;',
+                hierarchyScript: 'return sourceHierarchy;',
+                generatedAt: '2026-07-14T12:00:00.000Z',
+            }),
+        };
+
+        const merged = applyChangeSet(base, source, clone(base));
+
+        expect(merged.generator).toEqual(source.generator);
+        expect(merged.generator).not.toBe(source.generator);
+    });
+
+    it('preserves target generator provenance when source is unchanged', () => {
+        const base = { ...mkState(), generator: generator() };
+        const target = {
+            ...mkState(),
+            generator: generator({
+                hierarchyScript: 'return upstreamHierarchy;',
+                generatedAt: '2026-07-14T13:00:00.000Z',
+            }),
+        };
+
+        expect(applyChangeSet(base, clone(base), target).generator).toEqual(target.generator);
+    });
+
+    it('removes generator provenance when source removed it', () => {
+        const base = { ...mkState(), generator: generator() };
+
+        expect(applyChangeSet(base, mkState(), clone(base)).generator).toBeUndefined();
     });
 });

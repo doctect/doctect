@@ -9,6 +9,14 @@ const stateWithDayName = (dayName) => {
     return s;
 };
 
+const generator = (overrides = {}) => ({
+    formatVersion: 1,
+    templateScript: 'return { elements: [] };',
+    hierarchyScript: 'return { nodes: {} };',
+    generatedAt: '2026-07-14T10:00:00.000Z',
+    ...overrides,
+});
+
 let app, ownerCookie, authorCookie, upstreamId, forkId;
 
 const setupForkWithChanges = async () => {
@@ -130,6 +138,24 @@ describe('merge request creation', () => {
         // targetState reflects the upstream's brand-new head, not the state at MR-creation time.
         expect(detail.body.targetState.variants.default.templates.page.name).toBe('OwnerEdited');
     });
+
+    it('accepts an MR whose only change is added generator provenance', async () => {
+        const up = await request(app).post('/api/projects').set('Cookie', ownerCookie)
+            .send({ name: 'Generator Upstream', state: minimalState() });
+        await request(app).post(`/api/projects/${up.body.project.id}/publish`).set('Cookie', ownerCookie)
+            .set('If-Match', up.body.project.headCommitId)
+            .send({ description: '', tags: [], thumbnails: [PNG_1X1] });
+        const fork = await request(app).post(`/api/projects/${up.body.project.id}/fork`).set('Cookie', authorCookie);
+        await request(app).post(`/api/projects/${fork.body.project.id}/commits`).set('Cookie', authorCookie)
+            .send({ state: { ...minimalState(), generator: generator() }, message: 'save generator source' });
+
+        const created = await request(app).post('/api/merge-requests').set('Cookie', authorCookie)
+            .send({ sourceProjectId: fork.body.project.id, title: 'Add generator source' });
+
+        expect(created.status).toBe(201);
+        const detail = await request(app).get(`/api/merge-requests/${created.body.mergeRequest.id}`).set('Cookie', ownerCookie);
+        expect(detail.body.diff.source.generatorChange).toBe('added');
+    });
 });
 
 describe('merge and close', () => {
@@ -169,6 +195,27 @@ describe('merge and close', () => {
         const mergedDetail = await request(app).get(`/api/merge-requests/${mrId}`).set('Cookie', ownerCookie);
         expect(mergedDetail.body.mergeRequest.status).toBe('merged');
         expect(mergedDetail.body.isTargetOwner).toBe(true);
+    });
+
+    it('persists source generator provenance in a generator-only merge commit', async () => {
+        const up = await request(app).post('/api/projects').set('Cookie', ownerCookie)
+            .send({ name: 'Generator Merge Upstream', state: minimalState() });
+        await request(app).post(`/api/projects/${up.body.project.id}/publish`).set('Cookie', ownerCookie)
+            .set('If-Match', up.body.project.headCommitId)
+            .send({ description: '', tags: [], thumbnails: [PNG_1X1] });
+        const fork = await request(app).post(`/api/projects/${up.body.project.id}/fork`).set('Cookie', authorCookie);
+        const provenance = generator({ generatedAt: '2026-07-14T12:34:56.000Z' });
+        await request(app).post(`/api/projects/${fork.body.project.id}/commits`).set('Cookie', authorCookie)
+            .send({ state: { ...minimalState(), generator: provenance }, message: 'save generator source' });
+        const created = await request(app).post('/api/merge-requests').set('Cookie', authorCookie)
+            .send({ sourceProjectId: fork.body.project.id, title: 'Merge generator source' });
+
+        const merged = await request(app).post(`/api/merge-requests/${created.body.mergeRequest.id}/merge`).set('Cookie', ownerCookie);
+
+        expect(merged.status).toBe(200);
+        const head = await request(app)
+            .get(`/api/projects/${up.body.project.id}/commits/${merged.body.commit.id}`).set('Cookie', ownerCookie);
+        expect(head.body.commit.state.generator).toEqual(provenance);
     });
 
     it('refuses to merge twice', async () => {

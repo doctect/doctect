@@ -2,6 +2,8 @@
 // Plain ESM JavaScript so both the Express server and the Vite client can import it.
 // A "DiffState" is any object with { nodes, rootId, variants } (extra fields ignored).
 
+import { generatorProvenanceEqual } from './generatorMetadata.js';
+
 /**
  * @typedef {Object} ChangeSet
  * @property {string[]} variantsAdded
@@ -11,6 +13,7 @@
  * @property {Record<string,string[]>} templatesModified
  * @property {Record<string,string[]>} templatesRemoved
  * @property {boolean} nodesChanged
+ * @property {null|'added'|'modified'|'removed'} generatorChange
  */
 
 export const stableStringify = (value) => {
@@ -24,18 +27,30 @@ export const stableStringify = (value) => {
 const eq = (a, b) => stableStringify(a) === stableStringify(b);
 const clone = (v) => JSON.parse(JSON.stringify(v));
 const pushMap = (map, key, val) => { (map[key] = map[key] || []).push(val); };
+const generatorValue = state => state.generator ?? null;
+const generatorEqual = (left, right) => left === null || right === null
+    ? left === right
+    : generatorProvenanceEqual(left, right);
 
 /** @returns {ChangeSet} */
 export const computeChangeSet = (base, side) => {
     const cs = {
         variantsAdded: [], variantsRemoved: [], variantsRenamed: {},
         templatesAdded: {}, templatesModified: {}, templatesRemoved: {},
-        nodesChanged: false
+        nodesChanged: false,
+        generatorChange: null
     };
     cs.nodesChanged = !eq(
         { nodes: base.nodes, rootId: base.rootId },
         { nodes: side.nodes, rootId: side.rootId }
     );
+    const baseGenerator = generatorValue(base);
+    const sideGenerator = generatorValue(side);
+    if (!generatorEqual(baseGenerator, sideGenerator)) {
+        cs.generatorChange = baseGenerator === null ? 'added'
+            : sideGenerator === null ? 'removed'
+                : 'modified';
+    }
     const baseV = base.variants || {};
     const sideV = side.variants || {};
     for (const vid of Object.keys(sideV)) if (!baseV[vid]) cs.variantsAdded.push(vid);
@@ -67,7 +82,8 @@ const variantTouched = (cs, vid) =>
 
 /**
  * @typedef {Object} Conflict
- * @property {'nodes'|'variant'|'template'} kind
+ * @property {'nodes'|'variant'|'template'|'generator'} kind
+ * @property {string} [id]
  * @property {string} [variantId]
  * @property {string} [templateId]
  * @property {string} description
@@ -82,6 +98,15 @@ export const threeWayDiff = (base, source, target) => {
     if (src.nodesChanged && tgt.nodesChanged &&
         !eq({ nodes: source.nodes, rootId: source.rootId }, { nodes: target.nodes, rootId: target.rootId })) {
         conflicts.push({ kind: 'nodes', description: 'Both projects changed the page hierarchy differently' });
+    }
+
+    if (src.generatorChange !== null && tgt.generatorChange !== null
+        && !generatorEqual(generatorValue(source), generatorValue(target))) {
+        conflicts.push({
+            kind: 'generator',
+            id: 'generator',
+            description: 'Generator source changed differently on both branches.',
+        });
     }
 
     for (const vid of src.variantsAdded) {
@@ -137,6 +162,10 @@ export const applyChangeSet = (base, source, target) => {
     if (cs.nodesChanged) {
         merged.nodes = clone(source.nodes);
         merged.rootId = source.rootId;
+    }
+    if (cs.generatorChange === 'removed') delete merged.generator;
+    if (cs.generatorChange === 'added' || cs.generatorChange === 'modified') {
+        merged.generator = clone(source.generator);
     }
     for (const vid of cs.variantsAdded) merged.variants[vid] = clone(source.variants[vid]);
     for (const vid of cs.variantsRemoved) delete merged.variants[vid];

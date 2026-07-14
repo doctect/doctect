@@ -89,6 +89,7 @@ router.post('/api/merge-requests', requireAuth, requireUsername, async (req, res
     if (computed.error) return res.status(400).json({ error: computed.error });
     const { diff } = computed;
     const hasChanges = diff.source.nodesChanged
+        || diff.source.generatorChange !== null
         || diff.source.variantsAdded.length || diff.source.variantsRemoved.length
         || Object.keys(diff.source.variantsRenamed).length
         || Object.keys(diff.source.templatesAdded).length
