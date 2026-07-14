@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { randomUUID } from 'crypto';
-import { query } from '../db.js';
+import { dbType, query, withTransaction } from '../db.js';
 import { sendEmail } from '../email.js';
 import { requireAuth, requireUsername } from '../middleware/guards.js';
 import { getProjectRow, loadProject, insertCommit } from './projects.js';
@@ -11,8 +11,8 @@ import { assertGlobalCeiling, sendLimitError } from '../middleware/limits.js';
 
 const router = Router();
 
-const getCommitState = async (commitId) => {
-    const rows = await query('SELECT state_json, state_gzip, schema_version FROM commits WHERE id = $1', [commitId]);
+const getCommitState = async (commitId, queryFn = query) => {
+    const rows = await queryFn('SELECT state_json, state_gzip, schema_version FROM commits WHERE id = $1', [commitId]);
     if (!rows[0]) return null;
     return { state: decodeStateRow(rows[0]), schemaVersion: rows[0].schema_version };
 };
@@ -39,8 +39,8 @@ const mrDto = async (row) => {
     };
 };
 
-export const getMrRow = async (id) => {
-    const rows = await query('SELECT * FROM merge_requests WHERE id = $1', [id]);
+export const getMrRow = async (id, queryFn = query) => {
+    const rows = await queryFn('SELECT * FROM merge_requests WHERE id = $1', [id]);
     return rows[0];
 };
 
@@ -200,19 +200,46 @@ router.post('/api/merge-requests/:id/merge', requireAuth, loadMrForParticipant, 
     }
 
     const users = await query('SELECT username FROM "user" WHERE id = $1', [mr.created_by]);
-    const target = await getProjectRow(mr.target_project_id);
-    const commitId = await insertCommit({
-        projectId: target.id,
-        parentCommitId: target.head_commit_id,
-        message: `Merge: ${mr.title} (from @${users[0]?.username ?? 'unknown'})`,
-        state: merged,
-        userId: req.user.id,
-        encoded
+    const transactionResult = await withTransaction(async txQuery => {
+        const lockSuffix = dbType === 'postgres' ? ' FOR UPDATE' : '';
+        const mrRows = await txQuery(`SELECT * FROM merge_requests WHERE id = $1${lockSuffix}`, [mr.id]);
+        const currentMr = mrRows[0];
+        if (!currentMr) return { status: 'missing' };
+        if (currentMr.status === 'merged' || currentMr.status === 'closed') {
+            return { status: 'resolved', mrStatus: currentMr.status };
+        }
+
+        const targetRows = await txQuery(`SELECT * FROM projects WHERE id = $1${lockSuffix}`, [mr.target_project_id]);
+        const target = targetRows[0];
+        if (!target || target.head_commit_id !== computed.targetHeadCommitId) {
+            return { status: 'target-changed' };
+        }
+
+        const commitId = await insertCommit({
+            projectId: target.id,
+            parentCommitId: target.head_commit_id,
+            message: `Merge: ${mr.title} (from @${users[0]?.username ?? 'unknown'})`,
+            state: merged,
+            userId: req.user.id,
+            encoded
+        }, txQuery);
+        const updated = await txQuery(
+            `UPDATE merge_requests SET status = 'merged', resolved_by = $1, resolved_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING *`,
+            [req.user.id, mr.id]);
+        if (!updated[0]) throw new Error('Merge request disappeared during merge.');
+        return { status: 'merged', row: updated[0], commitId };
     });
-    await query(
-        `UPDATE merge_requests SET status = 'merged', resolved_by = $1, resolved_at = CURRENT_TIMESTAMP WHERE id = $2`,
-        [req.user.id, mr.id]);
-    res.json({ mergeRequest: await mrDto(await getMrRow(mr.id)), commit: { id: commitId } });
+
+    if (transactionResult.status === 'target-changed') {
+        return res.status(409).json({ error: 'Target project head changed during merge.', code: 'TARGET_HEAD_CHANGED' });
+    }
+    if (transactionResult.status === 'missing') {
+        return res.status(409).json({ error: 'Merge request no longer exists.' });
+    }
+    if (transactionResult.status === 'resolved') {
+        return res.status(409).json({ error: `Merge request is already ${transactionResult.mrStatus}` });
+    }
+    res.json({ mergeRequest: await mrDto(transactionResult.row), commit: { id: transactionResult.commitId } });
 });
 
 router.post('/api/merge-requests/:id/close', requireAuth, loadMrForParticipant, async (req, res) => {

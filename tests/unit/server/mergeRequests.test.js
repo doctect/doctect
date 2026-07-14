@@ -1,7 +1,31 @@
 // @vitest-environment node
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, vi } from 'vitest';
 import request from 'supertest';
 import { initTestApp, signUpUser, minimalState, PNG_1X1 } from './helpers.js';
+
+const dbFaults = vi.hoisted(() => ({ beforeMergeUserLookup: null, failMergedStatusUpdate: false }));
+vi.mock('../../../server/db.js', async importOriginal => {
+    const actual = await importOriginal();
+    const intercept = async (baseQuery, text, params = []) => {
+        if (/SELECT username FROM "user"/.test(text) && dbFaults.beforeMergeUserLookup) {
+            const hook = dbFaults.beforeMergeUserLookup;
+            dbFaults.beforeMergeUserLookup = null;
+            await hook();
+        }
+        if (/UPDATE merge_requests SET status = 'merged'/.test(text) && dbFaults.failMergedStatusUpdate) {
+            dbFaults.failMergedStatusUpdate = false;
+            throw new Error('Injected merge status failure');
+        }
+        return baseQuery(text, params);
+    };
+    return {
+        ...actual,
+        query: (text, params = []) => intercept(actual.query, text, params),
+        withTransaction: callback => actual.withTransaction(
+            txQuery => callback((text, params = []) => intercept(txQuery, text, params)),
+        ),
+    };
+});
 
 const stateWithDayName = (dayName) => {
     const s = minimalState();
@@ -32,6 +56,21 @@ const setupForkWithChanges = async () => {
     forkId = fork.body.project.id;
     await request(app).post(`/api/projects/${forkId}/commits`).set('Cookie', authorCookie)
         .send({ state: stateWithDayName('Improved'), message: 'improve page template' });
+};
+
+const makeOpenMr = async (seed) => {
+    const upstream = await request(app).post('/api/projects').set('Cookie', ownerCookie)
+        .send({ name: `Atomic Upstream ${seed}`, state: stateWithDayName(`Base ${seed}`) });
+    const targetId = upstream.body.project.id;
+    await request(app).post(`/api/projects/${targetId}/publish`).set('Cookie', ownerCookie)
+        .set('If-Match', upstream.body.project.headCommitId)
+        .send({ description: '', tags: [], thumbnails: [PNG_1X1] });
+    const fork = await request(app).post(`/api/projects/${targetId}/fork`).set('Cookie', authorCookie);
+    await request(app).post(`/api/projects/${fork.body.project.id}/commits`).set('Cookie', authorCookie)
+        .send({ state: stateWithDayName(`Fork ${seed}`), message: `fork ${seed}` });
+    const created = await request(app).post('/api/merge-requests').set('Cookie', authorCookie)
+        .send({ sourceProjectId: fork.body.project.id, title: `Atomic ${seed}` });
+    return { mrId: created.body.mergeRequest.id, targetId, headId: upstream.body.project.headCommitId };
 };
 
 beforeAll(async () => {
@@ -216,6 +255,54 @@ describe('merge and close', () => {
         const head = await request(app)
             .get(`/api/projects/${up.body.project.id}/commits/${merged.body.commit.id}`).set('Cookie', ownerCookie);
         expect(head.body.commit.state.generator).toEqual(provenance);
+    });
+
+    it('rejects when the target head changes after diff computation', async () => {
+        const { mrId: atomicMrId, targetId } = await makeOpenMr('head-race');
+        let releaseMerge;
+        const held = new Promise(resolve => { releaseMerge = resolve; });
+        let mergePaused;
+        const paused = new Promise(resolve => { mergePaused = resolve; });
+        dbFaults.beforeMergeUserLookup = async () => {
+            mergePaused();
+            await held;
+        };
+        const merging = request(app).post(`/api/merge-requests/${atomicMrId}/merge`)
+            .set('Cookie', ownerCookie)
+            .then(response => response);
+        await paused;
+
+        const saved = await request(app).post(`/api/projects/${targetId}/commits`).set('Cookie', ownerCookie)
+            .send({ state: stateWithDayName('Owner advanced'), message: 'owner advanced target' });
+        releaseMerge();
+        const merged = await merging;
+
+        expect(saved.status).toBe(201);
+        expect(merged.status).toBe(409);
+        expect(merged.body.code).toBe('TARGET_HEAD_CHANGED');
+        const { query } = await import('../../../server/db.js');
+        const project = await query('SELECT head_commit_id FROM projects WHERE id = $1', [targetId]);
+        const mr = await query('SELECT status FROM merge_requests WHERE id = $1', [atomicMrId]);
+        const staleMerges = await query('SELECT id FROM commits WHERE project_id = $1 AND message = $2', [targetId, 'Merge: Atomic head-race (from @mr_author)']);
+        expect(project[0].head_commit_id).toBe(saved.body.commit.id);
+        expect(mr[0].status).toBe('open');
+        expect(staleMerges).toEqual([]);
+    });
+
+    it('rolls back commit and target head when final MR update fails', async () => {
+        const { mrId: atomicMrId, targetId, headId } = await makeOpenMr('rollback');
+        dbFaults.failMergedStatusUpdate = true;
+
+        const merged = await request(app).post(`/api/merge-requests/${atomicMrId}/merge`).set('Cookie', ownerCookie);
+
+        expect(merged.status).toBe(500);
+        const { query } = await import('../../../server/db.js');
+        const project = await query('SELECT head_commit_id FROM projects WHERE id = $1', [targetId]);
+        const mr = await query('SELECT status FROM merge_requests WHERE id = $1', [atomicMrId]);
+        const mergeCommits = await query('SELECT id FROM commits WHERE project_id = $1 AND message = $2', [targetId, 'Merge: Atomic rollback (from @mr_author)']);
+        expect(project[0].head_commit_id).toBe(headId);
+        expect(mr[0].status).toBe('open');
+        expect(mergeCommits).toEqual([]);
     });
 
     it('refuses to merge twice', async () => {

@@ -8,8 +8,8 @@ import { assertStorageAllowance, assertProjectAllowance, assertPublishAllowance,
 
 const router = Router();
 
-export const getProjectRow = async (id) => {
-    const rows = await query('SELECT * FROM projects WHERE id = $1', [id]);
+export const getProjectRow = async (id, queryFn = query) => {
+    const rows = await queryFn('SELECT * FROM projects WHERE id = $1', [id]);
     return rows[0];
 };
 
@@ -38,8 +38,8 @@ const retentionLimit = () => {
 // merge request must survive — the MR detail page recomputes its diff from them live.
 // Note $1 and $2 are the same projectId passed twice: the SQLite adapter rewrites
 // placeholders positionally, so a reused $1 would mis-bind (see Global Constraints).
-export const pruneCommits = async (projectId) => {
-    await query(
+export const pruneCommits = async (projectId, queryFn = query) => {
+    await queryFn(
         `DELETE FROM commits
          WHERE project_id = $1
            AND id NOT IN (SELECT id FROM commits WHERE project_id = $2 ORDER BY created_at DESC, id DESC LIMIT $3)
@@ -49,7 +49,7 @@ export const pruneCommits = async (projectId) => {
     );
 };
 
-export const insertCommit = async ({ projectId, parentCommitId, message, state, userId, encoded }) => {
+export const insertCommit = async ({ projectId, parentCommitId, message, state, userId, encoded }, queryFn = query) => {
     const id = randomUUID();
     const enc = encoded ?? encodeState(state);
     // Explicit millisecond-precision timestamp rather than relying on the DB's
@@ -58,13 +58,13 @@ export const insertCommit = async ({ projectId, parentCommitId, message, state, 
     // in production for rapid saves) would tie and fall back to sorting by the
     // random commit UUID — breaking the "newest first" ordering guarantee below.
     const createdAt = new Date().toISOString();
-    await query(
+    await queryFn(
         `INSERT INTO commits (id, project_id, parent_commit_id, message, state_json, state_gzip, state_bytes, state_hash, schema_version, created_by, created_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
         [id, projectId, parentCommitId ?? null, message, '', enc.gzip, enc.bytes, enc.hash, state.schemaVersion ?? null, userId, createdAt]
     );
-    await query(`UPDATE projects SET head_commit_id = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`, [id, projectId]);
-    await pruneCommits(projectId);
+    await queryFn(`UPDATE projects SET head_commit_id = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`, [id, projectId]);
+    await pruneCommits(projectId, queryFn);
     return id;
 };
 
