@@ -167,3 +167,28 @@ Publishing exposes the cloud project's current head commit, not the mutable loca
 - Missing `If-Match` returns 428 with `PROJECT_HEAD_REQUIRED`.
 - If authoritative `projects.head_commit_id` differs, server returns 409 with stable code `PROJECT_HEAD_CHANGED` and performs no publish mutation.
 - On that 409, client discards H1 readiness, reloads latest project/head disclosure, and never retries publication automatically.
+
+## Review Fix 3: Atomic Publish and Project Reset
+
+### RED
+
+- Added a query-interleaving server regression that seeds an existing thumbnail, changes H1 to H2 after the route's early head read but immediately before the required conditional update, and asserts 409 `PROJECT_HEAD_CHANGED`, private visibility, byte-identical existing thumbnail/ID, and retained H2.
+- Added a `PublishModal` rerender regression with distinct first pages. It populates description, tags, generated previews, publish error, and H1 disclosure before changing `cloudProjectId`, then requires a clean cloud-2 form and fresh disclosure gate.
+- RED result: server publish ran 8 tests with 1 expected failure because no final conditional update was observed; `PublishModal` ran 8 tests with 1 expected failure and showed stale description, tags, selected page, and preview from cloud-1.
+
+### GREEN
+
+- Server publish retains the early head check as a fast path, then executes `UPDATE projects ... WHERE id = $3 AND head_commit_id = $4 RETURNING *` as final authority before deleting or inserting thumbnails.
+- A zero-row conditional update returns 409 `PROJECT_HEAD_CHANGED`; visibility, metadata, and thumbnails remain untouched. The interleaving regression proves H2 remains authoritative.
+- On `cloudProjectId` change, `PublishModal` resets description, tags, selected pages to the new project's first page, previews, phase, and errors. Existing project-bound disclosure state resets to loading and stale async work remains identity-gated.
+- Publish/server projects/protocol suites: 4 files, 32 tests passed.
+- Task 4 focused suite: 11 files, 97 tests passed.
+- Full unit suite: 104 files, 842 tests passed.
+- Production build: passed with the existing large-chunk warning.
+- `git diff --check`: passed.
+
+### Protocol and Concerns
+
+- Publish body remains exactly `{ description, tags, thumbnails }`; inspected head remains the raw `If-Match` header. `cloudApi.test.ts` protocol assertions pass.
+- `npm install` still cannot resolve the existing optional peer mismatch between `better-auth@1.4.10` and pinned `better-sqlite3@^9.6.0`; verification used the existing installed dependencies.
+- Progress ledger was not touched.

@@ -30,6 +30,15 @@ export function PublishModal({ project, cloudProjectId, onClose, onPublished }: 
     currentProjectId.current = cloudProjectId;
 
     useEffect(() => {
+        setDescription('');
+        setTagsText('');
+        setSelected(computePageOrder(project.initialState).slice(0, 1));
+        setPreviews([]);
+        setPhase('form');
+        setError(null);
+    }, [cloudProjectId]);
+
+    useEffect(() => {
         let cancelled = false;
         setDisclosure({ status: 'loading', projectId: cloudProjectId });
         setPhase('form');

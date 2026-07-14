@@ -273,15 +273,23 @@ router.post('/api/projects/:id/publish', requireAuth, requireUsername, loadProje
     }
     const d = String(description ?? '').slice(0, 2000);
 
+    const updated = await query(
+        `UPDATE projects SET visibility = 'public', description = $1, tags = $2, updated_at = CURRENT_TIMESTAMP
+         WHERE id = $3 AND head_commit_id = $4
+         RETURNING *`,
+        [d, JSON.stringify(tags), currentProject.id, expectedHead]
+    );
+    if (!updated[0]) {
+        return res.status(409).json({ error: 'Project head changed since it was inspected.', code: 'PROJECT_HEAD_CHANGED' });
+    }
+
     await query('DELETE FROM thumbnails WHERE project_id = $1', [currentProject.id]);
     for (let i = 0; i < parsed.length; i++) {
         await query('INSERT INTO thumbnails (id, project_id, position, mime, image) VALUES ($1, $2, $3, $4, $5)',
             [randomUUID(), currentProject.id, i, parsed[i].mime, parsed[i].buf]);
     }
-    await query(`UPDATE projects SET visibility = 'public', description = $1, tags = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3`,
-        [d, JSON.stringify(tags), currentProject.id]);
 
-    const row = await getProjectRow(currentProject.id);
+    const row = updated[0];
     res.json({ project: { ...projectDto(row), thumbnailIds: await getThumbnailIds(row.id) } });
 });
 

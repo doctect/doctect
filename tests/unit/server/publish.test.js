@@ -1,7 +1,25 @@
 // @vitest-environment node
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, vi } from 'vitest';
 import request from 'supertest';
 import { initTestApp, signUpUser, minimalState, PNG_1X1 } from './helpers.js';
+
+const dbInterleave = vi.hoisted(() => ({ beforeConditionalPublish: null }));
+vi.mock('../../../server/db.js', async importOriginal => {
+    const actual = await importOriginal();
+    return {
+        ...actual,
+        query: async (text, params = []) => {
+            if (/UPDATE projects SET visibility = 'public'/.test(text)
+                && /WHERE id = \$3 AND head_commit_id = \$4/.test(text)
+                && dbInterleave.beforeConditionalPublish) {
+                const hook = dbInterleave.beforeConditionalPublish;
+                dbInterleave.beforeConditionalPublish = null;
+                await hook(actual.query);
+            }
+            return actual.query(text, params);
+        },
+    };
+});
 
 let app, cookie, projectId;
 beforeAll(async () => {
@@ -77,6 +95,50 @@ describe('publishing', () => {
         const project = await request(app).get(`/api/projects/${conditionalProjectId}`).set('Cookie', cookie);
         expect(project.body.project.headCommitId).toBe(saved.body.commit.id);
         expect(project.body.project.visibility).toBe('private');
+    });
+
+    it('rejects when H1 changes to H2 after the early check without touching existing thumbnails', async () => {
+        const created = await request(app).post('/api/projects').set('Cookie', cookie)
+            .send({ name: 'Interleaved Publish', state: minimalState('H1') });
+        const interleavedProjectId = created.body.project.id;
+        const h1 = created.body.project.headCommitId;
+        const seeded = await request(app).post(`/api/projects/${interleavedProjectId}/publish`)
+            .set('Cookie', cookie)
+            .set('If-Match', h1)
+            .send({ description: 'existing', tags: ['existing'], thumbnails: [PNG_1X1] });
+        await request(app).post(`/api/projects/${interleavedProjectId}/unpublish`).set('Cookie', cookie);
+        const saved = await request(app).post(`/api/projects/${interleavedProjectId}/commits`).set('Cookie', cookie)
+            .send({ state: minimalState('H2'), message: 'H2' });
+        const h2 = saved.body.commit.id;
+        const { query } = await import('../../../server/db.js');
+        const existingThumbnails = await query(
+            'SELECT id, mime, image FROM thumbnails WHERE project_id = $1 ORDER BY position',
+            [interleavedProjectId],
+        );
+        await query('UPDATE projects SET head_commit_id = $1 WHERE id = $2', [h1, interleavedProjectId]);
+
+        let interleaved = false;
+        dbInterleave.beforeConditionalPublish = async realQuery => {
+            interleaved = true;
+            await realQuery('UPDATE projects SET head_commit_id = $1 WHERE id = $2', [h2, interleavedProjectId]);
+        };
+        const res = await request(app).post(`/api/projects/${interleavedProjectId}/publish`)
+            .set('Cookie', cookie)
+            .set('If-Match', h1)
+            .send({ description: 'stale', tags: ['stale'], thumbnails: [PNG_1X1] });
+
+        expect(interleaved).toBe(true);
+        expect(res.status).toBe(409);
+        expect(res.body.code).toBe('PROJECT_HEAD_CHANGED');
+        const project = await query('SELECT visibility, head_commit_id FROM projects WHERE id = $1', [interleavedProjectId]);
+        const thumbnails = await query(
+            'SELECT id, mime, image FROM thumbnails WHERE project_id = $1 ORDER BY position',
+            [interleavedProjectId],
+        );
+        expect(project[0]).toMatchObject({ visibility: 'private', head_commit_id: h2 });
+        expect(thumbnails).toHaveLength(1);
+        expect(thumbnails[0]).toMatchObject({ id: seeded.body.project.thumbnailIds[0], mime: existingThumbnails[0].mime });
+        expect(Buffer.compare(thumbnails[0].image, existingThumbnails[0].image)).toBe(0);
     });
 
     it('unpublishes', async () => {

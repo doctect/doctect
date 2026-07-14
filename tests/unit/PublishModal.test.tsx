@@ -3,7 +3,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PublishModal } from '../../components/cloud/PublishModal';
 import { ApiError, cloudApi } from '../../services/cloudApi';
 
-vi.mock('../../services/pdfService', () => ({ computePageOrder: () => ['root'] }));
+const computePageOrder = vi.hoisted(() => vi.fn((projectState: any) => [projectState.rootId]));
+vi.mock('../../services/pdfService', () => ({ computePageOrder }));
 const generateThumbnails = vi.hoisted(() => vi.fn());
 vi.mock('../../services/thumbnailService', () => ({ generateThumbnails }));
 
@@ -22,11 +23,21 @@ const state = {
     schemaVersion: 9,
 };
 
+const nextState = {
+    ...state,
+    nodes: { next: { id: 'next', parentId: null, type: 'page', title: 'Next Project Page', data: {}, children: [] } },
+    rootId: 'next',
+};
+
 const cloudProject = { id: 'cloud-1', name: 'Cloud Project', headCommitId: 'head-1' } as any;
 
 const modal = (cloudProjectId = 'cloud-1', withLocalGenerator = false) => (
     <PublishModal
-        project={{ id: `local-${cloudProjectId}`, name: 'Project', initialState: { ...state, ...(withLocalGenerator ? { generator } : {}) } as any }}
+        project={{
+            id: `local-${cloudProjectId}`,
+            name: 'Project',
+            initialState: { ...(cloudProjectId === 'cloud-2' ? nextState : state), ...(withLocalGenerator ? { generator } : {}) } as any,
+        }}
         cloudProjectId={cloudProjectId}
         onClose={vi.fn()}
         onPublished={vi.fn()}
@@ -53,6 +64,7 @@ describe('PublishModal generator source warning', () => {
     beforeEach(() => {
         vi.restoreAllMocks();
         generateThumbnails.mockReset();
+        computePageOrder.mockImplementation((projectState: any) => [projectState.rootId]);
         vi.spyOn(cloudApi, 'getProject').mockResolvedValue(cloudProject);
         vi.spyOn(cloudApi, 'getCommit').mockResolvedValue({
             id: 'head-1', message: 'Head', createdAt: '2026-07-14T12:40:00.000Z', state,
@@ -161,6 +173,47 @@ describe('PublishModal generator source warning', () => {
 
         expect(screen.getByRole('button', { name: 'Publish' })).toBeDisabled();
         expect(screen.queryByText(/Publishing makes both scripts public/)).not.toBeInTheDocument();
+    });
+
+    it('resets project-specific form state when the cloud project changes', async () => {
+        const nextProject = deferred<any>();
+        vi.spyOn(cloudApi, 'getProject').mockImplementation(projectId => (
+            projectId === 'cloud-1'
+                ? Promise.resolve(cloudProject)
+                : nextProject.promise
+        ));
+        vi.spyOn(cloudApi, 'getCommit').mockImplementation(async (projectId, commitId) => ({
+            id: commitId,
+            message: 'Head',
+            createdAt: '2026-07-14T12:40:00.000Z',
+            state: projectId === 'cloud-1' ? { ...state, generator } : nextState,
+        }));
+        generateThumbnails.mockResolvedValue(['data:image/png;base64,old-preview']);
+        vi.spyOn(cloudApi, 'publish').mockRejectedValue(new Error('Old project publish failed'));
+        const { rerender } = render(modal('cloud-1'));
+        const publishButton = screen.getByRole('button', { name: 'Publish' });
+        await waitFor(() => expect(publishButton).toBeEnabled());
+        fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Old description' } });
+        fireEvent.change(screen.getByLabelText('Tags (comma-separated)'), { target: { value: 'old, tags' } });
+        fireEvent.click(publishButton);
+        expect(await screen.findByText('Old project publish failed')).toBeInTheDocument();
+        expect(screen.getByAltText('Preview 1')).toHaveAttribute('src', 'data:image/png;base64,old-preview');
+
+        rerender(modal('cloud-2'));
+
+        await waitFor(() => {
+            expect(screen.getByLabelText('Description')).toHaveValue('');
+            expect(screen.getByLabelText('Tags (comma-separated)')).toHaveValue('');
+            expect(screen.getByRole('checkbox', { name: 'Next Project Page' })).toBeChecked();
+            expect(screen.queryByAltText('Preview 1')).not.toBeInTheDocument();
+            expect(screen.queryByText('Old project publish failed')).not.toBeInTheDocument();
+        });
+        expect(screen.queryByText(/Publishing makes both scripts public/)).not.toBeInTheDocument();
+        expect(screen.getByRole('status')).toHaveTextContent('Checking cloud source disclosure');
+        expect(screen.getByRole('button', { name: 'Publish' })).toBeDisabled();
+
+        nextProject.resolve({ ...cloudProject, id: 'cloud-2', headCommitId: 'head-2' });
+        await waitFor(() => expect(screen.getByRole('button', { name: 'Publish' })).toBeEnabled());
     });
 
     it('does not let an operation started for the old project publish after rerender', async () => {
