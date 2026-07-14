@@ -1,7 +1,9 @@
 
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { AppState, RM_PP_WIDTH, RM_PP_HEIGHT, A4_WIDTH, A4_HEIGHT } from '../types';
-import { normalizeGeneratedTemplates } from '../services/generatorTemplates';
+import { GeneratorProvenance, RM_PP_WIDTH, RM_PP_HEIGHT, A4_WIDTH, A4_HEIGHT } from '../types';
+import { runGeneratorSandbox } from '../services/generatorSandbox';
+import { GeneratedProject, GeneratedProjectSummary, validateGeneratedProject } from '../services/validateGeneratedProject';
+import { GENERATOR_COMBINED_MAX_BYTES, GENERATOR_SCRIPT_MAX_BYTES } from '../shared/generatorMetadata.js';
 import { X, Play, AlertTriangle, CheckCircle2, RotateCcw, LayoutTemplate, Network, Sparkles, Minus, Plus, WrapText, HelpCircle, Book, ChevronDown, ChevronUp, Copy, Check } from 'lucide-react';
 import { HighlightedCode } from './HighlightedCode';
 import { GENERATOR_PRESETS } from './generatorPresets';
@@ -9,18 +11,24 @@ import { FONTS } from '../constants/editor';
 
 interface HierarchyGeneratorModalProps {
   isOpen: boolean;
+  savedGenerator?: GeneratorProvenance;
   onClose: () => void;
-  onImport: (newState: Partial<AppState> & { templates?: Record<string, any> }) => void;
+  onApplyGenerated: (
+    project: GeneratedProject,
+    source: Pick<GeneratorProvenance, 'templateScript' | 'hierarchyScript'>,
+  ) => boolean;
+  onDetachSavedGenerator: () => boolean;
 }
 
 interface SimpleEditorProps {
   value: string;
   onChange: (v: string) => void;
+  label: string;
   fontSize?: number;
   wordWrap?: boolean;
 }
 
-const SimpleEditor: React.FC<SimpleEditorProps> = ({ value, onChange, fontSize = 12, wordWrap = true }) => {
+const SimpleEditor: React.FC<SimpleEditorProps> = ({ value, onChange, label, fontSize = 12, wordWrap = true }) => {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const preRef = useRef<HTMLPreElement>(null);
 
@@ -65,6 +73,7 @@ const SimpleEditor: React.FC<SimpleEditorProps> = ({ value, onChange, fontSize =
         className="absolute inset-0 w-full h-full bg-transparent text-transparent caret-white resize-none border-none outline-none overflow-auto"
         style={sharedStyle}
         value={value || ''}
+        aria-label={label}
         onChange={e => onChange(e.target.value)}
         onScroll={handleScroll}
         spellCheck={false}
@@ -2002,116 +2011,167 @@ const templates = {
   }
   return templates;`;
 
-export const HierarchyGeneratorModal: React.FC<HierarchyGeneratorModalProps> = ({ isOpen, onClose, onImport }) => {
+type PreviewState =
+  | { status: 'idle' }
+  | { status: 'running' }
+  | {
+    status: 'ready';
+    project: GeneratedProject;
+    summary: GeneratedProjectSummary;
+    source: Pick<GeneratorProvenance, 'templateScript' | 'hierarchyScript'>;
+  }
+  | { status: 'error'; message: string };
+
+const utf8Bytes = (value: string) => new TextEncoder().encode(value).byteLength;
+const countLabel = (count: number, singular: string) => `${count} ${singular}${count === 1 ? '' : 's'}`;
+
+export const HierarchyGeneratorModal: React.FC<HierarchyGeneratorModalProps> = ({
+  isOpen,
+  savedGenerator,
+  onClose,
+  onApplyGenerated,
+  onDetachSavedGenerator,
+}) => {
   // Default to 'simple' preset for better onboarding
   const simplePreset = GENERATOR_PRESETS.find(p => p.id === 'simple')!;
+  const initialSource = savedGenerator ?? simplePreset;
 
-  const [templateScript, setTemplateScript] = useState(simplePreset.templateScript);
-  const [hierarchyScript, setHierarchyScript] = useState(simplePreset.hierarchyScript);
-  const [selectedPreset, setSelectedPreset] = useState<string>('simple');
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<boolean>(false);
+  const [templateScript, setTemplateScript] = useState(initialSource.templateScript);
+  const [hierarchyScript, setHierarchyScript] = useState(initialSource.hierarchyScript);
+  const [selectedPreset, setSelectedPreset] = useState<string>(savedGenerator ? 'saved' : 'simple');
+  const [previewState, setPreviewState] = useState<PreviewState>({ status: 'idle' });
   const [fontSize, setFontSize] = useState<number>(12);
   const [wordWrap, setWordWrap] = useState<boolean>(true);
   const [isHelpOpen, setIsHelpOpen] = useState<boolean>(false);
+  const baselineRef = useRef({
+    templateScript: initialSource.templateScript,
+    hierarchyScript: initialSource.hierarchyScript,
+  });
+  const wasOpenRef = useRef(false);
+  const previewRequestRef = useRef(0);
+
+  const isDirty = templateScript !== baselineRef.current.templateScript
+    || hierarchyScript !== baselineRef.current.hierarchyScript;
+
+  useEffect(() => {
+    if (isOpen && !wasOpenRef.current) {
+      const source = savedGenerator ?? simplePreset;
+      setTemplateScript(source.templateScript);
+      setHierarchyScript(source.hierarchyScript);
+      setSelectedPreset(savedGenerator ? 'saved' : 'simple');
+      baselineRef.current = {
+        templateScript: source.templateScript,
+        hierarchyScript: source.hierarchyScript,
+      };
+      previewRequestRef.current += 1;
+      setPreviewState({ status: 'idle' });
+    }
+    wasOpenRef.current = isOpen;
+  }, [isOpen, savedGenerator, simplePreset]);
+
+  const setDraft = (field: 'templateScript' | 'hierarchyScript', value: string) => {
+    previewRequestRef.current += 1;
+    setPreviewState({ status: 'idle' });
+    if (field === 'templateScript') setTemplateScript(value);
+    else setHierarchyScript(value);
+  };
 
   const loadPreset = (presetId: string) => {
+    if (isDirty && !window.confirm('Discard draft generator changes and switch presets?')) return;
     const preset = GENERATOR_PRESETS.find(p => p.id === presetId);
-    if (!preset) return;
+    if (!preset && !(presetId === 'saved' && savedGenerator)) return;
 
     setSelectedPreset(presetId);
-
-    // For 'complex', use the built-in default scripts
-    if (presetId === 'complex') {
-      setTemplateScript(DEFAULT_TEMPLATES_SCRIPT);
-      setHierarchyScript(DEFAULT_HIERARCHY_SCRIPT);
-    } else {
-      setTemplateScript(preset.templateScript);
-      setHierarchyScript(preset.hierarchyScript);
-    }
-    setError(null);
+    const source = presetId === 'saved' && savedGenerator
+      ? savedGenerator
+      : presetId === 'complex'
+      ? { templateScript: DEFAULT_TEMPLATES_SCRIPT, hierarchyScript: DEFAULT_HIERARCHY_SCRIPT }
+      : { templateScript: preset!.templateScript, hierarchyScript: preset!.hierarchyScript };
+    setTemplateScript(source.templateScript);
+    setHierarchyScript(source.hierarchyScript);
+    baselineRef.current = source;
+    previewRequestRef.current += 1;
+    setPreviewState({ status: 'idle' });
   };
 
   if (!isOpen) return null;
 
-  const runGenerator = () => {
-    setError(null);
-    setSuccess(false);
-    try {
-      // 1. Execute Templates Script
-      const SCOPE_CONSTANTS = {
-        RM_PP_WIDTH, RM_PP_HEIGHT, A4_WIDTH, A4_HEIGHT
-      };
+  const handleClose = () => {
+    if (isDirty && !window.confirm('Discard draft generator changes?')) return;
+    previewRequestRef.current += 1;
+    onClose();
+  };
 
-      const templateFn = new Function('consts', `
-            with (consts) {
-                ${templateScript}
-            }
-        `);
-
-      const templates = templateFn(SCOPE_CONSTANTS);
-
-      if (!templates || typeof templates !== 'object') {
-        throw new Error("Template script must return an object where keys are template IDs.");
-      }
-
-      // Re-key templates by their ID, auto-generate element IDs, and accept either the flat
-      // { templateId: template } shape or the documented multi-device { variants, activeVariantId }
-      // shape (see the LLM prompt / schema docs below) — both are normalized the same way.
-      const normalized = normalizeGeneratedTemplates(templates);
-      const activeTemplateLookup: Record<string, any> = normalized.templates
-        ?? normalized.variants![normalized.activeVariantId!].templates;
-
-      if (Object.keys(activeTemplateLookup).length === 0) {
-        throw new Error("Template script produced no usable templates — check that each template object has an 'id' field.");
-      }
-
-      // 2. Execute Hierarchy Script
-      const createId = (prefix: string = 'node') => `${prefix}_${Math.random().toString(36).substr(2, 9)}`;
-
-      const hierarchyFn = new Function('templates', 'createId', `
-            ${hierarchyScript}
-        `);
-
-      const result = hierarchyFn(activeTemplateLookup, createId);
-
-      if (!result || !result.nodes || !result.rootId) {
-        throw new Error("Hierarchy script must return an object with { nodes, rootId }.");
-      }
-
-      // 3. Validation
-      if (!result.nodes[result.rootId]) {
-        throw new Error(`Root ID '${result.rootId}' not found in nodes.`);
-      }
-
-      // Every node's `type` must resolve to a real template, or the editor will crash later
-      // trying to read that (nonexistent) template's width/height when rendering the page.
-      const unknownTypes = new Set<string>();
-      Object.values(result.nodes).forEach((n: any) => {
-        if (n && n.type && !activeTemplateLookup[n.type]) unknownTypes.add(n.type);
-      });
-      if (unknownTypes.size > 0) {
-        throw new Error(`Hierarchy references unknown template type(s): ${[...unknownTypes].join(', ')}. Check that these ids exist in the Templates script output.`);
-      }
-
-      // 4. Import
-      onImport({
-        nodes: result.nodes,
-        rootId: result.rootId,
-        ...(normalized.templates
-          ? { templates: normalized.templates as any }
-          : { variants: normalized.variants as any, activeVariantId: normalized.activeVariantId })
-      });
-      setSuccess(true);
-      setTimeout(() => {
-        setSuccess(false);
-        onClose();
-      }, 1500);
-
-    } catch (e: any) {
-      console.error("Generator Error:", e);
-      setError(e.message || "Unknown error occurred during generation.");
+  const previewGenerator = async () => {
+    const templateBytes = utf8Bytes(templateScript);
+    const hierarchyBytes = utf8Bytes(hierarchyScript);
+    if (templateBytes > GENERATOR_SCRIPT_MAX_BYTES) {
+      setPreviewState({ status: 'error', message: 'Template script exceeds 512 KiB.' });
+      return;
     }
+    if (hierarchyBytes > GENERATOR_SCRIPT_MAX_BYTES) {
+      setPreviewState({ status: 'error', message: 'Hierarchy script exceeds 512 KiB.' });
+      return;
+    }
+    if (templateBytes + hierarchyBytes > GENERATOR_COMBINED_MAX_BYTES) {
+      setPreviewState({ status: 'error', message: 'Combined generator source exceeds 1 MiB.' });
+      return;
+    }
+
+    const source = { templateScript, hierarchyScript };
+    const requestId = ++previewRequestRef.current;
+    setPreviewState({ status: 'running' });
+    try {
+      const sandboxResult = await runGeneratorSandbox({
+        ...source,
+        constants: { RM_PP_WIDTH, RM_PP_HEIGHT, A4_WIDTH, A4_HEIGHT },
+      });
+      if (requestId !== previewRequestRef.current) return;
+      if (!sandboxResult.ok) {
+        const category = sandboxResult.category[0].toUpperCase() + sandboxResult.category.slice(1);
+        setPreviewState({ status: 'error', message: `${category}: ${sandboxResult.message}` });
+        return;
+      }
+      const validation = validateGeneratedProject(sandboxResult.value);
+      if (!validation.ok) {
+        const category = validation.category[0].toUpperCase() + validation.category.slice(1);
+        setPreviewState({ status: 'error', message: `${category}: ${validation.message}` });
+        return;
+      }
+      setPreviewState({ status: 'ready', project: validation.project, summary: validation.summary, source });
+    } catch (error) {
+      if (requestId !== previewRequestRef.current) return;
+      setPreviewState({ status: 'error', message: error instanceof Error ? error.message : 'Preview failed.' });
+    }
+  };
+
+  const applyPreview = () => {
+    if (previewState.status !== 'ready') return;
+    if (!window.confirm('Apply this generated project? This replaces the current generated document.')) return;
+    if (onApplyGenerated(previewState.project, previewState.source)) onClose();
+  };
+
+  const detachSavedGenerator = () => {
+    if (!window.confirm('Detach saved generator source? Generated document content will remain unchanged.')) return;
+    if (onDetachSavedGenerator()) onClose();
+  };
+
+  const resetCurrentPreset = () => {
+    const preset = GENERATOR_PRESETS.find(item => item.id === selectedPreset);
+    const source = selectedPreset === 'saved' && savedGenerator
+      ? savedGenerator
+      : selectedPreset === 'complex'
+        ? { templateScript: DEFAULT_TEMPLATES_SCRIPT, hierarchyScript: DEFAULT_HIERARCHY_SCRIPT }
+        : preset;
+    if (!source) return;
+    setTemplateScript(source.templateScript);
+    setHierarchyScript(source.hierarchyScript);
+    baselineRef.current = {
+      templateScript: source.templateScript,
+      hierarchyScript: source.hierarchyScript,
+    };
+    previewRequestRef.current += 1;
+    setPreviewState({ status: 'idle' });
   };
 
   return (
@@ -2139,6 +2199,7 @@ export const HierarchyGeneratorModal: React.FC<HierarchyGeneratorModalProps> = (
                 onChange={(e) => loadPreset(e.target.value)}
                 className="text-sm font-medium text-slate-700 bg-transparent border-none focus:outline-none cursor-pointer"
               >
+                {savedGenerator && <option value="saved">Current saved source</option>}
                 {GENERATOR_PRESETS.map(preset => (
                   <option key={preset.id} value={preset.id}>
                     {preset.name} - {preset.description}
@@ -2158,7 +2219,7 @@ export const HierarchyGeneratorModal: React.FC<HierarchyGeneratorModalProps> = (
               } />
             </div>
 
-            <button onClick={onClose} className="p-2 hover:bg-slate-200 rounded-full text-slate-500 transition-colors">
+            <button aria-label="Close generator" onClick={handleClose} className="p-2 hover:bg-slate-200 rounded-full text-slate-500 transition-colors">
               <X className="w-5 h-5" />
             </button>
           </div>
@@ -2207,25 +2268,58 @@ export const HierarchyGeneratorModal: React.FC<HierarchyGeneratorModalProps> = (
           </div>
 
           <div className="flex items-center gap-3">
-            {error && <span className="text-red-600 text-xs flex items-center gap-1 font-medium"><AlertTriangle size={14} /> {error}</span>}
-            {success && <span className="text-green-600 text-xs flex items-center gap-1 font-medium"><CheckCircle2 size={14} /> Generated Successfully!</span>}
+            {savedGenerator && (
+              <span className="text-indigo-700 text-xs flex items-center gap-1 font-semibold">
+                <CheckCircle2 size={14} /> Saved Generator
+              </span>
+            )}
+            {previewState.status === 'error' && <span className="text-red-600 text-xs flex items-center gap-1 font-medium"><AlertTriangle size={14} /> {previewState.message}</span>}
+            {savedGenerator && (
+              <button onClick={detachSavedGenerator} className="text-xs text-red-600 hover:text-red-700 px-2">
+                Detach Saved Generator
+              </button>
+            )}
 
             <button onClick={() => {
               if (confirm("Reset scripts to current preset?")) {
-                loadPreset(selectedPreset);
+                resetCurrentPreset();
               }
             }} className="text-xs text-slate-400 hover:text-slate-600 flex items-center gap-1 px-2">
               <RotateCcw size={12} /> Reset
             </button>
 
             <button
-              onClick={runGenerator}
-              className="flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-bold shadow-sm transition-all hover:shadow hover:-translate-y-0.5"
+              onClick={previewGenerator}
+              disabled={previewState.status === 'running'}
+              className="flex items-center gap-2 bg-green-600 hover:bg-green-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg text-sm font-bold shadow-sm transition-all hover:shadow hover:-translate-y-0.5"
             >
-              <Play size={16} fill="currentColor" /> Run Generator
+              <Play size={16} fill="currentColor" /> {previewState.status === 'running' ? 'Previewing...' : 'Preview'}
+            </button>
+            <button
+              onClick={applyPreview}
+              disabled={previewState.status !== 'ready'}
+              className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg text-sm font-bold shadow-sm transition-colors"
+            >
+              Apply Generated Project
             </button>
           </div>
         </div>
+
+        {previewState.status === 'ready' && (
+          <div className="px-4 py-3 border-b bg-emerald-50 text-sm text-slate-700" aria-live="polite">
+            <div className="flex flex-wrap gap-x-5 gap-y-1 font-semibold text-emerald-800">
+              <span>{countLabel(previewState.summary.variantCount, 'variant')}</span>
+              <span>{countLabel(previewState.summary.templateCount, 'template')}</span>
+              <span>{countLabel(previewState.summary.nodeCount, 'node')}</span>
+              <span>{countLabel(previewState.summary.estimatedPageCount, 'estimated page')}</span>
+            </div>
+            <div className="mt-1 text-xs text-slate-600">Variants: {previewState.summary.variantNames.join(', ')}</div>
+            {previewState.summary.warnings.map(warning => <div key={warning} className="mt-1 text-xs text-amber-700">{warning}</div>)}
+            <p className="mt-2 text-xs font-medium">
+              Applying replaces the current generated document. Manual template and hierarchy edits are not written back to generator source.
+            </p>
+          </div>
+        )}
 
         {/* Side-by-Side Editor Area */}
         <div className="flex-1 flex overflow-hidden relative">
@@ -2249,7 +2343,7 @@ export const HierarchyGeneratorModal: React.FC<HierarchyGeneratorModalProps> = (
               } />
             </div>
             <div className="flex-1 bg-[#1e1e1e]">
-              <SimpleEditor value={templateScript} onChange={setTemplateScript} fontSize={fontSize} wordWrap={wordWrap} />
+              <SimpleEditor value={templateScript} onChange={value => setDraft('templateScript', value)} label="Template script" fontSize={fontSize} wordWrap={wordWrap} />
             </div>
           </div>
 
@@ -2274,7 +2368,7 @@ export const HierarchyGeneratorModal: React.FC<HierarchyGeneratorModalProps> = (
               } />
             </div>
             <div className="flex-1 bg-[#1e1e1e]">
-              <SimpleEditor value={hierarchyScript} onChange={setHierarchyScript} fontSize={fontSize} wordWrap={wordWrap} />
+              <SimpleEditor value={hierarchyScript} onChange={value => setDraft('hierarchyScript', value)} label="Hierarchy script" fontSize={fontSize} wordWrap={wordWrap} />
             </div>
           </div>
         </div>

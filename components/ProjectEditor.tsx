@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { AppState, AppNode, TemplateElement, PageTemplate, Variant, RM_PP_WIDTH, RM_PP_HEIGHT } from '../types';
+import { AppState, AppNode, GeneratorProvenance, TemplateElement, PageTemplate, Variant, RM_PP_WIDTH, RM_PP_HEIGHT } from '../types';
 import { Sidebar } from './Sidebar';
 import { Canvas } from './Canvas';
 import { PropertiesPanel } from './PropertiesPanel';
@@ -10,7 +10,7 @@ import { NodeSelectorModal } from './NodeSelectorModal';
 import { DeleteConfirmModal } from './DeleteConfirmModal';
 import { HierarchyGeneratorModal } from './HierarchyGeneratorModal';
 import { generatePDF } from '../services/pdfService';
-import { migrateState } from '../services/migration';
+import { CURRENT_SCHEMA_VERSION } from '../services/migration';
 import { Download, Code, Undo2, Redo2, Loader2, Contrast, Layers } from 'lucide-react';
 import { EditorToolbar } from './EditorToolbar';
 import { saveCustomPreset } from '../services/presets';
@@ -21,10 +21,12 @@ import clsx from 'clsx';
 import { trackEvent } from '../services/analytics';
 import { resolveActiveLayerId, nextZIndexInLayer, createDefaultLayer } from '../services/layers';
 import { PLACEHOLDER_SVG, createPlacedSvgElement } from '../services/svgEditing';
+import { DocumentSnapshot, restoreDocument, snapshotDocument } from '../services/projectDocumentSnapshot';
+import type { GeneratedProject } from '../services/validateGeneratedProject';
 
 interface HistoryState {
-    past: { nodes: Record<string, AppNode>, variants: Record<string, Variant> }[];
-    future: { nodes: Record<string, AppNode>, variants: Record<string, Variant> }[];
+    past: DocumentSnapshot[];
+    future: DocumentSnapshot[];
 }
 
 interface ProjectEditorProps {
@@ -78,40 +80,31 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, initial
     }, [state]);
 
     const saveToHistory = useCallback(() => {
-        historyRef.current.past.push({
-            nodes: JSON.parse(JSON.stringify(state.nodes)),
-            variants: JSON.parse(JSON.stringify(state.variants))
-        });
+        historyRef.current.past.push(snapshotDocument(state));
         // Limit history size to 50
         if (historyRef.current.past.length > 50) historyRef.current.past.shift();
         historyRef.current.future = [];
-    }, [state.nodes, state.variants]);
+    }, [state]);
 
     const undo = useCallback(() => {
         if (historyRef.current.past.length === 0) return;
 
         const previous = historyRef.current.past.pop();
         if (previous) {
-            historyRef.current.future.push({
-                nodes: JSON.parse(JSON.stringify(state.nodes)),
-                variants: JSON.parse(JSON.stringify(state.variants))
-            });
-            setState(s => ({ ...s, nodes: previous.nodes, variants: previous.variants, selectedElementIds: [] }));
+            historyRef.current.future.push(snapshotDocument(state));
+            setState(s => restoreDocument(s, previous));
         }
-    }, [state.nodes, state.variants]);
+    }, [state]);
 
     const redo = useCallback(() => {
         if (historyRef.current.future.length === 0) return;
 
         const next = historyRef.current.future.pop();
         if (next) {
-            historyRef.current.past.push({
-                nodes: JSON.parse(JSON.stringify(state.nodes)),
-                variants: JSON.parse(JSON.stringify(state.variants))
-            });
-            setState(s => ({ ...s, nodes: next.nodes, variants: next.variants, selectedElementIds: [] }));
+            historyRef.current.past.push(snapshotDocument(state));
+            setState(s => restoreDocument(s, next));
         }
-    }, [state.nodes, state.variants]);
+    }, [state]);
 
     // Panel Resizing Logic
     useEffect(() => {
@@ -926,84 +919,37 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, initial
         handleUpdateTemplateElements(newElements, false);
     };
 
-    const handleImportGenerated = (newState: Partial<AppState> & { templates?: Record<string, PageTemplate> }) => {
-        console.group("ProjectEditor: Import Debug");
-        try {
-            if (!newState) throw new Error("Import state is null or undefined");
-            if (!newState.nodes || typeof newState.nodes !== 'object') throw new Error("Import Error: 'nodes' must be a valid object");
-            // Accept either old format (templates) or new format (variants)
-            const hasTemplates = newState.templates && typeof newState.templates === 'object';
-            const hasVariants = newState.variants && typeof newState.variants === 'object';
-            if (!hasTemplates && !hasVariants) throw new Error("Import Error: 'templates' or 'variants' must be provided");
-            if (!newState.rootId) throw new Error("Import Error: 'rootId' is missing");
+    const handleApplyGenerated = (
+        project: GeneratedProject,
+        source: Pick<GeneratorProvenance, 'templateScript' | 'hierarchyScript'>,
+    ) => {
+        saveToHistory();
+        const generatedAt = new Date().toISOString();
+        setState(current => ({
+            ...current,
+            nodes: project.nodes,
+            rootId: project.rootId,
+            variants: project.variants,
+            activeVariantId: project.activeVariantId,
+            schemaVersion: CURRENT_SCHEMA_VERSION,
+            generator: { formatVersion: 1, ...source, generatedAt },
+            selectedNodeId: project.rootId,
+            selectedNodeIds: [project.rootId],
+            selectedTemplateId: '',
+            selectedTemplateIds: [],
+            selectedElementIds: [],
+        }));
+        trackEvent('generator_run', { rootId: project.rootId, nodeCount: Object.keys(project.nodes).length });
+        return true;
+    };
 
-            const cleanNodes: Record<string, AppNode> = {};
-            for (const key in newState.nodes) {
-                if (Object.prototype.hasOwnProperty.call(newState.nodes, key)) {
-                    const node = newState.nodes[key];
-                    if (node && typeof node === 'object') {
-                        cleanNodes[key] = {
-                            ...node,
-                            data: node.data || {},
-                            children: Array.isArray(node.children) ? node.children : []
-                        };
-                    }
-                }
-            }
-
-            // Clean templates if provided (old format), else use variants
-            let cleanTemplates: Record<string, PageTemplate> | undefined;
-            if (hasTemplates && newState.templates) {
-                cleanTemplates = {};
-                for (const key in newState.templates) {
-                    if (Object.prototype.hasOwnProperty.call(newState.templates, key)) {
-                        const tpl = newState.templates[key];
-                        if (tpl && typeof tpl === 'object') {
-                            cleanTemplates[key] = tpl;
-                        }
-                    }
-                }
-            }
-
-            saveToHistory();
-
-            const newRootId = newState.rootId;
-            if (!cleanNodes[newRootId]) throw new Error(`Root node '${newRootId}' missing from generated nodes.`);
-
-            // Build a partial state and migrate it to ensure schema compatibility
-            // If old format with templates, migration will convert to variants
-            const stateToMigrate: any = {
-                ...state,
-                nodes: cleanNodes,
-                rootId: newRootId,
-            };
-            if (cleanTemplates) {
-                stateToMigrate.templates = cleanTemplates;
-                delete stateToMigrate.variants; // Remove variants so migration creates from templates
-                stateToMigrate.schemaVersion = 3; // Force migration from v3 to v4
-            } else if (newState.variants) {
-                stateToMigrate.variants = newState.variants;
-                stateToMigrate.activeVariantId = newState.activeVariantId || Object.keys(newState.variants)[0];
-            }
-            const migratedState = migrateState(stateToMigrate);
-
-            setState(s => ({
-                ...s,
-                nodes: migratedState.nodes,
-                variants: migratedState.variants,
-                activeVariantId: migratedState.activeVariantId,
-                rootId: migratedState.rootId,
-                schemaVersion: migratedState.schemaVersion,
-                selectedNodeId: newRootId,
-                selectedElementIds: []
-            }));
-            trackEvent('generator_run', { rootId: newRootId, nodeCount: Object.keys(cleanNodes).length });
-        } catch (e: any) {
-            console.error("Critical Import Error:", e);
-            alert(`Import Failed: ${e.message}`);
-        } finally {
-            console.groupEnd();
-        }
+    const handleDetachSavedGenerator = () => {
+        saveToHistory();
+        setState(current => {
+            const { generator: _generator, ...withoutGenerator } = current;
+            return withoutGenerator;
+        });
+        return true;
     };
 
     const handleSavePreset = (title: string, desc: string) => {
@@ -1260,8 +1206,10 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, initial
 
             <HierarchyGeneratorModal
                 isOpen={showScriptGenModal}
+                savedGenerator={state.generator}
                 onClose={() => setShowScriptGenModal(false)}
-                onImport={handleImportGenerated}
+                onApplyGenerated={handleApplyGenerated}
+                onDetachSavedGenerator={handleDetachSavedGenerator}
             />
 
             <SavePresetModal

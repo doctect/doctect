@@ -35,29 +35,49 @@ test.describe('Editor Advanced Features', () => {
         await expect(page.getByText('Grid Configuration')).toBeVisible();
     });
 
-    test('should Run the Hierarchy Generator', async ({ page }) => {
+    test('should preview, apply, and retain generator source through reload and manual edits', async ({ page }) => {
         // 1. Open Generator
         await page.getByTitle('Generate Hierarchy via Script').click();
         await expect(page.getByText('Hierarchy Generator')).toBeVisible();
+        const templateSource = await page.getByLabel('Template script').inputValue();
+        const hierarchySource = await page.getByLabel('Hierarchy script').inputValue();
 
-        // 2. Run Default Generator
-        // The default script generates a "2026 Planner"
-        await page.getByRole('button', { name: 'Run Generator' }).click();
+        // 2. Preview Default Generator without changing the current project
+        await page.getByRole('button', { name: 'Preview' }).click();
+        await expect(page.getByText('1 variant', { exact: true })).toBeVisible();
+        await expect(page.getByText('2 templates', { exact: true })).toBeVisible();
+        await expect(page.getByText('3 nodes', { exact: true })).toBeVisible();
+        await expect(page.getByText('3 estimated pages', { exact: true })).toBeVisible();
+        await expect(page.getByTestId('project-tab').filter({ hasText: 'Blank Project' })).toBeVisible();
 
-        // 3. Verify Success
-        await expect(page.getByText('Generated Successfully!')).toBeVisible();
+        // 3. Apply preview and verify generated project
+        page.once('dialog', dialog => dialog.accept());
+        await page.getByRole('button', { name: 'Apply Generated Project' }).click();
+        await expect(page.getByText('Hierarchy Generator')).not.toBeVisible();
+        await expect(page.getByTestId('project-tab').filter({ hasText: 'My Simple Book' })).toBeVisible();
 
-        // 4. Verify Project Content Updated
-        // The tabs should now reflect the new structure or at least the root node title might change if the script updates it.
-        // The default script sets root title to "2026 Planner".
-        // Wait for modal to close (it closes after 1.5s)
-        await page.waitForTimeout(2000);
+        // 4. Autosave and reload; source must reopen byte-for-byte
+        await page.waitForTimeout(1200);
+        await page.reload();
+        await expect(page.getByTestId('project-tab').filter({ hasText: 'My Simple Book' })).toBeVisible();
+        await page.getByTitle('Generate Hierarchy via Script').click();
+        await expect(page.getByText('Saved Generator', { exact: true })).toBeVisible();
+        await expect(page.getByLabel('Template script')).toHaveValue(templateSource);
+        await expect(page.getByLabel('Hierarchy script')).toHaveValue(hierarchySource);
+        await page.getByRole('button', { name: 'Close generator' }).click();
 
-        // Check if tab name changed
-        // Note: ProjectEditor.tsx updates parent name when root title changes.
-        // But the TabBar might need a moment or a reload, or state update.
-        // Let's check the TabBar.
-        await expect(page.getByTestId('project-tab').filter({ hasText: '2026 Planner' })).toBeVisible();
+        // 5. Manual template edits do not rewrite saved source
+        await page.getByTitle('Rectangle (R)').click();
+        const canvas = page.getByTestId('editor-canvas');
+        const box = await canvas.boundingBox();
+        if (!box) throw new Error('Canvas not found');
+        await page.mouse.move(box.x + 120, box.y + 120);
+        await page.mouse.down();
+        await page.mouse.move(box.x + 220, box.y + 180);
+        await page.mouse.up();
+        await page.getByTitle('Generate Hierarchy via Script').click();
+        await expect(page.getByLabel('Template script')).toHaveValue(templateSource);
+        await expect(page.getByLabel('Hierarchy script')).toHaveValue(hierarchySource);
     });
 
     test('should Trigger PDF Export', async ({ page }) => {
