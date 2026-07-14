@@ -105,6 +105,32 @@ describe('PostgreSQL transactions', () => {
         expect(client.release).toHaveBeenCalledOnce();
     });
 
+    it('keeps commit insertion, CAS head advancement, and pruning on the pinned client', async () => {
+        client.query.mockImplementation(async text => ({
+            rows: /UPDATE projects SET head_commit_id =/.test(text) ? [{ id: 'project-1' }] : [],
+        }));
+        const { withTransaction } = await import('../../../server/db.js');
+        const { insertCommit } = await import('../../../server/routes/projects.js');
+
+        const commit = await withTransaction(() => insertCommit({
+            projectId: 'project-1',
+            parentCommitId: 'head-1',
+            message: 'postgres transaction',
+            state: { schemaVersion: 9 },
+            userId: 'user-1',
+        }));
+
+        expect(commit.id).toBeTruthy();
+        expect(client.query.mock.calls.map(([text]) => text.trim().split(/\s+/).slice(0, 3).join(' '))).toEqual([
+            'BEGIN',
+            'INSERT INTO commits',
+            'UPDATE projects SET',
+            'DELETE FROM commits',
+            'COMMIT',
+        ]);
+        expect(pool.query).not.toHaveBeenCalled();
+    });
+
     it('rolls back and releases the pinned client on failure', async () => {
         const { withTransaction } = await import('../../../server/db.js');
 
@@ -119,5 +145,20 @@ describe('PostgreSQL transactions', () => {
             'ROLLBACK',
         ]);
         expect(client.release).toHaveBeenCalledOnce();
+    });
+
+    it('discards the pinned client when rollback itself fails', async () => {
+        const rollbackError = new Error('connection lost during rollback');
+        client.query.mockImplementation(async text => {
+            if (text === 'ROLLBACK') throw rollbackError;
+            return { rows: [] };
+        });
+        const { withTransaction } = await import('../../../server/db.js');
+
+        await expect(withTransaction(async () => {
+            throw new Error('original transaction failure');
+        })).rejects.toThrow('original transaction failure');
+
+        expect(client.release).toHaveBeenCalledWith(rollbackError);
     });
 });

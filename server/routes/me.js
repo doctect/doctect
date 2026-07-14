@@ -17,11 +17,13 @@ router.get('/api/users/:username', async (req, res) => {
     const users = await query('SELECT id, username, "createdAt" FROM "user" WHERE username = $1', [uname]);
     if (!users[0]) return res.status(404).json({ error: 'User not found' });
     const rows = await query(
-        `SELECT p.id, p.name, p.description, p.tags, p.fork_count, p.download_count, p.updated_at,
+        `SELECT p.id, p.published_name AS name, p.published_description AS description,
+                p.published_tags AS tags, p.fork_count, p.download_count, p.published_at AS updated_at,
                 (SELECT t.id FROM thumbnails t WHERE t.project_id = p.id ORDER BY t.position LIMIT 1) AS thumbnail_id,
                 (SELECT AVG(rv.rating) FROM reviews rv WHERE rv.project_id = p.id) AS rating_avg,
                 (SELECT COUNT(*) FROM reviews rv WHERE rv.project_id = p.id) AS rating_count
-         FROM projects p WHERE p.owner_id = $1 AND p.visibility = 'public' ORDER BY p.updated_at DESC LIMIT 100`,
+         FROM projects p WHERE p.owner_id = $1 AND p.visibility = 'public' AND p.published_commit_id IS NOT NULL
+         ORDER BY p.published_at DESC LIMIT 100`,
         [users[0].id]);
     res.json({
         // Public, unauthenticated endpoint — anyone can call this for any known/guessed

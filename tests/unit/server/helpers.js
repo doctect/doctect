@@ -108,3 +108,15 @@ export const minimalState = (title = 'Root') => ({
 
 // Valid 1x1 transparent PNG data URL, used by every publish-related test.
 export const PNG_1X1 = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+
+export const saveProjectCommit = async (app, cookie, projectId, body, expectedHead) => {
+    let head = expectedHead;
+    if (!head) {
+        const project = await request(app).get(`/api/projects/${projectId}`).set('Cookie', cookie);
+        head = project.body.project.headCommitId;
+    }
+    return request(app).post(`/api/projects/${projectId}/commits`)
+        .set('Cookie', cookie)
+        .set('If-Match', `"${head}"`)
+        .send(body);
+};

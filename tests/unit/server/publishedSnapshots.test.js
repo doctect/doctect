@@ -33,14 +33,19 @@ describe('published project snapshots', () => {
         const h1 = created.body.commit.id;
         expect((await publish(projectId, ownerCookie, h1, 'first')).status).toBe(200);
 
+        await request(app).patch(`/api/projects/${projectId}`).set('Cookie', ownerCookie)
+            .send({ name: 'Private renamed planner', description: 'private metadata', tags: ['private'] });
+
         const saved = await save(projectId, ownerCookie, h1, 'private H2');
         expect(saved.status).toBe(201);
         const h2 = saved.body.commit.id;
 
         const detail = await request(app).get(`/api/gallery/${projectId}`);
         expect(detail.body.project.headCommitId).toBe(h1);
+        expect(detail.body.project).toMatchObject({ name: 'Pinned planner', description: 'first', tags: ['first'] });
         const publicProject = await request(app).get(`/api/projects/${projectId}`).set('Cookie', visitorCookie);
         expect(publicProject.body.project.headCommitId).toBe(h1);
+        expect(publicProject.body.project).toMatchObject({ name: 'Pinned planner', description: 'first', tags: ['first'] });
         const state = await request(app).get(`/api/gallery/${projectId}/state`);
         expect(state.body.state.nodes.root.title).toBe('published H1');
 
@@ -53,6 +58,7 @@ describe('published project snapshots', () => {
         expect(ownerHistory.body.commits.map(commit => commit.id)).toEqual([h2, h1]);
         const ownerProject = await request(app).get(`/api/projects/${projectId}`).set('Cookie', ownerCookie);
         expect(ownerProject.body.project.headCommitId).toBe(h2);
+        expect(ownerProject.body.project.name).toBe('Private renamed planner');
 
         const forked = await request(app).post(`/api/projects/${projectId}/fork`).set('Cookie', visitorCookie);
         expect(forked.status).toBe(201);
@@ -65,15 +71,28 @@ describe('published project snapshots', () => {
         expect((await publish(projectId, ownerCookie, h2, 'second')).status).toBe(200);
         const republishedState = await request(app).get(`/api/gallery/${projectId}/state`);
         expect(republishedState.body.state.nodes.root.title).toBe('private H2');
+        const republishedDetail = await request(app).get(`/api/gallery/${projectId}`);
+        expect(republishedDetail.body.project).toMatchObject({
+            name: 'Private renamed planner', description: 'second', tags: ['second'], headCommitId: h2,
+        });
         const republishedHistory = await request(app).get(`/api/projects/${projectId}/commits`).set('Cookie', visitorCookie);
         expect(republishedHistory.body.commits.map(commit => commit.id)).toEqual([h2, h1]);
+
+        const third = await save(projectId, ownerCookie, h2, 'private H3');
+        const h3 = third.body.commit.id;
+        const fourth = await save(projectId, ownerCookie, h3, 'published H4');
+        const h4 = fourth.body.commit.id;
+        expect((await publish(projectId, ownerCookie, h4, 'fourth')).status).toBe(200);
+        const gappedHistory = await request(app).get(`/api/projects/${projectId}/commits`).set('Cookie', visitorCookie);
+        expect(gappedHistory.body.commits.map(commit => commit.id)).toEqual([h4, h2, h1]);
+        expect(gappedHistory.body.commits[0].parentCommitId).toBeNull();
 
         await request(app).post(`/api/projects/${projectId}/unpublish`).set('Cookie', ownerCookie);
         expect((await request(app).get(`/api/projects/${projectId}/commits`).set('Cookie', visitorCookie)).status).toBe(404);
         expect((await request(app).get(`/api/projects/${projectId}/commits/${h1}`).set('Cookie', visitorCookie)).status).toBe(404);
 
-        expect((await publish(projectId, ownerCookie, h2, 'third')).status).toBe(200);
+        expect((await publish(projectId, ownerCookie, h4, 'third')).status).toBe(200);
         const historyAfterRepublish = await request(app).get(`/api/projects/${projectId}/commits`).set('Cookie', visitorCookie);
-        expect(historyAfterRepublish.body.commits.map(commit => commit.id)).toEqual([h2, h1]);
+        expect(historyAfterRepublish.body.commits.map(commit => commit.id)).toEqual([h4, h2, h1]);
     });
 });

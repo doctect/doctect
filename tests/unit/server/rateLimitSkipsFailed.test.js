@@ -2,7 +2,7 @@
 // @vitest-environment node
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import request from 'supertest';
-import { initTestApp, signUpUser, minimalState } from './helpers.js';
+import { initTestApp, signUpUser, minimalState, saveProjectCommit } from './helpers.js';
 
 let app, cookie;
 beforeAll(async () => {
@@ -33,8 +33,8 @@ describe('rate limiter does not count rejected (>=400) writes against the hourly
         // A genuinely allowed write (a commit on the one project we're allowed) still
         // succeeds. If the 5 rejections above had each counted, this would 429 first --
         // the create (1) + 5 rejections would already be 6 hits against a budget of 2.
-        const commit = await request(app).post(`/api/projects/${first.body.project.id}/commits`)
-            .set('Cookie', cookie).send({ state: minimalState('changed'), message: 'edit' });
+        const commit = await saveProjectCommit(app, cookie, first.body.project.id,
+            { state: minimalState('changed'), message: 'edit' }, first.body.commit.id);
         expect(commit.status).toBe(201);
     });
 });

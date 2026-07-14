@@ -2,7 +2,7 @@
 // @vitest-environment node
 import { describe, it, expect, beforeAll } from 'vitest';
 import request from 'supertest';
-import { initTestApp, signUpUser, minimalState } from './helpers.js';
+import { initTestApp, signUpUser, minimalState, saveProjectCommit } from './helpers.js';
 
 let app, cookie;
 beforeAll(async () => {
@@ -14,8 +14,8 @@ describe('GET /api/projects usage', () => {
     it('reports per-project size/commit count and overall usage vs quota', async () => {
         const p = await request(app).post('/api/projects').set('Cookie', cookie)
             .send({ name: 'Usage', state: minimalState('u0') });
-        await request(app).post(`/api/projects/${p.body.project.id}/commits`).set('Cookie', cookie)
-            .send({ state: minimalState('u1'), message: 'second' });
+        await saveProjectCommit(app, cookie, p.body.project.id,
+            { state: minimalState('u1'), message: 'second' }, p.body.commit.id);
 
         const res = await request(app).get('/api/projects').set('Cookie', cookie);
         expect(res.status).toBe(200);

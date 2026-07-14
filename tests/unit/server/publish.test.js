@@ -3,12 +3,20 @@ import { describe, it, expect, beforeAll, vi } from 'vitest';
 import request from 'supertest';
 import { initTestApp, signUpUser, minimalState, PNG_1X1 } from './helpers.js';
 
-const dbInterleave = vi.hoisted(() => ({ beforeConditionalPublish: null, failThumbnailInsert: false }));
+const dbInterleave = vi.hoisted(() => ({ beforeConditionalPublish: null, afterPublishAllowance: null, failThumbnailInsert: false }));
 vi.mock('../../../server/db.js', async importOriginal => {
     const actual = await importOriginal();
     const intercept = async (baseQuery, text, params = []) => {
+        if (/SELECT COUNT\(\*\) AS n FROM projects WHERE owner_id = \$1 AND visibility = 'public'/.test(text)
+            && dbInterleave.afterPublishAllowance) {
+            const result = await baseQuery(text, params);
+            const hook = dbInterleave.afterPublishAllowance;
+            dbInterleave.afterPublishAllowance = null;
+            await hook();
+            return result;
+        }
         if (/UPDATE projects SET visibility = 'public', published_commit_id =/.test(text)
-            && /WHERE id = \$4 AND head_commit_id = \$5/.test(text)
+            && /WHERE id = \$6 AND head_commit_id = \$7/.test(text)
             && dbInterleave.beforeConditionalPublish) {
             const hook = dbInterleave.beforeConditionalPublish;
             dbInterleave.beforeConditionalPublish = null;
@@ -109,6 +117,7 @@ describe('publishing', () => {
         const conditionalProjectId = created.body.project.id;
         const h1 = created.body.project.headCommitId;
         const saved = await request(app).post(`/api/projects/${conditionalProjectId}/commits`).set('Cookie', cookie)
+            .set('If-Match', `"${h1}"`)
             .send({ state: minimalState('H2'), message: 'H2' });
 
         const res = await request(app).post(`/api/projects/${conditionalProjectId}/publish`)
@@ -147,6 +156,7 @@ describe('publishing', () => {
         let saveFinished = false;
         const saving = request(app).post(`/api/projects/${interleavedProjectId}/commits`)
             .set('Cookie', cookie)
+            .set('If-Match', `"${h1}"`)
             .send({ state: minimalState('H2'), message: 'H2' })
             .then(response => {
                 saveFinished = true;
@@ -162,6 +172,53 @@ describe('publishing', () => {
         expect(saved.status).toBe(201);
         expect(published.body.project.visibility).toBe('public');
         expect((await currentHead(interleavedProjectId))).toBe(saved.body.commit.id);
+    });
+
+    it('serializes concurrent first publishes under the per-owner allowance', async () => {
+        const previousLimit = process.env.MAX_PUBLIC_PROJECTS_PER_USER;
+        const { query } = await import('../../../server/db.js');
+        const currentPublic = await query(`SELECT COUNT(*) AS n FROM projects WHERE owner_id = (
+            SELECT id FROM "user" WHERE email = $1
+        ) AND visibility = 'public'`, ['pub@test.dev']);
+        process.env.MAX_PUBLIC_PROJECTS_PER_USER = String(Number(currentPublic[0].n) + 1);
+        const first = await request(app).post('/api/projects').set('Cookie', cookie)
+            .send({ name: 'First allowance project', state: minimalState('first') });
+        const second = await request(app).post('/api/projects').set('Cookie', cookie)
+            .send({ name: 'Second allowance project', state: minimalState('second') });
+        let allowanceRead;
+        const read = new Promise(resolve => { allowanceRead = resolve; });
+        let release;
+        const held = new Promise(resolve => { release = resolve; });
+        dbInterleave.afterPublishAllowance = async () => {
+            allowanceRead();
+            await held;
+        };
+
+        const firstPublish = request(app).post(`/api/projects/${first.body.project.id}/publish`)
+            .set('Cookie', cookie)
+            .set('If-Match', `"${first.body.commit.id}"`)
+            .send({ description: 'first', tags: [], thumbnails: [PNG_1X1] })
+            .then(response => response);
+        await read;
+        let secondFinished = false;
+        const secondPublish = request(app).post(`/api/projects/${second.body.project.id}/publish`)
+            .set('Cookie', cookie)
+            .set('If-Match', `"${second.body.commit.id}"`)
+            .send({ description: 'second', tags: [], thumbnails: [PNG_1X1] })
+            .then(response => {
+                secondFinished = true;
+                return response;
+            });
+        await new Promise(resolve => setTimeout(resolve, 50));
+        const secondWasSerialized = !secondFinished;
+        release();
+        const responses = await Promise.all([firstPublish, secondPublish]);
+        if (previousLimit === undefined) delete process.env.MAX_PUBLIC_PROJECTS_PER_USER;
+        else process.env.MAX_PUBLIC_PROJECTS_PER_USER = previousLimit;
+
+        expect(secondWasSerialized).toBe(true);
+        expect(responses.map(response => response.status).sort()).toEqual([200, 403]);
+        expect(responses.find(response => response.status === 403).body.code).toBe('PUBLIC_LIMIT_REACHED');
     });
 
     it('rolls back metadata and thumbnail replacement when insertion fails', async () => {

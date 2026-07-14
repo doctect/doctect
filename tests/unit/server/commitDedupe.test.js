@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, it, expect, beforeAll } from 'vitest';
 import request from 'supertest';
-import { initTestApp, signUpUser, minimalState } from './helpers.js';
+import { initTestApp, signUpUser, minimalState, saveProjectCommit } from './helpers.js';
 
 let app, cookie, projectId, initialCommitId, query;
 beforeAll(async () => {
@@ -16,8 +16,8 @@ beforeAll(async () => {
 
 describe('commit dedupe', () => {
     it('saving an identical state returns the existing head commit, creates nothing', async () => {
-        const res = await request(app).post(`/api/projects/${projectId}/commits`).set('Cookie', cookie)
-            .send({ state: minimalState('A'), message: 'same again' });
+        const res = await saveProjectCommit(app, cookie, projectId,
+            { state: minimalState('A'), message: 'same again' }, initialCommitId);
         expect(res.status).toBe(200);
         expect(res.body.deduped).toBe(true);
         expect(res.body.commit.id).toBe(initialCommitId);
@@ -26,8 +26,8 @@ describe('commit dedupe', () => {
     });
 
     it('a genuinely changed state still creates a new commit', async () => {
-        const res = await request(app).post(`/api/projects/${projectId}/commits`).set('Cookie', cookie)
-            .send({ state: minimalState('B'), message: 'changed' });
+        const res = await saveProjectCommit(app, cookie, projectId,
+            { state: minimalState('B'), message: 'changed' }, initialCommitId);
         expect(res.status).toBe(201);
         expect(res.body.commit.id).not.toBe(initialCommitId);
         const list = await request(app).get(`/api/projects/${projectId}/commits`).set('Cookie', cookie);
@@ -44,8 +44,8 @@ describe('commit dedupe', () => {
         // would be for any commit written before that migration added the column.
         await query('UPDATE commits SET state_hash = NULL WHERE id = $1', [legacyHeadCommitId]);
 
-        const res = await request(app).post(`/api/projects/${legacyProjectId}/commits`).set('Cookie', cookie)
-            .send({ state: minimalState('Legacy'), message: 'identical content, legacy head' });
+        const res = await saveProjectCommit(app, cookie, legacyProjectId,
+            { state: minimalState('Legacy'), message: 'identical content, legacy head' }, legacyHeadCommitId);
         expect(res.status).toBe(201);
         expect(res.body.deduped).toBeUndefined();
         expect(res.body.commit.id).not.toBe(legacyHeadCommitId);

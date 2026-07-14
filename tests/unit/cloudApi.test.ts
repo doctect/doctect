@@ -64,6 +64,26 @@ describe('cloudApi publish', () => {
     });
 });
 
+describe('cloudApi save', () => {
+    afterEach(() => vi.unstubAllGlobals());
+
+    it('sends last synced commit as a quoted strong entity tag', async () => {
+        const fetchMock = vi.fn().mockResolvedValue({
+            ok: true,
+            status: 201,
+            json: async () => ({ commit: { id: 'head-2' } }),
+        });
+        vi.stubGlobal('fetch', fetchMock);
+        const body = { state: {} as any, message: 'save' };
+
+        await cloudApi.saveCommit('project-1', 'head-1', body);
+
+        const [, options] = fetchMock.mock.calls[0];
+        expect(options.headers).toMatchObject({ 'If-Match': '"head-1"' });
+        expect(JSON.parse(options.body)).toEqual(body);
+    });
+});
+
 describe('gallery v2 api methods', () => {
     const okJson = (body: unknown) =>
         Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(body) } as Response);

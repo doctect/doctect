@@ -2,7 +2,7 @@
 // @vitest-environment node
 import { describe, it, expect, beforeAll, afterEach } from 'vitest';
 import request from 'supertest';
-import { initTestApp, signUpUser, minimalState, PNG_1X1 } from './helpers.js';
+import { initTestApp, signUpUser, minimalState, PNG_1X1, saveProjectCommit } from './helpers.js';
 
 let app, cookie, fresh, forker;
 beforeAll(async () => {
@@ -21,8 +21,8 @@ describe('storage quota', () => {
         const created = await request(app).post('/api/projects').set('Cookie', cookie)
             .send({ name: 'Quota', state: minimalState('q0') });
         process.env.USER_STORAGE_QUOTA_MB = '0.0000001'; // ~0.1 bytes: anything trips it
-        const res = await request(app).post(`/api/projects/${created.body.project.id}/commits`)
-            .set('Cookie', cookie).send({ state: minimalState('q1'), message: 'over' });
+        const res = await saveProjectCommit(app, cookie, created.body.project.id,
+            { state: minimalState('q1'), message: 'over' }, created.body.commit.id);
         expect(res.status).toBe(413);
         expect(res.body.code).toBe('STORAGE_QUOTA_EXCEEDED');
     });

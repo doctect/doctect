@@ -40,7 +40,8 @@ const ratingDtoFields = (r) => ({
 });
 
 const cardFields = `
-    p.id, p.name, p.description, p.tags, p.fork_count, p.download_count, p.updated_at,
+    p.id, p.published_name AS name, p.published_description AS description,
+    p.published_tags AS tags, p.fork_count, p.download_count, p.published_at AS updated_at,
     u.username AS author,
     (SELECT t.id FROM thumbnails t WHERE t.project_id = p.id ORDER BY t.position LIMIT 1) AS thumbnail_id,
     ${ratingFields}
@@ -57,16 +58,16 @@ router.get('/api/gallery', async (req, res) => {
     const q = String(req.query.q ?? '').toLowerCase().slice(0, 100);
     const tag = String(req.query.tag ?? '').slice(0, 30);
     const sort = req.query.sort === 'popular'
-        ? 'ORDER BY (p.fork_count + p.download_count) DESC, p.updated_at DESC'
+        ? 'ORDER BY (p.fork_count + p.download_count) DESC, p.published_at DESC'
         : req.query.sort === 'rating'
-            ? 'ORDER BY rating_avg DESC NULLS LAST, rating_count DESC, p.updated_at DESC'
-            : 'ORDER BY p.updated_at DESC';
+            ? 'ORDER BY rating_avg DESC NULLS LAST, rating_count DESC, p.published_at DESC'
+            : 'ORDER BY p.published_at DESC';
     const page = Math.max(0, parseInt(req.query.page ?? '0', 10) || 0);
     const limit = Math.min(PAGE_SIZE, Math.max(1, parseInt(req.query.limit ?? '0', 10) || PAGE_SIZE));
 
     const params = [`%${q}%`, `%${q}%`, `%${q}%`];
     let where = `p.visibility = 'public' AND p.published_commit_id IS NOT NULL
-           AND (LOWER(p.name) LIKE $1 OR LOWER(p.description) LIKE $2 OR LOWER(p.tags) LIKE $3)`;
+           AND (LOWER(p.published_name) LIKE $1 OR LOWER(p.published_description) LIKE $2 OR LOWER(p.published_tags) LIKE $3)`;
     if (tag) {
         // Tags are stored as a JSON array string; matching the JSON-quoted encoding of the
         // tag ("tag", incl. escaping) makes this an exact-element match — 'plan' cannot
@@ -76,7 +77,7 @@ router.get('/api/gallery', async (req, res) => {
         // then wildcards, and tell the DB the escape character is backslash.
         const quoted = JSON.stringify(tag).replace(/\\/g, '\\\\').replace(/[%_]/g, m => '\\' + m);
         params.push(`%${quoted}%`);
-        where += ` AND p.tags LIKE $${params.length} ESCAPE '\\'`;
+        where += ` AND p.published_tags LIKE $${params.length} ESCAPE '\\'`;
     }
     const rows = await query(
         `SELECT ${cardFields}
@@ -90,7 +91,7 @@ router.get('/api/gallery', async (req, res) => {
 });
 
 router.get('/api/gallery/tags', async (req, res) => {
-    const rows = await query(`SELECT tags FROM projects WHERE visibility = 'public' AND published_commit_id IS NOT NULL`, []);
+    const rows = await query(`SELECT published_tags AS tags FROM projects WHERE visibility = 'public' AND published_commit_id IS NOT NULL`, []);
     const counts = new Map();
     for (const r of rows) {
         for (const t of JSON.parse(r.tags || '[]')) {
@@ -132,7 +133,7 @@ router.get('/api/gallery/:id', loadPublicProject, async (req, res) => {
     let forkedFrom = null;
     if (p.forked_from_project_id) {
         const src = await query(
-            `SELECT p.id, p.name, p.visibility, u.username AS author
+            `SELECT p.id, p.published_name AS name, p.visibility, u.username AS author
              FROM projects p JOIN "user" u ON u.id = p.owner_id WHERE p.id = $1`,
             [p.forked_from_project_id]);
         if (src[0] && src[0].visibility === 'public') {
@@ -141,9 +142,9 @@ router.get('/api/gallery/:id', loadPublicProject, async (req, res) => {
     }
     res.json({
         project: {
-            id: p.id, name: p.name, description: p.description, tags: JSON.parse(p.tags || '[]'),
+            id: p.id, name: p.published_name, description: p.published_description, tags: JSON.parse(p.published_tags || '[]'),
             author: p.author, ownerId: p.owner_id, forkCount: p.fork_count, downloadCount: p.download_count,
-            updatedAt: p.updated_at, headCommitId: p.published_commit_id,
+            updatedAt: p.published_at, headCommitId: p.published_commit_id,
             thumbnailIds: thumbs.map(t => t.id), forkedFrom,
             ...ratingDtoFields(agg[0])
         }
@@ -156,7 +157,7 @@ router.get('/api/gallery/:id/state', loadPublicProject, async (req, res) => {
     const rows = await query('SELECT state_json, state_gzip FROM commits WHERE id = $1', [p.published_commit_id]);
     if (!rows[0]) return res.status(404).json({ error: 'Commit not found' });
     await query('UPDATE projects SET download_count = download_count + 1 WHERE id = $1', [p.id]);
-    res.json({ name: p.name, state: decodeStateRow(rows[0]) });
+    res.json({ name: p.published_name, state: decodeStateRow(rows[0]) });
 });
 
 router.post('/api/gallery/:id/report', optionalAuth, loadPublicProject, async (req, res) => {

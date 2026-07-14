@@ -24,6 +24,7 @@ export function CloudMenu({ project, onLinkCloud, onRestoreState }: CloudMenuPro
     const [showPublish, setShowPublish] = useState(false);
     const [showPropose, setShowPropose] = useState(false);
     const [cloudProject, setCloudProject] = useState<CloudProject | null>(null);
+    const [saveConflict, setSaveConflict] = useState(false);
     const ref = useRef<HTMLDivElement>(null);
     const location = useLocation();
     const navigate = useNavigate();
@@ -45,13 +46,13 @@ export function CloudMenu({ project, onLinkCloud, onRestoreState }: CloudMenuPro
     const saveToCloud = async () => {
         const message = window.prompt('Describe this save (commit message):', project.cloud ? 'Update' : 'Initial save');
         if (message === null) return;
-        setBusy(true); setError(null);
+        setBusy(true); setError(null); setSaveConflict(false);
         try {
             if (!project.cloud) {
                 const res = await cloudApi.createProject({ name: project.name, state: project.initialState, message });
                 onLinkCloud({ projectId: res.project.id, lastSyncedCommitId: res.commit.id });
             } else {
-                const res = await cloudApi.saveCommit(project.cloud.projectId, { state: project.initialState, message });
+                const res = await cloudApi.saveCommit(project.cloud.projectId, project.cloud.lastSyncedCommitId, { state: project.initialState, message });
                 onLinkCloud({ projectId: project.cloud.projectId, lastSyncedCommitId: res.commit.id });
             }
             setOpen(false);
@@ -60,7 +61,31 @@ export function CloudMenu({ project, onLinkCloud, onRestoreState }: CloudMenuPro
                 navigate('/welcome', { state: { from: location.pathname } });
                 return;
             }
+            if (e instanceof ApiError && e.code === 'PROJECT_HEAD_CHANGED') {
+                setSaveConflict(true);
+                setError('Cloud project changed since your last save. Local edits are unchanged.');
+                return;
+            }
             setError(e instanceof ApiError ? e.message : 'Save failed');
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    const reloadCloudVersion = async () => {
+        if (!project.cloud) return;
+        setBusy(true); setError(null);
+        try {
+            const latest = await cloudApi.getProject(project.cloud.projectId);
+            if (!latest.headCommitId) throw new Error('Cloud project has no saved version.');
+            const commit = await cloudApi.getCommit(project.cloud.projectId, latest.headCommitId);
+            onRestoreState(commit.state);
+            onLinkCloud({ projectId: project.cloud.projectId, lastSyncedCommitId: latest.headCommitId });
+            setCloudProject(latest);
+            setSaveConflict(false);
+            setOpen(false);
+        } catch (e) {
+            setError(e instanceof ApiError ? e.message : 'Could not reload cloud version');
         } finally {
             setBusy(false);
         }
@@ -113,6 +138,12 @@ export function CloudMenu({ project, onLinkCloud, onRestoreState }: CloudMenuPro
                                 </button>
                             )}
                             {error && <div className="px-3 py-1.5 text-xs text-red-600">{error}</div>}
+                            {saveConflict && (
+                                <button disabled={busy} onClick={reloadCloudVersion}
+                                    className="w-full text-left px-3 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-50 disabled:opacity-50">
+                                    Reload cloud version
+                                </button>
+                            )}
                         </>
                     )}
                 </div>

@@ -16,9 +16,9 @@ export const getProjectRow = async (id, queryFn = query) => {
 const projectDto = (row, usePublishedHead = false) => ({
     id: row.id,
     ownerId: row.owner_id,
-    name: row.name,
-    description: row.description,
-    tags: JSON.parse(row.tags || '[]'),
+    name: usePublishedHead ? row.published_name : row.name,
+    description: usePublishedHead ? row.published_description : row.description,
+    tags: JSON.parse((usePublishedHead ? row.published_tags : row.tags) || '[]'),
     visibility: row.visibility,
     headCommitId: usePublishedHead ? row.published_commit_id : row.head_commit_id,
     publishedCommitId: row.published_commit_id,
@@ -27,7 +27,7 @@ const projectDto = (row, usePublishedHead = false) => ({
     downloadCount: row.download_count,
     forkCount: row.fork_count,
     createdAt: row.created_at,
-    updatedAt: row.updated_at
+    updatedAt: usePublishedHead ? row.published_at : row.updated_at
 });
 
 const retentionLimit = () => {
@@ -51,6 +51,8 @@ export const pruneCommits = async (projectId, queryFn = query) => {
     );
 };
 
+export class ProjectHeadChangedError extends Error {}
+
 export const insertCommit = async ({ projectId, parentCommitId, message, state, userId, encoded }, queryFn = query) => {
     const id = randomUUID();
     const enc = encoded ?? encodeState(state);
@@ -65,13 +67,36 @@ export const insertCommit = async ({ projectId, parentCommitId, message, state, 
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
         [id, projectId, parentCommitId ?? null, message, '', enc.gzip, enc.bytes, enc.hash, state.schemaVersion ?? null, userId, createdAt]
     );
-    await queryFn(`UPDATE projects SET head_commit_id = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`, [id, projectId]);
+    const updated = parentCommitId === null
+        ? await queryFn(
+            `UPDATE projects SET head_commit_id = $1, updated_at = CURRENT_TIMESTAMP
+             WHERE id = $2 AND head_commit_id IS NULL RETURNING id`,
+            [id, projectId])
+        : await queryFn(
+            `UPDATE projects SET head_commit_id = $1, updated_at = CURRENT_TIMESTAMP
+             WHERE id = $2 AND head_commit_id = $3 RETURNING id`,
+            [id, projectId, parentCommitId]);
+    if (!updated[0]) throw new ProjectHeadChangedError('Project head changed.');
     await pruneCommits(projectId, queryFn);
-    return id;
+    return { id, createdAt };
 };
 
 const cleanName = (name) => (typeof name === 'string' ? name.trim().slice(0, 100) : '');
 const cleanMessage = (m) => (typeof m === 'string' && m.trim() ? m.trim().slice(0, 500) : 'Update');
+
+const expectedHeadFromRequest = (req, res) => {
+    const ifMatch = req.get('If-Match');
+    if (!ifMatch) {
+        res.status(428).json({ error: 'If-Match header is required.', code: 'PROJECT_HEAD_REQUIRED' });
+        return null;
+    }
+    const entityTag = /^"([\x21\x23-\x7e]+)"$/.exec(ifMatch);
+    if (!entityTag) {
+        res.status(400).json({ error: 'If-Match must contain one quoted strong entity tag.', code: 'INVALID_IF_MATCH' });
+        return null;
+    }
+    return entityTag[1];
+};
 
 router.post('/api/projects', requireAuth, requireUsername, userWriteLimiter, async (req, res) => {
     const { name, state, message } = req.body || {};
@@ -89,14 +114,16 @@ router.post('/api/projects', requireAuth, requireUsername, userWriteLimiter, asy
         throw e;
     }
 
-    const projectId = randomUUID();
-    await query(
-        `INSERT INTO projects (id, owner_id, name) VALUES ($1, $2, $3)`,
-        [projectId, req.user.id, n]
-    );
-    const commitId = await insertCommit({ projectId, parentCommitId: null, message: cleanMessage(message ?? 'Initial save'), state, userId: req.user.id, encoded });
-    const row = await getProjectRow(projectId);
-    res.status(201).json({ project: projectDto(row), commit: { id: commitId } });
+    const created = await withTransaction(async txQuery => {
+        const projectId = randomUUID();
+        await txQuery(
+            `INSERT INTO projects (id, owner_id, name) VALUES ($1, $2, $3)`,
+            [projectId, req.user.id, n]
+        );
+        const commit = await insertCommit({ projectId, parentCommitId: null, message: cleanMessage(message ?? 'Initial save'), state, userId: req.user.id, encoded }, txQuery);
+        return { row: await getProjectRow(projectId, txQuery), commit };
+    });
+    res.status(201).json({ project: projectDto(created.row), commit: { id: created.commit.id } });
 });
 
 router.get('/api/projects', requireAuth, async (req, res) => {
@@ -168,37 +195,53 @@ router.delete('/api/projects/:id', requireAuth, loadProject(true), async (req, r
 });
 
 router.post('/api/projects/:id/commits', requireAuth, requireUsername, userWriteLimiter, loadProject(true), async (req, res) => {
+    const expectedHead = expectedHeadFromRequest(req, res);
+    if (expectedHead === null) return;
     const { state, message } = req.body || {};
     const v = validateAppState(state);
     if (!v.ok) return res.status(400).json({ error: `invalid state: ${v.error}` });
     const encoded = encodeState(state);
 
-    // Dedupe: content identical to the current head is a no-op, not a new commit.
-    // Legacy heads (pre-migration, state_hash NULL) never match and just commit normally.
-    if (req.project.head_commit_id) {
-        const head = await query('SELECT id, message, created_at, state_hash FROM commits WHERE id = $1', [req.project.head_commit_id]);
-        if (head[0] && head[0].state_hash === encoded.hash) {
-            return res.json({ commit: { id: head[0].id, message: head[0].message, createdAt: head[0].created_at }, deduped: true });
-        }
-    }
-
+    let result;
     try {
-        await assertStorageAllowance(req.user.id, encoded.bytes);
+        result = await withTransaction(async txQuery => {
+            const lockSuffix = dbType === 'postgres' ? ' FOR UPDATE' : '';
+            const projects = await txQuery(`SELECT * FROM projects WHERE id = $1${lockSuffix}`, [req.project.id]);
+            const current = projects[0];
+            if (!current || current.owner_id !== req.user.id) return { status: 'missing' };
+            if (current.head_commit_id !== expectedHead) return { status: 'changed' };
+
+            // Dedupe against the locked current head. Legacy NULL hashes never match.
+            const heads = await txQuery('SELECT id, message, created_at, state_hash FROM commits WHERE id = $1', [expectedHead]);
+            if (heads[0]?.state_hash === encoded.hash) {
+                return { status: 'deduped', commit: { id: heads[0].id, message: heads[0].message, createdAt: heads[0].created_at } };
+            }
+
+            await assertStorageAllowance(req.user.id, encoded.bytes, txQuery);
+            const clean = cleanMessage(message);
+            const commit = await insertCommit({
+                projectId: current.id,
+                parentCommitId: expectedHead,
+                message: clean,
+                state,
+                userId: req.user.id,
+                encoded
+            }, txQuery);
+            return { status: 'created', commit: { id: commit.id, message: clean, createdAt: commit.createdAt } };
+        });
     } catch (e) {
         if (sendLimitError(res, e)) return;
+        if (e instanceof ProjectHeadChangedError) {
+            return res.status(409).json({ error: 'Project head changed since your last save.', code: 'PROJECT_HEAD_CHANGED' });
+        }
         throw e;
     }
-
-    const commitId = await insertCommit({
-        projectId: req.project.id,
-        parentCommitId: req.project.head_commit_id,
-        message: cleanMessage(message),
-        state,
-        userId: req.user.id,
-        encoded
-    });
-    const rows = await query('SELECT id, message, created_at FROM commits WHERE id = $1', [commitId]);
-    res.status(201).json({ commit: { id: rows[0].id, message: rows[0].message, createdAt: rows[0].created_at } });
+    if (result.status === 'missing') return res.status(404).json({ error: 'Project not found' });
+    if (result.status === 'changed') {
+        return res.status(409).json({ error: 'Project head changed since your last save.', code: 'PROJECT_HEAD_CHANGED' });
+    }
+    if (result.status === 'deduped') return res.json({ commit: result.commit, deduped: true });
+    res.status(201).json({ commit: result.commit });
 });
 
 router.get('/api/projects/:id/commits', optionalAuth, loadProject(false), async (req, res) => {
@@ -208,9 +251,12 @@ router.get('/api/projects/:id/commits', optionalAuth, loadProject(false), async 
     const rows = await query(
         `SELECT id, parent_commit_id, message, schema_version, created_by, created_at
          FROM commits WHERE project_id = $1${publicFilter} ORDER BY created_at DESC, id DESC LIMIT 200`, [req.project.id]);
+    const publishedIds = req.isOwner ? null : new Set(rows.map(row => row.id));
     res.json({
         commits: rows.map(r => ({
-            id: r.id, parentCommitId: r.parent_commit_id, message: r.message,
+            id: r.id,
+            parentCommitId: req.isOwner || publishedIds.has(r.parent_commit_id) ? r.parent_commit_id : null,
+            message: r.message,
             schemaVersion: r.schema_version, createdBy: r.created_by, createdAt: r.created_at
         }))
     });
@@ -251,15 +297,8 @@ export const getThumbnailIds = async (projectId) => {
 };
 
 router.post('/api/projects/:id/publish', requireAuth, requireUsername, loadProject(true), async (req, res) => {
-    const ifMatch = req.get('If-Match');
-    if (!ifMatch) {
-        return res.status(428).json({ error: 'If-Match header is required.', code: 'PROJECT_HEAD_REQUIRED' });
-    }
-    const entityTag = /^"([\x21\x23-\x7e]+)"$/.exec(ifMatch);
-    if (!entityTag) {
-        return res.status(400).json({ error: 'If-Match must contain one quoted strong entity tag.', code: 'INVALID_IF_MATCH' });
-    }
-    const expectedHead = entityTag[1];
+    const expectedHead = expectedHeadFromRequest(req, res);
+    if (expectedHead === null) return;
     const { description, tags, thumbnails } = req.body || {};
     if (!Array.isArray(thumbnails) || thumbnails.length < 1 || thumbnails.length > 4) {
         return res.status(400).json({ error: 'thumbnails must contain 1-4 images' });
@@ -273,42 +312,45 @@ router.post('/api/projects/:id/publish', requireAuth, requireUsername, loadProje
     }
     const d = String(description ?? '').slice(0, 2000);
 
-    if (req.project.visibility !== 'public') {
-        try {
-            await assertPublishAllowance(req.user.id);
-        } catch (e) {
-            if (sendLimitError(res, e)) return;
-            throw e;
-        }
+    let published;
+    try {
+        published = await withTransaction(async txQuery => {
+            const lockSuffix = dbType === 'postgres' ? ' FOR UPDATE' : '';
+            // Serialize first-publish allowance checks per owner before locking a project.
+            await txQuery(`SELECT id FROM "user" WHERE id = $1${lockSuffix}`, [req.user.id]);
+            const current = await txQuery(`SELECT * FROM projects WHERE id = $1${lockSuffix}`, [req.project.id]);
+            if (!current[0] || current[0].head_commit_id !== expectedHead) return null;
+            if (current[0].visibility !== 'public') await assertPublishAllowance(req.user.id, txQuery);
+
+            const updated = await txQuery(
+                `UPDATE projects SET visibility = 'public', published_commit_id = $1,
+                     published_name = name, published_description = $2, published_tags = $3,
+                     published_at = CURRENT_TIMESTAMP, description = $4, tags = $5,
+                     updated_at = CURRENT_TIMESTAMP
+                 WHERE id = $6 AND head_commit_id = $7
+                 RETURNING *`,
+                [expectedHead, d, JSON.stringify(tags), d, JSON.stringify(tags), current[0].id, expectedHead]
+            );
+            if (!updated[0]) return null;
+
+            await txQuery(
+                `INSERT INTO project_publications (project_id, commit_id)
+                 VALUES ($1, $2) ON CONFLICT (project_id, commit_id) DO NOTHING`,
+                [current[0].id, expectedHead]
+            );
+
+            await txQuery('DELETE FROM thumbnails WHERE project_id = $1', [current[0].id]);
+            for (let i = 0; i < parsed.length; i++) {
+                await txQuery('INSERT INTO thumbnails (id, project_id, position, mime, image) VALUES ($1, $2, $3, $4, $5)',
+                    [randomUUID(), current[0].id, i, parsed[i].mime, parsed[i].buf]);
+            }
+            const thumbnailRows = await txQuery('SELECT id FROM thumbnails WHERE project_id = $1 ORDER BY position', [current[0].id]);
+            return { row: updated[0], thumbnailIds: thumbnailRows.map(item => item.id) };
+        });
+    } catch (e) {
+        if (sendLimitError(res, e)) return;
+        throw e;
     }
-
-    const published = await withTransaction(async txQuery => {
-        const lockSuffix = dbType === 'postgres' ? ' FOR UPDATE' : '';
-        const current = await txQuery(`SELECT * FROM projects WHERE id = $1${lockSuffix}`, [req.project.id]);
-        if (!current[0] || current[0].head_commit_id !== expectedHead) return null;
-
-        const updated = await txQuery(
-            `UPDATE projects SET visibility = 'public', published_commit_id = $1, description = $2, tags = $3, updated_at = CURRENT_TIMESTAMP
-             WHERE id = $4 AND head_commit_id = $5
-             RETURNING *`,
-            [expectedHead, d, JSON.stringify(tags), current[0].id, expectedHead]
-        );
-        if (!updated[0]) return null;
-
-        await txQuery(
-            `INSERT INTO project_publications (project_id, commit_id)
-             VALUES ($1, $2) ON CONFLICT (project_id, commit_id) DO NOTHING`,
-            [current[0].id, expectedHead]
-        );
-
-        await txQuery('DELETE FROM thumbnails WHERE project_id = $1', [current[0].id]);
-        for (let i = 0; i < parsed.length; i++) {
-            await txQuery('INSERT INTO thumbnails (id, project_id, position, mime, image) VALUES ($1, $2, $3, $4, $5)',
-                [randomUUID(), current[0].id, i, parsed[i].mime, parsed[i].buf]);
-        }
-        const thumbnailRows = await txQuery('SELECT id FROM thumbnails WHERE project_id = $1 ORDER BY position', [current[0].id]);
-        return { row: updated[0], thumbnailIds: thumbnailRows.map(item => item.id) };
-    });
 
     if (!published) {
         return res.status(409).json({ error: 'Project head changed since it was inspected.', code: 'PROJECT_HEAD_CHANGED' });
@@ -322,35 +364,48 @@ router.post('/api/projects/:id/unpublish', requireAuth, loadProject(true), async
 });
 
 router.post('/api/projects/:id/fork', requireAuth, requireUsername, userWriteLimiter, loadProject(false), async (req, res) => {
-    const src = req.project;
-    const sourceCommitId = src.visibility === 'public' ? src.published_commit_id : src.head_commit_id;
-    if (!sourceCommitId) return res.status(400).json({ error: 'Source project has no content' });
-    const headRows = await query('SELECT state_json, state_gzip, state_bytes FROM commits WHERE id = $1', [sourceCommitId]);
-    if (!headRows[0]) return res.status(404).json({ error: 'Source commit not found' });
-
+    let forked;
     try {
-        await assertProjectAllowance(req.user.id);
-        await assertStorageAllowance(req.user.id, Number(headRows[0].state_bytes ?? 0));
+        forked = await withTransaction(async txQuery => {
+            const lockSuffix = dbType === 'postgres' ? ' FOR UPDATE' : '';
+            const sources = await txQuery(`SELECT * FROM projects WHERE id = $1${lockSuffix}`, [req.project.id]);
+            const src = sources[0];
+            const isOwner = src?.owner_id === req.user.id;
+            if (!src || (!isOwner && src.visibility !== 'public')) return { status: 'missing' };
+            const sourceCommitId = src.visibility === 'public' ? src.published_commit_id : src.head_commit_id;
+            if (!sourceCommitId) return { status: 'empty' };
+            const headRows = await txQuery('SELECT state_json, state_gzip, state_bytes FROM commits WHERE id = $1', [sourceCommitId]);
+            if (!headRows[0]) return { status: 'commit-missing' };
+
+            await assertProjectAllowance(req.user.id, txQuery);
+            await assertStorageAllowance(req.user.id, Number(headRows[0].state_bytes ?? 0), txQuery);
+            const sourceName = src.visibility === 'public' ? src.published_name : src.name;
+            const sourceDescription = src.visibility === 'public' ? src.published_description : src.description;
+            const sourceTags = src.visibility === 'public' ? src.published_tags : src.tags;
+            const forkId = randomUUID();
+            await txQuery(
+                `INSERT INTO projects (id, owner_id, name, description, tags, forked_from_project_id, forked_from_commit_id)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+                [forkId, req.user.id, sourceName, sourceDescription, sourceTags, src.id, sourceCommitId]
+            );
+            await insertCommit({
+                projectId: forkId,
+                parentCommitId: null,
+                message: `Fork of "${sourceName}"`,
+                state: decodeStateRow(headRows[0]),
+                userId: req.user.id
+            }, txQuery);
+            await txQuery('UPDATE projects SET fork_count = fork_count + 1 WHERE id = $1', [src.id]);
+            return { status: 'created', row: await getProjectRow(forkId, txQuery) };
+        });
     } catch (e) {
         if (sendLimitError(res, e)) return;
         throw e;
     }
-
-    const forkId = randomUUID();
-    await query(
-        `INSERT INTO projects (id, owner_id, name, description, tags, forked_from_project_id, forked_from_commit_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-        [forkId, req.user.id, src.name, src.description, src.tags, src.id, sourceCommitId]
-    );
-    await insertCommit({
-        projectId: forkId,
-        parentCommitId: null,
-        message: `Fork of "${src.name}"`,
-        state: decodeStateRow(headRows[0]),
-        userId: req.user.id
-    });
-    await query('UPDATE projects SET fork_count = fork_count + 1 WHERE id = $1', [src.id]);
-    res.status(201).json({ project: projectDto(await getProjectRow(forkId)) });
+    if (forked.status === 'missing') return res.status(404).json({ error: 'Project not found' });
+    if (forked.status === 'empty') return res.status(400).json({ error: 'Source project has no content' });
+    if (forked.status === 'commit-missing') return res.status(404).json({ error: 'Source commit not found' });
+    res.status(201).json({ project: projectDto(forked.row) });
 });
 
 export default router;

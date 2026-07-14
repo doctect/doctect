@@ -74,17 +74,18 @@ export const withTransaction = async (callback) => {
                 return res.rows ?? [];
             },
         };
+        let releaseError;
         try {
             await client.query('BEGIN');
             const result = await transactionContext.run(context, () => callback(context.query));
             await client.query('COMMIT');
             return result;
         } catch (error) {
-            try { await client.query('ROLLBACK'); } catch { /* Preserve original failure. */ }
+            try { await client.query('ROLLBACK'); } catch (rollbackError) { releaseError = rollbackError; }
             throw error;
         } finally {
             context.active = false;
-            client.release();
+            client.release(releaseError);
         }
     }
 

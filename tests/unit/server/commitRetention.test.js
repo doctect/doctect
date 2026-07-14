@@ -2,7 +2,7 @@
 // @vitest-environment node
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import request from 'supertest';
-import { initTestApp, signUpUser, minimalState } from './helpers.js';
+import { initTestApp, signUpUser, minimalState, saveProjectCommit } from './helpers.js';
 
 let app, cookie, query;
 beforeAll(async () => {
@@ -18,8 +18,7 @@ const makeProjectWithCommits = async (name, count) => {
         .send({ name, state: minimalState(`${name}-0`) });
     const projectId = created.body.project.id;
     for (let i = 1; i < count; i++) {
-        await request(app).post(`/api/projects/${projectId}/commits`).set('Cookie', cookie)
-            .send({ state: minimalState(`${name}-${i}`), message: `c${i}` });
+        await saveProjectCommit(app, cookie, projectId, { state: minimalState(`${name}-${i}`), message: `c${i}` });
     }
     return projectId;
 };
@@ -41,8 +40,7 @@ describe('commit retention', () => {
              VALUES ($1, $2, $3, $4, $5, $6, 'open', $7)`,
             ['mr-retention-1', projectId, oldestId, 'other-project', oldestId, 'keep me', 'retain_u']);
         for (let i = 2; i < 6; i++) {
-            await request(app).post(`/api/projects/${projectId}/commits`).set('Cookie', cookie)
-                .send({ state: minimalState(`MrSafe-${i}`), message: `c${i}` });
+            await saveProjectCommit(app, cookie, projectId, { state: minimalState(`MrSafe-${i}`), message: `c${i}` });
         }
         const rows = await query('SELECT id FROM commits WHERE id = $1', [oldestId]);
         expect(rows.length).toBe(1);

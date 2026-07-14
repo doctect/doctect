@@ -2,7 +2,7 @@
 // @vitest-environment node
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import request from 'supertest';
-import { initTestApp, signUpUser, minimalState } from './helpers.js';
+import { initTestApp, signUpUser, minimalState, saveProjectCommit } from './helpers.js';
 
 let app;
 beforeAll(async () => {
@@ -19,11 +19,11 @@ describe('per-user write rate limit', () => {
         const p = await request(app).post('/api/projects').set('Cookie', heavy)
             .send({ name: 'R1', state: minimalState('r0') });                          // write 1
         expect(p.status).toBe(201);
-        const c1 = await request(app).post(`/api/projects/${p.body.project.id}/commits`)
-            .set('Cookie', heavy).send({ state: minimalState('r1'), message: 'c1' });   // write 2
+        const c1 = await saveProjectCommit(app, heavy, p.body.project.id,
+            { state: minimalState('r1'), message: 'c1' }, p.body.commit.id);           // write 2
         expect(c1.status).toBe(201);
-        const c2 = await request(app).post(`/api/projects/${p.body.project.id}/commits`)
-            .set('Cookie', heavy).send({ state: minimalState('r2'), message: 'c2' });   // write 3 — over
+        const c2 = await saveProjectCommit(app, heavy, p.body.project.id,
+            { state: minimalState('r2'), message: 'c2' }, c1.body.commit.id);           // write 3 — over
         expect(c2.status).toBe(429);
         expect(c2.body.code).toBe('RATE_LIMITED');
 

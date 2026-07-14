@@ -17,10 +17,10 @@ const getCommitState = async (commitId, queryFn = query) => {
     return { state: decodeStateRow(rows[0]), schemaVersion: rows[0].schema_version };
 };
 
-const mrDto = async (row) => {
-    const src = await getProjectRow(row.source_project_id);
-    const tgt = await getProjectRow(row.target_project_id);
-    const users = await query('SELECT username FROM "user" WHERE id = $1', [row.created_by]);
+const mrDto = async (row, queryFn = query) => {
+    const src = await getProjectRow(row.source_project_id, queryFn);
+    const tgt = await getProjectRow(row.target_project_id, queryFn);
+    const users = await queryFn('SELECT username FROM "user" WHERE id = $1', [row.created_by]);
     return {
         id: row.id,
         sourceProjectId: row.source_project_id,
@@ -127,14 +127,14 @@ router.get('/api/projects/:id/merge-requests', requireAuth, loadProject(true), a
     const rows = await query(
         `SELECT * FROM merge_requests WHERE target_project_id = $1 ORDER BY created_at DESC LIMIT 100`,
         [req.project.id]);
-    res.json({ mergeRequests: await Promise.all(rows.map(mrDto)) });
+    res.json({ mergeRequests: await Promise.all(rows.map(row => mrDto(row))) });
 });
 
 router.get('/api/merge-requests/mine', requireAuth, async (req, res) => {
     const rows = await query(
         `SELECT * FROM merge_requests WHERE created_by = $1 ORDER BY created_at DESC LIMIT 100`,
         [req.user.id]);
-    res.json({ mergeRequests: await Promise.all(rows.map(mrDto)) });
+    res.json({ mergeRequests: await Promise.all(rows.map(row => mrDto(row))) });
 });
 
 const loadMrForParticipant = async (req, res, next) => {
@@ -215,7 +215,7 @@ router.post('/api/merge-requests/:id/merge', requireAuth, loadMrForParticipant, 
             return { status: 'target-changed' };
         }
 
-        const commitId = await insertCommit({
+        const commit = await insertCommit({
             projectId: target.id,
             parentCommitId: target.head_commit_id,
             message: `Merge: ${mr.title} (from @${users[0]?.username ?? 'unknown'})`,
@@ -227,7 +227,8 @@ router.post('/api/merge-requests/:id/merge', requireAuth, loadMrForParticipant, 
             `UPDATE merge_requests SET status = 'merged', resolved_by = $1, resolved_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING *`,
             [req.user.id, mr.id]);
         if (!updated[0]) throw new Error('Merge request disappeared during merge.');
-        return { status: 'merged', row: updated[0], commitId };
+        const responseDto = await mrDto(updated[0], txQuery);
+        return { status: 'merged', responseDto, commitId: commit.id };
     });
 
     if (transactionResult.status === 'target-changed') {
@@ -239,7 +240,7 @@ router.post('/api/merge-requests/:id/merge', requireAuth, loadMrForParticipant, 
     if (transactionResult.status === 'resolved') {
         return res.status(409).json({ error: `Merge request is already ${transactionResult.mrStatus}` });
     }
-    res.json({ mergeRequest: await mrDto(transactionResult.row), commit: { id: transactionResult.commitId } });
+    res.json({ mergeRequest: transactionResult.responseDto, commit: { id: transactionResult.commitId } });
 });
 
 router.post('/api/merge-requests/:id/close', requireAuth, loadMrForParticipant, async (req, res) => {

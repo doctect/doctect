@@ -1,12 +1,17 @@
 // @vitest-environment node
 import { describe, it, expect, beforeAll, vi } from 'vitest';
 import request from 'supertest';
-import { initTestApp, signUpUser, minimalState, PNG_1X1 } from './helpers.js';
+import { initTestApp, signUpUser, minimalState, PNG_1X1, saveProjectCommit } from './helpers.js';
 
-const dbFaults = vi.hoisted(() => ({ beforeMergeUserLookup: null, failMergedStatusUpdate: false }));
+const dbFaults = vi.hoisted(() => ({ beforeMergeUserLookup: null, failMergedStatusUpdate: false, failMergedDtoLookup: false, mergeStatusUpdated: false }));
 vi.mock('../../../server/db.js', async importOriginal => {
     const actual = await importOriginal();
     const intercept = async (baseQuery, text, params = []) => {
+        if (/SELECT \* FROM projects WHERE id = \$1/.test(text)
+            && dbFaults.failMergedDtoLookup && dbFaults.mergeStatusUpdated) {
+            dbFaults.failMergedDtoLookup = false;
+            throw new Error('Injected merge DTO lookup failure');
+        }
         if (/SELECT username FROM "user"/.test(text) && dbFaults.beforeMergeUserLookup) {
             const hook = dbFaults.beforeMergeUserLookup;
             dbFaults.beforeMergeUserLookup = null;
@@ -16,7 +21,9 @@ vi.mock('../../../server/db.js', async importOriginal => {
             dbFaults.failMergedStatusUpdate = false;
             throw new Error('Injected merge status failure');
         }
-        return baseQuery(text, params);
+        const result = await baseQuery(text, params);
+        if (/UPDATE merge_requests SET status = 'merged'/.test(text)) dbFaults.mergeStatusUpdated = true;
+        return result;
     };
     return {
         ...actual,
@@ -55,6 +62,7 @@ const setupForkWithChanges = async () => {
     const fork = await request(app).post(`/api/projects/${upstreamId}/fork`).set('Cookie', authorCookie);
     forkId = fork.body.project.id;
     await request(app).post(`/api/projects/${forkId}/commits`).set('Cookie', authorCookie)
+        .set('If-Match', `"${fork.body.project.headCommitId}"`)
         .send({ state: stateWithDayName('Improved'), message: 'improve page template' });
 };
 
@@ -67,6 +75,7 @@ const makeOpenMr = async (seed) => {
         .send({ description: '', tags: [], thumbnails: [PNG_1X1] });
     const fork = await request(app).post(`/api/projects/${targetId}/fork`).set('Cookie', authorCookie);
     await request(app).post(`/api/projects/${fork.body.project.id}/commits`).set('Cookie', authorCookie)
+        .set('If-Match', `"${fork.body.project.headCommitId}"`)
         .send({ state: stateWithDayName(`Fork ${seed}`), message: `fork ${seed}` });
     const created = await request(app).post('/api/merge-requests').set('Cookie', authorCookie)
         .send({ sourceProjectId: fork.body.project.id, title: `Atomic ${seed}` });
@@ -150,8 +159,8 @@ describe('merge request creation', () => {
             .send({ description: '', tags: [], thumbnails: [PNG_1X1] });
         const selfFork = await request(app).post(`/api/projects/${ownId}/fork`).set('Cookie', ownerCookie);
         const selfForkId = selfFork.body.project.id;
-        await request(app).post(`/api/projects/${selfForkId}/commits`).set('Cookie', ownerCookie)
-            .send({ state: stateWithDayName('Improved'), message: 'improve my own template' });
+        await saveProjectCommit(app, ownerCookie, selfForkId,
+            { state: stateWithDayName('Improved'), message: 'improve my own template' }, selfFork.body.project.headCommitId);
         const mk = await request(app).post('/api/merge-requests').set('Cookie', ownerCookie)
             .send({ sourceProjectId: selfForkId, title: 'Self merge test' });
         expect(mk.status).toBe(201);
@@ -164,8 +173,8 @@ describe('merge request creation', () => {
     it('recomputes the diff live against the target\'s current head, flagging new conflicts', async () => {
         // Upstream owner independently edits the very same template *after* the MR was opened.
         // A cached, creation-time diff would still report this MR as conflict-free; a live diff must not.
-        await request(app).post(`/api/projects/${upstreamId}/commits`).set('Cookie', ownerCookie)
-            .send({ state: stateWithDayName('OwnerEdited'), message: 'owner also renamed the page' });
+        await saveProjectCommit(app, ownerCookie, upstreamId,
+            { state: stateWithDayName('OwnerEdited'), message: 'owner also renamed the page' });
 
         const list = await request(app).get('/api/merge-requests/mine').set('Cookie', authorCookie);
         const mrId = list.body.mergeRequests[0].id;
@@ -185,8 +194,8 @@ describe('merge request creation', () => {
             .set('If-Match', `"${up.body.project.headCommitId}"`)
             .send({ description: '', tags: [], thumbnails: [PNG_1X1] });
         const fork = await request(app).post(`/api/projects/${up.body.project.id}/fork`).set('Cookie', authorCookie);
-        await request(app).post(`/api/projects/${fork.body.project.id}/commits`).set('Cookie', authorCookie)
-            .send({ state: { ...minimalState(), generator: generator() }, message: 'save generator source' });
+        await saveProjectCommit(app, authorCookie, fork.body.project.id,
+            { state: { ...minimalState(), generator: generator() }, message: 'save generator source' }, fork.body.project.headCommitId);
 
         const created = await request(app).post('/api/merge-requests').set('Cookie', authorCookie)
             .send({ sourceProjectId: fork.body.project.id, title: 'Add generator source' });
@@ -203,11 +212,16 @@ describe('merge and close', () => {
         // The MR left over from 'merge request creation' is no longer clean: its final test
         // ("recomputes the diff live...") deliberately gave upstream a conflicting commit, so
         // that exact MR is now genuinely (and correctly) conflicted against the live target head.
-        // To exercise a real clean-merge path here, fork upstream's CURRENT head fresh and open
-        // a brand-new MR from it, rather than reusing the now-conflicted one.
+        // Public forks use the explicit published snapshot, not a newer private head. Republish
+        // the owner's current head first so this fixture intentionally starts from that version.
+        const current = await request(app).get(`/api/projects/${upstreamId}`).set('Cookie', ownerCookie);
+        await request(app).post(`/api/projects/${upstreamId}/publish`).set('Cookie', ownerCookie)
+            .set('If-Match', `"${current.body.project.headCommitId}"`)
+            .send({ description: '', tags: [], thumbnails: [PNG_1X1] });
         const fork2 = await request(app).post(`/api/projects/${upstreamId}/fork`).set('Cookie', authorCookie);
         const cleanForkId = fork2.body.project.id;
         await request(app).post(`/api/projects/${cleanForkId}/commits`).set('Cookie', authorCookie)
+            .set('If-Match', `"${fork2.body.project.headCommitId}"`)
             .send({ state: stateWithDayName('Improved'), message: 'improve page template again' });
         const mk = await request(app).post('/api/merge-requests').set('Cookie', authorCookie)
             .send({ sourceProjectId: cleanForkId, title: 'Improve the page template (clean)' });
@@ -244,8 +258,8 @@ describe('merge and close', () => {
             .send({ description: '', tags: [], thumbnails: [PNG_1X1] });
         const fork = await request(app).post(`/api/projects/${up.body.project.id}/fork`).set('Cookie', authorCookie);
         const provenance = generator({ generatedAt: '2026-07-14T12:34:56.000Z' });
-        await request(app).post(`/api/projects/${fork.body.project.id}/commits`).set('Cookie', authorCookie)
-            .send({ state: { ...minimalState(), generator: provenance }, message: 'save generator source' });
+        await saveProjectCommit(app, authorCookie, fork.body.project.id,
+            { state: { ...minimalState(), generator: provenance }, message: 'save generator source' }, fork.body.project.headCommitId);
         const created = await request(app).post('/api/merge-requests').set('Cookie', authorCookie)
             .send({ sourceProjectId: fork.body.project.id, title: 'Merge generator source' });
 
@@ -255,6 +269,8 @@ describe('merge and close', () => {
         const head = await request(app)
             .get(`/api/projects/${up.body.project.id}/commits/${merged.body.commit.id}`).set('Cookie', ownerCookie);
         expect(head.body.commit.state.generator).toEqual(provenance);
+        const galleryState = await request(app).get(`/api/gallery/${up.body.project.id}/state`);
+        expect(galleryState.body.state.generator).toBeUndefined();
     });
 
     it('rejects when the target head changes after diff computation', async () => {
@@ -272,8 +288,8 @@ describe('merge and close', () => {
             .then(response => response);
         await paused;
 
-        const saved = await request(app).post(`/api/projects/${targetId}/commits`).set('Cookie', ownerCookie)
-            .send({ state: stateWithDayName('Owner advanced'), message: 'owner advanced target' });
+        const saved = await saveProjectCommit(app, ownerCookie, targetId,
+            { state: stateWithDayName('Owner advanced'), message: 'owner advanced target' });
         releaseMerge();
         const merged = await merging;
 
@@ -305,6 +321,20 @@ describe('merge and close', () => {
         expect(mergeCommits).toEqual([]);
     });
 
+    it('rolls back the merge if response DTO data cannot be gathered before commit', async () => {
+        const { mrId: atomicMrId, targetId, headId } = await makeOpenMr('dto-rollback');
+        dbFaults.mergeStatusUpdated = false;
+        dbFaults.failMergedDtoLookup = true;
+
+        const merged = await request(app).post(`/api/merge-requests/${atomicMrId}/merge`).set('Cookie', ownerCookie);
+
+        expect(merged.status).toBe(500);
+        const { query } = await import('../../../server/db.js');
+        expect((await query('SELECT head_commit_id FROM projects WHERE id = $1', [targetId]))[0].head_commit_id).toBe(headId);
+        expect((await query('SELECT status FROM merge_requests WHERE id = $1', [atomicMrId]))[0].status).toBe('open');
+        expect(await query('SELECT id FROM commits WHERE project_id = $1 AND message = $2', [targetId, 'Merge: Atomic dto-rollback (from @mr_author)'])).toEqual([]);
+    });
+
     it('refuses to merge twice', async () => {
         const res = await request(app).post(`/api/merge-requests/${mrId}/merge`).set('Cookie', ownerCookie);
         expect(res.status).toBe(409);
@@ -312,14 +342,14 @@ describe('merge and close', () => {
 
     it('409s on conflicted MRs', async () => {
         // author makes a NEW fork change; owner then changes the same template upstream
-        await request(app).post(`/api/projects/${forkId}/commits`).set('Cookie', authorCookie)
-            .send({ state: stateWithDayName('Fork v3'), message: 'fork again' });
+        await saveProjectCommit(app, authorCookie, forkId,
+            { state: stateWithDayName('Fork v3'), message: 'fork again' });
         const mk = await request(app).post('/api/merge-requests').set('Cookie', authorCookie)
             .send({ sourceProjectId: forkId, title: 'Second round' });
         // NOTE: base is still the original fork point; upstream already merged 'Improved',
         // and now the owner edits the same template again:
-        await request(app).post(`/api/projects/${upstreamId}/commits`).set('Cookie', ownerCookie)
-            .send({ state: stateWithDayName('Owner rewrite'), message: 'owner edit' });
+        await saveProjectCommit(app, ownerCookie, upstreamId,
+            { state: stateWithDayName('Owner rewrite'), message: 'owner edit' });
         const res = await request(app).post(`/api/merge-requests/${mk.body.mergeRequest.id}/merge`).set('Cookie', ownerCookie);
         expect(res.status).toBe(409);
         const detail = await request(app).get(`/api/merge-requests/${mk.body.mergeRequest.id}`).set('Cookie', ownerCookie);

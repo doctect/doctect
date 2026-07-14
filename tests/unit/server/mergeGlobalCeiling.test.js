@@ -2,7 +2,7 @@
 // @vitest-environment node
 import { describe, it, expect, beforeAll, afterEach } from 'vitest';
 import request from 'supertest';
-import { initTestApp, signUpUser, minimalState, PNG_1X1 } from './helpers.js';
+import { initTestApp, signUpUser, minimalState, PNG_1X1, saveProjectCommit } from './helpers.js';
 
 let app, ownerCookie, authorCookie;
 beforeAll(async () => {
@@ -27,8 +27,8 @@ const makeOpenMr = async (seed) => {
         .send({ description: '', tags: [], thumbnails: [PNG_1X1] });
     const fork = await request(app).post(`/api/projects/${targetId}/fork`).set('Cookie', authorCookie);
     const sourceId = fork.body.project.id;
-    await request(app).post(`/api/projects/${sourceId}/commits`).set('Cookie', authorCookie)
-        .send({ state: minimalState(`changed-${seed}`), message: 'edit' });
+    await saveProjectCommit(app, authorCookie, sourceId,
+        { state: minimalState(`changed-${seed}`), message: 'edit' }, fork.body.project.headCommitId);
     const mr = await request(app).post('/api/merge-requests').set('Cookie', authorCookie)
         .send({ sourceProjectId: sourceId, title: `Propose-${seed}` });
     return mr.body.mergeRequest.id;

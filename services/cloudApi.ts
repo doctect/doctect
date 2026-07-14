@@ -85,8 +85,12 @@ export const cloudApi = {
     deleteProject: (projectId: string) =>
         api<{ success: boolean }>(`/api/projects/${projectId}`, { method: 'DELETE' }),
 
-    saveCommit: (projectId: string, args: { state: AppState; message: string }) =>
-        api<{ commit: { id: string; message: string; createdAt: string } }>(`/api/projects/${projectId}/commits`, { method: 'POST', body: JSON.stringify(args) }),
+    saveCommit: (projectId: string, expectedHead: string, args: { state: AppState; message: string }) =>
+        api<{ commit: { id: string; message: string; createdAt: string } }>(`/api/projects/${projectId}/commits`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'If-Match': `"${expectedHead}"` },
+            body: JSON.stringify(args),
+        }),
 
     listCommits: async (projectId: string) =>
         (await api<{ commits: CommitMeta[] }>(`/api/projects/${projectId}/commits`)).commits,

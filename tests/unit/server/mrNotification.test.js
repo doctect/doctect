@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import request from 'supertest';
-import { initTestApp, signUpUser, minimalState, PNG_1X1 } from './helpers.js';
+import { initTestApp, signUpUser, minimalState, PNG_1X1, saveProjectCommit } from './helpers.js';
 import { setSendEmailImpl } from '../../../server/email.js';
 
 let app;
@@ -51,8 +51,8 @@ const createMrBetween = async (ownerEmail, authorEmail) => {
 
     const fork = await request(app).post(`/api/projects/${upstreamId}/fork`).set('Cookie', authorCookie);
     const forkId = fork.body.project.id;
-    await request(app).post(`/api/projects/${forkId}/commits`).set('Cookie', authorCookie)
-        .send({ state: stateWithDayName('Improved'), message: 'improve page template' });
+    await saveProjectCommit(app, authorCookie, forkId,
+        { state: stateWithDayName('Improved'), message: 'improve page template' }, fork.body.project.headCommitId);
 
     return request(app).post('/api/merge-requests').set('Cookie', authorCookie)
         .send({ sourceProjectId: forkId, title: 'Improve the page template', description: 'Better name' });

@@ -274,5 +274,32 @@ export const migrations = [
             CREATE INDEX IF NOT EXISTS idx_project_publications_project
                 ON project_publications(project_id, published_at DESC)
         `
+    },
+    {
+        id: '010_published_metadata',
+        pg: `
+            ALTER TABLE projects ADD COLUMN IF NOT EXISTS published_name TEXT;
+            ALTER TABLE projects ADD COLUMN IF NOT EXISTS published_description TEXT;
+            ALTER TABLE projects ADD COLUMN IF NOT EXISTS published_tags TEXT;
+            ALTER TABLE projects ADD COLUMN IF NOT EXISTS published_at TIMESTAMP;
+            UPDATE projects
+            SET published_name = name,
+                published_description = description,
+                published_tags = tags,
+                published_at = updated_at
+            WHERE published_commit_id IS NOT NULL AND published_name IS NULL
+        `,
+        sqlite: `
+            ALTER TABLE projects ADD COLUMN published_name TEXT;
+            ALTER TABLE projects ADD COLUMN published_description TEXT;
+            ALTER TABLE projects ADD COLUMN published_tags TEXT;
+            ALTER TABLE projects ADD COLUMN published_at TIMESTAMP;
+            UPDATE projects
+            SET published_name = name,
+                published_description = description,
+                published_tags = tags,
+                published_at = updated_at
+            WHERE published_commit_id IS NOT NULL AND published_name IS NULL
+        `
     }
 ];

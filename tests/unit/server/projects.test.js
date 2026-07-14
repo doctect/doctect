@@ -48,6 +48,7 @@ describe('projects API', () => {
             .send({ name: 'Versioned', state: minimalState('v1') });
         const pid = create.body.project.id;
         const c2 = await request(app).post(`/api/projects/${pid}/commits`).set('Cookie', cookieA)
+            .set('If-Match', `"${create.body.commit.id}"`)
             .send({ state: minimalState('v2'), message: 'second' });
         expect(c2.status).toBe(201);
 
@@ -60,6 +61,44 @@ describe('projects API', () => {
 
         const proj = await request(app).get(`/api/projects/${pid}`).set('Cookie', cookieA);
         expect(proj.body.project.headCommitId).toBe(c2.body.commit.id);
+    });
+
+    it('requires one quoted strong head tag for ordinary saves', async () => {
+        const create = await request(app).post('/api/projects').set('Cookie', cookieA)
+            .send({ name: 'Conditional saves', state: minimalState('v1') });
+        const path = `/api/projects/${create.body.project.id}/commits`;
+        const body = { state: minimalState('v2'), message: 'second' };
+
+        const missing = await request(app).post(path).set('Cookie', cookieA).send(body);
+        expect(missing.status).toBe(428);
+        expect(missing.body.code).toBe('PROJECT_HEAD_REQUIRED');
+
+        for (const value of ['head-1', 'W/"head-1"', '"head-1", "head-2"', '*']) {
+            const malformed = await request(app).post(path).set('Cookie', cookieA).set('If-Match', value).send(body);
+            expect(malformed.status).toBe(400);
+            expect(malformed.body.code).toBe('INVALID_IF_MATCH');
+        }
+    });
+
+    it('rejects a stale ordinary save without inserting an orphan commit', async () => {
+        const create = await request(app).post('/api/projects').set('Cookie', cookieA)
+            .send({ name: 'Stale save', state: minimalState('H1') });
+        const projectId = create.body.project.id;
+        const h1 = create.body.commit.id;
+        const first = await request(app).post(`/api/projects/${projectId}/commits`).set('Cookie', cookieA)
+            .set('If-Match', `"${h1}"`)
+            .send({ state: minimalState('H2'), message: 'winner' });
+        const stale = await request(app).post(`/api/projects/${projectId}/commits`).set('Cookie', cookieA)
+            .set('If-Match', `"${h1}"`)
+            .send({ state: minimalState('stale'), message: 'loser' });
+
+        expect(first.status).toBe(201);
+        expect(stale.status).toBe(409);
+        expect(stale.body.code).toBe('PROJECT_HEAD_CHANGED');
+        const project = await request(app).get(`/api/projects/${projectId}`).set('Cookie', cookieA);
+        expect(project.body.project.headCommitId).toBe(first.body.commit.id);
+        const history = await request(app).get(`/api/projects/${projectId}/commits`).set('Cookie', cookieA);
+        expect(history.body.commits.map(commit => commit.message)).toEqual(['winner', 'Initial save']);
     });
 
     it('forbids commits by non-owners', async () => {

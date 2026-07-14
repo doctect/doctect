@@ -33,42 +33,42 @@ const globalCeilingBytes = () => Math.round(envNum('MAX_TOTAL_STORAGE_MB', 20480
 const maxProjectsPerUser = () => envNum('MAX_PROJECTS_PER_USER', 25);
 const maxPublicProjectsPerUser = () => envNum('MAX_PUBLIC_PROJECTS_PER_USER', 20);
 
-export const getUserStoredBytes = async (userId) => {
-    const rows = await query(
+export const getUserStoredBytes = async (userId, queryFn = query) => {
+    const rows = await queryFn(
         `SELECT COALESCE(SUM(c.state_bytes), 0) AS used
          FROM commits c JOIN projects p ON c.project_id = p.id
          WHERE p.owner_id = $1`, [userId]);
     return Number(rows[0].used);
 };
 
-export const assertGlobalCeiling = async (incomingBytes) => {
-    const total = await query('SELECT COALESCE(SUM(state_bytes), 0) AS used FROM commits');
+export const assertGlobalCeiling = async (incomingBytes, queryFn = query) => {
+    const total = await queryFn('SELECT COALESCE(SUM(state_bytes), 0) AS used FROM commits');
     if (Number(total[0].used) + incomingBytes > globalCeilingBytes()) {
         throw new LimitError(507, 'SERVICE_STORAGE_FULL',
             'Cloud storage is temporarily full. Please try again later.');
     }
 };
 
-export const assertStorageAllowance = async (userId, incomingBytes) => {
+export const assertStorageAllowance = async (userId, incomingBytes, queryFn = query) => {
     // Global ceiling first: a hard cost kill-switch that holds even if per-user
     // accounting is ever wrong. Checked on every content write.
-    await assertGlobalCeiling(incomingBytes);
-    if (await getUserStoredBytes(userId) + incomingBytes > userStorageQuotaBytes()) {
+    await assertGlobalCeiling(incomingBytes, queryFn);
+    if (await getUserStoredBytes(userId, queryFn) + incomingBytes > userStorageQuotaBytes()) {
         throw new LimitError(413, 'STORAGE_QUOTA_EXCEEDED',
             'Storage quota exceeded. Delete old projects from the My Projects page to free up space.');
     }
 };
 
-export const assertProjectAllowance = async (userId) => {
-    const rows = await query('SELECT COUNT(*) AS n FROM projects WHERE owner_id = $1', [userId]);
+export const assertProjectAllowance = async (userId, queryFn = query) => {
+    const rows = await queryFn('SELECT COUNT(*) AS n FROM projects WHERE owner_id = $1', [userId]);
     if (Number(rows[0].n) >= maxProjectsPerUser()) {
         throw new LimitError(403, 'PROJECT_LIMIT_REACHED',
             `Project limit reached (max ${maxProjectsPerUser()}). Delete a project from the My Projects page to make room.`);
     }
 };
 
-export const assertPublishAllowance = async (userId) => {
-    const rows = await query(`SELECT COUNT(*) AS n FROM projects WHERE owner_id = $1 AND visibility = 'public'`, [userId]);
+export const assertPublishAllowance = async (userId, queryFn = query) => {
+    const rows = await queryFn(`SELECT COUNT(*) AS n FROM projects WHERE owner_id = $1 AND visibility = 'public'`, [userId]);
     if (Number(rows[0].n) >= maxPublicProjectsPerUser()) {
         throw new LimitError(403, 'PUBLIC_LIMIT_REACHED',
             `Published project limit reached (max ${maxPublicProjectsPerUser()}). Unpublish one to publish another.`);
