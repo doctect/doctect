@@ -72,6 +72,7 @@ describe('project count cap', () => {
         const pub = await request(app).post('/api/projects').set('Cookie', fresh)
             .send({ name: 'Pub', state: minimalState('pub') });
         await request(app).post(`/api/projects/${pub.body.project.id}/publish`).set('Cookie', fresh)
+            .set('If-Match', pub.body.project.headCommitId)
             .send({ description: '', tags: [], thumbnails: [PNG_1X1] });
         forker = await signUpUser(app, { email: 'capfork@test.dev', username: 'capfork_u' });
         await request(app).post('/api/projects').set('Cookie', forker)
@@ -91,13 +92,16 @@ describe('publish cap', () => {
             .send({ name: 'P2', state: minimalState('p2') });
         process.env.MAX_PUBLIC_PROJECTS_PER_USER = '1';
         const pub1 = await request(app).post(`/api/projects/${p1.body.project.id}/publish`).set('Cookie', forker)
+            .set('If-Match', p1.body.project.headCommitId)
             .send({ description: '', tags: [], thumbnails: [PNG_1X1] });
         expect(pub1.status).toBe(200);
         const pub2 = await request(app).post(`/api/projects/${p2.body.project.id}/publish`).set('Cookie', forker)
+            .set('If-Match', p2.body.project.headCommitId)
             .send({ description: '', tags: [], thumbnails: [PNG_1X1] });
         expect(pub2.status).toBe(403);
         expect(pub2.body.code).toBe('PUBLIC_LIMIT_REACHED');
         const repub = await request(app).post(`/api/projects/${p1.body.project.id}/publish`).set('Cookie', forker)
+            .set('If-Match', p1.body.project.headCommitId)
             .send({ description: 'updated', tags: [], thumbnails: [PNG_1X1] });
         expect(repub.status).toBe(200);
     });

@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PublishModal } from '../../components/cloud/PublishModal';
-import { cloudApi } from '../../services/cloudApi';
+import { ApiError, cloudApi } from '../../services/cloudApi';
 
 vi.mock('../../services/pdfService', () => ({ computePageOrder: () => ['root'] }));
 const generateThumbnails = vi.hoisted(() => vi.fn());
@@ -24,14 +24,23 @@ const state = {
 
 const cloudProject = { id: 'cloud-1', name: 'Cloud Project', headCommitId: 'head-1' } as any;
 
+const modal = (cloudProjectId = 'cloud-1', withLocalGenerator = false) => (
+    <PublishModal
+        project={{ id: `local-${cloudProjectId}`, name: 'Project', initialState: { ...state, ...(withLocalGenerator ? { generator } : {}) } as any }}
+        cloudProjectId={cloudProjectId}
+        onClose={vi.fn()}
+        onPublished={vi.fn()}
+    />
+);
+
 const renderModal = (withLocalGenerator: boolean) => {
     const props = { onClose: vi.fn(), onPublished: vi.fn() };
-    render(<PublishModal
+    const result = render(<PublishModal
         project={{ id: 'local-1', name: 'Project', initialState: { ...state, ...(withLocalGenerator ? { generator } : {}) } as any }}
         cloudProjectId="cloud-1"
         {...props}
     />);
-    return props;
+    return { ...props, ...result };
 };
 
 const deferred = <T,>() => {
@@ -98,11 +107,76 @@ describe('PublishModal generator source warning', () => {
 
         fireEvent.click(button);
 
-        await waitFor(() => expect(publish).toHaveBeenCalledWith('cloud-1', {
+        await waitFor(() => expect(publish).toHaveBeenCalledWith('cloud-1', 'head-1', {
             description: '',
             tags: [],
             thumbnails: ['data:image/png;base64,preview'],
         }));
         expect(props.onPublished).toHaveBeenCalledOnce();
+    });
+
+    it('reloads changed head disclosure after a conditional publish conflict', async () => {
+        vi.spyOn(cloudApi, 'getProject')
+            .mockResolvedValueOnce(cloudProject)
+            .mockResolvedValueOnce({ ...cloudProject, headCommitId: 'head-2' });
+        vi.spyOn(cloudApi, 'getCommit').mockImplementation(async (_projectId, commitId) => ({
+            id: commitId,
+            message: 'Head',
+            createdAt: '2026-07-14T12:40:00.000Z',
+            state: commitId === 'head-2' ? { ...state, generator } : state,
+        }));
+        generateThumbnails.mockResolvedValue(['data:image/png;base64,preview']);
+        const publish = vi.spyOn(cloudApi, 'publish').mockRejectedValue(
+            new ApiError(409, 'Project changed since disclosure was inspected.', 'PROJECT_HEAD_CHANGED'),
+        );
+        const props = renderModal(false);
+        const button = screen.getByRole('button', { name: 'Publish' });
+        await waitFor(() => expect(button).toBeEnabled());
+
+        fireEvent.click(button);
+
+        expect(await screen.findByRole('alert')).toHaveTextContent('Publishing makes both scripts public');
+        expect(cloudApi.getCommit).toHaveBeenLastCalledWith('cloud-1', 'head-2');
+        expect(publish).toHaveBeenCalledOnce();
+        expect(publish).toHaveBeenCalledWith('cloud-1', 'head-1', expect.any(Object));
+        expect(props.onPublished).not.toHaveBeenCalled();
+        expect(button).toBeEnabled();
+    });
+
+    it('immediately disables old disclosure when the cloud project changes', async () => {
+        const nextProject = deferred<any>();
+        vi.spyOn(cloudApi, 'getProject').mockImplementation(projectId => (
+            projectId === 'cloud-1'
+                ? Promise.resolve(cloudProject)
+                : nextProject.promise
+        ));
+        vi.spyOn(cloudApi, 'getCommit').mockResolvedValue({
+            id: 'head-1', message: 'Head', createdAt: '2026-07-14T12:40:00.000Z', state: { ...state, generator },
+        });
+        const { rerender } = render(modal('cloud-1'));
+        expect(await screen.findByRole('alert')).toHaveTextContent('Publishing makes both scripts public');
+        expect(screen.getByRole('button', { name: 'Publish' })).toBeEnabled();
+
+        rerender(modal('cloud-2'));
+
+        expect(screen.getByRole('button', { name: 'Publish' })).toBeDisabled();
+        expect(screen.queryByText(/Publishing makes both scripts public/)).not.toBeInTheDocument();
+    });
+
+    it('does not let an operation started for the old project publish after rerender', async () => {
+        const thumbnails = deferred<string[]>();
+        generateThumbnails.mockReturnValue(thumbnails.promise);
+        const publish = vi.spyOn(cloudApi, 'publish').mockResolvedValue({} as any);
+        const { rerender } = render(modal('cloud-1'));
+        const button = screen.getByRole('button', { name: 'Publish' });
+        await waitFor(() => expect(button).toBeEnabled());
+        fireEvent.click(button);
+        await waitFor(() => expect(generateThumbnails).toHaveBeenCalledOnce());
+
+        rerender(modal('cloud-2'));
+        thumbnails.resolve(['data:image/png;base64,preview']);
+
+        await waitFor(() => expect(screen.getByRole('button', { name: 'Publish' })).toBeDisabled());
+        expect(publish).not.toHaveBeenCalled();
     });
 });

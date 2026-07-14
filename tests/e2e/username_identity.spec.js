@@ -99,8 +99,10 @@ test.describe('Username identity', () => {
             data: { name: 'Upstream For Fork Test', state: minimalState },
         });
         expect(createRes.ok()).toBeTruthy();
-        const projectId = (await createRes.json()).project.id;
+        const project = (await createRes.json()).project;
+        const projectId = project.id;
         const publishRes = await ownerCtx.request.post(`${API_BASE}/api/projects/${projectId}/publish`, {
+            headers: { 'If-Match': project.headCommitId },
             data: { description: '', tags: [], thumbnails: [PNG_1X1] },
         });
         expect(publishRes.ok()).toBeTruthy();

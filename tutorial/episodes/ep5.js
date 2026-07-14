@@ -63,7 +63,7 @@ async function setupOwner(servers) {
         body: JSON.stringify({ name: 'Weekly Planner', state, message: 'Initial design' }),
     })).json();
     await fetch(`${API}/api/projects/${proj.project.id}/publish`, {
-        method: 'POST', headers: authed,
+        method: 'POST', headers: { ...authed, 'If-Match': proj.project.headCommitId },
         body: JSON.stringify({ description: 'A clean weekly planner spread — fork it and make it yours.', tags: ['weekly', 'planner'], thumbnails: [PNG_1X1] }),
     });
     return proj.project.id;

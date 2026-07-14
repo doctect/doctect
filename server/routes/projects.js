@@ -243,7 +243,16 @@ export const getThumbnailIds = async (projectId) => {
 };
 
 router.post('/api/projects/:id/publish', requireAuth, requireUsername, loadProject(true), async (req, res) => {
-    if (req.project.visibility !== 'public') {
+    const expectedHead = req.get('If-Match');
+    if (!expectedHead) {
+        return res.status(428).json({ error: 'If-Match header is required.', code: 'PROJECT_HEAD_REQUIRED' });
+    }
+    const currentProject = await getProjectRow(req.project.id);
+    if (!currentProject || currentProject.head_commit_id !== expectedHead) {
+        return res.status(409).json({ error: 'Project head changed since it was inspected.', code: 'PROJECT_HEAD_CHANGED' });
+    }
+
+    if (currentProject.visibility !== 'public') {
         try {
             await assertPublishAllowance(req.user.id);
         } catch (e) {
@@ -264,15 +273,15 @@ router.post('/api/projects/:id/publish', requireAuth, requireUsername, loadProje
     }
     const d = String(description ?? '').slice(0, 2000);
 
-    await query('DELETE FROM thumbnails WHERE project_id = $1', [req.project.id]);
+    await query('DELETE FROM thumbnails WHERE project_id = $1', [currentProject.id]);
     for (let i = 0; i < parsed.length; i++) {
         await query('INSERT INTO thumbnails (id, project_id, position, mime, image) VALUES ($1, $2, $3, $4, $5)',
-            [randomUUID(), req.project.id, i, parsed[i].mime, parsed[i].buf]);
+            [randomUUID(), currentProject.id, i, parsed[i].mime, parsed[i].buf]);
     }
     await query(`UPDATE projects SET visibility = 'public', description = $1, tags = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3`,
-        [d, JSON.stringify(tags), req.project.id]);
+        [d, JSON.stringify(tags), currentProject.id]);
 
-    const row = await getProjectRow(req.project.id);
+    const row = await getProjectRow(currentProject.id);
     res.json({ project: { ...projectDto(row), thumbnailIds: await getThumbnailIds(row.id) } });
 });
 

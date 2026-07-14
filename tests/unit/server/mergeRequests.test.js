@@ -17,6 +17,7 @@ const setupForkWithChanges = async () => {
         .send({ name: 'Upstream', state: stateWithDayName('Original') });
     upstreamId = up.body.project.id;
     await request(app).post(`/api/projects/${upstreamId}/publish`).set('Cookie', ownerCookie)
+        .set('If-Match', up.body.project.headCommitId)
         .send({ description: '', tags: [], thumbnails: [PNG_1X1] });
     // fork + a change
     const fork = await request(app).post(`/api/projects/${upstreamId}/fork`).set('Cookie', authorCookie);
@@ -98,6 +99,7 @@ describe('merge request creation', () => {
             .send({ name: 'Solo Upstream', state: stateWithDayName('Original') });
         const ownId = own.body.project.id;
         await request(app).post(`/api/projects/${ownId}/publish`).set('Cookie', ownerCookie)
+            .set('If-Match', own.body.project.headCommitId)
             .send({ description: '', tags: [], thumbnails: [PNG_1X1] });
         const selfFork = await request(app).post(`/api/projects/${ownId}/fork`).set('Cookie', ownerCookie);
         const selfForkId = selfFork.body.project.id;

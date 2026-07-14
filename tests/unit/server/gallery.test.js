@@ -17,6 +17,7 @@ beforeAll(async () => {
         .send({ name: 'Public Planner', state: { ...minimalState(), generator } });
     publicId = pub.body.project.id;
     await request(app).post(`/api/projects/${publicId}/publish`).set('Cookie', cookie)
+        .set('If-Match', pub.body.project.headCommitId)
         .send({ description: 'shiny', tags: ['planner'], thumbnails: [PNG_1X1] });
     const priv = await request(app).post('/api/projects').set('Cookie', cookie)
         .send({ name: 'Hidden', state: minimalState() });

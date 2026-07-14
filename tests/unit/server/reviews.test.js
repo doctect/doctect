@@ -14,6 +14,7 @@ beforeAll(async () => {
         .send({ name: 'Reviewable Planner', state: minimalState() });
     projectId = proj.body.project.id;
     await request(app).post(`/api/projects/${projectId}/publish`).set('Cookie', ownerCookie)
+        .set('If-Match', proj.body.project.headCommitId)
         .send({ description: 'reviewable', tags: ['rev-tag'], thumbnails: [PNG_1X1] });
 });
 

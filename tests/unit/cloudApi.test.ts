@@ -39,6 +39,31 @@ describe('cloudApi error handling', () => {
     });
 });
 
+describe('cloudApi publish', () => {
+    afterEach(() => vi.unstubAllGlobals());
+
+    it('sends the inspected head in If-Match without changing the body', async () => {
+        const fetchMock = vi.fn().mockResolvedValue({
+            ok: true,
+            status: 200,
+            json: async () => ({ project: {} }),
+        });
+        vi.stubGlobal('fetch', fetchMock);
+        const body = {
+            description: 'Description',
+            tags: ['planner'],
+            thumbnails: ['data:image/png;base64,preview'],
+        };
+
+        await cloudApi.publish('project-1', 'head-1', body);
+
+        const [, options] = fetchMock.mock.calls[0];
+        expect(options.headers).toMatchObject({ 'If-Match': 'head-1' });
+        expect(JSON.parse(options.body)).toEqual(body);
+        expect(Object.keys(JSON.parse(options.body))).toEqual(['description', 'tags', 'thumbnails']);
+    });
+});
+
 describe('gallery v2 api methods', () => {
     const okJson = (body: unknown) =>
         Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(body) } as Response);

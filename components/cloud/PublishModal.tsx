@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { X, Globe, Loader } from 'lucide-react';
 import { cloudApi, ApiError } from '../../services/cloudApi';
 import { computePageOrder } from '../../services/pdfService';
@@ -13,9 +13,9 @@ interface PublishModalProps {
 }
 
 type DisclosureState =
-    | { status: 'loading' }
-    | { status: 'ready'; hasGenerator: boolean }
-    | { status: 'error'; message: string };
+    | { status: 'loading'; projectId: string }
+    | { status: 'ready'; projectId: string; headCommitId: string; hasGenerator: boolean }
+    | { status: 'error'; projectId: string; message: string };
 
 export function PublishModal({ project, cloudProjectId, onClose, onPublished }: PublishModalProps) {
     const [description, setDescription] = useState('');
@@ -24,24 +24,33 @@ export function PublishModal({ project, cloudProjectId, onClose, onPublished }: 
     const [previews, setPreviews] = useState<string[]>([]);
     const [phase, setPhase] = useState<'form' | 'rendering' | 'uploading'>('form');
     const [error, setError] = useState<string | null>(null);
-    const [disclosure, setDisclosure] = useState<DisclosureState>({ status: 'loading' });
+    const [disclosure, setDisclosure] = useState<DisclosureState>({ status: 'loading', projectId: cloudProjectId });
     const [disclosureAttempt, setDisclosureAttempt] = useState(0);
+    const currentProjectId = useRef(cloudProjectId);
+    currentProjectId.current = cloudProjectId;
 
     useEffect(() => {
         let cancelled = false;
-        setDisclosure({ status: 'loading' });
+        setDisclosure({ status: 'loading', projectId: cloudProjectId });
+        setPhase('form');
+        setError(null);
         const loadDisclosure = async () => {
             try {
                 const cloudProject = await cloudApi.getProject(cloudProjectId);
                 if (!cloudProject.headCommitId) throw new Error('Cloud project has no head commit.');
                 const head = await cloudApi.getCommit(cloudProjectId, cloudProject.headCommitId);
                 if (!cancelled) {
-                    setDisclosure({ status: 'ready', hasGenerator: head.state?.generator !== undefined });
+                    setDisclosure({
+                        status: 'ready',
+                        projectId: cloudProjectId,
+                        headCommitId: cloudProject.headCommitId,
+                        hasGenerator: head.state?.generator !== undefined,
+                    });
                 }
             } catch (e) {
                 if (!cancelled) {
                     const message = e instanceof Error ? e.message : 'Could not inspect cloud source disclosure.';
-                    setDisclosure({ status: 'error', message });
+                    setDisclosure({ status: 'error', projectId: cloudProjectId, message });
                 }
             }
         };
@@ -59,23 +68,32 @@ export function PublishModal({ project, cloudProjectId, onClose, onPublished }: 
     };
 
     const publish = async () => {
-        if (disclosure.status !== 'ready') return;
+        const inspected = disclosure.status === 'ready' && disclosure.projectId === cloudProjectId ? disclosure : null;
+        if (!inspected || currentProjectId.current !== cloudProjectId) return;
         if (selected.length === 0) { setError('Pick at least one page for the preview.'); return; }
         setError(null);
         try {
             setPhase('rendering');
             const thumbs = await generateThumbnails(project.initialState, selected, project.initialState.activeVariantId);
+            if (currentProjectId.current !== cloudProjectId) return;
             setPreviews(thumbs);
             if (thumbs.length === 0) throw new Error('Could not render previews');
             setPhase('uploading');
             const tags = tagsText.split(',').map(t => t.trim().toLowerCase()).filter(Boolean).slice(0, 10);
-            await cloudApi.publish(cloudProjectId, { description, tags, thumbnails: thumbs });
-            onPublished();
+            await cloudApi.publish(cloudProjectId, inspected.headCommitId, { description, tags, thumbnails: thumbs });
+            if (currentProjectId.current === cloudProjectId) onPublished();
         } catch (e) {
+            if (currentProjectId.current !== cloudProjectId) return;
+            if (e instanceof ApiError && e.code === 'PROJECT_HEAD_CHANGED') {
+                setDisclosure({ status: 'loading', projectId: cloudProjectId });
+                setDisclosureAttempt(value => value + 1);
+            }
             setError(e instanceof ApiError ? e.message : (e as Error).message || 'Publish failed');
             setPhase('form');
         }
     };
+
+    const hasCurrentDisclosure = disclosure.status === 'ready' && disclosure.projectId === cloudProjectId;
 
     return (
         <div className="fixed inset-0 bg-black/40 z-[100] flex items-center justify-center" onClick={onClose}>
@@ -89,12 +107,12 @@ export function PublishModal({ project, cloudProjectId, onClose, onPublished }: 
                         Publishing makes this project's latest cloud version and previews visible to everyone.
                         Make sure you've saved to cloud first.
                     </p>
-                    {disclosure.status === 'loading' && (
+                    {(disclosure.projectId !== cloudProjectId || disclosure.status === 'loading') && (
                         <div role="status" className="rounded border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600 flex items-center gap-2">
                             <Loader size={12} className="animate-spin" /> Checking cloud source disclosure…
                         </div>
                     )}
-                    {disclosure.status === 'error' && (
+                    {disclosure.status === 'error' && disclosure.projectId === cloudProjectId && (
                         <div role="alert" className="rounded border border-red-200 bg-red-50 p-3 text-xs text-red-700 flex items-center justify-between gap-3">
                             <span>{disclosure.message}</span>
                             <button type="button" onClick={() => setDisclosureAttempt(value => value + 1)} className="font-semibold hover:text-red-900">
@@ -102,7 +120,7 @@ export function PublishModal({ project, cloudProjectId, onClose, onPublished }: 
                             </button>
                         </div>
                     )}
-                    {disclosure.status === 'ready' && disclosure.hasGenerator && (
+                    {hasCurrentDisclosure && disclosure.hasGenerator && (
                         <div role="alert" className="rounded border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">
                             This project includes saved generator source. Publishing makes both scripts public. Review them for secrets, private comments, or identifying information. To exclude source, cancel, use “Detach Saved Generator” in Hierarchy Generator, and save to cloud before publishing.
                         </div>
@@ -137,7 +155,7 @@ export function PublishModal({ project, cloudProjectId, onClose, onPublished }: 
                 </div>
                 <div className="px-4 py-3 border-t flex justify-end gap-2">
                     <button onClick={onClose} className="text-xs px-3 py-1.5 rounded border text-slate-600">Cancel</button>
-                    <button onClick={publish} disabled={phase !== 'form' || disclosure.status !== 'ready'}
+                    <button onClick={publish} disabled={phase !== 'form' || !hasCurrentDisclosure}
                         className="text-xs px-3 py-1.5 rounded bg-blue-600 text-white disabled:opacity-50 flex items-center gap-1">
                         {phase !== 'form' && <Loader size={11} className="animate-spin" />}
                         {phase === 'rendering' ? 'Rendering previews…' : phase === 'uploading' ? 'Publishing…' : 'Publish'}

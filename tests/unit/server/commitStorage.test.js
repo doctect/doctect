@@ -60,6 +60,7 @@ describe('compressed commit storage', () => {
         const created = await request(app).post('/api/projects').set('Cookie', cookie)
             .send({ name: 'ForkSrc', state });
         await request(app).post(`/api/projects/${created.body.project.id}/publish`).set('Cookie', cookie)
+            .set('If-Match', created.body.project.headCommitId)
             .send({ description: '', tags: [], thumbnails: ['data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='] });
         const cookieB = await signUpUser(app, { email: 'forker@test.dev', username: 'forker_u' });
         const fork = await request(app).post(`/api/projects/${created.body.project.id}/fork`).set('Cookie', cookieB);
