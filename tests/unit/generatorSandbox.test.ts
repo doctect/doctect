@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { chromium } from '@playwright/test';
 import {
     runGeneratorSandbox,
     type GeneratorSandboxEnvironment,
     type GeneratorSandboxRequest,
 } from '../../services/generatorSandbox';
+import { normalizeGeneratedTemplates } from '../../services/generatorTemplates';
 
 const validRequest = (): GeneratorSandboxRequest => ({
     templateScript: 'return { page: { id: "page" } };',
@@ -220,16 +222,20 @@ describe('browser sandbox frame', () => {
         expect(iframe!.srcdoc).toContain('new MessageChannel()');
         expect(iframe!.srcdoc).toContain('resultPort.onmessage');
         expect(iframe!.srcdoc).not.toContain('worker.onmessage');
-        expect(iframe!.srcdoc).toContain('trustedEncode(serialized).byteLength');
+        expect(iframe!.srcdoc).toContain('trustedByteLength(trustedEncode(serialized))');
         expect(iframe!.srcdoc).toContain('const trustedStringify = JSON.stringify.bind(JSON)');
         expect(iframe!.srcdoc).toContain('const trustedEncoder = new TextEncoder()');
         expect(iframe!.srcdoc).toContain('const trustedEncode = trustedEncoder.encode.bind(trustedEncoder)');
+        expect(iframe!.srcdoc).toContain('Object.getOwnPropertyDescriptor(typedArrayPrototype, \\"byteLength\\")');
+        expect(iframe!.srcdoc).toContain('trustedByteLengthGetter.call.bind(trustedByteLengthGetter)');
         expect(iframe!.srcdoc).toContain('const trustedPost = resultPort.postMessage.bind(resultPort)');
         expect(iframe!.srcdoc).toContain(String(5 * 1024 * 1024));
         expect(iframe!.srcdoc).toContain('Generated output exceeds');
         expect(iframe!.srcdoc).toContain('JSON.parse(message.serialized)');
         expect(iframe!.srcdoc).toContain('Object.create(null)');
         expect(iframe!.srcdoc).toContain('Object.hasOwn(variants, raw.activeVariantId)');
+        expect(iframe!.srcdoc).toContain('typeof normalizedElement.layerId !== \\"string\\"');
+        expect(iframe!.srcdoc).toContain('layerIds.has(normalizedElement.layerId)');
         expect(iframe!.srcdoc).toContain('safely(() => workerToTerminate.terminate())');
         expect(iframe!.srcdoc).toContain('safely(() => URL.revokeObjectURL(urlToRevoke))');
 
@@ -237,6 +243,89 @@ describe('browser sandbox frame', () => {
         await expect(pending).resolves.toMatchObject({ ok: true });
         expect(document.body.querySelector('iframe')).toBeNull();
     });
+
+    it('enforces output bytes and layer agreement in Chromium', async () => {
+        vi.spyOn(crypto, 'getRandomValues').mockImplementation(array => {
+            (array as Uint8Array).fill(0);
+            return array;
+        });
+        const pending = runGeneratorSandbox(validRequest());
+        const iframe = document.body.querySelector('iframe')!;
+        const sourceMatch = iframe.srcdoc.match(/const workerSource = (".*");\n  let worker/s);
+        expect(sourceMatch).not.toBeNull();
+        const workerSource = JSON.parse(sourceMatch![1]);
+        settleFrame(iframe);
+        await pending;
+
+        const browser = await chromium.launch({ headless: true });
+        try {
+            const page = await browser.newPage();
+            const results = await page.evaluate(async source => {
+                const runWorker = (request: unknown) => new Promise<any>((resolve, reject) => {
+                    const url = URL.createObjectURL(new Blob([source], { type: 'text/javascript' }));
+                    const worker = new Worker(url);
+                    URL.revokeObjectURL(url);
+                    const channel = new MessageChannel();
+                    channel.port1.onmessage = event => {
+                        worker.terminate();
+                        channel.port1.close();
+                        resolve(event.data);
+                    };
+                    worker.onerror = event => reject(new Error(event.message));
+                    worker.postMessage(request, [channel.port2]);
+                });
+                const constants = { RM_PP_WIDTH: 509, RM_PP_HEIGHT: 679, A4_WIDTH: 595.28, A4_HEIGHT: 841.89 };
+                const oversized = await runWorker({
+                    templateScript: `
+                        const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype);
+                        Object.defineProperty(typedArrayPrototype, 'byteLength', { configurable: true, get: () => 0 });
+                        return { page: { id: 'page', name: 'Page', width: 509, height: 679,
+                            elements: [{ id: 'large', type: 'text', text: 'x'.repeat(6 * 1024 * 1024) }] } };
+                    `,
+                    hierarchyScript: `return { nodes: { root: { id: 'root', parentId: null, type: 'page', title: 'Root', data: {}, children: [] } }, rootId: 'root' };`,
+                    constants,
+                });
+                const layers = await runWorker({
+                    templateScript: `return { page: {
+                        id: 'page', name: 'Page', width: 509, height: 679,
+                        layers: [
+                            { id: 'fallback', name: 'Fallback', order: 0, visible: true, locked: false },
+                            { id: 'valid', name: 'Valid', order: 1, visible: true, locked: false }
+                        ],
+                        elements: [
+                            { id: 'dangling', type: 'rect', layerId: 'missing-layer' },
+                            { id: 'valid-element', type: 'rect', layerId: 'valid' },
+                            { id: 'missing', type: 'rect' }
+                        ]
+                    } };`,
+                    hierarchyScript: `
+                        const ids = templates.page.elements.map(element => element.layerId);
+                        return { nodes: { root: { id: 'root', parentId: null, type: 'page', title: 'Root', data: { ids: ids.join(',') }, children: [] } }, rootId: 'root' };
+                    `,
+                    constants,
+                });
+                return {
+                    oversized,
+                    layers: layers.ok ? { ...layers, value: JSON.parse(layers.serialized) } : layers,
+                };
+            }, workerSource);
+
+            expect(results.oversized).toEqual({
+                ok: false,
+                category: 'runtime',
+                message: `Generated output exceeds ${5 * 1024 * 1024} bytes.`,
+            });
+            expect(JSON.stringify(results.oversized).length).toBeLessThan(200);
+            expect(results.layers.ok).toBe(true);
+            const workerValue = results.layers.value;
+            const finalTemplates = normalizeGeneratedTemplates(workerValue.templates).templates!;
+            const hierarchyIds = workerValue.hierarchy.nodes.root.data.ids.split(',');
+            expect(hierarchyIds).toEqual(['fallback', 'valid', 'fallback']);
+            expect(finalTemplates.page.elements.map(element => element.layerId)).toEqual(hierarchyIds);
+        } finally {
+            await browser.close();
+        }
+    }, 20_000);
 
     it('removes the iframe even when posting cancellation fails', async () => {
         vi.spyOn(crypto, 'getRandomValues').mockImplementation(array => {

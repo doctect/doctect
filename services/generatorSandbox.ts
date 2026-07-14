@@ -106,6 +106,9 @@ function generatorWorkerMain(maxOutputBytes: number) {
     const trustedStringify = JSON.stringify.bind(JSON);
     const trustedEncoder = new TextEncoder();
     const trustedEncode = trustedEncoder.encode.bind(trustedEncoder);
+    const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype);
+    const trustedByteLengthGetter = Object.getOwnPropertyDescriptor(typedArrayPrototype, 'byteLength')!.get!;
+    const trustedByteLength = trustedByteLengthGetter.call.bind(trustedByteLengthGetter);
     try { Object.freeze(Object.prototype); } catch { /* Keep serialization free of inherited toJSON hooks when supported. */ }
     try { Object.freeze(Array.prototype); } catch { /* Keep array serialization stable when supported. */ }
     const blockedGlobals = [
@@ -182,13 +185,18 @@ function generatorWorkerMain(maxOutputBytes: number) {
             const fallbackLayerId = Array.isArray(layers) && layers.length > 0
                 ? [...layers].sort((left: any, right: any) => left.order - right.order)[0].id
                 : undefined;
+            const layerIds = new Set(Array.isArray(layers) ? layers.map((layer: any) => layer.id) : []);
             const elements = Array.isArray(template.elements)
                 ? template.elements.map((element: any, index: number) => {
                     const normalizedElement = {
                         ...element,
                         id: element?.id || `gen_${template.id}_${index}_${Math.random().toString(36).slice(2, 7)}`,
                     };
-                    if (normalizedElement.layerId === undefined && fallbackLayerId !== undefined) {
+                    if (normalizedElement.layerId !== undefined && typeof normalizedElement.layerId !== 'string') {
+                        throw new Error(`Template ${template.id} has an element with a non-string layerId.`);
+                    }
+                    if (fallbackLayerId !== undefined
+                        && (!normalizedElement.layerId || !layerIds.has(normalizedElement.layerId))) {
                         normalizedElement.layerId = fallbackLayerId;
                     }
                     return normalizedElement;
@@ -259,7 +267,7 @@ function generatorWorkerMain(maxOutputBytes: number) {
 
             const value = { templates: normalizedTemplates, hierarchy };
             const serialized = trustedStringify(value);
-            if (trustedEncode(serialized).byteLength > maxOutputBytes) {
+            if (trustedByteLength(trustedEncode(serialized)) > maxOutputBytes) {
                 trustedPost({
                     ok: false,
                     category: 'runtime',
