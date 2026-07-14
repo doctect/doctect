@@ -16,7 +16,7 @@ Every cloud save inserts an immutable row into `commits`: a full JSON snapshot o
 
 - **Version history** (`components/cloud/HistoryModal.tsx`) lists up to the last 200 commits (`GET /api/projects/:id/commits`) and lets owners restore any of them. Non-owners see only commits recorded by an explicit publish; private intermediate commits and parent identifiers are not exposed.
 - **Validation on every write**: `POST /api/projects` and `POST /api/projects/:id/commits` both run the submitted state through `validateAppState` before writing anything. It rejects anything over 5MB serialized, more than 20,000 nodes, more than 50 variants, or more than 50,000 total template elements across all variants — a defense against both malformed clients and pathological documents, not a normal-use ceiling.
-- Deleting a project (`DELETE /api/projects/:id`) cascades to its commits.
+- Deleting a project (`DELETE /api/projects/:id`) closes active merge requests and explicitly removes reports, publication records, thumbnail blobs, reviews, and commits before removing the project. All cleanup shares one transaction, including on SQLite where foreign-key cascades may be disabled.
 
 ## Publishing to the Gallery
 

@@ -1,8 +1,27 @@
 // tests/unit/server/deleteProjectClosesMrs.test.js
 // @vitest-environment node
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, vi } from 'vitest';
 import request from 'supertest';
 import { initTestApp, signUpUser, minimalState, PNG_1X1, saveProjectCommit } from './helpers.js';
+
+const deletionFault = vi.hoisted(() => ({ failCommitDelete: false }));
+vi.mock('../../../server/db.js', async importOriginal => {
+    const actual = await importOriginal();
+    const intercept = async (baseQuery, text, params = []) => {
+        if (deletionFault.failCommitDelete && /DELETE FROM commits WHERE project_id/.test(text)) {
+            deletionFault.failCommitDelete = false;
+            throw new Error('Injected project commit cleanup failure');
+        }
+        return baseQuery(text, params);
+    };
+    return {
+        ...actual,
+        query: (text, params = []) => intercept(actual.query, text, params),
+        withTransaction: callback => actual.withTransaction(
+            txQuery => callback((text, params = []) => intercept(txQuery, text, params)),
+        ),
+    };
+});
 
 let app, query, ownerCookie, authorCookie;
 beforeAll(async () => {
@@ -66,5 +85,42 @@ describe('deleting a project closes any open MRs referencing it', () => {
         const after = await query('SELECT status, resolved_at FROM merge_requests WHERE id = $1', [mrId]);
         expect(after[0].status).toBe('closed');
         expect(after[0].resolved_at).toBe(resolvedAtBefore);
+    });
+
+    it('removes every row and thumbnail blob owned by a published project', async () => {
+        const { mrId, targetId } = await makeOpenMr();
+        await request(app).put(`/api/gallery/${targetId}/review`).set('Cookie', authorCookie)
+            .send({ rating: 4, body: 'published project review' });
+        await request(app).post(`/api/gallery/${targetId}/report`).send({ reason: 'project report' });
+
+        const del = await request(app).delete(`/api/projects/${targetId}`).set('Cookie', ownerCookie);
+
+        expect(del.status).toBe(200);
+        expect(await query('SELECT project_id FROM project_publications WHERE project_id = $1', [targetId])).toEqual([]);
+        expect(await query('SELECT id FROM thumbnails WHERE project_id = $1', [targetId])).toEqual([]);
+        expect(await query('SELECT id FROM reviews WHERE project_id = $1', [targetId])).toEqual([]);
+        expect(await query('SELECT id FROM reports WHERE project_id = $1', [targetId])).toEqual([]);
+        expect(await query('SELECT id FROM commits WHERE project_id = $1', [targetId])).toEqual([]);
+        expect(await query('SELECT id FROM projects WHERE id = $1', [targetId])).toEqual([]);
+        expect(await query('SELECT status FROM merge_requests WHERE id = $1', [mrId])).toEqual([{ status: 'closed' }]);
+    });
+
+    it('rolls back MR closure and all cleanup when deletion fails', async () => {
+        const { mrId, targetId } = await makeOpenMr();
+        await request(app).put(`/api/gallery/${targetId}/review`).set('Cookie', authorCookie)
+            .send({ rating: 3, body: 'must survive rollback' });
+        await request(app).post(`/api/gallery/${targetId}/report`).send({ reason: 'must survive rollback' });
+        deletionFault.failCommitDelete = true;
+
+        const del = await request(app).delete(`/api/projects/${targetId}`).set('Cookie', ownerCookie);
+
+        expect(del.status).toBe(500);
+        expect(await query('SELECT status FROM merge_requests WHERE id = $1', [mrId])).toEqual([{ status: 'open' }]);
+        expect(await query('SELECT commit_id FROM project_publications WHERE project_id = $1', [targetId])).toHaveLength(1);
+        expect(await query('SELECT id FROM thumbnails WHERE project_id = $1', [targetId])).toHaveLength(1);
+        expect(await query('SELECT id FROM reviews WHERE project_id = $1', [targetId])).toHaveLength(1);
+        expect(await query('SELECT id FROM reports WHERE project_id = $1', [targetId])).toHaveLength(1);
+        expect(await query('SELECT id FROM commits WHERE project_id = $1', [targetId])).toHaveLength(1);
+        expect(await query('SELECT id FROM projects WHERE id = $1', [targetId])).toHaveLength(1);
     });
 });
