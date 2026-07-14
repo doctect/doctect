@@ -44,79 +44,172 @@ const seedSavedGenerator = async (page, source) => {
     await waitForPersistedGenerator(page, source);
 };
 
-const observeNoExecutionUi = (dialog, durationMs = MIN_NO_HIT_OBSERVATION_MS) => dialog.evaluate(
-    (root, observationMs) => new Promise((resolve, reject) => {
-        let timer;
-        let observer;
-        const findExecutionUi = () => root.querySelector('[role="alert"], [aria-live="polite"]');
-        const cleanup = () => {
-            clearTimeout(timer);
-            observer?.disconnect();
-        };
-        const fail = executionUi => {
-            if (!executionUi) return;
-            cleanup();
-            reject(new Error(`Unexpected generator execution UI: ${executionUi.outerHTML}`));
-        };
-        const findInNode = node => node instanceof Element && (
-            node.matches('[role="alert"], [aria-live="polite"]')
-                ? node
-                : node.querySelector('[role="alert"], [aria-live="polite"]')
-        );
-
-        timer = setTimeout(() => {
-            cleanup();
-            resolve();
-        }, observationMs);
-        observer = new MutationObserver(records => {
-            for (const record of records) {
-                if (record.type === 'attributes') {
-                    const currentValue = record.target.getAttribute(record.attributeName);
-                    const executionValue = record.attributeName === 'role' ? 'alert' : 'polite';
-                    if (record.oldValue === executionValue || currentValue === executionValue) {
-                        fail(record.target);
-                        return;
-                    }
-                    continue;
-                }
-                for (const node of record.addedNodes) {
-                    const executionUi = findInNode(node);
-                    if (executionUi) {
-                        fail(executionUi);
-                        return;
+const startExecutionUiObservation = page => page.evaluateHandle(() => {
+    const matches = [];
+    const isApplyButton = node => node instanceof Element
+        && node.matches('button')
+        && node.textContent?.trim() === 'Apply Generated Project';
+    const record = (node, target, reason) => {
+        matches.push({
+            node,
+            targets: [target],
+            description: `${reason}: ${node.outerHTML}`,
+        });
+    };
+    const inspectNode = (node, target, reason) => {
+        if (!(node instanceof Element)) return;
+        const executionNodes = [
+            ...(node.matches('[role="alert"], [aria-live="polite"]') ? [node] : []),
+            ...node.querySelectorAll('[role="alert"], [aria-live="polite"]'),
+        ];
+        for (const executionNode of executionNodes) record(executionNode, target, reason);
+        const buttons = [
+            ...(isApplyButton(node) ? [node] : []),
+            ...[...node.querySelectorAll('button')].filter(isApplyButton),
+        ];
+        for (const button of buttons) {
+            if (!button.hasAttribute('disabled')) record(button, target, 'preview became ready');
+        }
+    };
+    const observer = new MutationObserver(mutations => {
+        for (const mutation of mutations) {
+            if (mutation.type === 'childList') {
+                for (const node of mutation.addedNodes) inspectNode(node, mutation.target, 'execution UI added');
+                for (const node of mutation.removedNodes) {
+                    inspectNode(node, mutation.target, 'execution UI removed');
+                    if (!(node instanceof Element)) continue;
+                    for (const match of matches) {
+                        if (node === match.node || node.contains(match.node)) match.targets.push(mutation.target);
                     }
                 }
+                continue;
             }
-            fail(findExecutionUi());
-        });
-        observer.observe(root, {
-            attributes: true,
-            attributeOldValue: true,
-            attributeFilter: ['aria-live', 'role'],
-            childList: true,
-            subtree: true,
-        });
-        fail(findExecutionUi());
-    }),
-    durationMs,
-);
+
+            const currentValue = mutation.target.getAttribute(mutation.attributeName);
+            if (
+                (mutation.attributeName === 'role'
+                    && (mutation.oldValue === 'alert' || currentValue === 'alert'))
+                || (mutation.attributeName === 'aria-live'
+                    && (mutation.oldValue === 'polite' || currentValue === 'polite'))
+            ) {
+                record(mutation.target, mutation.target, 'execution UI attribute changed');
+            }
+            if (
+                mutation.attributeName === 'disabled'
+                && isApplyButton(mutation.target)
+                && (mutation.oldValue !== null || !mutation.target.hasAttribute('disabled'))
+            ) {
+                record(mutation.target, mutation.target, 'preview became ready');
+            }
+        }
+    });
+    observer.observe(document, {
+        attributes: true,
+        attributeOldValue: true,
+        attributeFilter: ['aria-live', 'disabled', 'role'],
+        childList: true,
+        subtree: true,
+    });
+    return { matches, observer };
+});
+
+const findScopedExecutionUi = async (observation, dialog) => {
+    const root = await dialog.elementHandle();
+    if (!root) throw new Error('Hierarchy Generator dialog disappeared during observation.');
+    try {
+        return await observation.evaluate((session, dialogRoot) => {
+            const isApplyButton = node => node instanceof Element
+                && node.matches('button')
+                && node.textContent?.trim() === 'Apply Generated Project';
+            const recorded = session.matches.find(match => (
+                match.node === dialogRoot
+                || dialogRoot.contains(match.node)
+                || match.targets.some(target => target === dialogRoot || dialogRoot.contains(target))
+            ));
+            if (recorded) return recorded.description;
+
+            const executionUi = dialogRoot.querySelector('[role="alert"], [aria-live="polite"]');
+            if (executionUi) return `execution UI present: ${executionUi.outerHTML}`;
+            const applyButton = [...dialogRoot.querySelectorAll('button')].find(isApplyButton);
+            return applyButton && !applyButton.hasAttribute('disabled')
+                ? `preview ready: ${applyButton.outerHTML}`
+                : null;
+        }, root);
+    } finally {
+        await root.dispose();
+    }
+};
+
+const stopExecutionUiObservation = async observation => {
+    try {
+        await observation.evaluate(session => session.observer.disconnect());
+    } finally {
+        await observation.dispose();
+    }
+};
 
 const openAndAssertIdleSource = async (page, expected, markerServer) => {
-    await activePane(page).getByTitle('Generate Hierarchy via Script').click();
-    const dialog = page.getByRole('dialog', { name: 'Hierarchy Generator' });
-    await expect(page.getByLabel('Template script')).toHaveValue(expected.templateScript);
-    await expect(page.getByLabel('Hierarchy script')).toHaveValue(expected.hierarchyScript);
-    await expect(dialog.getByRole('button', { name: 'Apply Generated Project' })).toBeDisabled();
-    await Promise.all([
-        markerServer.observeNoHitsFor(MIN_NO_HIT_OBSERVATION_MS),
-        observeNoExecutionUi(dialog, MIN_NO_HIT_OBSERVATION_MS),
-    ]);
-    expect(markerServer.hits).toEqual([]);
-    await expect(dialog.getByRole('alert')).toHaveCount(0);
-    await expect(dialog.locator('[aria-live="polite"]')).toHaveCount(0);
+    const observation = await startExecutionUiObservation(page);
+    const markerOutcome = markerServer.observeNoHitsFor(MIN_NO_HIT_OBSERVATION_MS).then(
+        () => null,
+        error => error,
+    );
+    try {
+        await activePane(page).getByTitle('Generate Hierarchy via Script').click();
+        const dialog = page.getByRole('dialog', { name: 'Hierarchy Generator' });
+        await expect(dialog.getByLabel('Template script')).toHaveValue(expected.templateScript);
+        await expect(dialog.getByLabel('Hierarchy script')).toHaveValue(expected.hierarchyScript);
+        await expect(dialog.getByRole('button', { name: 'Apply Generated Project' })).toBeDisabled();
+        const markerError = await markerOutcome;
+        if (markerError) throw markerError;
+        const executionUi = await findScopedExecutionUi(observation, dialog);
+        if (executionUi) throw new Error(`Unexpected generator execution UI: ${executionUi}`);
+        expect(markerServer.hits).toEqual([]);
+        await expect(dialog.getByRole('alert')).toHaveCount(0);
+        await expect(dialog.locator('[aria-live="polite"]')).toHaveCount(0);
+    } finally {
+        await markerOutcome;
+        await stopExecutionUiObservation(observation);
+    }
 };
 
 test.describe('Gallery', () => {
+    test('inert-source check catches transient execution UI during generator open', async ({ page, markerServer }) => {
+        await page.goto('/app');
+        await activePane(page).getByTitle('Generate Hierarchy via Script').click();
+        const expected = {
+            templateScript: await page.getByLabel('Template script').inputValue(),
+            hierarchyScript: await page.getByLabel('Hierarchy script').inputValue(),
+        };
+        await page.getByRole('button', { name: 'Close generator' }).click();
+        await page.evaluate(() => {
+            const injector = new MutationObserver(() => {
+                const dialog = document.querySelector('[role="dialog"][aria-labelledby="hierarchy-generator-title"]');
+                if (!dialog) return;
+                const unrelatedAlert = document.createElement('div');
+                unrelatedAlert.setAttribute('role', 'alert');
+                unrelatedAlert.textContent = 'unrelated page alert';
+                document.body.append(unrelatedAlert);
+                unrelatedAlert.remove();
+                const transientAlert = document.createElement('div');
+                transientAlert.setAttribute('role', 'alert');
+                transientAlert.textContent = 'transient generator execution';
+                dialog.append(transientAlert);
+                transientAlert.remove();
+                injector.disconnect();
+            });
+            injector.observe(document, { childList: true, subtree: true });
+        });
+
+        let observationError;
+        try {
+            await openAndAssertIdleSource(page, expected, markerServer);
+        } catch (error) {
+            observationError = error;
+        }
+        expect(observationError?.message).toContain('transient generator execution');
+    });
+
     test('published generator source opens inertly, edits byte-exactly, and survives a fork', async ({ browser, markerServer }) => {
         test.setTimeout(180000);
 
