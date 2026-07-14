@@ -1,9 +1,10 @@
 import { Router } from 'express';
 import { randomUUID } from 'crypto';
-import { query } from '../db.js';
+import { dbType, query, withTransaction } from '../db.js';
 import { optionalAuth, requireAdmin, requireAuth, requireUsername } from '../middleware/guards.js';
 import { userWriteLimiter } from '../middleware/limits.js';
 import { decodeStateRow } from '../stateCodec.js';
+import { lockProjectRows } from '../projectLocks.js';
 
 const router = Router();
 
@@ -114,6 +115,8 @@ const loadPublicProject = async (req, res, next) => {
     next();
 };
 
+const isPublishedProject = project => project?.visibility === 'public' && project.published_commit_id !== null;
+
 const reviewDto = (r) => ({
     id: r.id, rating: r.rating, body: r.body || '', author: r.author,
     createdAt: r.created_at, updatedAt: r.updated_at
@@ -167,8 +170,14 @@ router.get('/api/gallery/:id/state', loadPublicProject, async (req, res) => {
 router.post('/api/gallery/:id/report', optionalAuth, loadPublicProject, async (req, res) => {
     const reason = String(req.body?.reason ?? '').trim().slice(0, 500);
     if (!reason) return res.status(400).json({ error: 'reason is required' });
-    await query('INSERT INTO reports (id, project_id, reporter_user_id, reason) VALUES ($1, $2, $3, $4)',
-        [randomUUID(), req.publicProject.id, req.user?.id ?? null, reason]);
+    const created = await withTransaction(async txQuery => {
+        const projects = await lockProjectRows([req.params.id], txQuery);
+        if (!isPublishedProject(projects[0])) return false;
+        await txQuery('INSERT INTO reports (id, project_id, reporter_user_id, reason) VALUES ($1, $2, $3, $4)',
+            [randomUUID(), projects[0].id, req.user?.id ?? null, reason]);
+        return true;
+    });
+    if (!created) return res.status(404).json({ error: 'Project not found' });
     res.status(201).json({ success: true });
 });
 
@@ -216,16 +225,27 @@ router.put('/api/gallery/:id/review', requireAuth, requireUsername, userWriteLim
     if (body.length > 2000) return res.status(400).json({ error: 'review must be 2000 characters or fewer' });
 
     const now = new Date().toISOString();
-    await query(
-        `INSERT INTO reviews (id, project_id, user_id, rating, body, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
-         ON CONFLICT (project_id, user_id)
-         DO UPDATE SET rating = EXCLUDED.rating, body = EXCLUDED.body, updated_at = EXCLUDED.updated_at`,
-        [randomUUID(), p.id, req.user.id, rating, body, now, now]);
-    const rows = await query(
-        `${reviewSelect} WHERE r.project_id = $1 AND r.user_id = $2`, [p.id, req.user.id]);
-    if (!rows[0]) return res.status(409).json({ error: 'Review was removed concurrently, try again' });
-    res.json({ review: reviewDto(rows[0]) });
+    const result = await withTransaction(async txQuery => {
+        const projects = await lockProjectRows([req.params.id], txQuery);
+        const current = projects[0];
+        if (!isPublishedProject(current)) return { status: 'missing' };
+        if (current.owner_id === req.user.id) return { status: 'self-review' };
+
+        await txQuery(
+            `INSERT INTO reviews (id, project_id, user_id, rating, body, created_at, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)
+             ON CONFLICT (project_id, user_id)
+             DO UPDATE SET rating = EXCLUDED.rating, body = EXCLUDED.body, updated_at = EXCLUDED.updated_at`,
+            [randomUUID(), current.id, req.user.id, rating, body, now, now]);
+        const rows = await txQuery(
+            `${reviewSelect} WHERE r.project_id = $1 AND r.user_id = $2`, [current.id, req.user.id]);
+        if (!rows[0]) return { status: 'removed' };
+        return { status: 'saved', review: reviewDto(rows[0]) };
+    });
+    if (result.status === 'missing') return res.status(404).json({ error: 'Project not found' });
+    if (result.status === 'self-review') return res.status(403).json({ error: "You can't review your own project" });
+    if (result.status === 'removed') return res.status(409).json({ error: 'Review was removed concurrently, try again' });
+    res.json({ review: result.review });
 });
 
 router.delete('/api/gallery/:id/review', requireAuth, loadPublicProject, async (req, res) => {
@@ -240,13 +260,27 @@ router.delete('/api/gallery/:id/review', requireAuth, loadPublicProject, async (
 router.post('/api/gallery/:id/reviews/:reviewId/report', optionalAuth, loadPublicProject, async (req, res) => {
     const reason = String(req.body?.reason ?? '').trim().slice(0, 500);
     if (!reason) return res.status(400).json({ error: 'reason is required' });
-    const rows = await query(
-        'SELECT id FROM reviews WHERE id = $1 AND project_id = $2',
-        [req.params.reviewId, req.publicProject.id]);
-    if (!rows[0]) return res.status(404).json({ error: 'Review not found' });
-    await query(
-        'INSERT INTO reports (id, project_id, reporter_user_id, reason, review_id) VALUES ($1, $2, $3, $4, $5)',
-        [randomUUID(), req.publicProject.id, req.user?.id ?? null, reason, rows[0].id]);
+    const resolved = await query('SELECT id, project_id FROM reviews WHERE id = $1', [req.params.reviewId]);
+    if (!resolved[0] || resolved[0].project_id !== req.params.id) {
+        return res.status(404).json({ error: 'Review not found' });
+    }
+
+    const result = await withTransaction(async txQuery => {
+        const projects = await lockProjectRows([resolved[0].project_id], txQuery);
+        if (!isPublishedProject(projects[0])) return 'project-missing';
+
+        const lockSuffix = dbType === 'postgres' ? ' FOR UPDATE' : '';
+        const reviews = await txQuery(
+            `SELECT id FROM reviews WHERE id = $1 AND project_id = $2${lockSuffix}`,
+            [req.params.reviewId, projects[0].id]);
+        if (!reviews[0]) return 'review-missing';
+        await txQuery(
+            'INSERT INTO reports (id, project_id, reporter_user_id, reason, review_id) VALUES ($1, $2, $3, $4, $5)',
+            [randomUUID(), projects[0].id, req.user?.id ?? null, reason, reviews[0].id]);
+        return 'created';
+    });
+    if (result === 'project-missing') return res.status(404).json({ error: 'Project not found' });
+    if (result === 'review-missing') return res.status(404).json({ error: 'Review not found' });
     res.status(201).json({ success: true });
 });
 

@@ -8,6 +8,7 @@ import { threeWayDiff, applyChangeSet } from '../../shared/diff.js';
 import { validateAppState } from '../validateAppState.js';
 import { decodeStateRow, encodeState } from '../stateCodec.js';
 import { assertGlobalCeiling, sendLimitError } from '../middleware/limits.js';
+import { lockProjectRows } from '../projectLocks.js';
 
 const router = Router();
 
@@ -45,12 +46,12 @@ export const getMrRow = async (id, queryFn = query) => {
 };
 
 // Recomputes the diff vs the target's CURRENT head. Returns { diff, sourceState, targetState } or { error }.
-export const computeMrDiff = async (mr) => {
-    const base = await getCommitState(mr.base_commit_id);
-    const source = await getCommitState(mr.source_commit_id);
-    const target = await getProjectRow(mr.target_project_id);
+export const computeMrDiff = async (mr, queryFn = query, lockedTarget = null) => {
+    const base = await getCommitState(mr.base_commit_id, queryFn);
+    const source = await getCommitState(mr.source_commit_id, queryFn);
+    const target = lockedTarget ?? await getProjectRow(mr.target_project_id, queryFn);
     if (!base || !source || !target?.head_commit_id) return { error: 'Missing commits' };
-    const targetHead = await getCommitState(target.head_commit_id);
+    const targetHead = await getCommitState(target.head_commit_id, queryFn);
     if (!targetHead) return { error: 'Missing target head' };
     if (source.schemaVersion !== targetHead.schemaVersion) {
         return { error: 'Schema versions differ between fork and upstream — the fork author must re-save with the latest app version' };
@@ -68,56 +69,82 @@ router.post('/api/merge-requests', requireAuth, requireUsername, async (req, res
     const t = typeof title === 'string' ? title.trim().slice(0, 200) : '';
     if (!t) return res.status(400).json({ error: 'title is required' });
 
-    const source = await getProjectRow(sourceProjectId);
-    if (!source || source.owner_id !== req.user.id) return res.status(404).json({ error: 'Source project not found' });
-    if (!source.forked_from_project_id) return res.status(400).json({ error: 'Source project is not a fork' });
-    const target = await getProjectRow(source.forked_from_project_id);
-    if (!target || target.visibility !== 'public') return res.status(400).json({ error: 'Upstream project is not available' });
-    if (source.head_commit_id === null) return res.status(400).json({ error: 'Source project has no commits' });
+    const sourceSnapshot = await getProjectRow(sourceProjectId);
+    if (!sourceSnapshot || sourceSnapshot.owner_id !== req.user.id) return res.status(404).json({ error: 'Source project not found' });
+    if (!sourceSnapshot.forked_from_project_id) return res.status(400).json({ error: 'Source project is not a fork' });
+    const targetSnapshot = await getProjectRow(sourceSnapshot.forked_from_project_id);
+    if (!targetSnapshot || targetSnapshot.visibility !== 'public') return res.status(400).json({ error: 'Upstream project is not available' });
+    if (sourceSnapshot.head_commit_id === null) return res.status(400).json({ error: 'Source project has no commits' });
 
-    const mr = {
-        id: randomUUID(),
-        source_project_id: source.id,
-        source_commit_id: source.head_commit_id,
-        target_project_id: target.id,
-        base_commit_id: source.forked_from_commit_id,
-        title: t,
-        description: String(description ?? '').slice(0, 2000),
-        created_by: req.user.id
-    };
-    const computed = await computeMrDiff(mr);
-    if (computed.error) return res.status(400).json({ error: computed.error });
-    const { diff } = computed;
-    const hasChanges = diff.source.nodesChanged
-        || diff.source.generatorChange !== null
-        || diff.source.variantsAdded.length || diff.source.variantsRemoved.length
-        || Object.keys(diff.source.variantsRenamed).length
-        || Object.keys(diff.source.templatesAdded).length
-        || Object.keys(diff.source.templatesModified).length
-        || Object.keys(diff.source.templatesRemoved).length;
-    if (!hasChanges) return res.status(400).json({ error: 'No changes to propose — save your edits to the cloud first' });
+    const creation = await withTransaction(async txQuery => {
+        const projects = await lockProjectRows([sourceProjectId, sourceSnapshot.forked_from_project_id], txQuery);
+        const byId = new Map(projects.map(project => [project.id, project]));
+        const source = byId.get(sourceProjectId);
+        if (!source || source.owner_id !== req.user.id) return { status: 'source-missing' };
+        if (!source.forked_from_project_id) return { status: 'not-fork' };
+        if (source.forked_from_project_id !== targetSnapshot.id) return { status: 'projects-changed' };
+        const target = byId.get(source.forked_from_project_id);
+        if (!target || target.visibility !== 'public') return { status: 'projects-changed' };
+        if (source.head_commit_id === null) return { status: 'empty' };
 
-    const status = diff.conflicts.length > 0 ? 'conflicted' : 'open';
-    await query(
-        `INSERT INTO merge_requests (id, source_project_id, source_commit_id, target_project_id, base_commit_id, title, description, status, created_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-        [mr.id, mr.source_project_id, mr.source_commit_id, mr.target_project_id, mr.base_commit_id, mr.title, mr.description, status, mr.created_by]
-    );
-    res.status(201).json({ mergeRequest: await mrDto(await getMrRow(mr.id)) });
+        const mr = {
+            id: randomUUID(),
+            source_project_id: source.id,
+            source_commit_id: source.head_commit_id,
+            target_project_id: target.id,
+            base_commit_id: source.forked_from_commit_id,
+            title: t,
+            description: String(description ?? '').slice(0, 2000),
+            created_by: req.user.id
+        };
+        const computed = await computeMrDiff(mr, txQuery, target);
+        if (computed.error) return { status: 'invalid', error: computed.error };
+        const { diff } = computed;
+        const hasChanges = diff.source.nodesChanged
+            || diff.source.generatorChange !== null
+            || diff.source.variantsAdded.length || diff.source.variantsRemoved.length
+            || Object.keys(diff.source.variantsRenamed).length
+            || Object.keys(diff.source.templatesAdded).length
+            || Object.keys(diff.source.templatesModified).length
+            || Object.keys(diff.source.templatesRemoved).length;
+        if (!hasChanges) return { status: 'no-changes' };
+
+        const status = diff.conflicts.length > 0 ? 'conflicted' : 'open';
+        await txQuery(
+            `INSERT INTO merge_requests (id, source_project_id, source_commit_id, target_project_id, base_commit_id, title, description, status, created_by)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+            [mr.id, mr.source_project_id, mr.source_commit_id, mr.target_project_id, mr.base_commit_id, mr.title, mr.description, status, mr.created_by]
+        );
+        return {
+            status: 'created',
+            mr,
+            target,
+            responseDto: await mrDto(await getMrRow(mr.id, txQuery), txQuery),
+        };
+    });
+
+    if (creation.status === 'source-missing') return res.status(404).json({ error: 'Source project not found' });
+    if (creation.status === 'projects-changed') return res.status(409).json({ error: 'Source or upstream project changed during merge request creation' });
+    if (creation.status === 'not-fork') return res.status(400).json({ error: 'Source project is not a fork' });
+    if (creation.status === 'empty') return res.status(400).json({ error: 'Source project has no commits' });
+    if (creation.status === 'invalid') return res.status(400).json({ error: creation.error });
+    if (creation.status === 'no-changes') return res.status(400).json({ error: 'No changes to propose — save your edits to the cloud first' });
+
+    res.status(201).json({ mergeRequest: creation.responseDto });
 
     // Notify the target project's owner — fire-and-forget: a delivery failure
     // must never fail MR creation. Skipped for self-MRs (fork of your own project).
-    if (target.owner_id !== req.user.id) {
+    if (creation.target.owner_id !== req.user.id) {
         (async () => {
-            const ownerRows = await query('SELECT email FROM "user" WHERE id = $1', [target.owner_id]);
+            const ownerRows = await query('SELECT email FROM "user" WHERE id = $1', [creation.target.owner_id]);
             const ownerEmail = ownerRows[0]?.email;
             if (!ownerEmail) return;
-            const mrUrl = `${process.env.CLIENT_URL || 'http://localhost:3000'}/mr/${mr.id}`;
+            const mrUrl = `${process.env.CLIENT_URL || 'http://localhost:3000'}/mr/${creation.mr.id}`;
             await sendEmail({
                 to: ownerEmail,
-                subject: `New merge request for "${target.name}"`,
-                html: `<p><strong>${req.user.username}</strong> proposed changes to your project "${target.name}".</p><p><a href="${mrUrl}">Review the merge request</a></p>`,
-                text: `${req.user.username} proposed changes to your project "${target.name}". Review: ${mrUrl}`,
+                subject: `New merge request for "${creation.target.name}"`,
+                html: `<p><strong>${req.user.username}</strong> proposed changes to your project "${creation.target.name}".</p><p><a href="${mrUrl}">Review the merge request</a></p>`,
+                text: `${req.user.username} proposed changes to your project "${creation.target.name}". Review: ${mrUrl}`,
             });
         })().catch(err => console.error('[mr] owner notification failed:', err));
     }

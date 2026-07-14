@@ -5,6 +5,7 @@ import { requireAuth, optionalAuth, requireUsername } from '../middleware/guards
 import { validateAppState } from '../validateAppState.js';
 import { encodeState, decodeStateRow } from '../stateCodec.js';
 import { assertStorageAllowance, assertProjectAllowance, assertPublishAllowance, sendLimitError, userWriteLimiter, userStorageQuotaBytes } from '../middleware/limits.js';
+import { lockProjectRows } from '../projectLocks.js';
 
 const router = Router();
 
@@ -178,19 +179,34 @@ router.patch('/api/projects/:id', requireAuth, loadProject(true), async (req, re
 router.delete('/api/projects/:id', requireAuth, loadProject(true), async (req, res) => {
     // Keep closed MR history, but remove every project-owned row explicitly because
     // SQLite deployments cannot depend on foreign-key cascade settings.
-    await withTransaction(async txQuery => {
+    const deleted = await withTransaction(async txQuery => {
+        // Merge resolves MR -> project, so deletion pre-locks active MRs in sorted
+        // order before taking the project lock to preserve that PostgreSQL lock order.
+        const mrLockSuffix = dbType === 'postgres' ? ' FOR UPDATE' : '';
+        await txQuery(
+            `SELECT id FROM merge_requests
+             WHERE (source_project_id = $1 OR target_project_id = $2) AND status IN ('open', 'conflicted')
+             ORDER BY id${mrLockSuffix}`,
+            [req.params.id, req.params.id]
+        );
+        const projects = await lockProjectRows([req.params.id], txQuery);
+        const project = projects[0];
+        if (!project || project.owner_id !== req.user.id) return false;
+
         await txQuery(
             `UPDATE merge_requests SET status = 'closed', resolved_at = CURRENT_TIMESTAMP
              WHERE (source_project_id = $1 OR target_project_id = $2) AND status IN ('open', 'conflicted')`,
-            [req.project.id, req.project.id]
+            [project.id, project.id]
         );
-        await txQuery('DELETE FROM reports WHERE project_id = $1', [req.project.id]);
-        await txQuery('DELETE FROM project_publications WHERE project_id = $1', [req.project.id]);
-        await txQuery('DELETE FROM thumbnails WHERE project_id = $1', [req.project.id]);
-        await txQuery('DELETE FROM reviews WHERE project_id = $1', [req.project.id]);
-        await txQuery('DELETE FROM commits WHERE project_id = $1', [req.project.id]);
-        await txQuery('DELETE FROM projects WHERE id = $1', [req.project.id]);
+        await txQuery('DELETE FROM reports WHERE project_id = $1', [project.id]);
+        await txQuery('DELETE FROM project_publications WHERE project_id = $1', [project.id]);
+        await txQuery('DELETE FROM thumbnails WHERE project_id = $1', [project.id]);
+        await txQuery('DELETE FROM reviews WHERE project_id = $1', [project.id]);
+        await txQuery('DELETE FROM commits WHERE project_id = $1', [project.id]);
+        await txQuery('DELETE FROM projects WHERE id = $1', [project.id]);
+        return true;
     });
+    if (!deleted) return res.status(404).json({ error: 'Project not found' });
     res.json({ success: true });
 });
 
