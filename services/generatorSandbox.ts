@@ -101,7 +101,7 @@ const validateRequest = (request: unknown): Extract<GeneratorSandboxResult, { ok
     };
 };
 
-function generatorWorkerMain(maxOutputBytes: number) {
+function generatorEvaluatorMain(maxOutputBytes: number) {
     const workerScope = self;
     const TrustedError = Error;
     const TrustedFunction = Function;
@@ -142,6 +142,7 @@ function generatorWorkerMain(maxOutputBytes: number) {
     const blockedGlobals = [
         'fetch', 'XMLHttpRequest', 'WebSocket', 'localStorage', 'sessionStorage',
         'cookieStore', 'indexedDB', 'caches', 'importScripts',
+        'Worker', 'SharedWorker', 'BroadcastChannel', 'MessageChannel', 'postMessage',
     ];
     for (const name of blockedGlobals) {
         try {
@@ -334,7 +335,92 @@ function generatorWorkerMain(maxOutputBytes: number) {
     };
 }
 
-const WORKER_SOURCE = `(${generatorWorkerMain.toString()})(${MAX_STATE_BYTES});`;
+function generatorSupervisorMain(evaluatorSource: string) {
+    const supervisorScope = self;
+    const TrustedError = Error;
+    let evaluator: Worker | null = null;
+    let evaluatorUrl: string | null = null;
+    let evaluatorPort: MessagePort | null = null;
+    let resultPort: MessagePort | null = null;
+    let controlPort: MessagePort | null = null;
+
+    const safely = (operation: () => void) => {
+        try { operation(); } catch { /* Every resource gets an independent cleanup attempt. */ }
+    };
+    const cleanup = () => {
+        const workerToTerminate = evaluator;
+        const urlToRevoke = evaluatorUrl;
+        const portToClose = evaluatorPort;
+        evaluator = null;
+        evaluatorUrl = null;
+        evaluatorPort = null;
+        if (workerToTerminate) safely(() => workerToTerminate.terminate());
+        if (portToClose) safely(() => portToClose.close());
+        if (urlToRevoke) safely(() => URL.revokeObjectURL(urlToRevoke));
+    };
+    const shutdown = () => {
+        cleanup();
+        safely(() => resultPort?.close());
+        safely(() => controlPort?.close());
+        resultPort = null;
+        controlPort = null;
+        safely(() => supervisorScope.close());
+    };
+    const finish = (message: unknown) => {
+        safely(() => resultPort?.postMessage(message));
+        shutdown();
+    };
+
+    supervisorScope.onmessage = event => {
+        supervisorScope.onmessage = null;
+        resultPort = event.ports[0] || null;
+        controlPort = event.ports[1] || null;
+        if (!resultPort) {
+            shutdown();
+            return;
+        }
+        if (controlPort) {
+            controlPort.onmessage = controlEvent => {
+                if (!controlEvent.data || controlEvent.data.type !== 'generator-cancel') return;
+                cleanup();
+                safely(() => controlPort?.postMessage({
+                    type: 'generator-cancelled',
+                    requestToken: controlEvent.data.requestToken,
+                }));
+                shutdown();
+            };
+            controlPort.start();
+        }
+
+        try {
+            evaluatorUrl = URL.createObjectURL(new Blob([evaluatorSource], { type: 'text/javascript' }));
+            evaluator = new Worker(evaluatorUrl);
+            const urlToRevoke = evaluatorUrl;
+            try {
+                URL.revokeObjectURL(urlToRevoke);
+                evaluatorUrl = null;
+            } catch { /* Terminal cleanup retries this URL. */ }
+            const channel = new MessageChannel();
+            evaluatorPort = channel.port1;
+            evaluatorPort.onmessage = evaluatorEvent => finish(evaluatorEvent.data);
+            evaluator.onerror = evaluatorEvent => finish({
+                ok: false,
+                category: 'runtime',
+                message: evaluatorEvent.message || 'Generator evaluator failed.',
+            });
+            evaluator.postMessage(event.data, [channel.port2]);
+        } catch (error) {
+            finish({
+                ok: false,
+                category: error instanceof DOMException && error.name === 'DataCloneError' ? 'clone' : 'runtime',
+                message: error instanceof TrustedError ? error.message : String(error),
+            });
+        }
+    };
+}
+
+const EVALUATOR_SOURCE = `(${generatorEvaluatorMain.toString()})(${MAX_STATE_BYTES});`;
+const WORKER_SOURCE = `(${generatorSupervisorMain.toString()})(${JSON.stringify(EVALUATOR_SOURCE)});`;
 
 const iframeDocument = (): string => {
     const workerSource = JSON.stringify(WORKER_SOURCE).replace(/</g, '\\u003c');
@@ -366,10 +452,12 @@ const iframeDocument = (): string => {
     if (event.source !== parent || !event.data || typeof event.data !== 'object') return;
     if (event.data.type === 'generator-cancel' && event.data.requestToken === requestToken) {
       disposeWorker();
+      parent.postMessage({ type: 'generator-cancelled', requestToken }, '*');
       return;
     }
     if (event.data.type !== 'generator-run' || worker || typeof event.data.requestToken !== 'string') return;
     requestToken = event.data.requestToken;
+    const controlPort = event.ports[0] || null;
     try {
       workerUrl = URL.createObjectURL(new Blob([workerSource], { type: 'text/javascript' }));
       worker = new Worker(workerUrl);
@@ -401,7 +489,10 @@ const iframeDocument = (): string => {
         try { safely(() => send({ ok: false, category: 'runtime', message: event.message || 'Generator worker failed.' })); }
         finally { disposeWorker(); }
       };
-      try { worker.postMessage(event.data.request, [channel.port2]); }
+      try {
+        const transfer = controlPort ? [channel.port2, controlPort] : [channel.port2];
+        worker.postMessage(event.data.request, transfer);
+      }
       catch (error) {
         safely(() => channel.port2.close());
         try { safely(() => send({ ok: false, category: error && error.name === 'DataCloneError' ? 'clone' : 'runtime', message: error instanceof Error ? error.message : String(error) })); }
@@ -430,16 +521,31 @@ const createBrowserEnvironment = (): GeneratorSandboxEnvironment => ({
         iframe.srcdoc = iframeDocument();
         let disposed = false;
         let loaded = false;
+        let removed = false;
+        let controlPort: MessagePort | undefined;
+        let removalFallback: ReturnType<typeof setTimeout> | undefined;
         let queuedRequest: GeneratorSandboxRequest | undefined;
         const safely = (operation: () => void) => {
             try { operation(); } catch { /* Every resource gets an independent cleanup attempt. */ }
         };
 
-        const send = (request: GeneratorSandboxRequest) => iframe.contentWindow?.postMessage({
-            type: 'generator-run',
-            requestToken,
-            request,
-        }, '*');
+        const send = (request: GeneratorSandboxRequest) => {
+            const channel = new MessageChannel();
+            controlPort = channel.port1;
+            controlPort.onmessage = event => {
+                if (isRecord(event.data)
+                    && event.data.type === 'generator-cancelled'
+                    && event.data.requestToken === requestToken) {
+                    removeFrame();
+                }
+            };
+            controlPort.start();
+            iframe.contentWindow?.postMessage({
+                type: 'generator-run',
+                requestToken,
+                request,
+            }, '*', [channel.port2]);
+        };
         const handleLoad = () => {
             loaded = true;
             if (queuedRequest) {
@@ -458,15 +564,37 @@ const createBrowserEnvironment = (): GeneratorSandboxEnvironment => ({
             }
         };
         const handleMessage = (event: MessageEvent) => {
-            if (event.source === iframe.contentWindow) onMessage(event.data);
+            if (event.source !== iframe.contentWindow) return;
+            if (isRecord(event.data)
+                && event.data.type === 'generator-cancelled'
+                && event.data.requestToken === requestToken) {
+                removeFrame();
+                return;
+            }
+            onMessage(event.data);
+        };
+
+        const removeFrame = () => {
+            if (removed) return;
+            removed = true;
+            if (removalFallback !== undefined) clearTimeout(removalFallback);
+            queuedRequest = undefined;
+            safely(() => controlPort?.close());
+            controlPort = undefined;
+            safely(() => iframe.removeEventListener('load', handleLoad));
+            safely(() => window.removeEventListener('message', handleMessage));
+            safely(() => iframe.remove());
         };
 
         const cleanup = (cancel: boolean) => {
             queuedRequest = undefined;
-            if (cancel) safely(() => iframe.contentWindow?.postMessage({ type: 'generator-cancel', requestToken }, '*'));
-            safely(() => iframe.removeEventListener('load', handleLoad));
-            safely(() => window.removeEventListener('message', handleMessage));
-            safely(() => iframe.remove());
+            if (!cancel) {
+                removeFrame();
+                return;
+            }
+            if (controlPort) safely(() => controlPort?.postMessage({ type: 'generator-cancel', requestToken }));
+            else safely(() => iframe.contentWindow?.postMessage({ type: 'generator-cancel', requestToken }, '*'));
+            removalFallback = setTimeout(removeFrame, 500);
         };
 
         try {
@@ -496,6 +624,7 @@ const createBrowserEnvironment = (): GeneratorSandboxEnvironment => ({
 export const runGeneratorSandbox = (
     request: GeneratorSandboxRequest,
     environment: GeneratorSandboxEnvironment = createBrowserEnvironment(),
+    signal: AbortSignal | undefined = environment.signal,
 ): Promise<GeneratorSandboxResult> => new Promise(resolve => {
     const validatedRequest = validateRequest(request);
     if (Object.hasOwn(validatedRequest, 'ok')) {
@@ -518,7 +647,7 @@ export const runGeneratorSandbox = (
         if (settled) return;
         settled = true;
         if (timeoutScheduled) safely(() => cancelTimeout(timeoutHandle));
-        safely(() => environment.signal?.removeEventListener('abort', abort));
+        safely(() => signal?.removeEventListener('abort', abort));
         safely(() => frame?.dispose());
         resolve(result);
     };
@@ -532,11 +661,11 @@ export const runGeneratorSandbox = (
                 if (result) finish(result);
             },
         });
-        if (environment.signal?.aborted) {
+        if (signal?.aborted) {
             abort();
             return;
         }
-        environment.signal?.addEventListener('abort', abort, { once: true });
+        signal?.addEventListener('abort', abort, { once: true });
         timeoutScheduled = true;
         timeoutHandle = scheduleTimeout(() => finish({
             ok: false,

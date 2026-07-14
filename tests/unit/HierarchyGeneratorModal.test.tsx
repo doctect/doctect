@@ -32,6 +32,12 @@ const deferred = <T,>() => {
     return { promise, resolve };
 };
 
+const lastPreviewSignal = (): AbortSignal => {
+    const call = runGeneratorSandbox.mock.calls.at(-1);
+    if (!(call?.[2] instanceof AbortSignal)) throw new Error('Preview did not pass an AbortSignal.');
+    return call[2];
+};
+
 const renderModal = (overrides: Record<string, unknown> = {}) => {
     const props = {
         isOpen: true,
@@ -81,11 +87,15 @@ describe('HierarchyGeneratorModal', () => {
         expect(screen.getByText('1 estimated page')).toBeVisible();
         expect(screen.getByText(/Applying replaces the current generated document/)).toBeVisible();
         expect(props.onApplyGenerated).not.toHaveBeenCalled();
-        expect(runGeneratorSandbox).toHaveBeenCalledWith({
-            templateScript: saved.templateScript,
-            hierarchyScript: saved.hierarchyScript,
-            constants: expect.objectContaining({ RM_PP_WIDTH: 509, RM_PP_HEIGHT: 679 }),
-        });
+        expect(runGeneratorSandbox).toHaveBeenCalledWith(
+            {
+                templateScript: saved.templateScript,
+                hierarchyScript: saved.hierarchyScript,
+                constants: expect.objectContaining({ RM_PP_WIDTH: 509, RM_PP_HEIGHT: 679 }),
+            },
+            undefined,
+            expect.any(AbortSignal),
+        );
 
         fireEvent.click(screen.getByRole('button', { name: 'Apply Generated Project' }));
 
@@ -118,10 +128,14 @@ describe('HierarchyGeneratorModal', () => {
         expect(screen.queryByText('1 template')).not.toBeInTheDocument();
         expect(screen.getByRole('button', { name: 'Apply Generated Project' })).toBeDisabled();
         fireEvent.click(screen.getByRole('button', { name: 'Preview' }));
-        await waitFor(() => expect(runGeneratorSandbox).toHaveBeenLastCalledWith(expect.objectContaining({
-            templateScript: '  return customTemplates;\n',
-            hierarchyScript: saved.hierarchyScript,
-        })));
+        await waitFor(() => expect(runGeneratorSandbox).toHaveBeenLastCalledWith(
+            expect.objectContaining({
+                templateScript: '  return customTemplates;\n',
+                hierarchyScript: saved.hierarchyScript,
+            }),
+            undefined,
+            expect.any(AbortSignal),
+        ));
     });
 
     it('ignores a deferred preview result after the draft changes', async () => {
@@ -135,6 +149,75 @@ describe('HierarchyGeneratorModal', () => {
 
         expect(screen.queryByText('1 template')).not.toBeInTheDocument();
         expect(screen.getByRole('button', { name: 'Apply Generated Project' })).toBeDisabled();
+    });
+
+    it('aborts a running preview when source changes and before its replacement starts', async () => {
+        const first = deferred<any>();
+        const second = deferred<any>();
+        runGeneratorSandbox.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+        renderModal();
+        fireEvent.click(screen.getByRole('button', { name: 'Preview' }));
+        const firstSignal = lastPreviewSignal();
+
+        fireEvent.change(screen.getByLabelText('Template script'), { target: { value: 'changed' } });
+        expect(firstSignal.aborted).toBe(true);
+        fireEvent.click(screen.getByRole('button', { name: 'Preview' }));
+        const secondSignal = lastPreviewSignal();
+
+        expect(secondSignal).not.toBe(firstSignal);
+        expect(secondSignal.aborted).toBe(false);
+        await act(async () => second.resolve({ ok: true, value: validSandboxValue }));
+        await screen.findByText('1 template');
+        await act(async () => {
+            fireEvent.click(screen.getByRole('button', { name: 'Preview' }));
+        });
+        expect(secondSignal.aborted).toBe(true);
+    });
+
+    it.each([
+        ['preset switch', (view: ReturnType<typeof render>) => {
+            fireEvent.change(screen.getByRole('combobox'), { target: { value: 'blank' } });
+        }],
+        ['reset', () => {
+            vi.spyOn(window, 'confirm').mockReturnValue(true);
+            fireEvent.click(screen.getByRole('button', { name: 'Reset' }));
+        }],
+        ['close', () => fireEvent.click(screen.getByRole('button', { name: 'Close generator' }))],
+        ['Escape', () => fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' })],
+        ['detach', () => {
+            vi.spyOn(window, 'confirm').mockReturnValue(true);
+            fireEvent.click(screen.getByRole('button', { name: 'Detach Saved Generator' }));
+        }],
+        ['unmount', (view: ReturnType<typeof render>) => view.unmount()],
+    ])('aborts a running preview on %s', async (_name, action) => {
+        const pending = deferred<any>();
+        runGeneratorSandbox.mockReturnValueOnce(pending.promise);
+        const props = {
+            isOpen: true,
+            savedGenerator: saved,
+            onClose: vi.fn(),
+            onApplyGenerated: vi.fn(() => true),
+            onDetachSavedGenerator: vi.fn(() => true),
+        };
+        const view = render(<HierarchyGeneratorModal {...props} />);
+        fireEvent.click(screen.getByRole('button', { name: 'Preview' }));
+        const signal = lastPreviewSignal();
+
+        action(view);
+
+        expect(signal.aborted).toBe(true);
+    });
+
+    it('aborts the preview controller when a ready preview is applied', async () => {
+        vi.spyOn(window, 'confirm').mockReturnValue(true);
+        renderModal();
+        fireEvent.click(screen.getByRole('button', { name: 'Preview' }));
+        const signal = lastPreviewSignal();
+        await screen.findByText('1 template');
+
+        fireEvent.click(screen.getByRole('button', { name: 'Apply Generated Project' }));
+
+        expect(signal.aborted).toBe(true);
     });
 
     it('starts a reopened session from current saved source and ignores the prior deferred result', async () => {

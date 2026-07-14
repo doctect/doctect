@@ -211,6 +211,8 @@ describe('browser sandbox frame', () => {
         });
         const pending = runGeneratorSandbox(validRequest());
         const iframe = document.body.querySelector('iframe');
+        const sourceMatch = iframe!.srcdoc.match(/const workerSource = (".*");\n  let worker/s);
+        const workerSource = JSON.parse(sourceMatch![1]);
 
         expect(iframe).not.toBeNull();
         expect(iframe!.getAttribute('sandbox')).toBe('allow-scripts');
@@ -226,7 +228,7 @@ describe('browser sandbox frame', () => {
         expect(iframe!.srcdoc).toContain('const trustedStringify = JSON.stringify.bind(JSON)');
         expect(iframe!.srcdoc).toContain('const trustedEncoder = new TextEncoder()');
         expect(iframe!.srcdoc).toContain('const trustedEncode = trustedEncoder.encode.bind(trustedEncoder)');
-        expect(iframe!.srcdoc).toContain('trustedObjectGetOwnPropertyDescriptor(typedArrayPrototype, \\"byteLength\\")');
+        expect(workerSource).toMatch(/trustedObjectGetOwnPropertyDescriptor\(typedArrayPrototype, \\?"byteLength\\?"\)/);
         expect(iframe!.srcdoc).toContain('trustedByteLengthGetter.call.bind(trustedByteLengthGetter)');
         expect(iframe!.srcdoc).toContain('const trustedPost = resultPort.postMessage.bind(resultPort)');
         expect(iframe!.srcdoc).toContain(String(5 * 1024 * 1024));
@@ -237,14 +239,14 @@ describe('browser sandbox frame', () => {
         expect(iframe!.srcdoc).toContain('const TrustedSet = Set');
         expect(iframe!.srcdoc).toContain('trustedObjectCreate(null)');
         expect(iframe!.srcdoc).toContain('trustedObjectHasOwn(variants, raw.activeVariantId)');
-        expect(iframe!.srcdoc).toContain('typeof normalizedElement.layerId !== \\"string\\"');
+        expect(workerSource).toMatch(/typeof normalizedElement\.layerId !== \\?"string\\?"/);
         expect(iframe!.srcdoc).toContain('trustedSetHas(layerIds, normalizedElement.layerId)');
         expect(iframe!.srcdoc).toContain('safely(() => workerToTerminate.terminate())');
         expect(iframe!.srcdoc).toContain('safely(() => URL.revokeObjectURL(urlToRevoke))');
 
         settleFrame(iframe!);
         await expect(pending).resolves.toMatchObject({ ok: true });
-        expect(document.body.querySelector('iframe')).toBeNull();
+        await vi.waitFor(() => expect(document.body.querySelector('iframe')).toBeNull());
     });
 
     it('enforces output bytes and layer agreement in Chromium', async () => {
@@ -471,6 +473,58 @@ describe('browser sandbox frame', () => {
         }
     }, 20_000);
 
+    it('removes source fan-out and global messaging while preserving the private port in Chromium', async () => {
+        vi.spyOn(crypto, 'getRandomValues').mockImplementation(array => {
+            (array as Uint8Array).fill(0);
+            return array;
+        });
+        const pending = runGeneratorSandbox(validRequest());
+        const iframe = document.body.querySelector('iframe')!;
+        const sourceMatch = iframe.srcdoc.match(/const workerSource = (".*");\n  let worker/s);
+        expect(sourceMatch).not.toBeNull();
+        const workerSource = JSON.parse(sourceMatch![1]);
+        settleFrame(iframe);
+        await pending;
+
+        const browser = await chromium.launch({ headless: true });
+        try {
+            const page = await browser.newPage();
+            const result = await page.evaluate(async source => {
+                const url = URL.createObjectURL(new Blob([source], { type: 'text/javascript' }));
+                const worker = new Worker(url);
+                URL.revokeObjectURL(url);
+                const channel = new MessageChannel();
+                const output = new Promise<any>((resolve, reject) => {
+                    channel.port1.onmessage = event => resolve(event.data);
+                    worker.onerror = event => reject(new Error(event.message));
+                });
+                worker.postMessage({
+                    templateScript: `
+                        const exposed = ['Worker', 'SharedWorker', 'BroadcastChannel', 'MessageChannel', 'postMessage']
+                            .filter(name => typeof globalThis[name] !== 'undefined');
+                        if (exposed.length > 0) {
+                            if (typeof postMessage === 'function') {
+                                for (let index = 0; index < 1000; index += 1) postMessage({ spam: index });
+                            }
+                            throw new Error('fan-out exposed: ' + exposed.join(','));
+                        }
+                        return { page: { id: 'page', name: 'Page', width: 509, height: 679, elements: [] } };
+                    `,
+                    hierarchyScript: `return { nodes: { root: { id: 'root', parentId: null, type: 'page', title: 'Root', data: {}, children: [] } }, rootId: 'root' };`,
+                    constants: { RM_PP_WIDTH: 509, RM_PP_HEIGHT: 679, A4_WIDTH: 595.28, A4_HEIGHT: 841.89 },
+                }, [channel.port2]);
+                const result = await output;
+                worker.terminate();
+                channel.port1.close();
+                return result;
+            }, workerSource);
+
+            expect(result).toMatchObject({ ok: true, serialized: expect.any(String) });
+        } finally {
+            await browser.close();
+        }
+    }, 20_000);
+
     it('removes the iframe even when posting cancellation fails', async () => {
         vi.spyOn(crypto, 'getRandomValues').mockImplementation(array => {
             (array as Uint8Array).fill(0);
@@ -485,7 +539,7 @@ describe('browser sandbox frame', () => {
         settleFrame(iframe);
 
         await expect(pending).resolves.toMatchObject({ ok: true });
-        expect(document.body.querySelector('iframe')).toBeNull();
+        await vi.waitFor(() => expect(document.body.querySelector('iframe')).toBeNull());
     });
 
     it('runs each frame cleanup independently when earlier operations throw', async () => {
@@ -507,8 +561,10 @@ describe('browser sandbox frame', () => {
         settleFrame(iframe);
 
         await expect(pending).resolves.toMatchObject({ ok: true });
-        expect(removeWindowListener).toHaveBeenCalledWith('message', expect.any(Function));
-        expect(removeFrame).toHaveBeenCalledOnce();
+        await vi.waitFor(() => {
+            expect(removeWindowListener).toHaveBeenCalledWith('message', expect.any(Function));
+            expect(removeFrame).toHaveBeenCalledOnce();
+        });
     });
 
     it('rolls back default frame listeners when append setup throws', async () => {

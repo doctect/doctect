@@ -2055,21 +2055,29 @@ const HierarchyGeneratorSession: React.FC<HierarchyGeneratorSessionProps> = ({
     hierarchyScript: initialSource.hierarchyScript,
   });
   const previewRequestRef = useRef(0);
+  const previewAbortRef = useRef<AbortController | null>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
 
   const isDirty = templateScript !== baselineRef.current.templateScript
     || hierarchyScript !== baselineRef.current.hierarchyScript;
 
+  const abortPreview = () => {
+    previewAbortRef.current?.abort();
+    previewAbortRef.current = null;
+  };
+
   useLayoutEffect(() => {
     const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     dialogRef.current?.focus();
     return () => {
+      abortPreview();
       previewRequestRef.current += 1;
       if (previousFocus?.isConnected) previousFocus.focus();
     };
   }, []);
 
   const setDraft = (field: 'templateScript' | 'hierarchyScript', value: string) => {
+    abortPreview();
     previewRequestRef.current += 1;
     setPreviewState({ status: 'idle' });
     if (field === 'templateScript') setTemplateScript(value);
@@ -2081,6 +2089,7 @@ const HierarchyGeneratorSession: React.FC<HierarchyGeneratorSessionProps> = ({
     const preset = GENERATOR_PRESETS.find(p => p.id === presetId);
     if (!preset && !(presetId === 'saved' && savedGenerator)) return;
 
+    abortPreview();
     setSelectedPreset(presetId);
     const source = presetId === 'saved' && savedGenerator
       ? savedGenerator
@@ -2096,6 +2105,7 @@ const HierarchyGeneratorSession: React.FC<HierarchyGeneratorSessionProps> = ({
 
   const handleClose = () => {
     if (isDirty && !window.confirm('Discard draft generator changes?')) return;
+    abortPreview();
     previewRequestRef.current += 1;
     onClose();
   };
@@ -2117,21 +2127,24 @@ const HierarchyGeneratorSession: React.FC<HierarchyGeneratorSessionProps> = ({
     }
 
     const source = { templateScript, hierarchyScript };
+    abortPreview();
+    const controller = new AbortController();
+    previewAbortRef.current = controller;
     const requestId = ++previewRequestRef.current;
     setPreviewState({ status: 'running' });
     try {
       const sandboxResult = await runGeneratorSandbox({
         ...source,
         constants: { RM_PP_WIDTH, RM_PP_HEIGHT, A4_WIDTH, A4_HEIGHT },
-      });
+      }, undefined, controller.signal);
       if (requestId !== previewRequestRef.current) return;
-      if (!sandboxResult.ok) {
+      if (sandboxResult.ok === false) {
         const category = sandboxResult.category[0].toUpperCase() + sandboxResult.category.slice(1);
         setPreviewState({ status: 'error', message: `${category}: ${sandboxResult.message}` });
         return;
       }
       const validation = validateGeneratedProject(sandboxResult.value);
-      if (!validation.ok) {
+      if (validation.ok === false) {
         const category = validation.category[0].toUpperCase() + validation.category.slice(1);
         setPreviewState({ status: 'error', message: `${category}: ${validation.message}` });
         return;
@@ -2146,12 +2159,14 @@ const HierarchyGeneratorSession: React.FC<HierarchyGeneratorSessionProps> = ({
   const applyPreview = () => {
     if (previewState.status !== 'ready') return;
     if (!window.confirm('Apply this generated project? This replaces the current generated document.')) return;
+    abortPreview();
     if (onApplyGenerated(previewState.project, previewState.source)) onClose();
   };
 
   const detachSavedGenerator = () => {
     if (isDirty && !window.confirm('Discard draft generator changes?')) return;
     if (!window.confirm('Detach saved generator source? Generated document content will remain unchanged.')) return;
+    abortPreview();
     if (onDetachSavedGenerator()) onClose();
   };
 
@@ -2191,6 +2206,7 @@ const HierarchyGeneratorSession: React.FC<HierarchyGeneratorSessionProps> = ({
         ? { templateScript: DEFAULT_TEMPLATES_SCRIPT, hierarchyScript: DEFAULT_HIERARCHY_SCRIPT }
         : preset;
     if (!source) return;
+    abortPreview();
     setTemplateScript(source.templateScript);
     setHierarchyScript(source.hierarchyScript);
     baselineRef.current = {

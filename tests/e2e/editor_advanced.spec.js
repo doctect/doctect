@@ -229,6 +229,43 @@ while (true) {}
         await expect(page.getByTestId('project-tab').filter({ hasText: 'One Page Fixture' })).toBeVisible();
     });
 
+    test('source edits terminate infinite previews promptly without accumulating Workers or frames', async ({ page, browserName }) => {
+        test.skip(browserName !== 'chromium', 'Worker lifecycle evidence is required in Chromium.');
+        await openGenerator(page);
+        await page.getByLabel('Template script').fill('while (true) {}');
+
+        for (let index = 0; index < 3; index += 1) {
+            await page.getByRole('button', { name: 'Preview', exact: true }).click();
+            await expect(page.locator('iframe[sandbox="allow-scripts"]')).toHaveCount(1);
+            await page.waitForTimeout(100);
+            const startedAt = Date.now();
+            await page.getByLabel('Template script').fill(`while (true) {}\n// cancel ${index}`);
+            await expect(page.locator('iframe[sandbox="allow-scripts"]')).toHaveCount(0, { timeout: 400 });
+            expect(Date.now() - startedAt).toBeLessThan(400);
+        }
+    });
+
+    test('sandbox source cannot fan out or spam global messaging', async ({ page, browserName }) => {
+        test.skip(browserName !== 'chromium', 'Capability regression is required in Chromium.');
+        await openGenerator(page);
+        await page.getByLabel('Template script').fill(`
+const exposed = ['Worker', 'SharedWorker', 'BroadcastChannel', 'MessageChannel', 'postMessage']
+    .filter(name => typeof globalThis[name] !== 'undefined');
+if (exposed.length > 0) {
+    if (typeof postMessage === 'function') {
+        for (let index = 0; index < 1000; index += 1) postMessage({ spam: index });
+    }
+    throw new Error('fan-out exposed: ' + exposed.join(','));
+}
+${ONE_PAGE_TEMPLATE_SOURCE}`);
+        await page.getByLabel('Hierarchy script').fill(ONE_PAGE_HIERARCHY_SOURCE);
+
+        await page.getByRole('button', { name: 'Preview', exact: true }).click();
+
+        await expect(page.getByText('1 template', { exact: true })).toBeVisible();
+        await expect(page.locator('iframe[sandbox="allow-scripts"]')).toHaveCount(0);
+    });
+
     test('should Trigger PDF Export', async ({ page }, testInfo) => {
         // 1. Setup download listener
         const downloadPromise = page.waitForEvent('download');
