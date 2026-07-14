@@ -18,7 +18,7 @@ beforeAll(async () => {
             .send({ name: `${PREFIX} ${suffix}`, state: minimalState() });
         ids[suffix] = p.body.project.id;
         await request(app).post(`/api/projects/${ids[suffix]}/publish`).set('Cookie', ownerCookie)
-            .set('If-Match', p.body.project.headCommitId)
+            .set('If-Match', `"${p.body.project.headCommitId}"`)
             .send({ description: 'd', tags: [], thumbnails: [PNG_1X1] });
     }
     // high: avg 4.5 (4 + 5), low: avg 2.0

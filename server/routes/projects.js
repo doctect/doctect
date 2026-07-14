@@ -243,10 +243,15 @@ export const getThumbnailIds = async (projectId) => {
 };
 
 router.post('/api/projects/:id/publish', requireAuth, requireUsername, loadProject(true), async (req, res) => {
-    const expectedHead = req.get('If-Match');
-    if (!expectedHead) {
+    const ifMatch = req.get('If-Match');
+    if (!ifMatch) {
         return res.status(428).json({ error: 'If-Match header is required.', code: 'PROJECT_HEAD_REQUIRED' });
     }
+    const entityTag = /^"([\x21\x23-\x7e]+)"$/.exec(ifMatch);
+    if (!entityTag) {
+        return res.status(400).json({ error: 'If-Match must contain one quoted strong entity tag.', code: 'INVALID_IF_MATCH' });
+    }
+    const expectedHead = entityTag[1];
     const { description, tags, thumbnails } = req.body || {};
     if (!Array.isArray(thumbnails) || thumbnails.length < 1 || thumbnails.length > 4) {
         return res.status(400).json({ error: 'thumbnails must contain 1-4 images' });

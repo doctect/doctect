@@ -49,7 +49,7 @@ const setupForkWithChanges = async () => {
         .send({ name: 'Upstream', state: stateWithDayName('Original') });
     upstreamId = up.body.project.id;
     await request(app).post(`/api/projects/${upstreamId}/publish`).set('Cookie', ownerCookie)
-        .set('If-Match', up.body.project.headCommitId)
+        .set('If-Match', `"${up.body.project.headCommitId}"`)
         .send({ description: '', tags: [], thumbnails: [PNG_1X1] });
     // fork + a change
     const fork = await request(app).post(`/api/projects/${upstreamId}/fork`).set('Cookie', authorCookie);
@@ -63,7 +63,7 @@ const makeOpenMr = async (seed) => {
         .send({ name: `Atomic Upstream ${seed}`, state: stateWithDayName(`Base ${seed}`) });
     const targetId = upstream.body.project.id;
     await request(app).post(`/api/projects/${targetId}/publish`).set('Cookie', ownerCookie)
-        .set('If-Match', upstream.body.project.headCommitId)
+        .set('If-Match', `"${upstream.body.project.headCommitId}"`)
         .send({ description: '', tags: [], thumbnails: [PNG_1X1] });
     const fork = await request(app).post(`/api/projects/${targetId}/fork`).set('Cookie', authorCookie);
     await request(app).post(`/api/projects/${fork.body.project.id}/commits`).set('Cookie', authorCookie)
@@ -146,7 +146,7 @@ describe('merge request creation', () => {
             .send({ name: 'Solo Upstream', state: stateWithDayName('Original') });
         const ownId = own.body.project.id;
         await request(app).post(`/api/projects/${ownId}/publish`).set('Cookie', ownerCookie)
-            .set('If-Match', own.body.project.headCommitId)
+            .set('If-Match', `"${own.body.project.headCommitId}"`)
             .send({ description: '', tags: [], thumbnails: [PNG_1X1] });
         const selfFork = await request(app).post(`/api/projects/${ownId}/fork`).set('Cookie', ownerCookie);
         const selfForkId = selfFork.body.project.id;
@@ -182,7 +182,7 @@ describe('merge request creation', () => {
         const up = await request(app).post('/api/projects').set('Cookie', ownerCookie)
             .send({ name: 'Generator Upstream', state: minimalState() });
         await request(app).post(`/api/projects/${up.body.project.id}/publish`).set('Cookie', ownerCookie)
-            .set('If-Match', up.body.project.headCommitId)
+            .set('If-Match', `"${up.body.project.headCommitId}"`)
             .send({ description: '', tags: [], thumbnails: [PNG_1X1] });
         const fork = await request(app).post(`/api/projects/${up.body.project.id}/fork`).set('Cookie', authorCookie);
         await request(app).post(`/api/projects/${fork.body.project.id}/commits`).set('Cookie', authorCookie)
@@ -240,7 +240,7 @@ describe('merge and close', () => {
         const up = await request(app).post('/api/projects').set('Cookie', ownerCookie)
             .send({ name: 'Generator Merge Upstream', state: minimalState() });
         await request(app).post(`/api/projects/${up.body.project.id}/publish`).set('Cookie', ownerCookie)
-            .set('If-Match', up.body.project.headCommitId)
+            .set('If-Match', `"${up.body.project.headCommitId}"`)
             .send({ description: '', tags: [], thumbnails: [PNG_1X1] });
         const fork = await request(app).post(`/api/projects/${up.body.project.id}/fork`).set('Cookie', authorCookie);
         const provenance = generator({ generatedAt: '2026-07-14T12:34:56.000Z' });

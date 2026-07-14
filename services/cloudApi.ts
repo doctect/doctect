@@ -97,7 +97,7 @@ export const cloudApi = {
     publish: (projectId: string, expectedHead: string, args: { description: string; tags: string[]; thumbnails: string[] }) =>
         api<{ project: CloudProject & { thumbnailIds: string[] } }>(`/api/projects/${projectId}/publish`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'If-Match': expectedHead },
+            headers: { 'Content-Type': 'application/json', 'If-Match': `"${expectedHead}"` },
             body: JSON.stringify(args),
         }),
 

@@ -10,7 +10,7 @@ beforeAll(async () => {
     const p = await request(app).post('/api/projects').set('Cookie', cookie)
         .send({ name: 'Profile Planner', state: minimalState() });
     await request(app).post(`/api/projects/${p.body.project.id}/publish`).set('Cookie', cookie)
-        .set('If-Match', p.body.project.headCommitId)
+        .set('If-Match', `"${p.body.project.headCommitId}"`)
         .send({ description: '', tags: [], thumbnails: [PNG_1X1] });
     await request(app).post('/api/projects').set('Cookie', cookie)
         .send({ name: 'Private Thing', state: minimalState() });

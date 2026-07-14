@@ -23,7 +23,7 @@ const makeOpenMr = async (seed) => {
         .send({ name: `Upstream-${seed}`, state: minimalState(`base-${seed}`) });
     const targetId = pub.body.project.id;
     await request(app).post(`/api/projects/${targetId}/publish`).set('Cookie', ownerCookie)
-        .set('If-Match', pub.body.project.headCommitId)
+        .set('If-Match', `"${pub.body.project.headCommitId}"`)
         .send({ description: '', tags: [], thumbnails: [PNG_1X1] });
     const fork = await request(app).post(`/api/projects/${targetId}/fork`).set('Cookie', authorCookie);
     const sourceId = fork.body.project.id;

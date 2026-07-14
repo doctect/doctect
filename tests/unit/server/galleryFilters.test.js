@@ -12,7 +12,7 @@ beforeAll(async () => {
         const p = await request(app).post('/api/projects').set('Cookie', ownerCookie)
             .send({ name, state: minimalState() });
         await request(app).post(`/api/projects/${p.body.project.id}/publish`).set('Cookie', ownerCookie)
-            .set('If-Match', p.body.project.headCommitId)
+            .set('If-Match', `"${p.body.project.headCommitId}"`)
             .send({ description: 'd', tags, thumbnails: [PNG_1X1] });
         return p.body.project.id;
     };

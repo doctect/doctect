@@ -46,7 +46,7 @@ const createMrBetween = async (ownerEmail, authorEmail) => {
         .send({ name: 'Upstream', state: stateWithDayName('Original') });
     const upstreamId = up.body.project.id;
     await request(app).post(`/api/projects/${upstreamId}/publish`).set('Cookie', ownerCookie)
-        .set('If-Match', up.body.project.headCommitId)
+        .set('If-Match', `"${up.body.project.headCommitId}"`)
         .send({ description: '', tags: [], thumbnails: [PNG_1X1] });
 
     const fork = await request(app).post(`/api/projects/${upstreamId}/fork`).set('Cookie', authorCookie);

@@ -47,7 +47,7 @@ describe('publishing', () => {
     const publish = async (body, expectedHead) => request(app)
         .post(`/api/projects/${projectId}/publish`)
         .set('Cookie', cookie)
-        .set('If-Match', expectedHead ?? await currentHead())
+        .set('If-Match', `"${expectedHead ?? await currentHead()}"`)
         .send(body);
 
     it('publishes with metadata and thumbnails', async () => {
@@ -84,6 +84,25 @@ describe('publishing', () => {
         expect(res.status).toBe(428);
     });
 
+    it.each(['head-1', 'W/"head-1"', '"head-1", "head-2"', '*'])('rejects malformed If-Match value %s', async value => {
+        const res = await request(app).post(`/api/projects/${projectId}/publish`).set('Cookie', cookie)
+            .set('If-Match', value)
+            .send({ description: 'x', tags: [], thumbnails: [PNG_1X1] });
+
+        expect(res.status).toBe(400);
+        expect(res.body.code).toBe('INVALID_IF_MATCH');
+    });
+
+    it('allows If-Match in CORS preflight requests', async () => {
+        const res = await request(app).options(`/api/projects/${projectId}/publish`)
+            .set('Origin', 'http://localhost:3000')
+            .set('Access-Control-Request-Method', 'POST')
+            .set('Access-Control-Request-Headers', 'content-type,if-match');
+
+        expect(res.status).toBe(204);
+        expect(res.headers['access-control-allow-headers'].toLowerCase()).toContain('if-match');
+    });
+
     it('rejects H1 after save H2 without making the project public', async () => {
         const created = await request(app).post('/api/projects').set('Cookie', cookie)
             .send({ name: 'Conditional Publish', state: minimalState('H1') });
@@ -94,7 +113,7 @@ describe('publishing', () => {
 
         const res = await request(app).post(`/api/projects/${conditionalProjectId}/publish`)
             .set('Cookie', cookie)
-            .set('If-Match', h1)
+            .set('If-Match', `"${h1}"`)
             .send({ description: 'stale', tags: [], thumbnails: [PNG_1X1] });
 
         expect(saved.body.commit.id).not.toBe(h1);
@@ -120,7 +139,7 @@ describe('publishing', () => {
         };
         const publishing = request(app).post(`/api/projects/${interleavedProjectId}/publish`)
             .set('Cookie', cookie)
-            .set('If-Match', h1)
+            .set('If-Match', `"${h1}"`)
             .send({ description: 'published', tags: ['published'], thumbnails: [PNG_1X1] })
             .then(response => response);
         await entered;
@@ -152,14 +171,14 @@ describe('publishing', () => {
         const head = created.body.project.headCommitId;
         const seeded = await request(app).post(`/api/projects/${rollbackProjectId}/publish`)
             .set('Cookie', cookie)
-            .set('If-Match', head)
+            .set('If-Match', `"${head}"`)
             .send({ description: 'existing', tags: ['existing'], thumbnails: [PNG_1X1] });
         await request(app).post(`/api/projects/${rollbackProjectId}/unpublish`).set('Cookie', cookie);
 
         dbInterleave.failThumbnailInsert = true;
         const failed = await request(app).post(`/api/projects/${rollbackProjectId}/publish`)
             .set('Cookie', cookie)
-            .set('If-Match', head)
+            .set('If-Match', `"${head}"`)
             .send({ description: 'replacement', tags: ['replacement'], thumbnails: [PNG_1X1] });
 
         expect(failed.status).toBe(500);

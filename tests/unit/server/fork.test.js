@@ -12,7 +12,7 @@ beforeAll(async () => {
         .send({ name: 'Forkable', state: minimalState('upstream') });
     publicId = pub.body.project.id;
     await request(app).post(`/api/projects/${publicId}/publish`).set('Cookie', ownerCookie)
-        .set('If-Match', pub.body.project.headCommitId)
+        .set('If-Match', `"${pub.body.project.headCommitId}"`)
         .send({ description: '', tags: [], thumbnails: [PNG_1X1] });
     const priv = await request(app).post('/api/projects').set('Cookie', ownerCookie)
         .send({ name: 'NotForkable', state: minimalState() });
