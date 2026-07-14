@@ -91,7 +91,24 @@ export interface Variant {
 *   If active is "iPad", it renders using `variants["ipad"].templates["day_view"]`.
 *   Both variants share the exact same `AppNode` hierarchy and data.
 
-## 5. `AppState` (The Global Truth)
+## 5. `GeneratorProvenance`
+Generator-created projects can retain the exact scripts that produced their document. This
+metadata is optional because legacy and manually created projects have no generator source.
+
+```typescript
+export interface GeneratorProvenance {
+  formatVersion: 1;
+  templateScript: string;
+  hierarchyScript: string;
+  generatedAt: string;
+}
+```
+
+Scripts preserve whitespace and Unicode byte-exactly. Each script has a 512 KiB UTF-8 limit,
+with a 1 MiB combined limit. The timestamp records when the source was applied. Manual document
+edits do not rewrite this source.
+
+## 6. `AppState` (The Global Truth)
 This represents the fully serialized state of a single Project.
 
 ```typescript
@@ -112,5 +129,6 @@ export interface AppState {
   // ... layout sizes, modal states, clipboard
   
   schemaVersion?: number; // Used for migrating state objects loaded from older versions.
+  generator?: GeneratorProvenance; // Optional exact Hierarchy Generator source.
 }
 ```

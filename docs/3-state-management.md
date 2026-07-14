@@ -44,6 +44,8 @@ When a project is loaded, it is passed through `migrateState(state)`.
 
 *   **Versioning**: The state object includes a `schemaVersion` flag.
 *   **Upgrades**: `migration.ts` contains sequential upgrade functions (e.g., `v3_to_v4`). Example: Migrating an old project that had `{ templates: {...} }` at the root object into the new `{ variants: { default: { templates: {...} } } }` structure introduced in `schemaVersion = 4`.
+*   **Schema v9**: The explicit v8 → v9 step adds support for optional project-level `generator` provenance. Legacy v0–v8 projects run through each migration in order and remain valid without this field. Older projects cannot recover generator source discarded before v9.
+*   **Load normalization**: External project-load paths use `loadProjectState`. After migration, it validates optional generator metadata. Invalid metadata is detached and returned as a non-fatal warning while the document itself continues loading; valid script text is retained byte-exactly and is never executed during load.
 
 ## Auto-Save implementation
 

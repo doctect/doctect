@@ -23,14 +23,32 @@ const v7State = () => ({
     },
 });
 
+const validV8State = () => ({
+    ...v7State(),
+    schemaVersion: 8,
+});
+
+const validLegacyV0State = () => ({
+    nodes: { root: { id: 'root', parentId: null, type: 'page', title: 'Root', data: {}, children: [] } },
+    rootId: 'root',
+    templates: { page: { id: 'page', name: 'Page', width: 500, height: 700, elements: [el('a')] } },
+});
+
+const source = {
+    formatVersion: 1 as const,
+    templateScript: 'const café = "☕";\nreturn {};',
+    hierarchyScript: 'return { nodes: {}, rootId: "root" };\n',
+    generatedAt: '2026-07-13T12:00:00.000Z',
+};
+
 describe('migrateV7ToV8', () => {
-    it('bumps CURRENT_SCHEMA_VERSION to 8', () => {
-        expect(CURRENT_SCHEMA_VERSION).toBe(8);
+    it('continues to the current schema version', () => {
+        expect(CURRENT_SCHEMA_VERSION).toBe(9);
     });
 
     it('creates exactly one default "Layer 1" per template across all variants and tags every element', () => {
         const out: any = migrateState(v7State());
-        expect(out.schemaVersion).toBe(8);
+        expect(out.schemaVersion).toBe(9);
         for (const variant of Object.values<any>(out.variants)) {
             for (const tpl of Object.values<any>(variant.templates)) {
                 expect(tpl.layers).toHaveLength(1);
@@ -55,7 +73,7 @@ describe('migrateV7ToV8', () => {
             templates: { page: { id: 'page', name: 'Page', width: 500, height: 700, elements: [el('a', 1)] } },
         };
         const out: any = migrateState(legacy);
-        expect(out.schemaVersion).toBe(8);
+        expect(out.schemaVersion).toBe(9);
         const tpl = out.variants.default.templates.page;
         expect(tpl.layers).toHaveLength(1);
         expect(tpl.elements[0].layerId).toBe(tpl.layers[0].id);
@@ -72,6 +90,22 @@ describe('migrateV7ToV8', () => {
         const snapshot = JSON.parse(JSON.stringify(input));
         migrateState(input);
         expect(input).toEqual(snapshot);
+    });
+});
+
+describe('migrateV8ToV9', () => {
+    it('preserves optional generator provenance without mutating input and remains idempotent', () => {
+        const input = { ...validV8State(), generator: source, schemaVersion: 8 };
+        const before = structuredClone(input);
+        const output = migrateState(input);
+
+        expect(CURRENT_SCHEMA_VERSION).toBe(9);
+        expect(output.schemaVersion).toBe(9);
+        expect(output.generator).toEqual(source);
+        expect(input).toEqual(before);
+        expect(migrateState(structuredClone(output))).toEqual(output);
+        expect(migrateState(validV8State()).generator).toBeUndefined();
+        expect(migrateState(validLegacyV0State()).schemaVersion).toBe(9);
     });
 });
 

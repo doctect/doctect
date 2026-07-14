@@ -143,6 +143,13 @@ export interface Variant {
   templates: Record<string, PageTemplate>;
 }
 
+export interface GeneratorProvenance {
+  formatVersion: 1;
+  templateScript: string;
+  hierarchyScript: string;
+  generatedAt: string;
+}
+
 export interface AppState {
   nodes: Record<string, AppNode>;
   rootId: string;
@@ -181,6 +188,7 @@ export interface AppState {
 
   // Schema Version for migration
   schemaVersion?: number;
+  generator?: GeneratorProvenance;
 }
 
 export const A4_WIDTH = 595.28;

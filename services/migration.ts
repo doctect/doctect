@@ -17,7 +17,7 @@ import { ensureTemplateLayers } from './layers';
 /**
  * Current schema version. Increment this when making breaking changes.
  */
-export const CURRENT_SCHEMA_VERSION = 8;
+export const CURRENT_SCHEMA_VERSION = 9;
 
 /**
  * Migration v0 → v1
@@ -136,6 +136,11 @@ export function migrateState(state: any): AppState {
     if (version < 8) {
         migratedState = migrateV7ToV8(migratedState);
         version = 8;
+    }
+
+    if (version < 9) {
+        migratedState = migrateV8ToV9(migratedState);
+        version = 9;
     }
 
     console.log(`[Migration] Migration complete. Now at v${CURRENT_SCHEMA_VERSION}`);
@@ -315,6 +320,19 @@ function migrateV7ToV8(state: any): any {
 }
 
 /**
+ * Migration v8 → v9
+ *
+ * Changes:
+ * - Adds optional generator provenance.
+ */
+function migrateV8ToV9(state: any): any {
+    console.log('[Migration] Applying v8 → v9: Adding optional generator provenance');
+    const migrated = JSON.parse(JSON.stringify(state));
+    migrated.schemaVersion = 9;
+    return migrated;
+}
+
+/**
  * Utility to check if a state needs migration
  */
 export function needsMigration(state: any): boolean {
@@ -322,4 +340,3 @@ export function needsMigration(state: any): boolean {
     const version = state.schemaVersion ?? 0;
     return version < CURRENT_SCHEMA_VERSION;
 }
-

@@ -1,6 +1,7 @@
 
 import { AppState } from "../types";
 import { migrateState, CURRENT_SCHEMA_VERSION } from "./migration";
+import { loadProjectState } from "./loadProjectState";
 import { ensureTemplateLayers } from "./layers";
 import { blankPresetData } from "./blank_preset";
 import { notebookPresetData } from "./notebook_preset";
@@ -51,9 +52,11 @@ export const getCustomPresets = (): PresetDefinition[] => {
             // Migrate each custom preset's initialState to current schema
             return presets.map((preset: PresetDefinition) => {
                 if (preset.initialState) {
+                    const loaded = loadProjectState(preset.initialState);
+                    loaded.warnings.forEach(warning => console.warn(warning));
                     return {
                         ...preset,
-                        initialState: migrateState(preset.initialState)
+                        initialState: loaded.state
                     };
                 }
                 return preset;
