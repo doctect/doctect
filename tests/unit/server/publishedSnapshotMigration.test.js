@@ -3,6 +3,26 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import os from 'os';
 import path from 'path';
 
+const migrationFault = vi.hoisted(() => ({ failAfterPublishedCommitColumn: false }));
+vi.mock('../../../server/db.js', async importOriginal => {
+    const actual = await importOriginal();
+    const intercept = async (baseQuery, text, params = []) => {
+        if (migrationFault.failAfterPublishedCommitColumn
+            && /CREATE TABLE IF NOT EXISTS project_publications/.test(text)) {
+            migrationFault.failAfterPublishedCommitColumn = false;
+            throw new Error('Injected 009 failure after first statement');
+        }
+        return baseQuery(text, params);
+    };
+    return {
+        ...actual,
+        query: (text, params = []) => intercept(actual.query, text, params),
+        withTransaction: callback => actual.withTransaction(
+            txQuery => callback((text, params = []) => intercept(txQuery, text, params)),
+        ),
+    };
+});
+
 let database;
 let query;
 let runMigrations;
@@ -51,7 +71,14 @@ beforeAll(async () => {
 afterAll(() => database.close());
 
 describe('published snapshot migration', () => {
-    it('backfills only existing public heads and records their publication', async () => {
+    it('rolls back a partial 009 migration and succeeds on restart', async () => {
+        migrationFault.failAfterPublishedCommitColumn = true;
+        await expect(runMigrations()).rejects.toThrow('Injected 009 failure after first statement');
+
+        const columns = await query('PRAGMA table_info(projects)');
+        expect(columns.map(column => column.name)).not.toContain('published_commit_id');
+        expect(await query('SELECT id FROM app_migrations WHERE id = $1', ['009_published_snapshots'])).toEqual([]);
+
         await runMigrations();
         await runMigrations();
 

@@ -13,6 +13,12 @@ beforeAll(async () => {
 });
 
 describe('migration runner', () => {
+    it('serializes concurrent runners before deciding pending migrations', async () => {
+        await Promise.all([runMigrations(), runMigrations()]);
+        const rows = await query('SELECT id, COUNT(*) AS count FROM app_migrations GROUP BY id ORDER BY id');
+        expect(rows.every(row => Number(row.count) === 1)).toBe(true);
+    });
+
     it('applies migrations and is idempotent', async () => {
         await runMigrations();
         await runMigrations(); // second run must not throw
