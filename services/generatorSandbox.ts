@@ -103,14 +103,42 @@ const validateRequest = (request: unknown): Extract<GeneratorSandboxResult, { ok
 
 function generatorWorkerMain(maxOutputBytes: number) {
     const workerScope = self;
+    const TrustedError = Error;
+    const TrustedFunction = Function;
+    const TrustedSet = Set;
+    const TrustedString = String;
+    const TrustedWeakSet = WeakSet;
+    const trustedArrayIsArray = Array.isArray;
+    const trustedArrayPrototype = Array.prototype;
+    const trustedArraySlice = Array.prototype.slice.call.bind(Array.prototype.slice);
+    const trustedArraySort = Array.prototype.sort.call.bind(Array.prototype.sort);
+    const trustedNumberIsFinite = Number.isFinite;
+    const trustedNumberToString = Number.prototype.toString.call.bind(Number.prototype.toString);
+    const trustedObjectCreate = Object.create;
+    const trustedObjectEntries = Object.entries;
+    const trustedObjectFreeze = Object.freeze;
+    const trustedObjectGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
+    const trustedObjectGetPrototypeOf = Object.getPrototypeOf;
+    const trustedObjectHasOwn = Object.hasOwn;
+    const trustedObjectKeys = Object.keys;
+    const trustedObjectPrototype = Object.prototype;
+    const trustedObjectValues = Object.values;
+    const trustedOwnKeys = Reflect.ownKeys;
+    const trustedRandom = Math.random.bind(Math);
+    const trustedSetAdd = Set.prototype.add.call.bind(Set.prototype.add);
+    const trustedSetHas = Set.prototype.has.call.bind(Set.prototype.has);
+    const trustedStringSlice = String.prototype.slice.call.bind(String.prototype.slice);
+    const trustedWeakSetAdd = WeakSet.prototype.add.call.bind(WeakSet.prototype.add);
+    const trustedWeakSetDelete = WeakSet.prototype.delete.call.bind(WeakSet.prototype.delete);
+    const trustedWeakSetHas = WeakSet.prototype.has.call.bind(WeakSet.prototype.has);
     const trustedStringify = JSON.stringify.bind(JSON);
     const trustedEncoder = new TextEncoder();
     const trustedEncode = trustedEncoder.encode.bind(trustedEncoder);
-    const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype);
-    const trustedByteLengthGetter = Object.getOwnPropertyDescriptor(typedArrayPrototype, 'byteLength')!.get!;
+    const typedArrayPrototype = trustedObjectGetPrototypeOf(Uint8Array.prototype);
+    const trustedByteLengthGetter = trustedObjectGetOwnPropertyDescriptor(typedArrayPrototype, 'byteLength')!.get!;
     const trustedByteLength = trustedByteLengthGetter.call.bind(trustedByteLengthGetter);
-    try { Object.freeze(Object.prototype); } catch { /* Keep serialization free of inherited toJSON hooks when supported. */ }
-    try { Object.freeze(Array.prototype); } catch { /* Keep array serialization stable when supported. */ }
+    try { trustedObjectFreeze(trustedObjectPrototype); } catch { /* Keep serialization free of inherited toJSON hooks when supported. */ }
+    try { trustedObjectFreeze(trustedArrayPrototype); } catch { /* Keep array serialization stable when supported. */ }
     const blockedGlobals = [
         'fetch', 'XMLHttpRequest', 'WebSocket', 'localStorage', 'sessionStorage',
         'cookieStore', 'indexedDB', 'caches', 'importScripts',
@@ -123,109 +151,131 @@ function generatorWorkerMain(maxOutputBytes: number) {
         }
     }
 
-    const createId = (prefix = 'node') => `${prefix}_${Math.random().toString(36).slice(2, 11)}`;
+    const randomIdPart = (end: number) => trustedStringSlice(trustedNumberToString(trustedRandom(), 36), 2, end);
+    const createId = (prefix = 'node') => `${prefix}_${randomIdPart(11)}`;
     const jsonIssue = (root: unknown) => {
-        const active = new WeakSet<object>();
+        const active = new TrustedWeakSet<object>();
         const stack: Array<{ value: unknown; exit?: boolean }> = [{ value: root }];
         while (stack.length > 0) {
-            const { value, exit } = stack.pop()!;
+            const entry = stack[stack.length - 1];
+            stack.length -= 1;
+            const { value, exit } = entry;
             if (exit) {
-                active.delete(value as object);
+                trustedWeakSetDelete(active, value as object);
                 continue;
             }
             if (value === null || typeof value === 'string' || typeof value === 'boolean') continue;
             if (typeof value === 'number') {
-                if (!Number.isFinite(value)) return 'Output contains a non-finite number.';
+                if (!trustedNumberIsFinite(value)) return 'Output contains a non-finite number.';
                 continue;
             }
             if (typeof value !== 'object') return 'Output contains a non-JSON value.';
-            if (active.has(value)) return 'Output contains a cycle.';
-            active.add(value);
-            stack.push({ value, exit: true });
-            if (Array.isArray(value)) {
-                if (Object.getPrototypeOf(value) !== Array.prototype) return 'Output has a custom array prototype.';
+            if (trustedWeakSetHas(active, value)) return 'Output contains a cycle.';
+            trustedWeakSetAdd(active, value);
+            stack[stack.length] = { value, exit: true };
+            if (trustedArrayIsArray(value)) {
+                if (trustedObjectGetPrototypeOf(value) !== trustedArrayPrototype) return 'Output has a custom array prototype.';
                 for (let index = 0; index < value.length; index += 1) {
-                    if (!Object.hasOwn(value, index)) return 'Output contains a sparse array.';
-                    stack.push({ value: value[index] });
+                    if (!trustedObjectHasOwn(value, index)) return 'Output contains a sparse array.';
+                    stack[stack.length] = { value: value[index] };
                 }
                 continue;
             }
-            const prototype = Object.getPrototypeOf(value);
-            if (prototype !== Object.prototype && prototype !== null) return 'Output has a custom prototype.';
-            for (const key of Reflect.ownKeys(value)) {
+            const prototype = trustedObjectGetPrototypeOf(value);
+            if (prototype !== trustedObjectPrototype && prototype !== null) return 'Output has a custom prototype.';
+            const keys = trustedOwnKeys(value);
+            for (let index = 0; index < keys.length; index += 1) {
+                const key = keys[index];
                 if (typeof key !== 'string') return 'Output has symbol properties.';
-                const descriptor = Object.getOwnPropertyDescriptor(value, key)!;
-                if (!descriptor.enumerable || !Object.hasOwn(descriptor, 'value')) return 'Output contains accessors or hidden data.';
-                stack.push({ value: descriptor.value });
+                const descriptor = trustedObjectGetOwnPropertyDescriptor(value, key)!;
+                if (!descriptor.enumerable || !trustedObjectHasOwn(descriptor, 'value')) return 'Output contains accessors or hidden data.';
+                stack[stack.length] = { value: descriptor.value };
             }
         }
         return undefined;
     };
     const cloneError = (message: string) => {
-        const error = new Error(message);
+        const error = new TrustedError(message);
         error.name = 'DataCloneError';
         return error;
     };
     const normalizeFlat = (raw: any) => {
-        const normalized: Record<string, any> = Object.create(null);
-        Object.values(raw || {}).forEach((template: any) => {
-            if (!template || typeof template !== 'object' || !template.id) return;
+        const normalized: Record<string, any> = trustedObjectCreate(null);
+        const rawTemplates = trustedObjectValues(raw || {});
+        for (let templateIndex = 0; templateIndex < rawTemplates.length; templateIndex += 1) {
+            const template: any = rawTemplates[templateIndex];
+            if (!template || typeof template !== 'object' || !template.id) continue;
             let layers = template.layers;
-            if (layers === undefined || Array.isArray(layers) && layers.length === 0) {
+            if (layers === undefined || trustedArrayIsArray(layers) && layers.length === 0) {
                 layers = [{
-                    id: `layer_${Math.random().toString(36).slice(2, 11)}`,
+                    id: `layer_${randomIdPart(11)}`,
                     name: 'Layer 1',
                     order: 0,
                     visible: true,
                     locked: false,
                 }];
-            } else if (Array.isArray(layers)) {
-                layers = layers.map((layer: any) => ({ ...layer }));
+            } else if (trustedArrayIsArray(layers)) {
+                const copiedLayers = [];
+                for (let layerIndex = 0; layerIndex < layers.length; layerIndex += 1) {
+                    copiedLayers[layerIndex] = { ...layers[layerIndex] };
+                }
+                layers = copiedLayers;
             }
-            const fallbackLayerId = Array.isArray(layers) && layers.length > 0
-                ? [...layers].sort((left: any, right: any) => left.order - right.order)[0].id
+            const fallbackLayerId = trustedArrayIsArray(layers) && layers.length > 0
+                ? trustedArraySort(trustedArraySlice(layers), (left: any, right: any) => left.order - right.order)[0].id
                 : undefined;
-            const layerIds = new Set(Array.isArray(layers) ? layers.map((layer: any) => layer.id) : []);
-            const elements = Array.isArray(template.elements)
-                ? template.elements.map((element: any, index: number) => {
+            const layerIds = new TrustedSet();
+            if (trustedArrayIsArray(layers)) {
+                for (let layerIndex = 0; layerIndex < layers.length; layerIndex += 1) {
+                    trustedSetAdd(layerIds, layers[layerIndex].id);
+                }
+            }
+            let elements = template.elements;
+            if (trustedArrayIsArray(template.elements)) {
+                elements = [];
+                for (let index = 0; index < template.elements.length; index += 1) {
+                    const element = template.elements[index];
                     const normalizedElement = {
                         ...element,
-                        id: element?.id || `gen_${template.id}_${index}_${Math.random().toString(36).slice(2, 7)}`,
+                        id: element?.id || `gen_${template.id}_${index}_${randomIdPart(7)}`,
                     };
                     if (normalizedElement.layerId !== undefined && typeof normalizedElement.layerId !== 'string') {
-                        throw new Error(`Template ${template.id} has an element with a non-string layerId.`);
+                        throw new TrustedError(`Template ${template.id} has an element with a non-string layerId.`);
                     }
                     if (fallbackLayerId !== undefined
-                        && (!normalizedElement.layerId || !layerIds.has(normalizedElement.layerId))) {
+                        && (!normalizedElement.layerId || !trustedSetHas(layerIds, normalizedElement.layerId))) {
                         normalizedElement.layerId = fallbackLayerId;
                     }
-                    return normalizedElement;
-                })
-                : template.elements;
+                    elements[index] = normalizedElement;
+                }
+            }
             normalized[template.id] = { ...template, elements, layers };
-        });
+        }
         return normalized;
     };
     const normalizeTemplates = (raw: any) => {
-        if (raw && typeof raw === 'object' && !Array.isArray(raw)
-            && Object.hasOwn(raw, 'variants') && raw.variants && typeof raw.variants === 'object' && !Array.isArray(raw.variants)) {
-            const variants: Record<string, any> = Object.create(null);
-            Object.entries(raw.variants).forEach(([key, variant]: [string, any]) => {
+        if (raw && typeof raw === 'object' && !trustedArrayIsArray(raw)
+            && trustedObjectHasOwn(raw, 'variants') && raw.variants && typeof raw.variants === 'object' && !trustedArrayIsArray(raw.variants)) {
+            const variants: Record<string, any> = trustedObjectCreate(null);
+            const rawVariants = trustedObjectEntries(raw.variants);
+            for (let index = 0; index < rawVariants.length; index += 1) {
+                const key = rawVariants[index][0];
+                const variant: any = rawVariants[index][1];
                 variants[key] = {
                     id: variant?.id || key,
                     name: variant?.name || key,
                     templates: normalizeFlat(variant?.templates),
                 };
-            });
-            const activeVariantId = typeof raw.activeVariantId === 'string' && Object.hasOwn(variants, raw.activeVariantId)
+            }
+            const activeVariantId = typeof raw.activeVariantId === 'string' && trustedObjectHasOwn(variants, raw.activeVariantId)
                 ? raw.activeVariantId
-                : Object.keys(variants)[0];
+                : trustedObjectKeys(variants)[0];
             return { variants, activeVariantId };
         }
         return normalizeFlat(raw);
     };
     const activeTemplates = (normalized: any) => {
-        if (Object.hasOwn(normalized, 'variants')) return normalized.variants[normalized.activeVariantId]?.templates;
+        if (trustedObjectHasOwn(normalized, 'variants')) return normalized.variants[normalized.activeVariantId]?.templates;
         return normalized;
     };
     const isPromise = value => (
@@ -234,8 +284,8 @@ function generatorWorkerMain(maxOutputBytes: number) {
         && typeof value.then === 'function'
     );
     const errorMessage = error => {
-        const message = error && typeof error.message === 'string' ? error.message : String(error);
-        return message.slice(0, 1000);
+        const message = error && typeof error.message === 'string' ? error.message : TrustedString(error);
+        return trustedStringSlice(message, 0, 1000);
     };
 
     workerScope.onmessage = event => {
@@ -249,19 +299,19 @@ function generatorWorkerMain(maxOutputBytes: number) {
         };
         try {
             const { templateScript, hierarchyScript, constants } = event.data;
-            const templateFn = new Function(
+            const templateFn = new TrustedFunction(
                 'consts',
                 'const { RM_PP_WIDTH, RM_PP_HEIGHT, A4_WIDTH, A4_HEIGHT } = consts;\n' + templateScript,
             );
             const templates = templateFn(constants);
-            if (isPromise(templates)) throw new Error('Template script must return synchronously.');
+            if (isPromise(templates)) throw new TrustedError('Template script must return synchronously.');
             const templateIssue = jsonIssue(templates);
             if (templateIssue) throw cloneError(templateIssue);
             const normalizedTemplates = normalizeTemplates(templates);
 
-            const hierarchyFn = new Function('templates', 'createId', hierarchyScript);
+            const hierarchyFn = new TrustedFunction('templates', 'createId', hierarchyScript);
             const hierarchy = hierarchyFn(activeTemplates(normalizedTemplates), createId);
-            if (isPromise(hierarchy)) throw new Error('Hierarchy script must return synchronously.');
+            if (isPromise(hierarchy)) throw new TrustedError('Hierarchy script must return synchronously.');
             const hierarchyIssue = jsonIssue(hierarchy);
             if (hierarchyIssue) throw cloneError(hierarchyIssue);
 

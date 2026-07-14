@@ -226,16 +226,19 @@ describe('browser sandbox frame', () => {
         expect(iframe!.srcdoc).toContain('const trustedStringify = JSON.stringify.bind(JSON)');
         expect(iframe!.srcdoc).toContain('const trustedEncoder = new TextEncoder()');
         expect(iframe!.srcdoc).toContain('const trustedEncode = trustedEncoder.encode.bind(trustedEncoder)');
-        expect(iframe!.srcdoc).toContain('Object.getOwnPropertyDescriptor(typedArrayPrototype, \\"byteLength\\")');
+        expect(iframe!.srcdoc).toContain('trustedObjectGetOwnPropertyDescriptor(typedArrayPrototype, \\"byteLength\\")');
         expect(iframe!.srcdoc).toContain('trustedByteLengthGetter.call.bind(trustedByteLengthGetter)');
         expect(iframe!.srcdoc).toContain('const trustedPost = resultPort.postMessage.bind(resultPort)');
         expect(iframe!.srcdoc).toContain(String(5 * 1024 * 1024));
         expect(iframe!.srcdoc).toContain('Generated output exceeds');
         expect(iframe!.srcdoc).toContain('JSON.parse(message.serialized)');
-        expect(iframe!.srcdoc).toContain('Object.create(null)');
-        expect(iframe!.srcdoc).toContain('Object.hasOwn(variants, raw.activeVariantId)');
+        expect(iframe!.srcdoc).toContain('const trustedArrayIsArray = Array.isArray');
+        expect(iframe!.srcdoc).toContain('const trustedObjectHasOwn = Object.hasOwn');
+        expect(iframe!.srcdoc).toContain('const TrustedSet = Set');
+        expect(iframe!.srcdoc).toContain('trustedObjectCreate(null)');
+        expect(iframe!.srcdoc).toContain('trustedObjectHasOwn(variants, raw.activeVariantId)');
         expect(iframe!.srcdoc).toContain('typeof normalizedElement.layerId !== \\"string\\"');
-        expect(iframe!.srcdoc).toContain('layerIds.has(normalizedElement.layerId)');
+        expect(iframe!.srcdoc).toContain('trustedSetHas(layerIds, normalizedElement.layerId)');
         expect(iframe!.srcdoc).toContain('safely(() => workerToTerminate.terminate())');
         expect(iframe!.srcdoc).toContain('safely(() => URL.revokeObjectURL(urlToRevoke))');
 
@@ -322,6 +325,147 @@ describe('browser sandbox frame', () => {
             const hierarchyIds = workerValue.hierarchy.nodes.root.data.ids.split(',');
             expect(hierarchyIds).toEqual(['fallback', 'valid', 'fallback']);
             expect(finalTemplates.page.elements.map(element => element.layerId)).toEqual(hierarchyIds);
+        } finally {
+            await browser.close();
+        }
+    }, 20_000);
+
+    it('isolates every trusted post-source intrinsic in Chromium', async () => {
+        vi.spyOn(crypto, 'getRandomValues').mockImplementation(array => {
+            (array as Uint8Array).fill(0);
+            return array;
+        });
+        const pending = runGeneratorSandbox(validRequest());
+        const iframe = document.body.querySelector('iframe')!;
+        const sourceMatch = iframe.srcdoc.match(/const workerSource = (".*");\n  let worker/s);
+        expect(sourceMatch).not.toBeNull();
+        const workerSource = JSON.parse(sourceMatch![1]);
+        settleFrame(iframe);
+        await pending;
+
+        const browser = await chromium.launch({ headless: true });
+        try {
+            const page = await browser.newPage();
+            const results = await page.evaluate(async source => {
+                const runWorker = (request: unknown) => new Promise<any>((resolve, reject) => {
+                    const url = URL.createObjectURL(new Blob([source], { type: 'text/javascript' }));
+                    const worker = new Worker(url);
+                    URL.revokeObjectURL(url);
+                    const channel = new MessageChannel();
+                    const timeout = setTimeout(() => {
+                        worker.terminate();
+                        channel.port1.close();
+                        resolve({ ok: false, category: 'timeout', message: 'Worker did not deliver a result.' });
+                    }, 2_000);
+                    channel.port1.onmessage = event => {
+                        clearTimeout(timeout);
+                        worker.terminate();
+                        channel.port1.close();
+                        resolve(event.data);
+                    };
+                    worker.onerror = event => reject(new Error(event.message));
+                    worker.postMessage(request, [channel.port2]);
+                });
+                const constants = { RM_PP_WIDTH: 509, RM_PP_HEIGHT: 679, A4_WIDTH: 595.28, A4_HEIGHT: 841.89 };
+                const hierarchyScript = `
+                    const elements = templates.page.elements;
+                    let ids = '';
+                    for (let index = 0; index < elements.length; index += 1) {
+                        if (index > 0) ids += ',';
+                        ids += elements[index].layerId;
+                    }
+                    return { nodes: { root: { id: 'root', parentId: null, type: 'page', title: 'Root', data: { ids }, children: [] } }, rootId: 'root' };
+                `;
+                const templateAfter = (mutation: string, template: string) => `${mutation}\nreturn ${template};`;
+                const layeredTemplate = `{
+                    variants: { v: { id: 'v', name: 'V', templates: { page: {
+                        id: 'page', name: 'Page', width: 509, height: 679,
+                        layers: [
+                            { id: 'fallback', name: 'Fallback', order: 0, visible: true, locked: false },
+                            { id: 'valid', name: 'Valid', order: 1, visible: true, locked: false }
+                        ],
+                        elements: [
+                            { id: 'dangling', type: 'rect', layerId: 'missing-layer' },
+                            { id: 'valid-element', type: 'rect', layerId: 'valid' },
+                            { id: 'missing', type: 'rect' }
+                        ]
+                    } } } }, activeVariantId: 'missing'
+                }`;
+                const generatedIdTemplate = `{
+                    page: { id: 'page', name: 'Page', width: 509, height: 679, elements: [{ type: 'rect' }] }
+                }`;
+                const attacks = [
+                    ['Set constructor', `Set = class { add() {} has() { return true; } }`, layeredTemplate],
+                    ['Set.add', `Set.prototype.add = () => { throw 'poisoned Set.add'; }`, layeredTemplate],
+                    ['Set.has', `Set.prototype.has = () => true`, layeredTemplate],
+                    ['Array.isArray', `Array.isArray = () => false`, layeredTemplate],
+                    ['Object.create', `Object.create = () => { throw 'poisoned Object.create'; }`, layeredTemplate],
+                    ['Object.values', `Object.values = () => { throw 'poisoned Object.values'; }`, layeredTemplate],
+                    ['Object.entries', `Object.entries = () => { throw 'poisoned Object.entries'; }`, layeredTemplate],
+                    ['Object.keys', `Object.keys = () => { throw 'poisoned Object.keys'; }`, layeredTemplate],
+                    ['Object.hasOwn', `Object.hasOwn = () => { throw 'poisoned Object.hasOwn'; }`, layeredTemplate],
+                    ['Object.getPrototypeOf', `Object.getPrototypeOf = () => { throw 'poisoned Object.getPrototypeOf'; }`, layeredTemplate],
+                    ['Object.getOwnPropertyDescriptor', `Object.getOwnPropertyDescriptor = () => { throw 'poisoned Object.getOwnPropertyDescriptor'; }`, layeredTemplate],
+                    ['Reflect.ownKeys', `Reflect.ownKeys = () => { throw 'poisoned Reflect.ownKeys'; }`, layeredTemplate],
+                    ['Number.isFinite', `Number.isFinite = () => { throw 'poisoned Number.isFinite'; }`, layeredTemplate],
+                    ['WeakSet constructor', `WeakSet = class {}`, layeredTemplate],
+                    ['WeakSet.add', `WeakSet.prototype.add = () => { throw 'poisoned WeakSet.add'; }`, layeredTemplate],
+                    ['WeakSet.has', `WeakSet.prototype.has = () => { throw 'poisoned WeakSet.has'; }`, layeredTemplate],
+                    ['WeakSet.delete', `WeakSet.prototype.delete = () => { throw 'poisoned WeakSet.delete'; }`, layeredTemplate],
+                    ['Function', `Function = () => { throw 'poisoned Function'; }`, layeredTemplate],
+                    ['Math.random', `Math.random = () => { throw 'poisoned Math.random'; }`, generatedIdTemplate],
+                    ['Number.toString', `Number.prototype.toString = () => { throw 'poisoned Number.toString'; }`, generatedIdTemplate],
+                    ['String.slice', `String.prototype.slice = () => { throw 'poisoned String.slice'; }`, generatedIdTemplate],
+                    ['JSON.stringify', `JSON.stringify = () => 'poisoned JSON.stringify'`, layeredTemplate],
+                    ['TextEncoder', `TextEncoder = class { encode() { return new Uint8Array(0); } }`, layeredTemplate],
+                    ['typed-array byteLength', `
+                        const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype);
+                        Object.defineProperty(typedArrayPrototype, 'byteLength', { configurable: true, get: () => 0 });
+                    `, layeredTemplate],
+                    ['MessagePort.postMessage', `MessagePort.prototype.postMessage = () => { throw 'poisoned postMessage'; }`, layeredTemplate],
+                ];
+                const outputs = await Promise.all(attacks.map(async ([name, mutation, template]) => {
+                    const output = await runWorker({
+                        templateScript: templateAfter(mutation, template),
+                        hierarchyScript,
+                        constants,
+                    });
+                    return [name, output.ok ? { ...output, value: JSON.parse(output.serialized) } : output];
+                }));
+                const stringFailure = await runWorker({
+                    templateScript: `String = () => 'poisoned String'; return ${layeredTemplate};`,
+                    hierarchyScript: `throw {};`,
+                    constants,
+                });
+                const stringSliceFailure = await runWorker({
+                    templateScript: `String.prototype.slice = () => 'poisoned String.slice'; return ${layeredTemplate};`,
+                    hierarchyScript: `throw new Error('expected hierarchy failure');`,
+                    constants,
+                });
+                const errorFailure = await runWorker({
+                    templateScript: `
+                        Error = class { constructor() { this.name = 'PoisonedError'; this.message = 'poisoned Error'; } };
+                        return { page: { id: 'page', width: NaN } };
+                    `,
+                    hierarchyScript,
+                    constants,
+                });
+                return { outputs, stringFailure, stringSliceFailure, errorFailure };
+            }, workerSource);
+
+            for (const [name, output] of results.outputs) {
+                expect(output, name).toMatchObject({ ok: true });
+                const activeVariant = output.value.templates.variants?.v;
+                const templates = activeVariant?.templates ?? output.value.templates;
+                const hierarchyIds = output.value.hierarchy.nodes.root.data.ids.split(',');
+                const finalTemplates = normalizeGeneratedTemplates(output.value.templates);
+                const finalPage = finalTemplates.variants?.v.templates.page ?? finalTemplates.templates!.page;
+                expect(hierarchyIds, name).toEqual(finalPage.elements.map(element => element.layerId));
+                expect(templates.page.elements.map(element => element.layerId), name).toEqual(hierarchyIds);
+            }
+            expect(results.stringFailure).toEqual({ ok: false, category: 'runtime', message: '[object Object]' });
+            expect(results.stringSliceFailure).toEqual({ ok: false, category: 'runtime', message: 'expected hierarchy failure' });
+            expect(results.errorFailure).toEqual({ ok: false, category: 'clone', message: 'Output contains a non-finite number.' });
         } finally {
             await browser.close();
         }
