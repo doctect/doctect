@@ -124,29 +124,33 @@ const reviewSelect = `
     FROM reviews r JOIN "user" u ON u.id = r.user_id
 `;
 
-router.get('/api/gallery/:id', loadPublicProject, async (req, res) => {
-    const p = req.publicProject;
-    const thumbs = await query('SELECT id FROM thumbnails WHERE project_id = $1 ORDER BY position', [p.id]);
-    const agg = await query(
-        'SELECT AVG(rating) AS rating_avg, COUNT(*) AS rating_count FROM reviews WHERE project_id = $1',
-        [p.id]);
-    let forkedFrom = null;
-    if (p.forked_from_project_id) {
-        const src = await query(
-            `SELECT p.id, p.published_name AS name, p.visibility, u.username AS author
-             FROM projects p JOIN "user" u ON u.id = p.owner_id WHERE p.id = $1`,
-            [p.forked_from_project_id]);
-        if (src[0] && src[0].visibility === 'public') {
-            forkedFrom = { projectId: src[0].id, name: src[0].name, author: src[0].author };
-        }
-    }
+router.get('/api/gallery/:id', async (req, res) => {
+    const rows = await query(
+        `SELECT p.*, u.username AS author, t.id AS thumbnail_id,
+                fp.id AS forked_project_id, fp.published_name AS forked_name,
+                fp.visibility AS forked_visibility, fu.username AS forked_author,
+                ${ratingFields}
+         FROM projects p
+         JOIN "user" u ON u.id = p.owner_id
+         LEFT JOIN thumbnails t ON t.project_id = p.id
+         LEFT JOIN projects fp ON fp.id = p.forked_from_project_id
+         LEFT JOIN "user" fu ON fu.id = fp.owner_id
+         WHERE p.id = $1 AND p.visibility = 'public' AND p.published_commit_id IS NOT NULL
+         ORDER BY t.position`,
+        [req.params.id]);
+    if (!rows[0]) return res.status(404).json({ error: 'Project not found' });
+
+    const p = rows[0];
+    const forkedFrom = p.forked_project_id && p.forked_visibility === 'public'
+        ? { projectId: p.forked_project_id, name: p.forked_name, author: p.forked_author }
+        : null;
     res.json({
         project: {
             id: p.id, name: p.published_name, description: p.published_description, tags: JSON.parse(p.published_tags || '[]'),
             author: p.author, ownerId: p.owner_id, forkCount: p.fork_count, downloadCount: p.download_count,
             updatedAt: p.published_at, headCommitId: p.published_commit_id,
-            thumbnailIds: thumbs.map(t => t.id), forkedFrom,
-            ...ratingDtoFields(agg[0])
+            thumbnailIds: rows.map(row => row.thumbnail_id).filter(Boolean), forkedFrom,
+            ...ratingDtoFields(p)
         }
     });
 });

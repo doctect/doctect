@@ -1,7 +1,25 @@
 // @vitest-environment node
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, vi } from 'vitest';
 import request from 'supertest';
-import { initTestApp, signUpUser, minimalState, PNG_1X1 } from './helpers.js';
+import { initTestApp, signUpUser, minimalState, PNG_1X1, saveProjectCommit } from './helpers.js';
+
+const galleryInterleave = vi.hoisted(() => ({ afterDetailRead: null }));
+vi.mock('../../../server/db.js', async importOriginal => {
+    const actual = await importOriginal();
+    return {
+        ...actual,
+        query: async (text, params = []) => {
+            const rows = await actual.query(text, params);
+            if (galleryInterleave.afterDetailRead
+                && /SELECT p\.\*, u\.username AS author[\s\S]*WHERE p\.id = \$1 AND p\.visibility = 'public'/.test(text)) {
+                const hook = galleryInterleave.afterDetailRead;
+                galleryInterleave.afterDetailRead = null;
+                await hook();
+            }
+            return rows;
+        },
+    };
+});
 
 let app, cookie, publicId, privateId;
 const generator = {
@@ -65,6 +83,38 @@ describe('gallery', () => {
     it('accepts reports', async () => {
         const res = await request(app).post(`/api/gallery/${publicId}/report`).send({ reason: 'spam' });
         expect(res.status).toBe(201);
+    });
+
+    it('returns one publication snapshot when republish interleaves with detail', async () => {
+        const created = await request(app).post('/api/projects').set('Cookie', cookie)
+            .send({ name: 'Snapshot detail old', state: minimalState('old head') });
+        const projectId = created.body.project.id;
+        const oldHead = created.body.project.headCommitId;
+        const oldPublish = await request(app).post(`/api/projects/${projectId}/publish`).set('Cookie', cookie)
+            .set('If-Match', `"${oldHead}"`)
+            .send({ description: 'old metadata', tags: ['old'], thumbnails: [PNG_1X1] });
+        const saved = await saveProjectCommit(app, cookie, projectId,
+            { state: minimalState('new head'), message: 'new head' }, oldHead);
+        const newHead = saved.body.commit.id;
+        let newPublish;
+        galleryInterleave.afterDetailRead = async () => {
+            newPublish = await request(app).post(`/api/projects/${projectId}/publish`).set('Cookie', cookie)
+                .set('If-Match', `"${newHead}"`)
+                .send({ description: 'new metadata', tags: ['new'], thumbnails: [PNG_1X1] });
+        };
+
+        const detail = await request(app).get(`/api/gallery/${projectId}`);
+
+        expect(newPublish.status).toBe(200);
+        const tuple = {
+            description: detail.body.project.description,
+            headCommitId: detail.body.project.headCommitId,
+            thumbnailIds: detail.body.project.thumbnailIds,
+        };
+        expect([
+            { description: 'old metadata', headCommitId: oldHead, thumbnailIds: oldPublish.body.project.thumbnailIds },
+            { description: 'new metadata', headCommitId: newHead, thumbnailIds: newPublish.body.project.thumbnailIds },
+        ]).toContainEqual(tuple);
     });
 
     it('lets admins unpublish', async () => {
