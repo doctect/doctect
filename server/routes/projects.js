@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { randomUUID } from 'crypto';
-import { query } from '../db.js';
+import { dbType, query, withTransaction } from '../db.js';
 import { requireAuth, optionalAuth, requireUsername } from '../middleware/guards.js';
 import { validateAppState } from '../validateAppState.js';
 import { encodeState, decodeStateRow } from '../stateCodec.js';
@@ -247,19 +247,6 @@ router.post('/api/projects/:id/publish', requireAuth, requireUsername, loadProje
     if (!expectedHead) {
         return res.status(428).json({ error: 'If-Match header is required.', code: 'PROJECT_HEAD_REQUIRED' });
     }
-    const currentProject = await getProjectRow(req.project.id);
-    if (!currentProject || currentProject.head_commit_id !== expectedHead) {
-        return res.status(409).json({ error: 'Project head changed since it was inspected.', code: 'PROJECT_HEAD_CHANGED' });
-    }
-
-    if (currentProject.visibility !== 'public') {
-        try {
-            await assertPublishAllowance(req.user.id);
-        } catch (e) {
-            if (sendLimitError(res, e)) return;
-            throw e;
-        }
-    }
     const { description, tags, thumbnails } = req.body || {};
     if (!Array.isArray(thumbnails) || thumbnails.length < 1 || thumbnails.length > 4) {
         return res.status(400).json({ error: 'thumbnails must contain 1-4 images' });
@@ -273,24 +260,41 @@ router.post('/api/projects/:id/publish', requireAuth, requireUsername, loadProje
     }
     const d = String(description ?? '').slice(0, 2000);
 
-    const updated = await query(
-        `UPDATE projects SET visibility = 'public', description = $1, tags = $2, updated_at = CURRENT_TIMESTAMP
-         WHERE id = $3 AND head_commit_id = $4
-         RETURNING *`,
-        [d, JSON.stringify(tags), currentProject.id, expectedHead]
-    );
-    if (!updated[0]) {
+    if (req.project.visibility !== 'public') {
+        try {
+            await assertPublishAllowance(req.user.id);
+        } catch (e) {
+            if (sendLimitError(res, e)) return;
+            throw e;
+        }
+    }
+
+    const published = await withTransaction(async txQuery => {
+        const lockSuffix = dbType === 'postgres' ? ' FOR UPDATE' : '';
+        const current = await txQuery(`SELECT * FROM projects WHERE id = $1${lockSuffix}`, [req.project.id]);
+        if (!current[0] || current[0].head_commit_id !== expectedHead) return null;
+
+        const updated = await txQuery(
+            `UPDATE projects SET visibility = 'public', description = $1, tags = $2, updated_at = CURRENT_TIMESTAMP
+             WHERE id = $3 AND head_commit_id = $4
+             RETURNING *`,
+            [d, JSON.stringify(tags), current[0].id, expectedHead]
+        );
+        if (!updated[0]) return null;
+
+        await txQuery('DELETE FROM thumbnails WHERE project_id = $1', [current[0].id]);
+        for (let i = 0; i < parsed.length; i++) {
+            await txQuery('INSERT INTO thumbnails (id, project_id, position, mime, image) VALUES ($1, $2, $3, $4, $5)',
+                [randomUUID(), current[0].id, i, parsed[i].mime, parsed[i].buf]);
+        }
+        const thumbnailRows = await txQuery('SELECT id FROM thumbnails WHERE project_id = $1 ORDER BY position', [current[0].id]);
+        return { row: updated[0], thumbnailIds: thumbnailRows.map(item => item.id) };
+    });
+
+    if (!published) {
         return res.status(409).json({ error: 'Project head changed since it was inspected.', code: 'PROJECT_HEAD_CHANGED' });
     }
-
-    await query('DELETE FROM thumbnails WHERE project_id = $1', [currentProject.id]);
-    for (let i = 0; i < parsed.length; i++) {
-        await query('INSERT INTO thumbnails (id, project_id, position, mime, image) VALUES ($1, $2, $3, $4, $5)',
-            [randomUUID(), currentProject.id, i, parsed[i].mime, parsed[i].buf]);
-    }
-
-    const row = updated[0];
-    res.json({ project: { ...projectDto(row), thumbnailIds: await getThumbnailIds(row.id) } });
+    res.json({ project: { ...projectDto(published.row), thumbnailIds: published.thumbnailIds } });
 });
 
 router.post('/api/projects/:id/unpublish', requireAuth, loadProject(true), async (req, res) => {

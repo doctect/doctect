@@ -3,21 +3,29 @@ import { describe, it, expect, beforeAll, vi } from 'vitest';
 import request from 'supertest';
 import { initTestApp, signUpUser, minimalState, PNG_1X1 } from './helpers.js';
 
-const dbInterleave = vi.hoisted(() => ({ beforeConditionalPublish: null }));
+const dbInterleave = vi.hoisted(() => ({ beforeConditionalPublish: null, failThumbnailInsert: false }));
 vi.mock('../../../server/db.js', async importOriginal => {
     const actual = await importOriginal();
+    const intercept = async (baseQuery, text, params = []) => {
+        if (/UPDATE projects SET visibility = 'public'/.test(text)
+            && /WHERE id = \$3 AND head_commit_id = \$4/.test(text)
+            && dbInterleave.beforeConditionalPublish) {
+            const hook = dbInterleave.beforeConditionalPublish;
+            dbInterleave.beforeConditionalPublish = null;
+            await hook();
+        }
+        if (/INSERT INTO thumbnails/.test(text) && dbInterleave.failThumbnailInsert) {
+            dbInterleave.failThumbnailInsert = false;
+            throw new Error('Injected thumbnail insert failure');
+        }
+        return baseQuery(text, params);
+    };
     return {
         ...actual,
-        query: async (text, params = []) => {
-            if (/UPDATE projects SET visibility = 'public'/.test(text)
-                && /WHERE id = \$3 AND head_commit_id = \$4/.test(text)
-                && dbInterleave.beforeConditionalPublish) {
-                const hook = dbInterleave.beforeConditionalPublish;
-                dbInterleave.beforeConditionalPublish = null;
-                await hook(actual.query);
-            }
-            return actual.query(text, params);
-        },
+        query: (text, params = []) => intercept(actual.query, text, params),
+        withTransaction: callback => actual.withTransaction(
+            txQuery => callback((text, params = []) => intercept(txQuery, text, params)),
+        ),
     };
 });
 
@@ -97,48 +105,69 @@ describe('publishing', () => {
         expect(project.body.project.visibility).toBe('private');
     });
 
-    it('rejects when H1 changes to H2 after the early check without touching existing thumbnails', async () => {
+    it('serializes a concurrent save behind the publish transaction', async () => {
         const created = await request(app).post('/api/projects').set('Cookie', cookie)
             .send({ name: 'Interleaved Publish', state: minimalState('H1') });
         const interleavedProjectId = created.body.project.id;
         const h1 = created.body.project.headCommitId;
-        const seeded = await request(app).post(`/api/projects/${interleavedProjectId}/publish`)
-            .set('Cookie', cookie)
-            .set('If-Match', h1)
-            .send({ description: 'existing', tags: ['existing'], thumbnails: [PNG_1X1] });
-        await request(app).post(`/api/projects/${interleavedProjectId}/unpublish`).set('Cookie', cookie);
-        const saved = await request(app).post(`/api/projects/${interleavedProjectId}/commits`).set('Cookie', cookie)
-            .send({ state: minimalState('H2'), message: 'H2' });
-        const h2 = saved.body.commit.id;
-        const { query } = await import('../../../server/db.js');
-        const existingThumbnails = await query(
-            'SELECT id, mime, image FROM thumbnails WHERE project_id = $1 ORDER BY position',
-            [interleavedProjectId],
-        );
-        await query('UPDATE projects SET head_commit_id = $1 WHERE id = $2', [h1, interleavedProjectId]);
-
-        let interleaved = false;
-        dbInterleave.beforeConditionalPublish = async realQuery => {
-            interleaved = true;
-            await realQuery('UPDATE projects SET head_commit_id = $1 WHERE id = $2', [h2, interleavedProjectId]);
+        let releasePublish;
+        const publishHeld = new Promise(resolve => { releasePublish = resolve; });
+        let publishEntered;
+        const entered = new Promise(resolve => { publishEntered = resolve; });
+        dbInterleave.beforeConditionalPublish = async () => {
+            publishEntered();
+            await publishHeld;
         };
-        const res = await request(app).post(`/api/projects/${interleavedProjectId}/publish`)
+        const publishing = request(app).post(`/api/projects/${interleavedProjectId}/publish`)
             .set('Cookie', cookie)
             .set('If-Match', h1)
-            .send({ description: 'stale', tags: ['stale'], thumbnails: [PNG_1X1] });
+            .send({ description: 'published', tags: ['published'], thumbnails: [PNG_1X1] })
+            .then(response => response);
+        await entered;
 
-        expect(interleaved).toBe(true);
-        expect(res.status).toBe(409);
-        expect(res.body.code).toBe('PROJECT_HEAD_CHANGED');
-        const project = await query('SELECT visibility, head_commit_id FROM projects WHERE id = $1', [interleavedProjectId]);
-        const thumbnails = await query(
-            'SELECT id, mime, image FROM thumbnails WHERE project_id = $1 ORDER BY position',
-            [interleavedProjectId],
-        );
-        expect(project[0]).toMatchObject({ visibility: 'private', head_commit_id: h2 });
-        expect(thumbnails).toHaveLength(1);
-        expect(thumbnails[0]).toMatchObject({ id: seeded.body.project.thumbnailIds[0], mime: existingThumbnails[0].mime });
-        expect(Buffer.compare(thumbnails[0].image, existingThumbnails[0].image)).toBe(0);
+        let saveFinished = false;
+        const saving = request(app).post(`/api/projects/${interleavedProjectId}/commits`)
+            .set('Cookie', cookie)
+            .send({ state: minimalState('H2'), message: 'H2' })
+            .then(response => {
+                saveFinished = true;
+                return response;
+            });
+        await new Promise(resolve => setTimeout(resolve, 50));
+        const saveWasSerialized = !saveFinished;
+        releasePublish();
+        const [published, saved] = await Promise.all([publishing, saving]);
+
+        expect(saveWasSerialized).toBe(true);
+        expect(published.status).toBe(200);
+        expect(saved.status).toBe(201);
+        expect(published.body.project.visibility).toBe('public');
+        expect((await currentHead(interleavedProjectId))).toBe(saved.body.commit.id);
+    });
+
+    it('rolls back metadata and thumbnail replacement when insertion fails', async () => {
+        const created = await request(app).post('/api/projects').set('Cookie', cookie)
+            .send({ name: 'Rollback Publish', state: minimalState('Rollback') });
+        const rollbackProjectId = created.body.project.id;
+        const head = created.body.project.headCommitId;
+        const seeded = await request(app).post(`/api/projects/${rollbackProjectId}/publish`)
+            .set('Cookie', cookie)
+            .set('If-Match', head)
+            .send({ description: 'existing', tags: ['existing'], thumbnails: [PNG_1X1] });
+        await request(app).post(`/api/projects/${rollbackProjectId}/unpublish`).set('Cookie', cookie);
+
+        dbInterleave.failThumbnailInsert = true;
+        const failed = await request(app).post(`/api/projects/${rollbackProjectId}/publish`)
+            .set('Cookie', cookie)
+            .set('If-Match', head)
+            .send({ description: 'replacement', tags: ['replacement'], thumbnails: [PNG_1X1] });
+
+        expect(failed.status).toBe(500);
+        const { query } = await import('../../../server/db.js');
+        const project = await query('SELECT visibility, description, tags FROM projects WHERE id = $1', [rollbackProjectId]);
+        const thumbnails = await query('SELECT id FROM thumbnails WHERE project_id = $1 ORDER BY position', [rollbackProjectId]);
+        expect(project[0]).toMatchObject({ visibility: 'private', description: 'existing', tags: '["existing"]' });
+        expect(thumbnails).toEqual([{ id: seeded.body.project.thumbnailIds[0] }]);
     });
 
     it('unpublishes', async () => {
