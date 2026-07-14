@@ -1,6 +1,6 @@
 
 import { test as base, expect } from '@playwright/test';
-import { startMarkerServer } from './markerServer.js';
+import { MIN_NO_HIT_OBSERVATION_MS, startMarkerServer } from './markerServer.js';
 
 const test = base.extend({
     markerServer: async ({}, use) => {
@@ -75,6 +75,7 @@ const applyOnePageFixture = async page => {
         templateScript: ONE_PAGE_TEMPLATE_SOURCE,
         hierarchyScript: ONE_PAGE_HIERARCHY_SOURCE,
     });
+    await page.waitForTimeout(MIN_NO_HIT_OBSERVATION_MS);
     return readActiveGeneratedFields(page);
 };
 
@@ -178,6 +179,7 @@ if (typeof caches !== 'undefined' || typeof importScripts !== 'undefined') throw
         await expect(page.getByText('1 template', { exact: true })).toBeVisible();
         await expect(page.getByText('1 node', { exact: true })).toBeVisible();
         await expect(page.getByText('1 estimated page', { exact: true })).toBeVisible();
+        await markerServer.observeNoHitsFor(MIN_NO_HIT_OBSERVATION_MS);
         expect(markerServer.hits).toEqual([]);
         expect(await readActiveGeneratedFields(page)).toEqual(before);
         await expect(page.getByTestId('project-tab').filter({ hasText: 'One Page Fixture' })).toBeVisible();
@@ -193,6 +195,7 @@ if (typeof caches !== 'undefined' || typeof importScripts !== 'undefined') throw
 
         await expect(page.getByRole('alert')).toContainText('Runtime: Template script must return synchronously.');
         await expect(page.getByRole('button', { name: 'Preview', exact: true })).toBeEnabled();
+        await markerServer.observeNoHitsFor(MIN_NO_HIT_OBSERVATION_MS);
         expect(markerServer.hits).toEqual([]);
         expect(await readActiveGeneratedFields(page)).toEqual(before);
         await expect(activePane(page).locator('[data-element-id]')).toHaveCount(1);
@@ -214,16 +217,16 @@ while (true) {}
         const elapsedMs = Date.now() - startedAt;
         expect(elapsedMs).toBeGreaterThanOrEqual(9500);
         expect(elapsedMs).toBeLessThan(12500);
+        await expect(page.getByRole('button', { name: 'Preview', exact: true })).toBeEnabled();
+        await markerServer.observeNoHitsFor(MIN_NO_HIT_OBSERVATION_MS);
         expect(markerServer.hits).toEqual([]);
         expect(await readActiveGeneratedFields(page)).toEqual(before);
         await expect(activePane(page).locator('[data-element-id]')).toHaveCount(1);
-        await expect(page.getByRole('button', { name: 'Preview', exact: true })).toBeEnabled();
 
         page.once('dialog', dialog => dialog.accept());
         await page.getByRole('button', { name: 'Close generator' }).click();
         await expect(page.getByRole('heading', { name: 'Hierarchy Generator' })).toBeHidden();
         await expect(page.getByTestId('project-tab').filter({ hasText: 'One Page Fixture' })).toBeVisible();
-        expect(await readActiveGeneratedFields(page)).toEqual(before);
     });
 
     test('should Trigger PDF Export', async ({ page }, testInfo) => {

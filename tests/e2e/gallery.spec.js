@@ -1,7 +1,7 @@
 
 import { test as base, expect } from '@playwright/test';
 import { getCloudHead, signIn, signUpAndVerify, TEST_PASSWORD } from './helpers.js';
-import { startMarkerServer } from './markerServer.js';
+import { MIN_NO_HIT_OBSERVATION_MS, startMarkerServer } from './markerServer.js';
 
 const API_BASE = process.env.E2E_API_BASE || 'http://localhost:3001';
 const test = base.extend({
@@ -44,12 +44,74 @@ const seedSavedGenerator = async (page, source) => {
     await waitForPersistedGenerator(page, source);
 };
 
-const openAndAssertIdleSource = async (page, expected) => {
+const observeNoExecutionUi = (dialog, durationMs = MIN_NO_HIT_OBSERVATION_MS) => dialog.evaluate(
+    (root, observationMs) => new Promise((resolve, reject) => {
+        let timer;
+        let observer;
+        const findExecutionUi = () => root.querySelector('[role="alert"], [aria-live="polite"]');
+        const cleanup = () => {
+            clearTimeout(timer);
+            observer?.disconnect();
+        };
+        const fail = executionUi => {
+            if (!executionUi) return;
+            cleanup();
+            reject(new Error(`Unexpected generator execution UI: ${executionUi.outerHTML}`));
+        };
+        const findInNode = node => node instanceof Element && (
+            node.matches('[role="alert"], [aria-live="polite"]')
+                ? node
+                : node.querySelector('[role="alert"], [aria-live="polite"]')
+        );
+
+        timer = setTimeout(() => {
+            cleanup();
+            resolve();
+        }, observationMs);
+        observer = new MutationObserver(records => {
+            for (const record of records) {
+                if (record.type === 'attributes') {
+                    const currentValue = record.target.getAttribute(record.attributeName);
+                    const executionValue = record.attributeName === 'role' ? 'alert' : 'polite';
+                    if (record.oldValue === executionValue || currentValue === executionValue) {
+                        fail(record.target);
+                        return;
+                    }
+                    continue;
+                }
+                for (const node of record.addedNodes) {
+                    const executionUi = findInNode(node);
+                    if (executionUi) {
+                        fail(executionUi);
+                        return;
+                    }
+                }
+            }
+            fail(findExecutionUi());
+        });
+        observer.observe(root, {
+            attributes: true,
+            attributeOldValue: true,
+            attributeFilter: ['aria-live', 'role'],
+            childList: true,
+            subtree: true,
+        });
+        fail(findExecutionUi());
+    }),
+    durationMs,
+);
+
+const openAndAssertIdleSource = async (page, expected, markerServer) => {
     await activePane(page).getByTitle('Generate Hierarchy via Script').click();
     const dialog = page.getByRole('dialog', { name: 'Hierarchy Generator' });
     await expect(page.getByLabel('Template script')).toHaveValue(expected.templateScript);
     await expect(page.getByLabel('Hierarchy script')).toHaveValue(expected.hierarchyScript);
     await expect(dialog.getByRole('button', { name: 'Apply Generated Project' })).toBeDisabled();
+    await Promise.all([
+        markerServer.observeNoHitsFor(MIN_NO_HIT_OBSERVATION_MS),
+        observeNoExecutionUi(dialog, MIN_NO_HIT_OBSERVATION_MS),
+    ]);
+    expect(markerServer.hits).toEqual([]);
     await expect(dialog.getByRole('alert')).toHaveCount(0);
     await expect(dialog.locator('[aria-live="polite"]')).toHaveCount(0);
 };
@@ -99,8 +161,7 @@ test.describe('Gallery', () => {
             hierarchyScript: `try { fetch('${markerServer.url('/gallery-hierarchy-source-executed.js')}'); }\nfinally { throw new Error('GALLERY_HIERARCHY_SOURCE_EXECUTED'); }\n\n// hierarchy trap:   λ   \n`,
         };
         await seedSavedGenerator(page, trapSource);
-        await openAndAssertIdleSource(page, trapSource);
-        expect(markerServer.hits).toEqual([]);
+        await openAndAssertIdleSource(page, trapSource, markerServer);
         await page.getByRole('button', { name: 'Close generator' }).click();
 
         // Save generated output with inert trap metadata to cloud.
@@ -156,14 +217,12 @@ test.describe('Gallery', () => {
         await pageB.getByRole('button', { name: /open in editor/i }).click();
         await pageB.waitForURL('**/app', { timeout: 15000 });
         await expect(pageB.getByTitle('Close Project')).toHaveCount(2, { timeout: 10000 });
-        await openAndAssertIdleSource(pageB, trapSource);
-        expect(markerServer.hits).toEqual([]);
+        await openAndAssertIdleSource(pageB, trapSource, markerServer);
         await pageB.getByRole('button', { name: 'Close generator' }).click();
 
         await pageB.reload();
         await expect(pageB.getByTestId('project-tab').filter({ hasText: 'My Simple Book' })).toBeVisible();
-        await openAndAssertIdleSource(pageB, trapSource);
-        expect(markerServer.hits).toEqual([]);
+        await openAndAssertIdleSource(pageB, trapSource, markerServer);
 
         const editedTitle = `Gallery Edited ${unique}`;
         const editedTemplateSource = `${baseTemplateSource}\n\n// edited source:   naïve Δ   \n`;
@@ -172,7 +231,6 @@ test.describe('Gallery', () => {
         await pageB.getByLabel('Hierarchy script').fill(editedHierarchySource);
         await pageB.getByRole('button', { name: 'Preview', exact: true }).click();
         await expect(pageB.getByText('3 nodes', { exact: true })).toBeVisible();
-        expect(markerServer.hits).toEqual([]);
         await pageB.getByRole('button', { name: 'Apply Generated Project' }).click();
         await expect(pageB.getByTestId('project-tab').filter({ hasText: editedTitle })).toBeVisible();
         await waitForPersistedGenerator(pageB, { templateScript: editedTemplateSource, hierarchyScript: editedHierarchySource });
@@ -197,8 +255,7 @@ test.describe('Gallery', () => {
         await pageB.getByRole('button', { name: /fork this project/i }).click();
         await pageB.waitForURL('**/app', { timeout: 15000 });
         await expect(pageB.getByTitle('Close Project')).toHaveCount(3, { timeout: 10000 });
-        await openAndAssertIdleSource(pageB, trapSource);
-        expect(markerServer.hits).toEqual([]);
+        await openAndAssertIdleSource(pageB, trapSource, markerServer);
 
         await ctxA.close();
         await ctxB.close();
