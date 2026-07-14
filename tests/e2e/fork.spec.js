@@ -8,6 +8,7 @@ import { signUpAndVerify, TEST_PASSWORD } from './helpers.js';
 const API_BASE = process.env.E2E_API_BASE || 'http://localhost:3001';
 
 const unique = Date.now();
+const activePane = page => page.locator('[data-testid="project-pane"][data-active="true"]');
 
 const waitForPersistedGenerator = async (page, expected) => {
     await expect.poll(() => page.evaluate(() => {
@@ -123,8 +124,7 @@ test.describe('Fork', () => {
         await pageB.waitForURL('**/app', { timeout: 15000 });
         await expect(pageB.getByTitle('Close Project')).toHaveCount(2, { timeout: 10000 });
 
-        const activePane = pageB.locator('.absolute.inset-0.w-full.h-full.opacity-100');
-        await activePane.getByTitle('Generate Hierarchy via Script').click();
+        await activePane(pageB).getByTitle('Generate Hierarchy via Script').click();
         await expect(pageB.getByLabel('Template script')).toHaveValue(generatorSource.templateSource);
         await expect(pageB.getByLabel('Hierarchy script')).toHaveValue(generatorSource.hierarchySource);
         await pageB.getByRole('button', { name: 'Close generator' }).click();
@@ -140,19 +140,18 @@ test.describe('Fork', () => {
 
         // Edit the (forked) template: draw a rectangle on the canvas.
         // Note: inactive tabs stay mounted (just visually hidden), so the default
-        // tab's toolbar/canvas also exists in the DOM -- scope to
-        // the active pane (the only one with the "opacity-100" wrapper class,
-        // see EditorPage.tsx) to avoid ambiguous matches.
-        const initialElementCount = await activePane.locator('[data-element-id]').count();
-        await activePane.getByTitle('Rectangle (R)').click();
-        const canvas = activePane.getByTestId('editor-canvas');
+        // tab's toolbar/canvas also exists in the DOM -- scope to the pane's
+        // stable data-active marker to avoid ambiguous matches.
+        const initialElementCount = await activePane(pageB).locator('[data-element-id]').count();
+        await activePane(pageB).getByTitle('Rectangle (R)').click();
+        const canvas = activePane(pageB).getByTestId('editor-canvas');
         const box = await canvas.boundingBox();
         if (!box) throw new Error('Canvas not found');
         await pageB.mouse.move(box.x + 100, box.y + 100);
         await pageB.mouse.down();
         await pageB.mouse.move(box.x + 200, box.y + 200);
         await pageB.mouse.up();
-        await expect(activePane.locator('[data-element-id]')).toHaveCount(initialElementCount + 1);
+        await expect(activePane(pageB).locator('[data-element-id]')).toHaveCount(initialElementCount + 1);
 
         // Save to cloud succeeds (button reads "Save to cloud", no "(new)" suffix,
         // since this tab is already cloud-linked from the fork).

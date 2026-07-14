@@ -1,9 +1,81 @@
 
-import { test, expect } from '@playwright/test';
+import { test as base, expect } from '@playwright/test';
+import { startMarkerServer } from './markerServer.js';
+
+const test = base.extend({
+    markerServer: async ({}, use) => {
+        const marker = await startMarkerServer();
+        try {
+            await use(marker);
+        } finally {
+            await marker.close();
+        }
+    },
+});
+
+const ONE_PAGE_TEMPLATE_SOURCE = `const layerId = 'fixture-layer';
+return {
+    fixture_page: {
+        id: 'fixture_page',
+        name: 'Fixture Page',
+        width: A4_WIDTH,
+        height: A4_HEIGHT,
+        layers: [{ id: layerId, name: 'Layer 1', order: 0, visible: true, locked: false }],
+        elements: [{
+            id: 'fixture-title', type: 'text', layerId,
+            x: 40, y: 40, w: 300, h: 40,
+            text: 'One-page isolation fixture', fontSize: 20
+        }]
+    }
+};`;
+
+const ONE_PAGE_HIERARCHY_SOURCE = `return {
+    rootId: 'root',
+    nodes: {
+        root: {
+            id: 'root', parentId: null, type: 'fixture_page',
+            title: 'One Page Fixture', data: {}, children: []
+        }
+    }
+};`;
 
 const openGenerator = async (page) => {
     await page.getByTitle('Generate Hierarchy via Script').click();
     await expect(page.getByRole('heading', { name: 'Hierarchy Generator' })).toBeVisible();
+};
+
+const activePane = page => page.locator('[data-testid="project-pane"][data-active="true"]');
+
+const readActiveGeneratedFields = page => page.evaluate(() => {
+    const projects = JSON.parse(localStorage.getItem('hype_projects') || '[]');
+    const activeId = localStorage.getItem('hype_active_project');
+    const state = projects.find(project => project.id === activeId)?.initialState;
+    if (!state) throw new Error('Active project state not found.');
+    return {
+        nodes: state.nodes,
+        rootId: state.rootId,
+        variants: state.variants,
+        activeVariantId: state.activeVariantId,
+        generator: state.generator,
+    };
+});
+
+const applyOnePageFixture = async page => {
+    await openGenerator(page);
+    await page.getByLabel('Template script').fill(ONE_PAGE_TEMPLATE_SOURCE);
+    await page.getByLabel('Hierarchy script').fill(ONE_PAGE_HIERARCHY_SOURCE);
+    await page.getByRole('button', { name: 'Preview', exact: true }).click();
+    await expect(page.getByText('1 template', { exact: true })).toBeVisible();
+    await expect(page.getByText('1 node', { exact: true })).toBeVisible();
+    await expect(page.getByText('1 estimated page', { exact: true })).toBeVisible();
+    page.once('dialog', dialog => dialog.accept());
+    await page.getByRole('button', { name: 'Apply Generated Project' }).click();
+    await expect(page.getByTestId('project-tab').filter({ hasText: 'One Page Fixture' })).toBeVisible();
+    await expect.poll(async () => (await readActiveGeneratedFields(page)).generator).toMatchObject({
+        templateScript: ONE_PAGE_TEMPLATE_SOURCE,
+        hierarchyScript: ONE_PAGE_HIERARCHY_SOURCE,
+    });
+    return readActiveGeneratedFields(page);
 };
 
 test.describe('Editor Advanced Features', () => {
@@ -19,7 +91,7 @@ test.describe('Editor Advanced Features', () => {
         await page.getByTitle('Data Grid (G)').click();
 
         // 2. Draw Grid on Canvas
-        const canvas = page.getByTestId('editor-canvas');
+        const canvas = activePane(page).getByTestId('editor-canvas');
         const box = await canvas.boundingBox();
         if (!box) throw new Error('Canvas not found');
 
@@ -85,53 +157,53 @@ test.describe('Editor Advanced Features', () => {
         await expect(page.getByLabel('Hierarchy script')).toHaveValue(hierarchySource);
     });
 
-    test('sandbox removes DOM, network, storage, cookie, and loader globals', async ({ page }) => {
+    test('sandbox removes DOM, network, storage, cookie, and loader globals', async ({ page, markerServer }) => {
+        const before = await applyOnePageFixture(page);
         await openGenerator(page);
-        const templateSource = await page.getByLabel('Template script').inputValue();
         const blockedGlobals = `
 if (typeof window !== 'undefined' || typeof document !== 'undefined') throw new Error('DOM exposed');
-if (typeof fetch !== 'undefined' || typeof XMLHttpRequest !== 'undefined') throw new Error('network exposed');
+if (typeof fetch !== 'undefined') { fetch('${markerServer.url('/isolation-fetch-exposed.js')}'); throw new Error('network exposed'); }
+if (typeof XMLHttpRequest !== 'undefined') throw new Error('network exposed');
 if (typeof WebSocket !== 'undefined' || typeof indexedDB !== 'undefined') throw new Error('browser capability exposed');
 if (typeof localStorage !== 'undefined' || typeof sessionStorage !== 'undefined') throw new Error('storage exposed');
 if (typeof cookieStore !== 'undefined') throw new Error('cookies exposed');
 if (typeof caches !== 'undefined' || typeof importScripts !== 'undefined') throw new Error('loader exposed');
 `;
-        await page.getByLabel('Template script').fill(blockedGlobals + templateSource);
+        await page.getByLabel('Template script').fill(blockedGlobals + ONE_PAGE_TEMPLATE_SOURCE);
+        await page.getByLabel('Hierarchy script').fill(ONE_PAGE_HIERARCHY_SOURCE);
 
         await page.getByRole('button', { name: 'Preview', exact: true }).click();
 
         await expect(page.getByText('1 variant', { exact: true })).toBeVisible();
-        await expect(page.getByText('2 templates', { exact: true })).toBeVisible();
-        await expect(page.getByTestId('project-tab').filter({ hasText: 'Blank Project' })).toBeVisible();
-        await expect(page.locator('[data-element-id]')).toHaveCount(0);
+        await expect(page.getByText('1 template', { exact: true })).toBeVisible();
+        await expect(page.getByText('1 node', { exact: true })).toBeVisible();
+        await expect(page.getByText('1 estimated page', { exact: true })).toBeVisible();
+        expect(markerServer.hits).toEqual([]);
+        expect(await readActiveGeneratedFields(page)).toEqual(before);
+        await expect(page.getByTestId('project-tab').filter({ hasText: 'One Page Fixture' })).toBeVisible();
+        await expect(activePane(page).locator('[data-element-id]')).toHaveCount(1);
     });
 
-    test('sandbox rejects dynamic import without requesting the module', async ({ page }) => {
-        const requested = [];
-        page.on('request', request => {
-            if (request.url().includes('generator-sandbox-must-not-load.js')) requested.push(request.url());
-        });
+    test('sandbox rejects dynamic import without requesting the module', async ({ page, markerServer }) => {
+        const before = await applyOnePageFixture(page);
         await openGenerator(page);
-        await page.getByLabel('Template script').fill("return import('/generator-sandbox-must-not-load.js');");
+        await page.getByLabel('Template script').fill(`return import('${markerServer.url('/dynamic-import-must-not-load.js')}');`);
 
         await page.getByRole('button', { name: 'Preview', exact: true }).click();
 
         await expect(page.getByRole('alert')).toContainText('Runtime: Template script must return synchronously.');
-        await page.waitForTimeout(250);
-        expect(requested).toEqual([]);
-        await expect(page.getByTestId('project-tab').filter({ hasText: 'Blank Project' })).toBeVisible();
-        await expect(page.locator('[data-element-id]')).toHaveCount(0);
+        await expect(page.getByRole('button', { name: 'Preview', exact: true })).toBeEnabled();
+        expect(markerServer.hits).toEqual([]);
+        expect(await readActiveGeneratedFields(page)).toEqual(before);
+        await expect(activePane(page).locator('[data-element-id]')).toHaveCount(1);
     });
 
-    test('sandbox times out after 10 seconds without changing the canvas or freezing the modal', async ({ page }) => {
+    test('sandbox times out after 10 seconds without changing the canvas or freezing the modal', async ({ page, markerServer }) => {
         test.setTimeout(25000);
-        const requested = [];
-        page.on('request', request => {
-            if (request.url().includes('generator-sandbox-timeout-must-not-request.js')) requested.push(request.url());
-        });
+        const before = await applyOnePageFixture(page);
         await openGenerator(page);
         await page.getByLabel('Template script').fill(`
-if (typeof fetch !== 'undefined') fetch('/generator-sandbox-timeout-must-not-request.js');
+if (typeof fetch !== 'undefined') fetch('${markerServer.url('/timeout-must-not-request.js')}');
 while (true) {}
 `);
         const startedAt = Date.now();
@@ -141,15 +213,17 @@ while (true) {}
         await expect(page.getByRole('alert')).toContainText('Timeout: Generator exceeded the 10000 ms execution limit.', { timeout: 15000 });
         const elapsedMs = Date.now() - startedAt;
         expect(elapsedMs).toBeGreaterThanOrEqual(9500);
-        expect(elapsedMs).toBeLessThan(15000);
-        expect(requested).toEqual([]);
+        expect(elapsedMs).toBeLessThan(12500);
+        expect(markerServer.hits).toEqual([]);
+        expect(await readActiveGeneratedFields(page)).toEqual(before);
+        await expect(activePane(page).locator('[data-element-id]')).toHaveCount(1);
         await expect(page.getByRole('button', { name: 'Preview', exact: true })).toBeEnabled();
 
         page.once('dialog', dialog => dialog.accept());
         await page.getByRole('button', { name: 'Close generator' }).click();
         await expect(page.getByRole('heading', { name: 'Hierarchy Generator' })).toBeHidden();
-        await expect(page.getByTestId('project-tab').filter({ hasText: 'Blank Project' })).toBeVisible();
-        await expect(page.locator('[data-element-id]')).toHaveCount(0);
+        await expect(page.getByTestId('project-tab').filter({ hasText: 'One Page Fixture' })).toBeVisible();
+        expect(await readActiveGeneratedFields(page)).toEqual(before);
     });
 
     test('should Trigger PDF Export', async ({ page }, testInfo) => {

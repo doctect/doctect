@@ -1,8 +1,22 @@
 
-import { test, expect } from '@playwright/test';
-import { signUpAndVerify, TEST_PASSWORD } from './helpers.js';
+import { test as base, expect } from '@playwright/test';
+import { getCloudHead, signIn, signUpAndVerify, TEST_PASSWORD } from './helpers.js';
+import { startMarkerServer } from './markerServer.js';
+
+const API_BASE = process.env.E2E_API_BASE || 'http://localhost:3001';
+const test = base.extend({
+    markerServer: async ({}, use) => {
+        const marker = await startMarkerServer();
+        try {
+            await use(marker);
+        } finally {
+            await marker.close();
+        }
+    },
+});
 
 const unique = Date.now();
+const activePane = page => page.locator('[data-testid="project-pane"][data-active="true"]');
 
 const waitForPersistedGenerator = async (page, expected) => {
     await expect.poll(() => page.evaluate(() => {
@@ -13,8 +27,35 @@ const waitForPersistedGenerator = async (page, expected) => {
     })).toEqual(expected);
 };
 
+const seedSavedGenerator = async (page, source) => {
+    await page.evaluate(generatorSource => {
+        const projects = JSON.parse(localStorage.getItem('hype_projects') || '[]');
+        const activeId = localStorage.getItem('hype_active_project');
+        const active = projects.find(project => project.id === activeId);
+        if (!active) throw new Error('Active project not found while seeding source.');
+        active.initialState.generator = {
+            formatVersion: 1,
+            generatedAt: new Date().toISOString(),
+            ...generatorSource,
+        };
+        localStorage.setItem('hype_projects', JSON.stringify(projects));
+    }, source);
+    await page.reload();
+    await waitForPersistedGenerator(page, source);
+};
+
+const openAndAssertIdleSource = async (page, expected) => {
+    await activePane(page).getByTitle('Generate Hierarchy via Script').click();
+    const dialog = page.getByRole('dialog', { name: 'Hierarchy Generator' });
+    await expect(page.getByLabel('Template script')).toHaveValue(expected.templateScript);
+    await expect(page.getByLabel('Hierarchy script')).toHaveValue(expected.hierarchyScript);
+    await expect(dialog.getByRole('button', { name: 'Apply Generated Project' })).toBeDisabled();
+    await expect(dialog.getByRole('alert')).toHaveCount(0);
+    await expect(dialog.locator('[aria-live="polite"]')).toHaveCount(0);
+};
+
 test.describe('Gallery', () => {
-    test('published generator source opens inertly, edits byte-exactly, and survives a fork', async ({ browser }) => {
+    test('published generator source opens inertly, edits byte-exactly, and survives a fork', async ({ browser, markerServer }) => {
         test.setTimeout(180000);
 
         const ctxA = await browser.newContext();
@@ -37,23 +78,32 @@ test.describe('Gallery', () => {
             password: TEST_PASSWORD,
         });
 
-        // Generate source with distinctive whitespace/Unicode and a page-scope tripwire.
+        // Generate valid output, then seed separately saved source that cannot run successfully.
         await page.goto('/app');
         await page.getByTitle('Generate Hierarchy via Script').click();
         const baseTemplateSource = await page.getByLabel('Template script').inputValue();
         const baseHierarchySource = await page.getByLabel('Hierarchy script').inputValue();
-        const openTripwire = `/generator-source-open-must-not-run-${unique}.js`;
-        const templateSource = `if (typeof fetch !== 'undefined') fetch('${openTripwire}');\n\n${baseTemplateSource}\n\n//   café 雪 source bytes   \n`;
-        const hierarchySource = `${baseHierarchySource}\n\n// hierarchy spacing:   λ   \n`;
-        await page.getByLabel('Template script').fill(templateSource);
-        await page.getByLabel('Hierarchy script').fill(hierarchySource);
+        await page.getByLabel('Template script').fill(baseTemplateSource);
+        await page.getByLabel('Hierarchy script').fill(baseHierarchySource);
         await page.getByRole('button', { name: 'Preview', exact: true }).click();
         await expect(page.getByText('3 nodes', { exact: true })).toBeVisible();
         await page.getByRole('button', { name: 'Apply Generated Project' }).click();
         await expect(page.getByTestId('project-tab').filter({ hasText: 'My Simple Book' })).toBeVisible();
-        await waitForPersistedGenerator(page, { templateScript: templateSource, hierarchyScript: hierarchySource });
+        await waitForPersistedGenerator(page, {
+            templateScript: baseTemplateSource,
+            hierarchyScript: baseHierarchySource,
+        });
 
-        // Save generated project to cloud.
+        const trapSource = {
+            templateScript: `try { fetch('${markerServer.url('/gallery-template-source-executed.js')}'); }\nfinally { throw new Error('GALLERY_TEMPLATE_SOURCE_EXECUTED'); }\n\n//   café 雪 trap bytes   \n`,
+            hierarchyScript: `try { fetch('${markerServer.url('/gallery-hierarchy-source-executed.js')}'); }\nfinally { throw new Error('GALLERY_HIERARCHY_SOURCE_EXECUTED'); }\n\n// hierarchy trap:   λ   \n`,
+        };
+        await seedSavedGenerator(page, trapSource);
+        await openAndAssertIdleSource(page, trapSource);
+        expect(markerServer.hits).toEqual([]);
+        await page.getByRole('button', { name: 'Close generator' }).click();
+
+        // Save generated output with inert trap metadata to cloud.
         await page.getByTitle('Cloud').click();
         const [createRes] = await Promise.all([
             page.waitForResponse(
@@ -63,6 +113,7 @@ test.describe('Gallery', () => {
             page.getByRole('button', { name: 'Save to cloud (new)' }).click(),
         ]);
         expect(createRes.ok()).toBeTruthy();
+        const projectId = (await createRes.json()).project.id;
         // CloudMenu's dropdown only closes once the save actually resolves (setOpen(false)
         // runs after the awaited create call) -- wait for that before reopening it, otherwise
         // a still-open menu would just toggle shut instead of opening for the next click.
@@ -82,7 +133,7 @@ test.describe('Gallery', () => {
             page.getByRole('button', { name: /^publish$/i }).click(),
         ]);
         expect(publishRes.ok()).toBeTruthy();
-        const projectId = (await publishRes.json()).project.id;
+        expect((await publishRes.json()).project.id).toBe(projectId);
         // The modal only closes once `onPublished` fires, i.e. the success path.
         await expect(page.getByRole('heading', { name: /publish to gallery/i })).toBeHidden({ timeout: 10000 });
 
@@ -93,14 +144,11 @@ test.describe('Gallery', () => {
         const ctxB = await browser.newContext();
         const pageB = await ctxB.newPage();
         pageB.on('dialog', dialog => dialog.accept(dialog.type() === 'prompt' ? 'source persistence save' : undefined));
-        const sourceExecutionRequests = [];
-        pageB.on('request', request => {
-            if (request.url().includes(openTripwire)) sourceExecutionRequests.push(request.url());
-        });
+        const editorEmail = `gallerysource${unique}@test.dev`;
         await signUpAndVerify(pageB, {
             name: 'Gallery Source User',
             username: `gallery_source_${unique}`,
-            email: `gallerysource${unique}@test.dev`,
+            email: editorEmail,
             password: TEST_PASSWORD,
         });
 
@@ -108,21 +156,23 @@ test.describe('Gallery', () => {
         await pageB.getByRole('button', { name: /open in editor/i }).click();
         await pageB.waitForURL('**/app', { timeout: 15000 });
         await expect(pageB.getByTitle('Close Project')).toHaveCount(2, { timeout: 10000 });
-        const activePane = pageB.locator('.absolute.inset-0.w-full.h-full.opacity-100');
-        await activePane.getByTitle('Generate Hierarchy via Script').click();
-        await expect(pageB.getByLabel('Template script')).toHaveValue(templateSource);
-        await expect(pageB.getByLabel('Hierarchy script')).toHaveValue(hierarchySource);
-        await expect(pageB.getByRole('button', { name: 'Apply Generated Project' })).toBeDisabled();
-        await pageB.waitForTimeout(250);
-        expect(sourceExecutionRequests).toEqual([]);
+        await openAndAssertIdleSource(pageB, trapSource);
+        expect(markerServer.hits).toEqual([]);
+        await pageB.getByRole('button', { name: 'Close generator' }).click();
+
+        await pageB.reload();
+        await expect(pageB.getByTestId('project-tab').filter({ hasText: 'My Simple Book' })).toBeVisible();
+        await openAndAssertIdleSource(pageB, trapSource);
+        expect(markerServer.hits).toEqual([]);
 
         const editedTitle = `Gallery Edited ${unique}`;
-        const editedTemplateSource = `${templateSource}\n\n// edited source:   naïve Δ   \n`;
-        const editedHierarchySource = hierarchySource.replace("title: 'My Simple Book'", `title: '${editedTitle}'`);
+        const editedTemplateSource = `${baseTemplateSource}\n\n// edited source:   naïve Δ   \n`;
+        const editedHierarchySource = baseHierarchySource.replace("title: 'My Simple Book'", `title: '${editedTitle}'`);
         await pageB.getByLabel('Template script').fill(editedTemplateSource);
         await pageB.getByLabel('Hierarchy script').fill(editedHierarchySource);
         await pageB.getByRole('button', { name: 'Preview', exact: true }).click();
         await expect(pageB.getByText('3 nodes', { exact: true })).toBeVisible();
+        expect(markerServer.hits).toEqual([]);
         await pageB.getByRole('button', { name: 'Apply Generated Project' }).click();
         await expect(pageB.getByTestId('project-tab').filter({ hasText: editedTitle })).toBeVisible();
         await waitForPersistedGenerator(pageB, { templateScript: editedTemplateSource, hierarchyScript: editedHierarchySource });
@@ -133,23 +183,22 @@ test.describe('Gallery', () => {
             pageB.getByRole('button', { name: 'Save to cloud (new)' }).click(),
         ]);
         expect(editedCreateRes.ok()).toBeTruthy();
-        await pageB.reload();
-        await expect(pageB.getByTestId('project-tab').filter({ hasText: editedTitle })).toBeVisible();
-        const reloadedPane = pageB.locator('.absolute.inset-0.w-full.h-full.opacity-100');
-        await reloadedPane.getByTitle('Generate Hierarchy via Script').click();
-        await expect(pageB.getByLabel('Template script')).toHaveValue(editedTemplateSource);
-        await expect(pageB.getByLabel('Hierarchy script')).toHaveValue(editedHierarchySource);
-        await pageB.getByRole('button', { name: 'Close generator' }).click();
+        const editedProjectId = (await editedCreateRes.json()).project.id;
+
+        const ctxC = await browser.newContext();
+        const pageC = await ctxC.newPage();
+        await signIn(pageC, { email: editorEmail, password: TEST_PASSWORD });
+        const authoritative = await getCloudHead(pageC.request, API_BASE, editedProjectId);
+        expect(authoritative.state.generator.templateScript).toBe(editedTemplateSource);
+        expect(authoritative.state.generator.hierarchyScript).toBe(editedHierarchySource);
+        await ctxC.close();
 
         await pageB.goto(`/gallery/${projectId}`);
         await pageB.getByRole('button', { name: /fork this project/i }).click();
         await pageB.waitForURL('**/app', { timeout: 15000 });
         await expect(pageB.getByTitle('Close Project')).toHaveCount(3, { timeout: 10000 });
-        const forkPane = pageB.locator('.absolute.inset-0.w-full.h-full.z-10.opacity-100');
-        await forkPane.getByTitle('Generate Hierarchy via Script').click();
-        await expect(pageB.getByLabel('Template script')).toHaveValue(templateSource);
-        await expect(pageB.getByLabel('Hierarchy script')).toHaveValue(hierarchySource);
-        expect(sourceExecutionRequests).toEqual([]);
+        await openAndAssertIdleSource(pageB, trapSource);
+        expect(markerServer.hits).toEqual([]);
 
         await ctxA.close();
         await ctxB.close();

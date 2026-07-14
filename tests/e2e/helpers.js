@@ -59,6 +59,32 @@ export const signUpAndVerify = async (page, { name, username, email, password = 
     await page.waitForURL('**/app', { timeout: 15000 });
 };
 
+export const signIn = async (page, { email, password = TEST_PASSWORD }) => {
+    await page.goto('/login');
+    await page.locator('input[type="email"]').fill(email);
+    await page.locator('input[type="password"]').fill(password);
+    await page.getByRole('button', { name: 'Sign In', exact: true }).click();
+    await page.waitForURL('**/app', { timeout: 15000 });
+};
+
+export const getCloudHead = async (requestContext, apiBase, projectId) => {
+    const projectResponse = await requestContext.get(`${apiBase}/api/projects/${projectId}`);
+    if (!projectResponse.ok()) {
+        throw new Error(`project read failed: ${projectResponse.status()} ${await projectResponse.text()}`);
+    }
+    const project = (await projectResponse.json()).project;
+    if (!project.headCommitId) throw new Error(`project ${projectId} has no HEAD commit`);
+
+    const commitResponse = await requestContext.get(
+        `${apiBase}/api/projects/${projectId}/commits/${project.headCommitId}`,
+    );
+    if (!commitResponse.ok()) {
+        throw new Error(`HEAD read failed: ${commitResponse.status()} ${await commitResponse.text()}`);
+    }
+    const commit = (await commitResponse.json()).commit;
+    return { project, commit, state: commit.state };
+};
+
 // Same idea for a signup done via a raw API call (no UI) -- e.g.
 // username_identity.spec.js's "no username" session, which mimics what
 // Google OAuth produces. Verifies via the DB, then signs in through the auth

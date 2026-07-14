@@ -1,12 +1,20 @@
 
 import { test, expect } from '@playwright/test';
-import { signUpAndVerify as signUp } from './helpers.js';
+import { getCloudHead, signUpAndVerify as signUp } from './helpers.js';
 
 // The API server (server/index.js) listens on a different origin than the Vite
 // dev server that Playwright's baseURL points at (see .env: VITE_API_BASE).
 const API_BASE = process.env.E2E_API_BASE || 'http://localhost:3001';
 
 const unique = Date.now();
+const activePane = page => page.locator('[data-testid="project-pane"][data-active="true"]');
+const generatedFields = state => ({
+    nodes: state.nodes,
+    rootId: state.rootId,
+    variants: state.variants,
+    activeVariantId: state.activeVariantId,
+    generator: state.generator,
+});
 
 const waitForPersistedGenerator = async (page, expected) => {
     await expect.poll(() => page.evaluate(() => {
@@ -18,8 +26,7 @@ const waitForPersistedGenerator = async (page, expected) => {
 };
 
 const applyGeneratorSource = async (page, title, marker) => {
-    const activePane = page.locator('.absolute.inset-0.w-full.h-full.opacity-100');
-    await activePane.getByTitle('Generate Hierarchy via Script').click();
+    await activePane(page).getByTitle('Generate Hierarchy via Script').click();
     const baseTemplateSource = await page.getByLabel('Template script').inputValue();
     const baseHierarchySource = await page.getByLabel('Hierarchy script').inputValue();
     const templateSource = `${baseTemplateSource}\n\n// ${marker}:   café 雪   \n`;
@@ -96,6 +103,7 @@ test.describe('Merge requests', () => {
             pageB.getByRole('button', { name: /fork this project/i }).click(),
         ]);
         expect(forkRes.ok()).toBeTruthy();
+        const forkedProjectId = (await forkRes.json()).project.id;
         await pageB.waitForURL('**/app', { timeout: 15000 });
         // EditorPage mounts with the pre-existing default "Blank Project" tab active,
         // then a separate effect consumes the staged fork import, adds a second tab,
@@ -115,6 +123,9 @@ test.describe('Merge requests', () => {
             pageB.getByRole('button', { name: 'Save to cloud', exact: true }).click(),
         ]);
         expect(saveRes.ok()).toBeTruthy();
+        const forkHeadBeforeMr = generatedFields(
+            (await getCloudHead(pageB.request, API_BASE, forkedProjectId)).state,
+        );
 
         // Reopen the (now-closed) Cloud dropdown to propose changes upstream.
         await pageB.getByTitle('Cloud').click();
@@ -164,6 +175,10 @@ test.describe('Merge requests', () => {
         expect((await mergeRes.json()).mergeRequest.status).toBe('merged');
         await expect(pageA.getByText('merged', { exact: true })).toBeVisible();
         await expect(pageA.getByRole('button', { name: 'Merge', exact: true })).toBeHidden();
+        const targetHeadAfterMerge = generatedFields(
+            (await getCloudHead(pageA.request, API_BASE, upstreamId)).state,
+        );
+        expect(targetHeadAfterMerge).toEqual(forkHeadBeforeMr);
 
         // ---------------------------------------------------------------
         // A: the merge commit is HEAD in their project's version history,
@@ -177,10 +192,9 @@ test.describe('Merge requests', () => {
         await expect(headMessage).toContainText(`Merge: ${mrTitle}`);
 
         await pageA.getByRole('button', { name: /restore/i }).first().click();
-        const activePaneA = pageA.locator('.absolute.inset-0.w-full.h-full.opacity-100');
         await expect(pageA.getByTestId('project-tab').filter({ hasText: generatedTitle })).toBeVisible({ timeout: 10000 });
-        await expect(activePaneA.locator('[data-element-id]')).toHaveCount(2, { timeout: 10000 });
-        await activePaneA.getByTitle('Generate Hierarchy via Script').click();
+        await expect(activePane(pageA).locator('[data-element-id]')).toHaveCount(2, { timeout: 10000 });
+        await activePane(pageA).getByTitle('Generate Hierarchy via Script').click();
         await expect(pageA.getByLabel('Template script')).toHaveValue(generatedSource.templateSource);
         await expect(pageA.getByLabel('Hierarchy script')).toHaveValue(generatedSource.hierarchySource);
 

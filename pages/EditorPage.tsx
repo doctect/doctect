@@ -290,6 +290,8 @@ export function EditorPage() {
                 {projects.map(project => (
                     <div
                         key={`${project.id}:${project.revision || 0}`}
+                        data-testid="project-pane"
+                        data-active={project.id === activeProjectId ? 'true' : 'false'}
                         className={clsx(
                             "absolute inset-0 w-full h-full",
                             project.id === activeProjectId ? "z-10 opacity-100" : "z-0 opacity-0 pointer-events-none"
