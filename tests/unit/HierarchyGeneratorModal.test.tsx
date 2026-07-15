@@ -4,8 +4,21 @@ import { HierarchyGeneratorModal } from '../../components/HierarchyGeneratorModa
 import type { GeneratorProvenance } from '../../types';
 
 const runGeneratorSandbox = vi.hoisted(() => vi.fn());
+const previewPayload = vi.hoisted(() => ({ current: null as any }));
 
 vi.mock('../../services/generatorSandbox', () => ({ runGeneratorSandbox }));
+vi.mock('../../components/GeneratorVisualPreviewModal', () => ({
+    GeneratorVisualPreviewModal: (props: any) => {
+        previewPayload.current = props.payload;
+        return (
+            <div role="dialog" aria-label="Generated Project Preview">
+                <button onClick={props.onBack}>Back to Scripts</button>
+                <button onClick={props.onReplace}>Replace Current Project</button>
+                <button onClick={() => props.onCreateProject('Separate Generated')}>Create Test Project</button>
+            </div>
+        );
+    },
+}));
 
 const saved: GeneratorProvenance = {
     formatVersion: 1,
@@ -41,10 +54,11 @@ const lastPreviewSignal = (): AbortSignal => {
 const renderModal = (overrides: Record<string, unknown> = {}) => {
     const props = {
         isOpen: true,
+        projectName: 'Current Project',
         savedGenerator: saved,
         onClose: vi.fn(),
         onApplyGenerated: vi.fn(() => true),
-        onDetachSavedGenerator: vi.fn(() => true),
+        onCreateGeneratedProject: vi.fn(() => true),
         ...overrides,
     };
     render(<HierarchyGeneratorModal {...props} />);
@@ -68,24 +82,21 @@ describe('HierarchyGeneratorModal', () => {
         expect(screen.getByRole('button', { name: 'Apply Generated Project' })).toBeDisabled();
     });
 
-    it('explains retained source safety, replacement, detach, and no reverse synchronization', () => {
+    it('explains retained source safety, replacement, and no reverse synchronization', () => {
         renderModal();
         expect(screen.getByText(/Saved generator source is retained with the project/)).toHaveTextContent(
-            'Saved generator source is retained with the project and becomes public when published. Opening source never runs it; Preview uses the sandbox. Apply replaces the generated document. Manual edits are not written back to JavaScript. Use Detach Saved Generator to remove retained source.',
+            'Saved generator source is retained with the project and becomes public when published. Opening source never runs it; Preview uses the sandbox. Apply replaces the generated document. Manual edits are not written back to JavaScript.',
         );
+        expect(screen.queryByRole('button', { name: 'Detach Saved Generator' })).not.toBeInTheDocument();
     });
 
-    it('previews without applying, shows summary, then applies exact preview source after confirmation', async () => {
+    it('previews without applying, then replaces with exact preview source after confirmation', async () => {
         const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
         const props = renderModal();
 
         fireEvent.click(screen.getByRole('button', { name: 'Preview' }));
 
-        await screen.findByText('1 template');
-        expect(screen.getByText('1 variant')).toBeVisible();
-        expect(screen.getByText('1 node')).toBeVisible();
-        expect(screen.getByText('1 estimated page')).toBeVisible();
-        expect(screen.getByText(/Applying replaces the current generated document/)).toBeVisible();
+        expect(await screen.findByRole('dialog', { name: 'Generated Project Preview' })).toBeVisible();
         expect(props.onApplyGenerated).not.toHaveBeenCalled();
         expect(runGeneratorSandbox).toHaveBeenCalledWith(
             {
@@ -97,14 +108,67 @@ describe('HierarchyGeneratorModal', () => {
             expect.any(AbortSignal),
         );
 
-        fireEvent.click(screen.getByRole('button', { name: 'Apply Generated Project' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Replace Current Project' }));
 
         expect(confirm).toHaveBeenCalled();
         expect(props.onApplyGenerated).toHaveBeenCalledWith(
             expect.objectContaining({ rootId: 'root' }),
-            { templateScript: saved.templateScript, hierarchyScript: saved.hierarchyScript },
+            { formatVersion: 1, templateScript: saved.templateScript, hierarchyScript: saved.hierarchyScript },
         );
         expect(props.onClose).toHaveBeenCalled();
+    });
+
+    it('Back preserves exact drafts and leaves project callbacks untouched', async () => {
+        const props = renderModal();
+        fireEvent.change(screen.getByLabelText('Template script'), { target: { value: '  exact template draft\n' } });
+        fireEvent.change(screen.getByLabelText('Hierarchy script'), { target: { value: '\texact hierarchy draft  ' } });
+        fireEvent.click(screen.getByRole('button', { name: 'Preview' }));
+        await screen.findByRole('dialog', { name: 'Generated Project Preview' });
+
+        fireEvent.click(screen.getByRole('button', { name: 'Back to Scripts' }));
+
+        expect(screen.getByLabelText('Template script')).toHaveValue('  exact template draft\n');
+        expect(screen.getByLabelText('Hierarchy script')).toHaveValue('\texact hierarchy draft  ');
+        expect(props.onApplyGenerated).not.toHaveBeenCalled();
+        expect(props.onCreateGeneratedProject).not.toHaveBeenCalled();
+        expect(props.onClose).not.toHaveBeenCalled();
+    });
+
+    it('reopens an immutable ready preview without rerunning the sandbox', async () => {
+        renderModal();
+        fireEvent.click(screen.getByRole('button', { name: 'Preview' }));
+        await screen.findByRole('dialog', { name: 'Generated Project Preview' });
+        const before = structuredClone(previewPayload.current);
+        fireEvent.click(screen.getByRole('button', { name: 'Back to Scripts' }));
+
+        fireEvent.click(screen.getByRole('button', { name: 'View Preview' }));
+
+        expect(await screen.findByRole('dialog', { name: 'Generated Project Preview' })).toBeVisible();
+        expect(runGeneratorSandbox).toHaveBeenCalledOnce();
+        expect(previewPayload.current).toEqual(before);
+    });
+
+    it('creates from the exact immutable ready payload and closes both dialogs', async () => {
+        const props = renderModal();
+        fireEvent.click(screen.getByRole('button', { name: 'Preview' }));
+        await screen.findByRole('dialog', { name: 'Generated Project Preview' });
+        const before = structuredClone(previewPayload.current);
+
+        fireEvent.click(screen.getByRole('button', { name: 'Create Test Project' }));
+
+        expect(props.onCreateGeneratedProject).toHaveBeenCalledWith(
+            'Separate Generated',
+            before.project,
+            before.source,
+        );
+        expect(before.source).toEqual({
+            formatVersion: 1,
+            templateScript: saved.templateScript,
+            hierarchyScript: saved.hierarchyScript,
+        });
+        expect(previewPayload.current).toEqual(before);
+        expect(props.onClose).toHaveBeenCalledOnce();
+        expect(screen.queryByRole('dialog', { name: 'Generated Project Preview' })).not.toBeInTheDocument();
     });
 
     it('shows failed previews and keeps Apply disabled', async () => {
@@ -120,12 +184,14 @@ describe('HierarchyGeneratorModal', () => {
     it('invalidates a successful preview on source edits and previews exact draft source', async () => {
         renderModal();
         fireEvent.click(screen.getByRole('button', { name: 'Preview' }));
-        await screen.findByText('1 template');
+        await screen.findByRole('dialog', { name: 'Generated Project Preview' });
+        fireEvent.click(screen.getByRole('button', { name: 'Back to Scripts' }));
 
         const templateEditor = screen.getByLabelText('Template script');
         fireEvent.change(templateEditor, { target: { value: '  return customTemplates;\n' } });
 
-        expect(screen.queryByText('1 template')).not.toBeInTheDocument();
+        expect(screen.queryByRole('dialog', { name: 'Generated Project Preview' })).not.toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Preview' })).toBeVisible();
         expect(screen.getByRole('button', { name: 'Apply Generated Project' })).toBeDisabled();
         fireEvent.click(screen.getByRole('button', { name: 'Preview' }));
         await waitFor(() => expect(runGeneratorSandbox).toHaveBeenLastCalledWith(
@@ -147,7 +213,7 @@ describe('HierarchyGeneratorModal', () => {
         fireEvent.change(screen.getByLabelText('Template script'), { target: { value: 'changed while running' } });
         await act(async () => pending.resolve({ ok: true, value: validSandboxValue }));
 
-        expect(screen.queryByText('1 template')).not.toBeInTheDocument();
+        expect(screen.queryByRole('dialog', { name: 'Generated Project Preview' })).not.toBeInTheDocument();
         expect(screen.getByRole('button', { name: 'Apply Generated Project' })).toBeDisabled();
     });
 
@@ -167,11 +233,11 @@ describe('HierarchyGeneratorModal', () => {
         expect(secondSignal).not.toBe(firstSignal);
         expect(secondSignal.aborted).toBe(false);
         await act(async () => second.resolve({ ok: true, value: validSandboxValue }));
-        await screen.findByText('1 template');
-        await act(async () => {
-            fireEvent.click(screen.getByRole('button', { name: 'Preview' }));
-        });
-        expect(secondSignal.aborted).toBe(true);
+        await screen.findByRole('dialog', { name: 'Generated Project Preview' });
+        fireEvent.click(screen.getByRole('button', { name: 'Back to Scripts' }));
+        fireEvent.click(screen.getByRole('button', { name: 'View Preview' }));
+        expect(secondSignal.aborted).toBe(false);
+        expect(runGeneratorSandbox).toHaveBeenCalledTimes(2);
     });
 
     it.each([
@@ -184,20 +250,17 @@ describe('HierarchyGeneratorModal', () => {
         }],
         ['close', () => fireEvent.click(screen.getByRole('button', { name: 'Close generator' }))],
         ['Escape', () => fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' })],
-        ['detach', () => {
-            vi.spyOn(window, 'confirm').mockReturnValue(true);
-            fireEvent.click(screen.getByRole('button', { name: 'Detach Saved Generator' }));
-        }],
         ['unmount', (view: ReturnType<typeof render>) => view.unmount()],
     ])('aborts a running preview on %s', async (_name, action) => {
         const pending = deferred<any>();
         runGeneratorSandbox.mockReturnValueOnce(pending.promise);
         const props = {
             isOpen: true,
+            projectName: 'Current Project',
             savedGenerator: saved,
             onClose: vi.fn(),
             onApplyGenerated: vi.fn(() => true),
-            onDetachSavedGenerator: vi.fn(() => true),
+            onCreateGeneratedProject: vi.fn(() => true),
         };
         const view = render(<HierarchyGeneratorModal {...props} />);
         fireEvent.click(screen.getByRole('button', { name: 'Preview' }));
@@ -213,9 +276,9 @@ describe('HierarchyGeneratorModal', () => {
         renderModal();
         fireEvent.click(screen.getByRole('button', { name: 'Preview' }));
         const signal = lastPreviewSignal();
-        await screen.findByText('1 template');
+        await screen.findByRole('dialog', { name: 'Generated Project Preview' });
 
-        fireEvent.click(screen.getByRole('button', { name: 'Apply Generated Project' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Replace Current Project' }));
 
         expect(signal.aborted).toBe(true);
     });
@@ -225,10 +288,11 @@ describe('HierarchyGeneratorModal', () => {
         runGeneratorSandbox.mockReturnValueOnce(pending.promise);
         const props = {
             isOpen: true,
+            projectName: 'Current Project',
             savedGenerator: saved,
             onClose: vi.fn(),
             onApplyGenerated: vi.fn(() => true),
-            onDetachSavedGenerator: vi.fn(() => true),
+            onCreateGeneratedProject: vi.fn(() => true),
         };
         const view = render(<HierarchyGeneratorModal {...props} />);
         fireEvent.click(screen.getByRole('button', { name: 'Preview' }));
@@ -246,7 +310,7 @@ describe('HierarchyGeneratorModal', () => {
         expect(screen.getByLabelText('Hierarchy script')).toHaveValue(reopened.hierarchyScript);
         expect(screen.getByRole('button', { name: 'Apply Generated Project' })).toBeDisabled();
         await act(async () => pending.resolve({ ok: true, value: validSandboxValue }));
-        expect(screen.queryByText('1 template')).not.toBeInTheDocument();
+        expect(screen.queryByRole('dialog', { name: 'Generated Project Preview' })).not.toBeInTheDocument();
         expect(screen.getByRole('button', { name: 'Apply Generated Project' })).toBeDisabled();
     });
 
@@ -283,10 +347,11 @@ describe('HierarchyGeneratorModal', () => {
         const view = render(
             <HierarchyGeneratorModal
                 isOpen
+                projectName="Current Project"
                 savedGenerator={saved}
                 onClose={vi.fn()}
                 onApplyGenerated={vi.fn(() => true)}
-                onDetachSavedGenerator={vi.fn(() => true)}
+                onCreateGeneratedProject={vi.fn(() => true)}
             />,
         );
         const dialog = screen.getByRole('dialog', { name: 'Hierarchy Generator' });
@@ -359,41 +424,12 @@ describe('HierarchyGeneratorModal', () => {
         vi.spyOn(window, 'confirm').mockReturnValue(false);
         const props = renderModal();
         fireEvent.click(screen.getByRole('button', { name: 'Preview' }));
-        await screen.findByText('1 template');
+        await screen.findByRole('dialog', { name: 'Generated Project Preview' });
 
-        fireEvent.click(screen.getByRole('button', { name: 'Apply Generated Project' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Replace Current Project' }));
 
         expect(props.onApplyGenerated).not.toHaveBeenCalled();
         expect(props.onClose).not.toHaveBeenCalled();
     });
 
-    it('requires dirty-discard and separate detach confirmations', () => {
-        const confirm = vi.spyOn(window, 'confirm');
-        const props = renderModal();
-        fireEvent.change(screen.getByLabelText('Hierarchy script'), { target: { value: 'dirty source' } });
-
-        confirm.mockReturnValueOnce(false);
-        fireEvent.click(screen.getByRole('button', { name: 'Detach Saved Generator' }));
-        expect(props.onDetachSavedGenerator).not.toHaveBeenCalled();
-        expect(props.onClose).not.toHaveBeenCalled();
-        expect(screen.getByLabelText('Hierarchy script')).toHaveValue('dirty source');
-
-        confirm.mockReturnValueOnce(true).mockReturnValueOnce(false);
-        fireEvent.click(screen.getByRole('button', { name: 'Detach Saved Generator' }));
-        expect(props.onDetachSavedGenerator).not.toHaveBeenCalled();
-        expect(props.onClose).not.toHaveBeenCalled();
-        expect(screen.getByLabelText('Hierarchy script')).toHaveValue('dirty source');
-
-        confirm.mockReturnValueOnce(true).mockReturnValueOnce(true);
-        fireEvent.click(screen.getByRole('button', { name: 'Detach Saved Generator' }));
-        expect(props.onDetachSavedGenerator).toHaveBeenCalledOnce();
-        expect(props.onClose).toHaveBeenCalledOnce();
-        expect(confirm.mock.calls.map(([message]) => message)).toEqual([
-            'Discard draft generator changes?',
-            'Discard draft generator changes?',
-            'Detach saved generator source? Generated document content will remain unchanged.',
-            'Discard draft generator changes?',
-            'Detach saved generator source? Generated document content will remain unchanged.',
-        ]);
-    });
 });

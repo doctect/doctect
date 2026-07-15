@@ -607,7 +607,7 @@ nodes[refId] = {
                      </ul>
 
                      <p className="bg-amber-50 border-l-4 border-amber-400 p-4 text-amber-900 text-sm mt-8">
-                         <strong>Saved generator source:</strong> Apply retains both scripts with local saves, JSON downloads, cloud history, gallery copies, and forks. Publishing makes both scripts public, so review them for secrets, private comments, and identifying information. To exclude them, use <strong>Detach Saved Generator</strong> and save to cloud before publishing.
+                         <strong>Saved generator source:</strong> Apply retains both scripts with local saves, JSON downloads, cloud history, gallery copies, and forks. Publishing makes both scripts public, so review them for secrets, private comments, and identifying information. Cancel publishing if you do not want to make saved generator source public.
                      </p>
                      <ul className="list-disc pl-5 space-y-2">
                         <li><strong>Opening is inert:</strong> Loading saved or gallery source never runs it.</li>

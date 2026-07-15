@@ -2,22 +2,22 @@
 import React, { useState, useRef, useEffect, useLayoutEffect, useMemo } from 'react';
 import { GeneratorProvenance, RM_PP_WIDTH, RM_PP_HEIGHT, A4_WIDTH, A4_HEIGHT } from '../types';
 import { runGeneratorSandbox } from '../services/generatorSandbox';
-import { GeneratedProject, GeneratedProjectSummary, validateGeneratedProject } from '../services/validateGeneratedProject';
+import { GeneratedProject, validateGeneratedProject } from '../services/validateGeneratedProject';
+import type { GeneratorPreviewPayload, GeneratorSourceDraft } from '../services/generatorVisualPreview';
 import { GENERATOR_COMBINED_MAX_BYTES, GENERATOR_SCRIPT_MAX_BYTES } from '../shared/generatorMetadata.js';
 import { X, Play, AlertTriangle, CheckCircle2, RotateCcw, LayoutTemplate, Network, Sparkles, Minus, Plus, WrapText, HelpCircle, Book, ChevronDown, ChevronUp, Copy, Check } from 'lucide-react';
 import { HighlightedCode } from './HighlightedCode';
 import { GENERATOR_PRESETS } from './generatorPresets';
 import { FONTS } from '../constants/editor';
+import { GeneratorVisualPreviewModal } from './GeneratorVisualPreviewModal';
 
 interface HierarchyGeneratorModalProps {
   isOpen: boolean;
+  projectName: string;
   savedGenerator?: GeneratorProvenance;
   onClose: () => void;
-  onApplyGenerated: (
-    project: GeneratedProject,
-    source: Pick<GeneratorProvenance, 'templateScript' | 'hierarchyScript'>,
-  ) => boolean;
-  onDetachSavedGenerator: () => boolean;
+  onApplyGenerated: (project: GeneratedProject, source: GeneratorSourceDraft) => boolean;
+  onCreateGeneratedProject: (name: string, project: GeneratedProject, source: GeneratorSourceDraft) => boolean;
 }
 
 interface SimpleEditorProps {
@@ -2016,16 +2016,10 @@ const templates = {
 type PreviewState =
   | { status: 'idle' }
   | { status: 'running' }
-  | {
-    status: 'ready';
-    project: GeneratedProject;
-    summary: GeneratedProjectSummary;
-    source: Pick<GeneratorProvenance, 'templateScript' | 'hierarchyScript'>;
-  }
+  | ({ status: 'ready' } & GeneratorPreviewPayload)
   | { status: 'error'; message: string };
 
 const utf8Bytes = (value: string) => new TextEncoder().encode(value).byteLength;
-const countLabel = (count: number, singular: string) => `${count} ${singular}${count === 1 ? '' : 's'}`;
 
 type HierarchyGeneratorSessionProps = Omit<HierarchyGeneratorModalProps, 'isOpen'>;
 
@@ -2034,10 +2028,11 @@ export const HierarchyGeneratorModal: React.FC<HierarchyGeneratorModalProps> = (
 );
 
 const HierarchyGeneratorSession: React.FC<HierarchyGeneratorSessionProps> = ({
+  projectName,
   savedGenerator,
   onClose,
   onApplyGenerated,
-  onDetachSavedGenerator,
+  onCreateGeneratedProject,
 }) => {
   // Default to 'simple' preset for better onboarding
   const simplePreset = GENERATOR_PRESETS.find(p => p.id === 'simple')!;
@@ -2047,6 +2042,7 @@ const HierarchyGeneratorSession: React.FC<HierarchyGeneratorSessionProps> = ({
   const [hierarchyScript, setHierarchyScript] = useState(initialSource.hierarchyScript);
   const [selectedPreset, setSelectedPreset] = useState<string>(savedGenerator ? 'saved' : 'simple');
   const [previewState, setPreviewState] = useState<PreviewState>({ status: 'idle' });
+  const [showVisualPreview, setShowVisualPreview] = useState(false);
   const [fontSize, setFontSize] = useState<number>(12);
   const [wordWrap, setWordWrap] = useState<boolean>(true);
   const [isHelpOpen, setIsHelpOpen] = useState<boolean>(false);
@@ -2080,6 +2076,7 @@ const HierarchyGeneratorSession: React.FC<HierarchyGeneratorSessionProps> = ({
     abortPreview();
     previewRequestRef.current += 1;
     setPreviewState({ status: 'idle' });
+    setShowVisualPreview(false);
     if (field === 'templateScript') setTemplateScript(value);
     else setHierarchyScript(value);
   };
@@ -2101,12 +2098,14 @@ const HierarchyGeneratorSession: React.FC<HierarchyGeneratorSessionProps> = ({
     baselineRef.current = source;
     previewRequestRef.current += 1;
     setPreviewState({ status: 'idle' });
+    setShowVisualPreview(false);
   };
 
   const handleClose = () => {
     if (isDirty && !window.confirm('Discard draft generator changes?')) return;
     abortPreview();
     previewRequestRef.current += 1;
+    setShowVisualPreview(false);
     onClose();
   };
 
@@ -2126,7 +2125,7 @@ const HierarchyGeneratorSession: React.FC<HierarchyGeneratorSessionProps> = ({
       return;
     }
 
-    const source = { templateScript, hierarchyScript };
+    const source = { formatVersion: 1 as const, templateScript, hierarchyScript };
     abortPreview();
     const controller = new AbortController();
     previewAbortRef.current = controller;
@@ -2134,7 +2133,8 @@ const HierarchyGeneratorSession: React.FC<HierarchyGeneratorSessionProps> = ({
     setPreviewState({ status: 'running' });
     try {
       const sandboxResult = await runGeneratorSandbox({
-        ...source,
+        templateScript: source.templateScript,
+        hierarchyScript: source.hierarchyScript,
         constants: { RM_PP_WIDTH, RM_PP_HEIGHT, A4_WIDTH, A4_HEIGHT },
       }, undefined, controller.signal);
       if (requestId !== previewRequestRef.current) return;
@@ -2150,24 +2150,29 @@ const HierarchyGeneratorSession: React.FC<HierarchyGeneratorSessionProps> = ({
         return;
       }
       setPreviewState({ status: 'ready', project: validation.project, summary: validation.summary, source });
+      setShowVisualPreview(true);
     } catch (error) {
       if (requestId !== previewRequestRef.current) return;
       setPreviewState({ status: 'error', message: error instanceof Error ? error.message : 'Preview failed.' });
     }
   };
 
-  const applyPreview = () => {
-    if (previewState.status !== 'ready') return;
-    if (!window.confirm('Apply this generated project? This replaces the current generated document.')) return;
-    abortPreview();
-    if (onApplyGenerated(previewState.project, previewState.source)) onClose();
+  const previewOrReopen = () => {
+    if (previewState.status === 'ready') {
+      setShowVisualPreview(true);
+      return;
+    }
+    void previewGenerator();
   };
 
-  const detachSavedGenerator = () => {
-    if (isDirty && !window.confirm('Discard draft generator changes?')) return;
-    if (!window.confirm('Detach saved generator source? Generated document content will remain unchanged.')) return;
+  const applyPreview = () => {
+    if (previewState.status !== 'ready') return false;
+    if (!window.confirm('Apply this generated project? This replaces the current generated document.')) return false;
     abortPreview();
-    if (onDetachSavedGenerator()) onClose();
+    if (!onApplyGenerated(previewState.project, previewState.source)) return false;
+    setShowVisualPreview(false);
+    onClose();
+    return true;
   };
 
   const handleDialogKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
@@ -2215,6 +2220,7 @@ const HierarchyGeneratorSession: React.FC<HierarchyGeneratorSessionProps> = ({
     };
     previewRequestRef.current += 1;
     setPreviewState({ status: 'idle' });
+    setShowVisualPreview(false);
   };
 
   return (
@@ -2326,12 +2332,6 @@ const HierarchyGeneratorSession: React.FC<HierarchyGeneratorSessionProps> = ({
               </span>
             )}
             {previewState.status === 'error' && <span role="alert" aria-live="assertive" className="text-red-600 text-xs flex items-center gap-1 font-medium"><AlertTriangle size={14} /> {previewState.message}</span>}
-            {savedGenerator && (
-              <button onClick={detachSavedGenerator} className="text-xs text-red-600 hover:text-red-700 px-2">
-                Detach Saved Generator
-              </button>
-            )}
-
             <button onClick={() => {
               if (confirm("Reset scripts to current preset?")) {
                 resetCurrentPreset();
@@ -2341,11 +2341,11 @@ const HierarchyGeneratorSession: React.FC<HierarchyGeneratorSessionProps> = ({
             </button>
 
             <button
-              onClick={previewGenerator}
+              onClick={previewOrReopen}
               disabled={previewState.status === 'running'}
               className="flex items-center gap-2 bg-green-600 hover:bg-green-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg text-sm font-bold shadow-sm transition-all hover:shadow hover:-translate-y-0.5"
             >
-              <Play size={16} fill="currentColor" /> {previewState.status === 'running' ? 'Previewing...' : 'Preview'}
+              <Play size={16} fill="currentColor" /> {previewState.status === 'running' ? 'Previewing...' : previewState.status === 'ready' ? 'View Preview' : 'Preview'}
             </button>
             <button
               onClick={applyPreview}
@@ -2358,24 +2358,8 @@ const HierarchyGeneratorSession: React.FC<HierarchyGeneratorSessionProps> = ({
         </div>
 
         <p className="px-4 py-2 border-b bg-indigo-50 text-xs text-indigo-900">
-          Saved generator source is retained with the project and becomes public when published. Opening source never runs it; Preview uses the sandbox. Apply replaces the generated document. Manual edits are not written back to JavaScript. Use Detach Saved Generator to remove retained source.
+          Saved generator source is retained with the project and becomes public when published. Opening source never runs it; Preview uses the sandbox. Apply replaces the generated document. Manual edits are not written back to JavaScript.
         </p>
-
-        {previewState.status === 'ready' && (
-          <div className="px-4 py-3 border-b bg-emerald-50 text-sm text-slate-700" aria-live="polite">
-            <div className="flex flex-wrap gap-x-5 gap-y-1 font-semibold text-emerald-800">
-              <span>{countLabel(previewState.summary.variantCount, 'variant')}</span>
-              <span>{countLabel(previewState.summary.templateCount, 'template')}</span>
-              <span>{countLabel(previewState.summary.nodeCount, 'node')}</span>
-              <span>{countLabel(previewState.summary.estimatedPageCount, 'estimated page')}</span>
-            </div>
-            <div className="mt-1 text-xs text-slate-600">Variants: {previewState.summary.variantNames.join(', ')}</div>
-            {previewState.summary.warnings.map(warning => <div key={warning} className="mt-1 text-xs text-amber-700">{warning}</div>)}
-            <p className="mt-2 text-xs font-medium">
-              Applying replaces the current generated document. Manual template and hierarchy edits are not written back to generator source.
-            </p>
-          </div>
-        )}
 
         {/* Side-by-Side Editor Area */}
         <div className="flex-1 flex overflow-hidden relative">
@@ -2432,6 +2416,22 @@ const HierarchyGeneratorSession: React.FC<HierarchyGeneratorSessionProps> = ({
         {/* Help Panel */}
         <GeneratorHelpPanel isOpen={isHelpOpen} onToggle={() => setIsHelpOpen(!isHelpOpen)} />
       </div>
+      {previewState.status === 'ready' && showVisualPreview && (
+        <GeneratorVisualPreviewModal
+          payload={previewState}
+          currentProjectName={projectName}
+          onBack={() => setShowVisualPreview(false)}
+          onReplace={applyPreview}
+          onCreateProject={name => {
+            const created = onCreateGeneratedProject(name, previewState.project, previewState.source);
+            if (created) {
+              setShowVisualPreview(false);
+              onClose();
+            }
+            return created;
+          }}
+        />
+      )}
     </div>
   );
 };

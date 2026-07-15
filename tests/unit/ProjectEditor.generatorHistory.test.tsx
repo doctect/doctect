@@ -48,6 +48,7 @@ const generatedProject = {
 };
 
 const source = {
+    formatVersion: 1 as const,
     templateScript: 'return generatedTemplates;',
     hierarchyScript: 'return generatedHierarchy;',
 };
@@ -58,9 +59,6 @@ vi.mock('../../components/HierarchyGeneratorModal', () => ({
             <button onClick={() => {
                 if (props.onApplyGenerated(generatedProject, source)) props.onClose();
             }}>Apply test project</button>
-            <button onClick={() => {
-                if (props.onDetachSavedGenerator()) props.onClose();
-            }}>Detach test source</button>
         </div>
     ) : null,
 }));
@@ -112,10 +110,12 @@ const readState = (): AppState => JSON.parse(screen.getByTestId('editor-state').
 const renderEditor = () => render(
     <ProjectEditor
         projectId="history-test"
+        projectName="History Test"
         initialState={initialState()}
         isActive
         onNameChange={vi.fn()}
         onStateChange={vi.fn()}
+        onCreateGeneratedProject={vi.fn(() => true)}
     />,
 );
 
@@ -144,7 +144,7 @@ describe('ProjectEditor generator history integration', () => {
             variants: generatedProject.variants,
             activeVariantId: 'generated',
             schemaVersion: 9,
-            generator: { formatVersion: 1, ...source, generatedAt: '2026-07-14T12:34:56.000Z' },
+            generator: { ...source, generatedAt: '2026-07-14T12:34:56.000Z' },
             selectedNodeId: 'generated',
             selectedNodeIds: ['generated'],
             selectedTemplateId: '',
@@ -162,32 +162,7 @@ describe('ProjectEditor generator history integration', () => {
             variants: generatedProject.variants,
             activeVariantId: 'generated',
             schemaVersion: 9,
-            generator: { formatVersion: 1, ...source, generatedAt: '2026-07-14T12:34:56.000Z' },
+            generator: { ...source, generatedAt: '2026-07-14T12:34:56.000Z' },
         });
-    });
-
-    it('checkpoints Detach once and Undo/Redo restore only provenance with its timestamp', () => {
-        renderEditor();
-        fireEvent.click(screen.getByRole('button', { name: 'Open generator' }));
-        snapshotDocumentSpy.mockClear();
-
-        fireEvent.click(screen.getByRole('button', { name: 'Detach test source' }));
-
-        expect(snapshotDocumentSpy).toHaveBeenCalledOnce();
-        expect(readState().generator).toBeUndefined();
-        expect(readState()).toMatchObject({
-            nodes: initialState().nodes,
-            rootId: 'root',
-            variants: initialState().variants,
-            activeVariantId: 'original',
-        });
-
-        fireEvent.click(screen.getByTitle('Undo (Ctrl+Z)'));
-        expect(readState().generator).toEqual(initialState().generator);
-        expect(readState().rootId).toBe('root');
-
-        fireEvent.click(screen.getByTitle('Redo (Ctrl+Y)'));
-        expect(readState().generator).toBeUndefined();
-        expect(readState().rootId).toBe('root');
     });
 });

@@ -170,7 +170,7 @@ export function PublishModal({ project, cloudProjectId, onClose, onPublished }: 
                     )}
                     {hasCurrentDisclosure && disclosure.hasGenerator && (
                         <div role="alert" className="rounded border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">
-                            This project includes saved generator source. Publishing makes both scripts public. Review them for secrets, private comments, or identifying information. To exclude source, cancel, use “Detach Saved Generator” in Hierarchy Generator, and save to cloud before publishing.
+                            This project includes saved generator source. Publishing makes both scripts public. Review them for secrets, private comments, or identifying information. Cancel publishing if you do not want to make saved generator source public.
                         </div>
                     )}
                     <label className="block">

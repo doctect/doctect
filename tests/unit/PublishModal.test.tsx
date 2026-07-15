@@ -89,7 +89,7 @@ describe('PublishModal generator source warning', () => {
         renderModal(false);
 
         expect(await screen.findByRole('alert')).toHaveTextContent(
-            'This project includes saved generator source. Publishing makes both scripts public. Review them for secrets, private comments, or identifying information. To exclude source, cancel, use “Detach Saved Generator” in Hierarchy Generator, and save to cloud before publishing.',
+            'This project includes saved generator source. Publishing makes both scripts public. Review them for secrets, private comments, or identifying information. Cancel publishing if you do not want to make saved generator source public.',
         );
         expect(cloudApi.getProject).toHaveBeenCalledWith('cloud-1');
         expect(cloudApi.getCommit).toHaveBeenCalledWith('cloud-1', 'head-1');

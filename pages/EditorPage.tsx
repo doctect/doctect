@@ -16,6 +16,9 @@ import { trackEvent } from '../services/analytics';
 import { AccountMenu } from '../components/AccountMenu';
 import { CloudMenu } from '../components/cloud/CloudMenu';
 import { KOFI_URL } from '../constants/editor';
+import type { GeneratedProject } from '../services/validateGeneratedProject';
+import type { GeneratorSourceDraft } from '../services/generatorVisualPreview';
+import { createGeneratedAppState } from '../services/generatedProjectState';
 
 export interface Project {
     id: string;
@@ -210,6 +213,30 @@ export function EditorPage() {
         setProjects(prev => prev.map(p => p.id === id ? { ...p, initialState: state } : p));
     };
 
+    const handleCreateGeneratedProject = (
+        sourceProjectId: string,
+        name: string,
+        generated: GeneratedProject,
+        source: GeneratorSourceDraft,
+    ) => {
+        const trimmed = name.trim();
+        if (!trimmed || trimmed.length > 100) return false;
+        const newId = `proj_${crypto.randomUUID()}`;
+        const newProject: Project = {
+            id: newId,
+            name: trimmed,
+            initialState: createGeneratedAppState(createBlankProject(), generated, source, new Date().toISOString()),
+            revision: 0,
+        };
+        setProjects(current => [...current, newProject]);
+        setActiveProjectId(newId);
+        trackEvent('project_created_from_generator', {
+            sourceProjectId,
+            nodeCount: Object.keys(generated.nodes).length,
+        });
+        return true;
+    };
+
     const handleLinkCloud = (id: string, cloud: { projectId: string; lastSyncedCommitId: string }) => {
         setProjects(prev => prev.map(p => p.id === id ? { ...p, cloud } : p));
     };
@@ -299,10 +326,14 @@ export function EditorPage() {
                     >
                         <ProjectEditor
                             projectId={project.id}
+                            projectName={project.name}
                             initialState={project.initialState}
                             isActive={project.id === activeProjectId}
                             onNameChange={(name) => handleUpdateProjectName(project.id, name)}
                             onStateChange={(state) => handleUpdateProjectState(project.id, state)}
+                            onCreateGeneratedProject={(name, generated, source) => (
+                                handleCreateGeneratedProject(project.id, name, generated, source)
+                            )}
                         />
                     </div>
                 ))}

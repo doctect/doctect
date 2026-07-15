@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { AppState, AppNode, GeneratorProvenance, TemplateElement, PageTemplate, Variant, RM_PP_WIDTH, RM_PP_HEIGHT } from '../types';
+import { AppState, AppNode, TemplateElement, PageTemplate, Variant, RM_PP_WIDTH, RM_PP_HEIGHT } from '../types';
 import { Sidebar } from './Sidebar';
 import { Canvas } from './Canvas';
 import { PropertiesPanel } from './PropertiesPanel';
@@ -23,6 +23,7 @@ import { resolveActiveLayerId, nextZIndexInLayer, createDefaultLayer } from '../
 import { PLACEHOLDER_SVG, createPlacedSvgElement } from '../services/svgEditing';
 import { DocumentSnapshot, restoreDocument, snapshotDocument } from '../services/projectDocumentSnapshot';
 import type { GeneratedProject } from '../services/validateGeneratedProject';
+import type { GeneratorSourceDraft } from '../services/generatorVisualPreview';
 
 interface HistoryState {
     past: DocumentSnapshot[];
@@ -31,13 +32,15 @@ interface HistoryState {
 
 interface ProjectEditorProps {
     projectId: string;
+    projectName: string;
     initialState: AppState;
     isActive: boolean;
     onNameChange: (name: string) => void;
     onStateChange?: (state: AppState) => void;
+    onCreateGeneratedProject: (name: string, project: GeneratedProject, source: GeneratorSourceDraft) => boolean;
 }
 
-export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, initialState, isActive, onNameChange, onStateChange }) => {
+export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, projectName, initialState, isActive, onNameChange, onStateChange, onCreateGeneratedProject }) => {
     const [state, setState] = useState<AppState>(initialState);
 
     const [deleteConfirmState, setDeleteConfirmState] = useState<{ isOpen: boolean, nodeIds: string[] }>({ isOpen: false, nodeIds: [] });
@@ -921,7 +924,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, initial
 
     const handleApplyGenerated = (
         project: GeneratedProject,
-        source: Pick<GeneratorProvenance, 'templateScript' | 'hierarchyScript'>,
+        source: GeneratorSourceDraft,
     ) => {
         saveToHistory();
         const generatedAt = new Date().toISOString();
@@ -932,7 +935,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, initial
             variants: project.variants,
             activeVariantId: project.activeVariantId,
             schemaVersion: CURRENT_SCHEMA_VERSION,
-            generator: { formatVersion: 1, ...source, generatedAt },
+            generator: { ...source, generatedAt },
             selectedNodeId: project.rootId,
             selectedNodeIds: [project.rootId],
             selectedTemplateId: '',
@@ -940,15 +943,6 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, initial
             selectedElementIds: [],
         }));
         trackEvent('generator_run', { rootId: project.rootId, nodeCount: Object.keys(project.nodes).length });
-        return true;
-    };
-
-    const handleDetachSavedGenerator = () => {
-        saveToHistory();
-        setState(current => {
-            const { generator: _generator, ...withoutGenerator } = current;
-            return withoutGenerator;
-        });
         return true;
     };
 
@@ -1206,10 +1200,11 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, initial
 
             <HierarchyGeneratorModal
                 isOpen={showScriptGenModal}
+                projectName={projectName}
                 savedGenerator={state.generator}
                 onClose={() => setShowScriptGenModal(false)}
                 onApplyGenerated={handleApplyGenerated}
-                onDetachSavedGenerator={handleDetachSavedGenerator}
+                onCreateGeneratedProject={onCreateGeneratedProject}
             />
 
             <SavePresetModal
