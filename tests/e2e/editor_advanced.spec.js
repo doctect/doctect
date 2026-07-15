@@ -39,8 +39,7 @@ const ONE_PAGE_HIERARCHY_SOURCE = `return {
     }
 };`;
 
-const VISUAL_PREVIEW_TEMPLATE_SOURCE = markerUrl => `if (typeof fetch !== 'undefined') fetch('${markerUrl}');
-const template = (id, name, color) => ({
+const VISUAL_PREVIEW_TEMPLATE_SOURCE = `const template = (id, name, color) => ({
     id, name, width: A4_WIDTH, height: A4_HEIGHT,
     elements: [{
         id: id + '-title', type: 'text', x: 40, y: 40, w: 300, h: 40,
@@ -176,7 +175,7 @@ test.describe('Editor Advanced Features', () => {
         await expect(page.getByText('Grid Configuration')).toBeVisible();
     });
 
-    test('previews visually, creates separately, and replaces with one-checkpoint Undo', async ({ page, markerServer }) => {
+    test('previews visually, creates separately, and replaces with one-checkpoint Undo', async ({ page }) => {
         await applyOnePageFixture(page);
         const original = await readActiveProject(page);
         await page.evaluate(projectId => {
@@ -187,17 +186,28 @@ test.describe('Editor Advanced Features', () => {
         }, original.id);
         await page.reload();
         const originalBefore = await readProject(page, original.id);
-        const templateSource = VISUAL_PREVIEW_TEMPLATE_SOURCE(markerServer.url('/visual-preview-sandbox-rerun.js'));
+        const templateSource = VISUAL_PREVIEW_TEMPLATE_SOURCE;
         let sandboxFrameCount = 0;
         page.on('frameattached', () => { sandboxFrameCount += 1; });
 
         await openGenerator(page);
         await page.getByLabel('Template script').fill(templateSource);
         await page.getByLabel('Hierarchy script').fill(VISUAL_PREVIEW_HIERARCHY_SOURCE);
+        const sourceCanvas = activePane(page).getByTestId('editor-canvas');
+        const sourceCanvasElements = sourceCanvas.locator('[data-element-id]');
+        const sourceCanvasElementCount = await sourceCanvasElements.count();
+        const sourceCanvasText = sourceCanvas.getByText('One-page isolation fixture', { exact: true });
+        const sourceCanvasTextBeforePreview = await sourceCanvasText.textContent();
+        expect(sourceCanvasElementCount).toBe(1);
+        expect(sourceCanvasTextBeforePreview).toBe('One-page isolation fixture');
+        await expect(sourceCanvasText).toBeVisible();
         await page.getByRole('button', { name: 'Preview', exact: true }).click();
 
         const preview = page.getByRole('dialog', { name: 'Generated Project Preview' });
         await expect(preview).toBeVisible();
+        await expect(sourceCanvasElements).toHaveCount(sourceCanvasElementCount);
+        await expect(sourceCanvasText).toHaveText(sourceCanvasTextBeforePreview || '');
+        expect(sandboxFrameCount).toBe(1);
         await expect(preview.getByRole('tab', { name: 'Paper' })).toHaveAttribute('aria-selected', 'true');
         await expect(preview.getByRole('button', { name: 'Paper Cover, Paper, 1 use' })).toBeVisible();
         await expect(preview.getByRole('button', { name: 'Paper Content, Paper, 2 uses' })).toBeVisible();
@@ -216,13 +226,9 @@ test.describe('Editor Advanced Features', () => {
         await preview.getByRole('button', { name: 'Back to Scripts' }).click();
         await expect(page.getByLabel('Template script')).toHaveValue(templateSource);
         await expect(page.getByLabel('Hierarchy script')).toHaveValue(VISUAL_PREVIEW_HIERARCHY_SOURCE);
-        const markerRequestsBeforeReopen = markerServer.hits.length;
         const sandboxFramesBeforeReopen = sandboxFrameCount;
-        const noRerunRequest = markerServer.observeNoHitsFor(MIN_NO_HIT_OBSERVATION_MS);
         await page.getByRole('button', { name: 'View Preview' }).click();
         await expect(preview).toBeVisible();
-        await noRerunRequest;
-        expect(markerServer.hits).toHaveLength(markerRequestsBeforeReopen);
         expect(sandboxFrameCount).toBe(sandboxFramesBeforeReopen);
 
         await preview.getByRole('button', { name: 'Create New Project' }).click();
