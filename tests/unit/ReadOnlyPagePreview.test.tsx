@@ -33,8 +33,8 @@ describe('ReadOnlyPagePreview', () => {
     expect(container.querySelector('.canvas-scroll-container')).toBeNull();
   });
 
-  it('renders supplied overlays after the element layer', () => {
-    render(
+  it('renders the background overlay before elements and child overlays after elements', () => {
+    const { container } = render(
       <ReadOnlyPagePreview
         template={template}
         nodes={nodes}
@@ -45,7 +45,11 @@ describe('ReadOnlyPagePreview', () => {
         <div data-testid="editor-overlay" />
       </ReadOnlyPagePreview>,
     );
-    expect(screen.getByTestId('grid-overlay')).toBeInTheDocument();
-    expect(screen.getByTestId('editor-overlay')).toBeInTheDocument();
+    const backgroundOverlay = screen.getByTestId('grid-overlay');
+    const renderedElement = container.querySelector('[data-element-id="shape"]');
+    const editorOverlay = screen.getByTestId('editor-overlay');
+    expect(renderedElement).not.toBeNull();
+    expect(backgroundOverlay.compareDocumentPosition(renderedElement!)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(renderedElement!.compareDocumentPosition(editorOverlay)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
   });
 });

@@ -104,6 +104,8 @@ export const GeneratorVisualPreviewModal: React.FC<GeneratorVisualPreviewModalPr
   const namingInputRef = useRef<HTMLInputElement>(null);
   const namingTriggerRef = useRef<HTMLButtonElement>(null);
   const lightboxTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const restoreLightboxFocusRef = useRef(false);
+  const restoreNamingFocusRef = useRef(false);
   const tabRefs = useRef<Record<string, HTMLButtonElement | null>>({});
 
   const selectedVariant = descriptors.find(variant => variant.variantId === selectedVariantId) ?? descriptors[0];
@@ -122,11 +124,21 @@ export const GeneratorVisualPreviewModal: React.FC<GeneratorVisualPreviewModalPr
   }, []);
 
   useLayoutEffect(() => {
-    if (lightboxIndex !== null) lightboxRef.current?.focus();
+    if (lightboxIndex !== null) {
+      lightboxRef.current?.focus();
+    } else if (restoreLightboxFocusRef.current) {
+      restoreLightboxFocusRef.current = false;
+      lightboxTriggerRef.current?.focus();
+    }
   }, [lightboxIndex]);
 
   useLayoutEffect(() => {
-    if (naming) namingInputRef.current?.focus();
+    if (naming) {
+      namingInputRef.current?.focus();
+    } else if (restoreNamingFocusRef.current) {
+      restoreNamingFocusRef.current = false;
+      namingTriggerRef.current?.focus();
+    }
   }, [naming]);
 
   const selectVariant = (variantId: string) => {
@@ -156,8 +168,8 @@ export const GeneratorVisualPreviewModal: React.FC<GeneratorVisualPreviewModalPr
   };
 
   const closeLightbox = () => {
+    restoreLightboxFocusRef.current = true;
     setLightboxIndex(null);
-    lightboxTriggerRef.current?.focus();
   };
 
   const moveLightbox = (offset: number) => {
@@ -188,9 +200,9 @@ export const GeneratorVisualPreviewModal: React.FC<GeneratorVisualPreviewModalPr
   };
 
   const closeNaming = () => {
+    restoreNamingFocusRef.current = true;
     setNaming(false);
     setNameError(null);
-    namingTriggerRef.current?.focus();
   };
 
   const handleNamingKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -239,6 +251,7 @@ export const GeneratorVisualPreviewModal: React.FC<GeneratorVisualPreviewModalPr
       Math.max(240, (typeof window === 'undefined' ? 768 : window.innerHeight) - 260),
     )
     : 1;
+  const nestedModalOpen = lightboxDescriptor !== null || naming;
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
@@ -247,6 +260,8 @@ export const GeneratorVisualPreviewModal: React.FC<GeneratorVisualPreviewModalPr
         role="dialog"
         aria-modal="true"
         aria-labelledby="generator-preview-title"
+        aria-hidden={nestedModalOpen || undefined}
+        inert={nestedModalOpen}
         tabIndex={-1}
         onKeyDown={handleDialogKeyDown}
         className="flex h-[92vh] w-full max-w-7xl flex-col overflow-hidden rounded-xl bg-slate-50 shadow-2xl outline-none"
@@ -361,9 +376,10 @@ export const GeneratorVisualPreviewModal: React.FC<GeneratorVisualPreviewModalPr
             Replace Current Project
           </button>
         </footer>
+      </div>
 
-        {lightboxDescriptor && lightboxIndex !== null && (
-          <div className="absolute inset-0 z-10 flex items-center justify-center bg-slate-950/80 p-6">
+      {lightboxDescriptor && lightboxIndex !== null && (
+        <div className="absolute inset-0 z-10 flex items-center justify-center bg-slate-950/80 p-6">
             <div
               ref={lightboxRef}
               role="dialog"
@@ -391,11 +407,11 @@ export const GeneratorVisualPreviewModal: React.FC<GeneratorVisualPreviewModalPr
                 <button type="button" disabled={lightboxIndex === selectedTemplates.length - 1} onClick={() => moveLightbox(1)} className="rounded-md border px-4 py-2 text-sm disabled:opacity-40">Next</button>
               </div>
             </div>
-          </div>
-        )}
+        </div>
+      )}
 
-        {naming && (
-          <div className="absolute inset-0 z-20 flex items-center justify-center bg-slate-950/60 p-4">
+      {naming && (
+        <div className="absolute inset-0 z-20 flex items-center justify-center bg-slate-950/60 p-4">
             <div
               ref={namingRef}
               role="dialog"
@@ -432,9 +448,8 @@ export const GeneratorVisualPreviewModal: React.FC<GeneratorVisualPreviewModalPr
                 </div>
               </form>
             </div>
-          </div>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 };

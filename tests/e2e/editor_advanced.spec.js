@@ -209,6 +209,13 @@ test.describe('Editor Advanced Features', () => {
         await expect(sourceCanvasText).toHaveText(sourceCanvasTextBeforePreview || '');
         expect(sandboxFrameCount).toBe(1);
         await expect(preview.getByRole('tab', { name: 'Paper' })).toHaveAttribute('aria-selected', 'true');
+        await preview.getByRole('tab', { name: 'Slate' }).click();
+        await expect(preview.getByRole('tab', { name: 'Slate' })).toHaveAttribute('aria-selected', 'true');
+        await expect(preview.getByRole('button', { name: 'Slate Cover, Slate, 1 use' })).toBeVisible();
+        await expect(preview.getByRole('button', { name: 'Slate Content, Slate, 2 uses' })).toBeVisible();
+        await expect(preview.getByRole('button', { name: 'Slate Spare, Slate, unused' })).toContainText('Unused');
+        await preview.getByRole('tab', { name: 'Paper' }).click();
+        await expect(preview.getByRole('tab', { name: 'Paper' })).toHaveAttribute('aria-selected', 'true');
         await expect(preview.getByRole('button', { name: 'Paper Cover, Paper, 1 use' })).toBeVisible();
         await expect(preview.getByRole('button', { name: 'Paper Content, Paper, 2 uses' })).toBeVisible();
         await expect(preview.getByRole('button', { name: 'Paper Spare, Paper, unused' })).toContainText('Unused');

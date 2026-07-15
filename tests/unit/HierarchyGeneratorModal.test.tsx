@@ -126,6 +126,19 @@ describe('HierarchyGeneratorModal', () => {
         expect(props.onClose).toHaveBeenCalled();
     });
 
+    it('makes the generator dialog inert and hidden while visual preview is active', async () => {
+        renderModal();
+        const generatorDialog = screen.getByRole('dialog', { name: 'Hierarchy Generator' });
+
+        fireEvent.click(screen.getByRole('button', { name: 'Preview' }));
+
+        expect(await screen.findByRole('dialog', { name: 'Generated Project Preview' })).toBeVisible();
+        expect(generatorDialog).toHaveAttribute('inert');
+        expect(generatorDialog).toHaveAttribute('aria-hidden', 'true');
+        expect(screen.queryByRole('dialog', { name: 'Hierarchy Generator' })).not.toBeInTheDocument();
+        expect(generatorDialog).toBeInTheDocument();
+    });
+
     it('Back preserves exact drafts and leaves project callbacks untouched', async () => {
         const props = renderModal();
         fireEvent.change(screen.getByLabelText('Template script'), { target: { value: '  exact template draft\n' } });

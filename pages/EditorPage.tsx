@@ -28,6 +28,16 @@ export interface Project {
     revision?: number;
 }
 
+const persistProjects = (projects: Project[]) => {
+    try {
+        localStorage.setItem('hype_projects', JSON.stringify(projects));
+        return true;
+    } catch (e) {
+        console.error("Failed to save projects to storage", e);
+        return false;
+    }
+};
+
 export const loadSavedProjects = (): { projects: Project[]; warnings: string[] } => {
     try {
         const saved = localStorage.getItem('hype_projects');
@@ -66,11 +76,7 @@ export function EditorPage() {
 
     // Persist projects state
     useEffect(() => {
-        try {
-            localStorage.setItem('hype_projects', JSON.stringify(projects));
-        } catch (e) {
-            console.error("Failed to save projects to storage", e);
-        }
+        persistProjects(projects);
     }, [projects]);
 
     // Persist active project
@@ -228,7 +234,9 @@ export function EditorPage() {
             initialState: createGeneratedAppState(createBlankProject(), generated, source, new Date().toISOString()),
             revision: 0,
         };
-        setProjects(current => [...current, newProject]);
+        const nextProjects = [...projects, newProject];
+        if (!persistProjects(nextProjects)) return false;
+        setProjects(nextProjects);
         setActiveProjectId(newId);
         trackEvent('project_created_from_generator', {
             sourceProjectId,

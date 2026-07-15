@@ -154,10 +154,18 @@ describe('GeneratorVisualPreviewModal', () => {
 
   it('navigates the lightbox and restores thumbnail focus when Escape closes it', () => {
     const { props } = renderModal();
+    const mainDialog = screen.getByRole('dialog', { name: 'Generated Project Preview' });
+    expect(mainDialog).not.toHaveAttribute('inert');
+    expect(mainDialog).not.toHaveAttribute('aria-hidden');
     const card = screen.getByRole('button', { name: 'Template 0, Primary, 1 use' });
     fireEvent.click(card);
 
     const lightbox = screen.getByRole('dialog', { name: 'Template 0 preview' });
+    expect(mainDialog).toHaveAttribute('inert');
+    expect(mainDialog).toHaveAttribute('aria-hidden', 'true');
+    expect(lightbox).not.toHaveAttribute('inert');
+    expect(lightbox).not.toHaveAttribute('aria-hidden');
+    expect(screen.queryByRole('dialog', { name: 'Generated Project Preview' })).not.toBeInTheDocument();
     expect(within(lightbox).getByText('Cover page')).toBeVisible();
     fireEvent.keyDown(lightbox, { key: 'ArrowRight' });
     expect(screen.getByRole('dialog', { name: 'Template 1 preview' })).toBeVisible();
@@ -165,6 +173,8 @@ describe('GeneratorVisualPreviewModal', () => {
     fireEvent.keyDown(screen.getByRole('dialog', { name: 'Template 1 preview' }), { key: 'Escape' });
 
     expect(screen.queryByRole('dialog', { name: /Template \d+ preview/ })).not.toBeInTheDocument();
+    expect(mainDialog).not.toHaveAttribute('inert');
+    expect(mainDialog).not.toHaveAttribute('aria-hidden');
     expect(card).toHaveFocus();
     expect(props.onBack).not.toHaveBeenCalled();
   });
@@ -200,9 +210,15 @@ describe('GeneratorVisualPreviewModal', () => {
 
   it('validates, trims, and submits the generated project name', () => {
     const { props } = renderModal();
+    const mainDialog = screen.getByRole('dialog', { name: 'Generated Project Preview' });
     fireEvent.click(screen.getByRole('button', { name: 'Create New Project' }));
 
     const namingDialog = screen.getByRole('dialog', { name: 'Create Generated Project' });
+    expect(mainDialog).toHaveAttribute('inert');
+    expect(mainDialog).toHaveAttribute('aria-hidden', 'true');
+    expect(namingDialog).not.toHaveAttribute('inert');
+    expect(namingDialog).not.toHaveAttribute('aria-hidden');
+    expect(screen.queryByRole('dialog', { name: 'Generated Project Preview' })).not.toBeInTheDocument();
     const input = within(namingDialog).getByRole('textbox', { name: 'Project name' });
     expect(input).toHaveValue('Current – Generated');
     expect(input).toHaveFocus();

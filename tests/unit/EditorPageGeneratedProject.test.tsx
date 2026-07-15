@@ -5,6 +5,7 @@ import { EditorPage, type Project } from '../../pages/EditorPage';
 import { createBlankProject } from '../../services/presets';
 
 const trackEvent = vi.hoisted(() => vi.fn());
+const lastCreateResult = vi.hoisted(() => ({ current: undefined as boolean | undefined }));
 
 const generatedProject = {
     schemaVersion: 9 as const,
@@ -34,7 +35,9 @@ vi.mock('../../components/ProjectEditor', () => ({
     ProjectEditor: ({ projectId, projectName, onCreateGeneratedProject }: any) => (
         <div data-testid={`editor-${projectId}`}>
             <span>{projectName}</span>
-            <button onClick={() => onCreateGeneratedProject('Separate Generated', generatedProject, source)}>
+            <button onClick={() => {
+                lastCreateResult.current = onCreateGeneratedProject('Separate Generated', generatedProject, source);
+            }}>
                 Create from {projectId}
             </button>
         </div>
@@ -72,6 +75,7 @@ describe('EditorPage generated project creation', () => {
     beforeEach(() => {
         vi.restoreAllMocks();
         trackEvent.mockReset();
+        lastCreateResult.current = undefined;
         localStorage.clear();
     });
 
@@ -113,5 +117,28 @@ describe('EditorPage generated project creation', () => {
         const created = savedProjects().slice(1);
         expect(created.map(project => project.name)).toEqual(['Separate Generated', 'Separate Generated']);
         expect(new Set(created.map(project => project.id))).toHaveProperty('size', 2);
+    });
+
+    it('returns false and preserves memory and storage when generated project persistence exceeds quota', () => {
+        const originalBefore = seedOriginal();
+        renderEditor();
+        const projectsBefore = localStorage.getItem('hype_projects');
+        const activeBefore = localStorage.getItem('hype_active_project');
+        vi.spyOn(console, 'error').mockImplementation(() => undefined);
+        const originalSetItem = Storage.prototype.setItem;
+        vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (key, value) {
+            if (key === 'hype_projects') throw new DOMException('Storage quota exceeded.', 'QuotaExceededError');
+            return originalSetItem.call(this, key, value);
+        });
+
+        fireEvent.click(screen.getByRole('button', { name: 'Create from source-project' }));
+
+        expect(lastCreateResult.current).toBe(false);
+        expect(screen.getAllByTestId(/^editor-/)).toHaveLength(1);
+        expect(screen.getByTestId('editor-source-project')).toBeVisible();
+        expect(localStorage.getItem('hype_projects')).toBe(projectsBefore);
+        expect(localStorage.getItem('hype_active_project')).toBe(activeBefore);
+        expect(savedProjects()).toEqual([originalBefore]);
+        expect(trackEvent).not.toHaveBeenCalled();
     });
 });
