@@ -4,9 +4,10 @@ import React, { useRef, useState, useEffect, useLayoutEffect, MouseEvent } from 
 import { AppState, TemplateElement, PageTemplate, AppNode, TraversalStep } from '../types';
 import clsx from 'clsx';
 import { CanvasElement } from './canvas/CanvasElement';
+import { ReadOnlyPagePreview } from './canvas/ReadOnlyPagePreview';
 import { OverlayTextEditor } from './canvas/OverlayTextEditor';
 import { SelectionHandles } from './canvas/SelectionHandles';
-import { resolveActiveLayerId, nextZIndexInLayer, sortElementsForRender } from '../services/layers';
+import { resolveActiveLayerId, nextZIndexInLayer } from '../services/layers';
 import { hitTestPoint } from '../services/hitTest';
 import { SelectUnderMenu } from './canvas/SelectUnderMenu';
 
@@ -1552,53 +1553,44 @@ export const Canvas: React.FC<CanvasProps> = ({
         >
             {/* Inner container wrapper to handle centering vs scrolling */}
             <div className="m-auto p-12 min-w-fit min-h-fit">
-                <div
+                <ReadOnlyPagePreview
                     ref={containerRef}
-                    data-testid="editor-canvas"
-                    className="bg-white shadow-lg relative overflow-hidden"
-                    style={{
-                        width: template.width * scale,
-                        height: template.height * scale,
-                    }}
+                    testId="editor-canvas"
+                    className="shadow-lg"
+                    template={template}
+                    elements={elements}
+                    nodes={nodes}
+                    currentNodeId={currentNodeId}
+                    scale={scale}
+                    greyscalePreview={greyscalePreview}
+                    interactive
+                    renderElement={element => (
+                        <CanvasElement
+                            key={element.id}
+                            element={element}
+                            selected={selectedElementIds.includes(element.id)}
+                            nodes={nodes}
+                            currentNodeId={currentNodeId}
+                            tool={tool}
+                            showHandles={selectedElementIds.includes(element.id) && selectedElementIds.length === 1}
+                            onDoubleClick={() => {
+                                const layer = element.layerId ? template.layers?.find(item => item.id === element.layerId) : undefined;
+                                if (!layer?.locked) setEditingElementId(element.id);
+                            }}
+                            isEditing={editingElementId === element.id}
+                        />
+                    )}
+                    backgroundOverlay={showGrid ? (
+                        <div
+                            className="absolute inset-0 pointer-events-none opacity-20"
+                            style={{
+                                backgroundImage: `radial-gradient(#94a3b8 ${Math.max(0.5, 1.5 / scale)}px, transparent ${Math.max(0.5, 1.5 / scale)}px)`,
+                                backgroundSize: `${effectiveGridSize}px ${effectiveGridSize}px`,
+                                zIndex: 0,
+                            }}
+                        />
+                    ) : undefined}
                 >
-                    <div style={{
-                        transform: `scale(${scale})`,
-                        transformOrigin: 'top left',
-                        width: template.width,
-                        height: template.height,
-                    }}>
-                        {showGrid && (
-                            <div className="absolute inset-0 pointer-events-none opacity-20"
-                                style={{
-                                    backgroundImage: `radial-gradient(#94a3b8 ${Math.max(0.5, 1.5 / scale)}px, transparent ${Math.max(0.5, 1.5 / scale)}px)`,
-                                    backgroundSize: `${effectiveGridSize}px ${effectiveGridSize}px`,
-                                    zIndex: 0
-                                }}></div>
-                        )}
-                        {/* isolation: element zIndex is user-editable and unbounded; without its own
-                            stacking context an element with zIndex >= 100 paints over the selection
-                            box (z-100) and select-under hover highlight (z-101) of anything under it. */}
-                        <div style={{ isolation: 'isolate', filter: greyscalePreview ? 'grayscale(1)' : undefined }}>
-                            {sortElementsForRender(elements, template.layers).map(el => (
-                                <CanvasElement
-                                    key={el.id}
-                                    element={el}
-                                    selected={selectedElementIds.includes(el.id)}
-                                    nodes={nodes}
-                                    currentNodeId={currentNodeId}
-                                    tool={tool}
-                                    showHandles={selectedElementIds.includes(el.id) && selectedElementIds.length === 1}
-                                    onDoubleClick={() => {
-                                        // Locked layers are not editable: don't enter inline edit mode.
-                                        const layer = el.layerId ? template.layers?.find(l => l.id === el.layerId) : undefined;
-                                        if (layer?.locked) return;
-                                        setEditingElementId(el.id);
-                                    }}
-                                    isEditing={editingElementId === el.id}
-                                />
-                            ))}
-                        </div>
-
                         {/* Group Selection Overlay */}
                         {(() => {
                             let visualBounds = groupBounds;
@@ -1873,8 +1865,7 @@ export const Canvas: React.FC<CanvasProps> = ({
                                 }}
                             />
                         )}
-                    </div>
-                </div>
+                </ReadOnlyPagePreview>
             </div>
 
             {selectUnderMenu && (
