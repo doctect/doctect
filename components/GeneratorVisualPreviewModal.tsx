@@ -1,4 +1,4 @@
-import React, { Component, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { Component, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { ErrorInfo, KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react';
 import {
   buildVariantPreviews,
@@ -85,6 +85,11 @@ export const GeneratorVisualPreviewModal: React.FC<GeneratorVisualPreviewModalPr
   onCreateProject,
 }) => {
   const descriptors = useMemo(() => buildVariantPreviews(payload.project), [payload.project]);
+  const domIdPrefix = useId();
+  const variantDomIds = useMemo(() => new Map(descriptors.map((variant, index) => [variant.variantId, {
+    tab: `${domIdPrefix}-variant-tab-${index}`,
+    panel: `${domIdPrefix}-variant-panel-${index}`,
+  }])), [descriptors, domIdPrefix]);
   const [selectedVariantId, setSelectedVariantId] = useState(payload.project.activeVariantId);
   const [visibleCounts, setVisibleCounts] = useState<Record<string, number>>(() => ({
     [payload.project.activeVariantId]: PREVIEW_BATCH_SIZE,
@@ -102,6 +107,7 @@ export const GeneratorVisualPreviewModal: React.FC<GeneratorVisualPreviewModalPr
   const tabRefs = useRef<Record<string, HTMLButtonElement | null>>({});
 
   const selectedVariant = descriptors.find(variant => variant.variantId === selectedVariantId) ?? descriptors[0];
+  const selectedVariantDomIds = selectedVariant ? variantDomIds.get(selectedVariant.variantId) : undefined;
   const selectedTemplates = selectedVariant?.templates ?? [];
   const visibleCount = visibleCounts[selectedVariantId] ?? PREVIEW_BATCH_SIZE;
   const visibleTemplates = selectedTemplates.slice(0, visibleCount);
@@ -263,31 +269,34 @@ export const GeneratorVisualPreviewModal: React.FC<GeneratorVisualPreviewModalPr
 
         <div className="border-b border-slate-200 bg-white px-6 pt-3">
           <div role="tablist" aria-label="Generated variants" className="flex gap-1 overflow-x-auto">
-            {descriptors.map(variant => (
-              <button
-                key={variant.variantId}
-                ref={element => { tabRefs.current[variant.variantId] = element; }}
-                type="button"
-                role="tab"
-                aria-selected={selectedVariantId === variant.variantId}
-                aria-controls={`generator-preview-panel-${variant.variantId}`}
-                id={`generator-preview-tab-${variant.variantId}`}
-                tabIndex={selectedVariantId === variant.variantId ? 0 : -1}
-                onClick={() => selectVariant(variant.variantId)}
-                onKeyDown={handleVariantArrowKey}
-                className={`border-b-2 px-4 py-2 text-sm font-medium ${selectedVariantId === variant.variantId ? 'border-indigo-600 text-indigo-700' : 'border-transparent text-slate-500 hover:text-slate-800'}`}
-              >
-                {variant.variantName}
-              </button>
-            ))}
+            {descriptors.map(variant => {
+              const domIds = variantDomIds.get(variant.variantId)!;
+              return (
+                <button
+                  key={variant.variantId}
+                  ref={element => { tabRefs.current[variant.variantId] = element; }}
+                  type="button"
+                  role="tab"
+                  aria-selected={selectedVariantId === variant.variantId}
+                  aria-controls={domIds.panel}
+                  id={domIds.tab}
+                  tabIndex={selectedVariantId === variant.variantId ? 0 : -1}
+                  onClick={() => selectVariant(variant.variantId)}
+                  onKeyDown={handleVariantArrowKey}
+                  className={`border-b-2 px-4 py-2 text-sm font-medium ${selectedVariantId === variant.variantId ? 'border-indigo-600 text-indigo-700' : 'border-transparent text-slate-500 hover:text-slate-800'}`}
+                >
+                  {variant.variantName}
+                </button>
+              );
+            })}
           </div>
         </div>
 
-        {selectedVariant && (
+        {selectedVariant && selectedVariantDomIds && (
           <div
             role="tabpanel"
-            id={`generator-preview-panel-${selectedVariant.variantId}`}
-            aria-labelledby={`generator-preview-tab-${selectedVariant.variantId}`}
+            id={selectedVariantDomIds.panel}
+            aria-labelledby={selectedVariantDomIds.tab}
             className="min-h-0 flex-1 overflow-y-auto p-6"
           >
             <div className="grid grid-cols-[repeat(auto-fill,minmax(250px,1fr))] gap-5">

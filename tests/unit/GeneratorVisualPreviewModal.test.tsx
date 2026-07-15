@@ -104,7 +104,27 @@ describe('GeneratorVisualPreviewModal', () => {
 
     expect(compact).toHaveAttribute('aria-selected', 'true');
     expect(compact).toHaveFocus();
-    expect(screen.getByRole('tabpanel', { name: 'Compact' })).toHaveAttribute('id', 'generator-preview-panel-compact');
+    expect(screen.getByRole('tabpanel', { name: 'Compact' })).toHaveAttribute('id', compact.getAttribute('aria-controls'));
+  });
+
+  it('links tabs to panels with safe DOM IDs when variant IDs contain whitespace', () => {
+    const payload = makePayload(2);
+    const primary = payload.project.variants.primary;
+    const compact = payload.project.variants.compact;
+    payload.project.activeVariantId = 'primary wide';
+    payload.project.variants = {
+      'primary wide': { ...primary, id: 'primary wide' },
+      'compact wide': { ...compact, id: 'compact wide' },
+    };
+    renderModal({}, payload);
+
+    const tab = screen.getByRole('tab', { name: 'Primary' });
+    const panel = screen.getByRole('tabpanel', { name: 'Primary' });
+    const panelId = tab.getAttribute('aria-controls');
+
+    expect(panelId).not.toMatch(/\s/);
+    expect(panel).toHaveAttribute('id', panelId);
+    expect(panel).toHaveAttribute('aria-labelledby', tab.id);
   });
 
   it('mounts previews in exact batches of 24', () => {
@@ -147,6 +167,22 @@ describe('GeneratorVisualPreviewModal', () => {
     expect(screen.queryByRole('dialog', { name: /Template \d+ preview/ })).not.toBeInTheDocument();
     expect(card).toHaveFocus();
     expect(props.onBack).not.toHaveBeenCalled();
+  });
+
+  it('wraps focus forward and backward within the lightbox', () => {
+    renderModal();
+    fireEvent.click(screen.getByRole('button', { name: 'Template 0, Primary, 1 use' }));
+    const lightbox = screen.getByRole('dialog', { name: 'Template 0 preview' });
+    const close = within(lightbox).getByRole('button', { name: 'Close' });
+    const next = within(lightbox).getByRole('button', { name: 'Next' });
+
+    next.focus();
+    fireEvent.keyDown(next, { key: 'Tab' });
+    expect(close).toHaveFocus();
+
+    close.focus();
+    fireEvent.keyDown(close, { key: 'Tab', shiftKey: true });
+    expect(next).toHaveFocus();
   });
 
   it('routes main Escape only to Back and invokes replacement directly', () => {
