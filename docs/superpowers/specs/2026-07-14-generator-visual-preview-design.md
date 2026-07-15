@@ -42,6 +42,8 @@ Use the approved centered thumbnail-grid layout:
 - Footer: **Back to Scripts**, **Create New Project**, and **Replace Current Project**.
 - Render cards in batches of 24, with **Load more** for the selected variant.
 
+After **Back to Scripts**, the validated payload remains ready and the toolbar action reads **View Preview**. Selecting it reopens the same immutable visual preview without rerunning source. Any source edit, preset switch, or reset invalidates that payload and restores the action to **Preview**.
+
 ### Lightbox
 
 Selecting a thumbnail opens a larger read-only canvas preview.
