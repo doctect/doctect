@@ -757,7 +757,7 @@ interface GeneratePDFOptions {
     output?: 'save' | 'arraybuffer';
 }
 
-export const computePageOrder = (state: AppState): string[] => {
+export const computePageOrder = (state: Pick<AppState, 'nodes' | 'rootId'>): string[] => {
     const pageNodes: string[] = [];
     const visited = new Set<string>();
     const pending = state.rootId ? [state.rootId] : [];

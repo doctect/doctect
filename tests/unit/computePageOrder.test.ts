@@ -15,6 +15,10 @@ const state: any = {
 };
 
 describe('computePageOrder', () => {
+    it('accepts only nodes and rootId while preserving reference-safe depth-first order', () => {
+        expect(computePageOrder({ nodes: state.nodes, rootId: state.rootId })).toEqual(['root', 'a', 'b']);
+    });
+
     it('returns depth-first page order, skipping reference nodes', () => {
         expect(computePageOrder(state)).toEqual(['root', 'a', 'b']);
     });
