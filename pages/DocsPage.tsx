@@ -607,13 +607,14 @@ nodes[refId] = {
                      </ul>
 
                      <p className="bg-amber-50 border-l-4 border-amber-400 p-4 text-amber-900 text-sm mt-8">
-                         <strong>Saved generator source:</strong> Apply retains both scripts with local saves, JSON downloads, cloud history, gallery copies, and forks. Publishing makes both scripts public, so review them for secrets, private comments, and identifying information. Cancel publishing if you do not want to make saved generator source public.
-                     </p>
-                     <ul className="list-disc pl-5 space-y-2">
-                        <li><strong>Opening is inert:</strong> Loading saved or gallery source never runs it.</li>
-                        <li><strong>Preview is sandboxed:</strong> Preview runs drafts only in an isolated disposable sandbox with a fixed 10-second timeout, then validates output.</li>
-                        <li><strong>Apply replaces:</strong> Apply Generated Project requires a successful preview and confirmation, then replaces the generated document.</li>
-                        <li><strong>No reverse synchronization:</strong> Manual project edits are not written back to JavaScript; saved source remains from the last successful generator apply.</li>
+                         <strong>Saved generator source:</strong> Replacing the current project or creating a separate project retains both scripts with local saves, JSON downloads, cloud history, gallery copies, and forks. Publishing makes both scripts public, so the publish warning asks you to review them for secrets, private comments, and identifying information.
+                      </p>
+                      <ul className="list-disc pl-5 space-y-2">
+                         <li><strong>Opening is inert:</strong> Loading saved or gallery source never runs it.</li>
+                         <li><strong>Preview is visual and sandboxed:</strong> Preview runs drafts only in an isolated disposable sandbox with a fixed 10-second timeout. After validation, it opens live canvas previews instead of changing the project.</li>
+                         <li><strong>Inspect every template:</strong> Variant tabs show one representative page for each template. Used templates show usage counts; unused templates use preview-only synthetic pages and show an <strong>Unused</strong> badge. Large sets load in batches, and selecting a thumbnail opens a lightbox.</li>
+                         <li><strong>Choose what happens next:</strong> Back to Scripts preserves exact drafts, and View Preview reopens the validated result without rerunning source. Create New Project asks for a name, retains source, and preserves the original. Replace Current Project confirms before replacing generated fields and creates one undo checkpoint.</li>
+                         <li><strong>No reverse synchronization:</strong> Manual project edits are not written back to JavaScript; saved source remains from the last successful generator apply.</li>
                      </ul>
                   </section>
 
@@ -652,7 +653,7 @@ nodes[refId] = {
                         <li><strong>Publish.</strong> You can unpublish at any time, which removes the project (and its reviews) from public view without deleting anything.</li>
                      </ol>
                      <p className="bg-amber-50 border-l-4 border-amber-400 p-4 text-amber-900 text-sm">
-                        Projects with saved Hierarchy Generator source publish both scripts with the project. The publish wizard warns you to review source or detach it before saving and publishing.
+                         Projects with saved Hierarchy Generator source publish both scripts with the project. The publish wizard warns you to review them for secrets, private comments, and identifying information.
                      </p>
                   </section>
 

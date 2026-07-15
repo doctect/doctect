@@ -42,7 +42,7 @@ test.describe('Editor Functionality', () => {
         const texts = await tabs.allTextContents();
         console.log('Current Tabs:', texts);
 
-        const plannerTab = tabs.filter({ hasText: '2026 Planner' });
+        const plannerTab = tabs.filter({ hasText: 'Planner 2026' });
         await expect(plannerTab).toBeVisible();
         await expect(plannerTab).toHaveClass(/bg-slate-100/);
 

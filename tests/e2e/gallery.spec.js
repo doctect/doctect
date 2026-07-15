@@ -243,7 +243,7 @@ test.describe('Gallery', () => {
         await page.getByLabel('Hierarchy script').fill(baseHierarchySource);
         await page.getByRole('button', { name: 'Preview', exact: true }).click();
         await expect(page.getByText('3 nodes', { exact: true })).toBeVisible();
-        await page.getByRole('button', { name: 'Apply Generated Project' }).click();
+        await page.getByRole('button', { name: 'Replace Current Project' }).click();
         await expect(page.getByTestId('project-tab').filter({ hasText: 'My Simple Book' })).toBeVisible();
         await waitForPersistedGenerator(page, {
             templateScript: baseTemplateSource,
@@ -339,7 +339,7 @@ test.describe('Gallery', () => {
         await pageB.getByRole('button', { name: 'Close generator' }).click();
 
         await pageB.reload();
-        await expect(pageB.getByTestId('project-tab').filter({ hasText: `Private newer ${unique}` })).toBeVisible();
+        await expect(pageB.getByTestId('project-tab').filter({ hasText: 'My Simple Book' })).toBeVisible();
         await openAndAssertIdleSource(pageB, trapSource, markerServer);
 
         const editedTitle = `Gallery Edited ${unique}`;
@@ -349,7 +349,7 @@ test.describe('Gallery', () => {
         await pageB.getByLabel('Hierarchy script').fill(editedHierarchySource);
         await pageB.getByRole('button', { name: 'Preview', exact: true }).click();
         await expect(pageB.getByText('3 nodes', { exact: true })).toBeVisible();
-        await pageB.getByRole('button', { name: 'Apply Generated Project' }).click();
+        await pageB.getByRole('button', { name: 'Replace Current Project' }).click();
         await expect(pageB.getByTestId('project-tab').filter({ hasText: editedTitle })).toBeVisible();
         await waitForPersistedGenerator(pageB, { templateScript: editedTemplateSource, hierarchyScript: editedHierarchySource });
 

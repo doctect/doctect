@@ -39,8 +39,56 @@ const ONE_PAGE_HIERARCHY_SOURCE = `return {
     }
 };`;
 
+const VISUAL_PREVIEW_TEMPLATE_SOURCE = markerUrl => `if (typeof fetch !== 'undefined') fetch('${markerUrl}');
+const template = (id, name, color) => ({
+    id, name, width: A4_WIDTH, height: A4_HEIGHT,
+    elements: [{
+        id: id + '-title', type: 'text', x: 40, y: 40, w: 300, h: 40,
+        text: name + ': {{title}}', fontSize: 20, color
+    }]
+});
+return {
+    variants: {
+        paper: {
+            id: 'paper', name: 'Paper',
+            templates: {
+                cover: template('cover', 'Paper Cover', '#111111'),
+                content: template('content', 'Paper Content', '#222222'),
+                unused: template('unused', 'Paper Spare', '#333333')
+            }
+        },
+        slate: {
+            id: 'slate', name: 'Slate',
+            templates: {
+                cover: template('cover', 'Slate Cover', '#444444'),
+                content: template('content', 'Slate Content', '#555555'),
+                unused: template('unused', 'Slate Spare', '#666666')
+            }
+        }
+    },
+    activeVariantId: 'paper'
+};`;
+
+const VISUAL_PREVIEW_HIERARCHY_SOURCE = `return {
+    rootId: 'visual-root',
+    nodes: {
+        'visual-root': {
+            id: 'visual-root', parentId: null, type: 'cover',
+            title: 'Visual Preview Root', data: {}, children: ['chapter-one', 'chapter-two']
+        },
+        'chapter-one': {
+            id: 'chapter-one', parentId: 'visual-root', type: 'content',
+            title: 'Chapter One', data: {}, children: []
+        },
+        'chapter-two': {
+            id: 'chapter-two', parentId: 'visual-root', type: 'content',
+            title: 'Chapter Two', data: {}, children: []
+        }
+    }
+};`;
+
 const openGenerator = async (page) => {
-    await page.getByTitle('Generate Hierarchy via Script').click();
+    await activePane(page).getByRole('button', { name: 'Generator' }).click();
     await expect(page.getByRole('heading', { name: 'Hierarchy Generator' })).toBeVisible();
 };
 
@@ -60,6 +108,21 @@ const readActiveGeneratedFields = page => page.evaluate(() => {
     };
 });
 
+const readProject = (page, projectId) => page.evaluate(id => {
+    const projects = JSON.parse(localStorage.getItem('hype_projects') || '[]');
+    const project = projects.find(candidate => candidate.id === id);
+    if (!project) throw new Error(`Project ${id} not found.`);
+    return project;
+}, projectId);
+
+const readActiveProject = page => page.evaluate(() => {
+    const projects = JSON.parse(localStorage.getItem('hype_projects') || '[]');
+    const activeId = localStorage.getItem('hype_active_project');
+    const project = projects.find(candidate => candidate.id === activeId);
+    if (!project) throw new Error('Active project not found.');
+    return project;
+});
+
 const applyOnePageFixture = async page => {
     await openGenerator(page);
     await page.getByLabel('Template script').fill(ONE_PAGE_TEMPLATE_SOURCE);
@@ -69,7 +132,7 @@ const applyOnePageFixture = async page => {
     await expect(page.getByText('1 node', { exact: true })).toBeVisible();
     await expect(page.getByText('1 estimated page', { exact: true })).toBeVisible();
     page.once('dialog', dialog => dialog.accept());
-    await page.getByRole('button', { name: 'Apply Generated Project' }).click();
+    await page.getByRole('button', { name: 'Replace Current Project' }).click();
     await expect(page.getByTestId('project-tab').filter({ hasText: 'One Page Fixture' })).toBeVisible();
     await expect.poll(async () => (await readActiveGeneratedFields(page)).generator).toMatchObject({
         templateScript: ONE_PAGE_TEMPLATE_SOURCE,
@@ -113,49 +176,89 @@ test.describe('Editor Advanced Features', () => {
         await expect(page.getByText('Grid Configuration')).toBeVisible();
     });
 
-    test('should preview, apply, and retain generator source through reload and manual edits', async ({ page }) => {
-        // 1. Open Generator
-        await page.getByTitle('Generate Hierarchy via Script').click();
-        await expect(page.getByText('Hierarchy Generator')).toBeVisible();
-        const templateSource = await page.getByLabel('Template script').inputValue();
-        const hierarchySource = await page.getByLabel('Hierarchy script').inputValue();
-
-        // 2. Preview Default Generator without changing the current project
-        await page.getByRole('button', { name: 'Preview' }).click();
-        await expect(page.getByText('1 variant', { exact: true })).toBeVisible();
-        await expect(page.getByText('2 templates', { exact: true })).toBeVisible();
-        await expect(page.getByText('3 nodes', { exact: true })).toBeVisible();
-        await expect(page.getByText('3 estimated pages', { exact: true })).toBeVisible();
-        await expect(page.getByTestId('project-tab').filter({ hasText: 'Blank Project' })).toBeVisible();
-
-        // 3. Apply preview and verify generated project
-        page.once('dialog', dialog => dialog.accept());
-        await page.getByRole('button', { name: 'Apply Generated Project' }).click();
-        await expect(page.getByText('Hierarchy Generator')).not.toBeVisible();
-        await expect(page.getByTestId('project-tab').filter({ hasText: 'My Simple Book' })).toBeVisible();
-
-        // 4. Autosave and reload; source must reopen byte-for-byte
-        await page.waitForTimeout(1200);
+    test('previews visually, creates separately, and replaces with one-checkpoint Undo', async ({ page, markerServer }) => {
+        await applyOnePageFixture(page);
+        const original = await readActiveProject(page);
+        await page.evaluate(projectId => {
+            const projects = JSON.parse(localStorage.getItem('hype_projects') || '[]');
+            const project = projects.find(candidate => candidate.id === projectId);
+            project.cloud = { projectId: 'cloud-preserved', lastSyncedCommitId: 'commit-preserved' };
+            localStorage.setItem('hype_projects', JSON.stringify(projects));
+        }, original.id);
         await page.reload();
-        await expect(page.getByTestId('project-tab').filter({ hasText: 'My Simple Book' })).toBeVisible();
-        await page.getByTitle('Generate Hierarchy via Script').click();
-        await expect(page.getByText('Saved Generator', { exact: true })).toBeVisible();
-        await expect(page.getByLabel('Template script')).toHaveValue(templateSource);
-        await expect(page.getByLabel('Hierarchy script')).toHaveValue(hierarchySource);
-        await page.getByRole('button', { name: 'Close generator' }).click();
+        const originalBefore = await readProject(page, original.id);
+        const templateSource = VISUAL_PREVIEW_TEMPLATE_SOURCE(markerServer.url('/visual-preview-sandbox-rerun.js'));
+        let sandboxFrameCount = 0;
+        page.on('frameattached', () => { sandboxFrameCount += 1; });
 
-        // 5. Manual template edits do not rewrite saved source
-        await page.getByTitle('Rectangle (R)').click();
-        const canvas = page.getByTestId('editor-canvas');
-        const box = await canvas.boundingBox();
-        if (!box) throw new Error('Canvas not found');
-        await page.mouse.move(box.x + 120, box.y + 120);
-        await page.mouse.down();
-        await page.mouse.move(box.x + 220, box.y + 180);
-        await page.mouse.up();
-        await page.getByTitle('Generate Hierarchy via Script').click();
+        await openGenerator(page);
+        await page.getByLabel('Template script').fill(templateSource);
+        await page.getByLabel('Hierarchy script').fill(VISUAL_PREVIEW_HIERARCHY_SOURCE);
+        await page.getByRole('button', { name: 'Preview', exact: true }).click();
+
+        const preview = page.getByRole('dialog', { name: 'Generated Project Preview' });
+        await expect(preview).toBeVisible();
+        await expect(preview.getByRole('tab', { name: 'Paper' })).toHaveAttribute('aria-selected', 'true');
+        await expect(preview.getByRole('button', { name: 'Paper Cover, Paper, 1 use' })).toBeVisible();
+        await expect(preview.getByRole('button', { name: 'Paper Content, Paper, 2 uses' })).toBeVisible();
+        await expect(preview.getByRole('button', { name: 'Paper Spare, Paper, unused' })).toContainText('Unused');
+        expect(await readProject(page, original.id)).toEqual(originalBefore);
+
+        const coverThumbnail = preview.getByRole('button', { name: 'Paper Cover, Paper, 1 use' });
+        await coverThumbnail.click();
+        await expect(page.getByRole('dialog', { name: 'Paper Cover preview' })).toBeVisible();
+        await page.keyboard.press('ArrowRight');
+        await expect(page.getByRole('dialog', { name: 'Paper Content preview' })).toBeVisible();
+        await page.keyboard.press('Escape');
+        await expect(page.getByRole('dialog', { name: 'Paper Content preview' })).toBeHidden();
+        await expect(coverThumbnail).toBeFocused();
+
+        await preview.getByRole('button', { name: 'Back to Scripts' }).click();
         await expect(page.getByLabel('Template script')).toHaveValue(templateSource);
-        await expect(page.getByLabel('Hierarchy script')).toHaveValue(hierarchySource);
+        await expect(page.getByLabel('Hierarchy script')).toHaveValue(VISUAL_PREVIEW_HIERARCHY_SOURCE);
+        const markerRequestsBeforeReopen = markerServer.hits.length;
+        const sandboxFramesBeforeReopen = sandboxFrameCount;
+        const noRerunRequest = markerServer.observeNoHitsFor(MIN_NO_HIT_OBSERVATION_MS);
+        await page.getByRole('button', { name: 'View Preview' }).click();
+        await expect(preview).toBeVisible();
+        await noRerunRequest;
+        expect(markerServer.hits).toHaveLength(markerRequestsBeforeReopen);
+        expect(sandboxFrameCount).toBe(sandboxFramesBeforeReopen);
+
+        await preview.getByRole('button', { name: 'Create New Project' }).click();
+        const naming = page.getByRole('dialog', { name: 'Create Generated Project' });
+        await naming.getByRole('textbox', { name: 'Project name' }).fill('Visual Preview Copy');
+        await naming.getByRole('button', { name: 'Create Project' }).click();
+        await expect(page.getByTestId('project-tab').filter({ hasText: 'Visual Preview Copy' })).toBeVisible();
+        const copy = await readActiveProject(page);
+        expect(copy.name).toBe('Visual Preview Copy');
+        expect(copy.initialState.rootId).toBe('visual-root');
+        expect(copy.initialState.generator).toMatchObject({
+            templateScript: templateSource,
+            hierarchyScript: VISUAL_PREVIEW_HIERARCHY_SOURCE,
+        });
+        expect(await readProject(page, original.id)).toEqual(originalBefore);
+
+        await page.getByTestId('project-tab').filter({ hasText: original.name }).click();
+        await expect.poll(async () => (await readActiveProject(page)).id).toBe(original.id);
+        await openGenerator(page);
+        await page.getByLabel('Template script').fill(templateSource);
+        await page.getByLabel('Hierarchy script').fill(VISUAL_PREVIEW_HIERARCHY_SOURCE);
+        await page.getByRole('button', { name: 'Preview', exact: true }).click();
+        await expect(preview).toBeVisible();
+        page.once('dialog', dialog => dialog.accept());
+        await preview.getByRole('button', { name: 'Replace Current Project' }).click();
+        await expect.poll(async () => (await readProject(page, original.id)).initialState.rootId).toBe('visual-root');
+        expect((await readProject(page, original.id)).cloud).toEqual(originalBefore.cloud);
+
+        await activePane(page).getByRole('button', { name: 'Undo (Ctrl+Z)' }).click();
+        await expect.poll(async () => (await readProject(page, original.id)).initialState.rootId).toBe(originalBefore.initialState.rootId);
+        const originalAfterUndo = await readProject(page, original.id);
+        expect(originalAfterUndo.initialState.nodes).toEqual(originalBefore.initialState.nodes);
+        expect(originalAfterUndo.initialState.generator).toEqual(originalBefore.initialState.generator);
+        expect(originalAfterUndo.initialState.variants).toEqual(originalBefore.initialState.variants);
+        expect(originalAfterUndo.initialState.activeVariantId).toBe(originalBefore.initialState.activeVariantId);
+        expect(originalAfterUndo.cloud).toEqual(originalBefore.cloud);
     });
 
     test('sandbox removes DOM, network, storage, cookie, and loader globals', async ({ page, markerServer }) => {
@@ -183,7 +286,7 @@ if (typeof caches !== 'undefined' || typeof importScripts !== 'undefined') throw
         expect(markerServer.hits).toEqual([]);
         expect(await readActiveGeneratedFields(page)).toEqual(before);
         await expect(page.getByTestId('project-tab').filter({ hasText: 'One Page Fixture' })).toBeVisible();
-        await expect(activePane(page).locator('[data-element-id]')).toHaveCount(1);
+        await expect(activePane(page).getByTestId('editor-canvas').locator('[data-element-id]')).toHaveCount(1);
     });
 
     test('sandbox rejects dynamic import without requesting the module', async ({ page, markerServer }) => {

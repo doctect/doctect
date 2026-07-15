@@ -35,7 +35,7 @@ const applyGeneratorSource = async (page, title, marker) => {
     await page.getByLabel('Hierarchy script').fill(hierarchySource);
     await page.getByRole('button', { name: 'Preview', exact: true }).click();
     await expect(page.getByText('3 nodes', { exact: true })).toBeVisible();
-    await page.getByRole('button', { name: 'Apply Generated Project' }).click();
+    await page.getByRole('button', { name: 'Replace Current Project' }).click();
     await expect(page.getByTestId('project-tab').filter({ hasText: title })).toBeVisible();
     await waitForPersistedGenerator(page, { templateScript: templateSource, hierarchyScript: hierarchySource });
     return { templateSource, hierarchySource };
@@ -192,7 +192,7 @@ test.describe('Merge requests', () => {
         await expect(headMessage).toContainText(`Merge: ${mrTitle}`);
 
         await pageA.getByRole('button', { name: /restore/i }).first().click();
-        await expect(pageA.getByTestId('project-tab').filter({ hasText: generatedTitle })).toBeVisible({ timeout: 10000 });
+        await expect(pageA.getByTestId('project-tab').filter({ hasText: 'Blank Project' })).toBeVisible({ timeout: 10000 });
         await expect(activePane(pageA).locator('[data-element-id]')).toHaveCount(2, { timeout: 10000 });
         await activePane(pageA).getByTitle('Generate Hierarchy via Script').click();
         await expect(pageA.getByLabel('Template script')).toHaveValue(generatedSource.templateSource);

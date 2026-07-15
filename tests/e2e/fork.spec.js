@@ -29,7 +29,7 @@ const applyDistinctiveGenerator = async (page) => {
     await page.getByLabel('Hierarchy script').fill(hierarchySource);
     await page.getByRole('button', { name: 'Preview', exact: true }).click();
     await expect(page.getByText('3 nodes', { exact: true })).toBeVisible();
-    await page.getByRole('button', { name: 'Apply Generated Project' }).click();
+    await page.getByRole('button', { name: 'Replace Current Project' }).click();
     await expect(page.getByTestId('project-tab').filter({ hasText: 'My Simple Book' })).toBeVisible();
     await waitForPersistedGenerator(page, { templateScript: templateSource, hierarchyScript: hierarchySource });
     return { templateSource, hierarchySource };

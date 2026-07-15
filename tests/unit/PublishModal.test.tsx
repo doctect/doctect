@@ -82,15 +82,18 @@ describe('PublishModal generator source warning', () => {
         });
     });
 
-    it('warns from cloud head source when local source is detached', async () => {
+    it('warns from cloud head source when local source is absent', async () => {
         vi.spyOn(cloudApi, 'getCommit').mockResolvedValue({
             id: 'head-1', message: 'Head', createdAt: '2026-07-14T12:40:00.000Z', state: { ...state, generator },
         });
         renderModal(false);
 
-        expect(await screen.findByRole('alert')).toHaveTextContent(
-            'This project includes saved generator source. Publishing makes both scripts public. Review them for secrets, private comments, or identifying information. Cancel publishing if you do not want to make saved generator source public.',
+        const warning = await screen.findByRole('alert');
+        expect(warning).toHaveTextContent(
+            /^This project includes saved generator source\. Publishing makes both scripts public\. Review them for secrets, private comments, or identifying information\.$/,
         );
+        expect(warning).not.toHaveTextContent('Detach Saved Generator');
+        expect(warning).not.toHaveTextContent(/remove source before publishing/i);
         expect(cloudApi.getProject).toHaveBeenCalledWith('cloud-1');
         expect(cloudApi.getCommit).toHaveBeenCalledWith('cloud-1', 'head-1');
     });

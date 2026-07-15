@@ -109,7 +109,7 @@ const InfoTooltip: React.FC<InfoTooltipProps> = ({ content, position = 'above', 
 
       let style: React.CSSProperties = {
         position: 'fixed',
-        zIndex: 9999,
+        zIndex: 55,
         width: tooltipWidth,
       };
 
@@ -596,6 +596,8 @@ Now please generate scripts for: [DESCRIBE YOUR DOCUMENT STRUCTURE HERE]`;
 };
 
 
+const GENERATOR_WORKFLOW_HELP = 'Preview opens live canvas template previews. Back keeps your scripts, Create New Project preserves the original, and Replace Current Project creates one undo checkpoint.';
+
 // Generator Help Panel component
 const GeneratorHelpPanel: React.FC<{ isOpen: boolean; onToggle: () => void }> = ({ isOpen, onToggle }) => {
   const [activeTab, setActiveTab] = useState<'prompt' | 'schema'>('prompt');
@@ -618,6 +620,9 @@ const GeneratorHelpPanel: React.FC<{ isOpen: boolean; onToggle: () => void }> = 
 
       {isOpen && (
         <div className="bg-slate-50 border-t border-slate-200">
+          <p className="border-b border-slate-200 px-4 py-3 text-sm text-slate-700">
+            {GENERATOR_WORKFLOW_HELP}
+          </p>
           {/* Tabs */}
           <div className="flex border-b border-slate-200">
             <button
@@ -2358,7 +2363,7 @@ const HierarchyGeneratorSession: React.FC<HierarchyGeneratorSessionProps> = ({
         </div>
 
         <p className="px-4 py-2 border-b bg-indigo-50 text-xs text-indigo-900">
-          Saved generator source is retained with the project and becomes public when published. Opening source never runs it; Preview uses the sandbox. Apply replaces the generated document. Manual edits are not written back to JavaScript.
+          Saved generator source is retained with the project and becomes public when published. <span>{GENERATOR_WORKFLOW_HELP}</span> Opening source never runs it; Preview uses the sandbox. Manual edits are not written back to JavaScript.
         </p>
 
         {/* Side-by-Side Editor Area */}

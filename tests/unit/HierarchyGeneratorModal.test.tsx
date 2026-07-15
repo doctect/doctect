@@ -82,11 +82,19 @@ describe('HierarchyGeneratorModal', () => {
         expect(screen.getByRole('button', { name: 'Apply Generated Project' })).toBeDisabled();
     });
 
-    it('explains retained source safety, replacement, and no reverse synchronization', () => {
+    it('explains visual preview decisions and retained source safety without detach guidance', () => {
         renderModal();
-        expect(screen.getByText(/Saved generator source is retained with the project/)).toHaveTextContent(
-            'Saved generator source is retained with the project and becomes public when published. Opening source never runs it; Preview uses the sandbox. Apply replaces the generated document. Manual edits are not written back to JavaScript.',
-        );
+        const workflow = 'Preview opens live canvas template previews. Back keeps your scripts, Create New Project preserves the original, and Replace Current Project creates one undo checkpoint.';
+        expect(screen.getByText(workflow, { exact: true })).toBeVisible();
+        expect(screen.getByRole('dialog')).toHaveTextContent('Saved generator source is retained with the project and becomes public when published.');
+        expect(screen.getByRole('dialog')).toHaveTextContent('Opening source never runs it; Preview uses the sandbox.');
+        expect(screen.getByRole('dialog')).toHaveTextContent('Manual edits are not written back to JavaScript.');
+
+        fireEvent.click(screen.getByRole('button', { name: 'LLM Helper & Schema Documentation' }));
+
+        expect(screen.getAllByText(workflow, { exact: true })).toHaveLength(2);
+        expect(screen.getByRole('dialog')).not.toHaveTextContent('Detach Saved Generator');
+        expect(screen.getByRole('dialog')).not.toHaveTextContent(/remove source before publishing/i);
         expect(screen.queryByRole('button', { name: 'Detach Saved Generator' })).not.toBeInTheDocument();
     });
 
