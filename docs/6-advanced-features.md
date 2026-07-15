@@ -29,7 +29,7 @@ When on "Jan 1", you want a button pointing to "Back to Week".
 The Scripting feature (`HierarchyGeneratorModal.tsx`) allows users to define massive node structures in seconds using JavaScript.
 
 *   **Source retention**: Applying generated output saves the exact template and hierarchy scripts with the project. Local saves, JSON files, cloud history, gallery copies, and forks retain them.
-*   **Public visibility**: Publishing a project with saved generator source makes both scripts public. Review them for secrets, private comments, and identifying information first. Use **Detach Saved Generator** and save to cloud if the source should not be published.
+*   **Public visibility**: Publishing a project with saved generator source makes both scripts public. Review them for secrets, private comments, and identifying information first. Cancel publishing if the source should not be public.
 *   **Inert opening**: Opening a local, downloaded, historical, gallery, or forked project never runs its saved scripts.
 *   **Sandboxed Preview**: **Preview** is the only action that runs draft scripts. It uses an isolated, disposable browser sandbox with a fixed 10-second timeout and validates output before showing a summary.
 *   **Replacement Apply**: **Apply Generated Project** replaces generated document fields only after a successful preview and explicit confirmation.

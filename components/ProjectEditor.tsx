@@ -58,6 +58,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, project
 
     const onNameChangeRef = useRef(onNameChange);
     const onStateChangeRef = useRef(onStateChange);
+    const previousRootTitleRef = useRef(state.nodes[state.rootId]?.title);
 
     useEffect(() => {
         onNameChangeRef.current = onNameChange;
@@ -67,9 +68,9 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, project
     // Update parent name when root title changes
     useEffect(() => {
         const rootNode = state.nodes[state.rootId];
-        if (rootNode) {
-            onNameChangeRef.current(rootNode.title);
-        }
+        if (!rootNode || rootNode.title === previousRootTitleRef.current) return;
+        previousRootTitleRef.current = rootNode.title;
+        onNameChangeRef.current(rootNode.title);
     }, [state.nodes[state.rootId]?.title]);
 
     // Debounce state changes to parent for persistence
@@ -928,6 +929,8 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, project
     ) => {
         saveToHistory();
         const generatedAt = new Date().toISOString();
+        const rootTemplateId = project.nodes[project.rootId]?.type;
+        const rootTemplate = project.variants[project.activeVariantId]?.templates[rootTemplateId];
         setState(current => ({
             ...current,
             nodes: project.nodes,
@@ -941,6 +944,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, project
             selectedTemplateId: '',
             selectedTemplateIds: [],
             selectedElementIds: [],
+            activeLayerId: rootTemplate ? resolveActiveLayerId(rootTemplate) : '',
         }));
         trackEvent('generator_run', { rootId: project.rootId, nodeCount: Object.keys(project.nodes).length });
         return true;

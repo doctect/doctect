@@ -12,7 +12,12 @@ vi.mock('../../services/projectDocumentSnapshot', async importOriginal => {
 });
 
 vi.mock('../../components/Sidebar', () => ({
-    Sidebar: ({ state }: { state: AppState }) => <pre data-testid="editor-state">{JSON.stringify(state)}</pre>,
+    Sidebar: ({ state, onUpdateNode }: { state: AppState; onUpdateNode: (id: string, updates: Partial<AppState['nodes'][string]>) => void }) => (
+        <div>
+            <pre data-testid="editor-state">{JSON.stringify(state)}</pre>
+            <button onClick={() => onUpdateNode(state.rootId, { title: 'Renamed Root' })}>Rename root</button>
+        </div>
+    ),
 }));
 vi.mock('../../components/Canvas', () => ({ Canvas: () => <div /> }));
 vi.mock('../../components/PropertiesPanel', () => ({ PropertiesPanel: () => <div /> }));
@@ -39,7 +44,17 @@ const generatedProject = {
             id: 'generated',
             name: 'Generated Variant',
             templates: {
-                'generated-page': { id: 'generated-page', name: 'Generated Page', width: 595, height: 842, elements: [] },
+                'generated-page': {
+                    id: 'generated-page',
+                    name: 'Generated Page',
+                    width: 595,
+                    height: 842,
+                    layers: [
+                        { id: 'generated-back', name: 'Back', order: 0, visible: true, locked: false },
+                        { id: 'generated-front', name: 'Front', order: 1, visible: true, locked: false },
+                    ],
+                    elements: [],
+                },
             },
         },
     },
@@ -75,7 +90,14 @@ const initialState = (): AppState => ({
             id: 'original',
             name: 'Original Variant',
             templates: {
-                page: { id: 'page', name: 'Page', width: 509, height: 679, elements: [] },
+                page: {
+                    id: 'page',
+                    name: 'Page',
+                    width: 509,
+                    height: 679,
+                    layers: [{ id: 'original-layer', name: 'Original', order: 0, visible: true, locked: false }],
+                    elements: [],
+                },
             },
         },
     },
@@ -86,6 +108,7 @@ const initialState = (): AppState => ({
     selectedTemplateId: '',
     selectedTemplateIds: [],
     selectedElementIds: ['original-element'],
+    activeLayerId: 'original-layer',
     scale: 1,
     tool: 'select',
     showJsonModal: false,
@@ -130,6 +153,35 @@ describe('ProjectEditor generator history integration', () => {
         vi.useRealTimers();
     });
 
+    it('preserves requested project name on mount and syncs later root title edits', () => {
+        const generatedState = initialState();
+        generatedState.nodes.root.title = 'Generated Root';
+        const NameHarness = () => {
+            const [name, setName] = React.useState('Separate Generated');
+            return (
+                <>
+                    <output data-testid="project-name">{name}</output>
+                    <ProjectEditor
+                        projectId="name-sync-test"
+                        projectName={name}
+                        initialState={generatedState}
+                        isActive
+                        onNameChange={setName}
+                        onStateChange={vi.fn()}
+                        onCreateGeneratedProject={vi.fn(() => true)}
+                    />
+                </>
+            );
+        };
+        render(<NameHarness />);
+
+        expect(screen.getByTestId('project-name')).toHaveTextContent('Separate Generated');
+
+        fireEvent.click(screen.getByRole('button', { name: 'Rename root' }));
+
+        expect(screen.getByTestId('project-name')).toHaveTextContent('Renamed Root');
+    });
+
     it('checkpoints Apply once and Undo/Redo restore all generated fields and provenance timestamp', () => {
         renderEditor();
         fireEvent.click(screen.getByRole('button', { name: 'Open generator' }));
@@ -150,6 +202,7 @@ describe('ProjectEditor generator history integration', () => {
             selectedTemplateId: '',
             selectedTemplateIds: [],
             selectedElementIds: [],
+            activeLayerId: 'generated-front',
         });
 
         fireEvent.click(screen.getByTitle('Undo (Ctrl+Z)'));
@@ -163,6 +216,7 @@ describe('ProjectEditor generator history integration', () => {
             activeVariantId: 'generated',
             schemaVersion: 9,
             generator: { ...source, generatedAt: '2026-07-14T12:34:56.000Z' },
+            activeLayerId: 'generated-front',
         });
     });
 });
