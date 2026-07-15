@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { buildVariantPreviews, fitTemplateScale, nodesForTemplatePreview } from '../../services/generatorVisualPreview';
 import type { GeneratedProject } from '../../services/validateGeneratedProject';
+import type { AppNode, PageTemplate } from '../../types';
 
 const project: GeneratedProject = {
     schemaVersion: 9,
@@ -55,5 +56,46 @@ describe('generator visual preview descriptors', () => {
         const variants = buildVariantPreviews(project, () => createId.next().value!);
 
         expect(variants[0].templates[2].nodeId).toBe('synthetic-appendix');
+    });
+
+    it('indexes node types in bounded passes at the 20,000-node limit', () => {
+        const nodeCount = 20_000;
+        const templateCount = 100;
+        const nodes: Record<string, AppNode> = {};
+        const templates: Record<string, PageTemplate> = {};
+        const rootChildren: string[] = [];
+        let typeReads = 0;
+
+        for (let index = 0; index < templateCount; index += 1) {
+            const templateId = `template-${index}`;
+            templates[templateId] = { id: templateId, name: templateId, width: 100, height: 100, layers: [], elements: [] };
+        }
+        for (let index = 0; index < nodeCount; index += 1) {
+            const id = `node-${index}`;
+            const templateId = `template-${index % templateCount}`;
+            const node: AppNode = { id, parentId: index === 0 ? null : 'node-0', type: templateId, title: id, data: {}, children: [] };
+            Object.defineProperty(node, 'type', {
+                enumerable: true,
+                get: () => {
+                    typeReads += 1;
+                    return templateId;
+                },
+            });
+            nodes[id] = node;
+            if (index > 0) rootChildren.push(id);
+        }
+        nodes['node-0'].children = rootChildren;
+
+        const variants = buildVariantPreviews({
+            schemaVersion: 9,
+            rootId: 'node-0',
+            activeVariantId: 'limit',
+            nodes,
+            variants: { limit: { id: 'limit', name: 'Limit', templates } },
+        });
+
+        expect(variants[0].templates).toHaveLength(templateCount);
+        expect(variants[0].templates.every(item => item.usageCount === nodeCount / templateCount)).toBe(true);
+        expect(typeReads).toBeLessThanOrEqual(nodeCount * 2);
     });
 });

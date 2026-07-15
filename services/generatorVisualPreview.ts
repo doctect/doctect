@@ -40,13 +40,25 @@ export function buildVariantPreviews(project: GeneratedProject, createId = defau
     const pageOrder = computePageOrder(project);
     const orderedNodes = pageOrder.map(id => project.nodes[id]).filter((node): node is AppNode => Boolean(node));
     const allNodes = Object.values(project.nodes);
+    const usageCounts = new Map<string, number>();
+    const fallbackNodes = new Map<string, AppNode>();
+    const orderedRepresentatives = new Map<string, AppNode>();
+
+    for (const node of allNodes) {
+        const nodeType = node.type;
+        usageCounts.set(nodeType, (usageCounts.get(nodeType) ?? 0) + 1);
+        if (!fallbackNodes.has(nodeType)) fallbackNodes.set(nodeType, node);
+    }
+    for (const node of orderedNodes) {
+        const nodeType = node.type;
+        if (!orderedRepresentatives.has(nodeType)) orderedRepresentatives.set(nodeType, node);
+    }
 
     return Object.entries(project.variants).map(([variantId, variant]) => ({
         variantId,
         variantName: variant.name || variantId,
         templates: Object.entries(variant.templates).map(([templateId, template]) => {
-            const matching = allNodes.filter(node => node.type === templateId);
-            const representative = orderedNodes.find(node => node.type === templateId) ?? matching[0];
+            const representative = orderedRepresentatives.get(templateId) ?? fallbackNodes.get(templateId);
             if (representative) {
                 return {
                     variantId,
@@ -55,7 +67,7 @@ export function buildVariantPreviews(project: GeneratedProject, createId = defau
                     template,
                     nodeId: representative.id,
                     nodeTitle: representative.title || representative.id,
-                    usageCount: matching.length,
+                    usageCount: usageCounts.get(templateId) ?? 0,
                     unused: false,
                 };
             }
