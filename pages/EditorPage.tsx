@@ -38,6 +38,38 @@ const persistProjects = (projects: Project[]) => {
     }
 };
 
+const persistGeneratedProject = (projects: Project[], activeProjectId: string) => {
+    let previousProjects: string | null | undefined;
+    let previousActiveProject: string | null | undefined;
+    try {
+        previousProjects = localStorage.getItem('hype_projects');
+        previousActiveProject = localStorage.getItem('hype_active_project');
+        localStorage.setItem('hype_projects', JSON.stringify(projects));
+        localStorage.setItem('hype_active_project', activeProjectId);
+        return true;
+    } catch (error) {
+        console.error("Failed to save generated project to storage", error);
+        const rollbackErrors: unknown[] = [];
+        if (previousProjects !== undefined && previousActiveProject !== undefined) {
+            for (const [key, value] of [
+                ['hype_projects', previousProjects],
+                ['hype_active_project', previousActiveProject],
+            ] as const) {
+                try {
+                    if (value === null) localStorage.removeItem(key);
+                    else localStorage.setItem(key, value);
+                } catch (rollbackError) {
+                    rollbackErrors.push(rollbackError);
+                }
+            }
+        }
+        if (rollbackErrors.length > 0) {
+            console.error("Failed to roll back generated project storage", rollbackErrors);
+        }
+        return false;
+    }
+};
+
 export const loadSavedProjects = (): { projects: Project[]; warnings: string[] } => {
     try {
         const saved = localStorage.getItem('hype_projects');
@@ -235,7 +267,7 @@ export function EditorPage() {
             revision: 0,
         };
         const nextProjects = [...projects, newProject];
-        if (!persistProjects(nextProjects)) return false;
+        if (!persistGeneratedProject(nextProjects, newId)) return false;
         setProjects(nextProjects);
         setActiveProjectId(newId);
         trackEvent('project_created_from_generator', {

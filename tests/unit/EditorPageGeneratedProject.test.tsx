@@ -141,4 +141,37 @@ describe('EditorPage generated project creation', () => {
         expect(savedProjects()).toEqual([originalBefore]);
         expect(trackEvent).not.toHaveBeenCalled();
     });
+
+    it('rolls back both storage keys when active project persistence exceeds quota', () => {
+        const originalBefore = seedOriginal();
+        renderEditor();
+        const projectsBefore = localStorage.getItem('hype_projects');
+        const activeBefore = localStorage.getItem('hype_active_project');
+        vi.spyOn(console, 'error').mockImplementation(() => undefined);
+        const originalSetItem = Storage.prototype.setItem;
+        let activeWriteFailed = false;
+        vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (key, value) {
+            if (key === 'hype_active_project' && !activeWriteFailed) {
+                activeWriteFailed = true;
+                throw new DOMException('Storage quota exceeded.', 'QuotaExceededError');
+            }
+            return originalSetItem.call(this, key, value);
+        });
+
+        let clickError: unknown;
+        try {
+            fireEvent.click(screen.getByRole('button', { name: 'Create from source-project' }));
+        } catch (error) {
+            clickError = error;
+        }
+
+        expect(clickError).toBeUndefined();
+        expect(lastCreateResult.current).toBe(false);
+        expect(screen.getAllByTestId(/^editor-/)).toHaveLength(1);
+        expect(screen.getByTestId('editor-source-project')).toBeVisible();
+        expect(localStorage.getItem('hype_projects')).toBe(projectsBefore);
+        expect(localStorage.getItem('hype_active_project')).toBe(activeBefore);
+        expect(savedProjects()).toEqual([originalBefore]);
+        expect(trackEvent).not.toHaveBeenCalled();
+    });
 });
