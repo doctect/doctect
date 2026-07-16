@@ -70,4 +70,37 @@ describe('PostgreSQL migration contract', () => {
             params: ['011_account_moderation'],
         });
     });
+
+    it('executes exact PostgreSQL session suspension guard statements intact', async () => {
+        migrationState.pendingId = '012_session_suspension_guard';
+        const { runMigrations } = await import('../../../server/migrations.js');
+        await runMigrations();
+
+        const texts = dbCalls.map(call => call.text);
+        expect(texts).toContain(`CREATE OR REPLACE FUNCTION guard_session_insert_for_suspension()
+             RETURNS trigger AS $$
+             DECLARE
+                 referenced_banned BOOLEAN;
+                 referenced_ban_expires TIMESTAMP;
+             BEGIN
+                 SELECT banned, "banExpires"
+                 INTO referenced_banned, referenced_ban_expires
+                 FROM "user"
+                 WHERE id = NEW."userId"
+                 FOR UPDATE;
+                 IF referenced_banned AND (referenced_ban_expires IS NULL OR referenced_ban_expires > CURRENT_TIMESTAMP) THEN
+                     RAISE EXCEPTION 'session creation blocked for suspended user';
+                 END IF;
+                 RETURN NEW;
+             END;
+             $$ LANGUAGE plpgsql`);
+        expect(texts).toContain('DROP TRIGGER IF EXISTS session_suspension_guard ON session');
+        expect(texts).toContain(`CREATE TRIGGER session_suspension_guard
+                BEFORE INSERT ON session
+                FOR EACH ROW EXECUTE FUNCTION guard_session_insert_for_suspension()`);
+        expect(dbCalls).toContainEqual({
+            text: 'INSERT INTO app_migrations (id) VALUES ($1)',
+            params: ['012_session_suspension_guard'],
+        });
+    });
 });

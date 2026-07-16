@@ -44,7 +44,7 @@ describe('011 account moderation migration', () => {
 
     it('migrates a pre-011 ordinary user without changing access state', () => {
         const legacyDb = new Database(':memory:');
-        for (const migration of migrations.filter(item => item.id !== '011_account_moderation')) {
+        for (const migration of migrations.filter(item => !['011_account_moderation', '012_session_suspension_guard'].includes(item.id))) {
             const sql = migration.sqlite ?? migration.pg;
             for (const statement of sql.split(';').map(value => value.trim()).filter(Boolean)) {
                 legacyDb.exec(statement);
@@ -105,5 +105,41 @@ describe('011 account moderation migration', () => {
             .rejects.toThrow('moderation_actions is append-only');
         expect((await query('SELECT reason FROM moderation_actions WHERE id = $1', ['audit-1']))[0].reason)
             .toBe('Confirmed abuse');
+    });
+});
+
+describe('012 session suspension guard migration', () => {
+    it('uses intact statement arrays for both trigger dialects', () => {
+        const migration = migrations.find(item => item.id === '012_session_suspension_guard');
+        expect(migration).toBeDefined();
+        expect(Array.isArray(migration.pg)).toBe(true);
+        expect(Array.isArray(migration.sqlite)).toBe(true);
+        expect(migration.pg.some(sql => sql.includes('CREATE OR REPLACE FUNCTION guard_session_insert_for_suspension()'))).toBe(true);
+        expect(migration.sqlite.some(sql => sql.includes('CREATE TRIGGER session_suspension_guard'))).toBe(true);
+    });
+
+    it('allows unbanned and expired users but rejects active session inserts on SQLite', async () => {
+        const timestamp = '2026-01-01T00:00:00.000Z';
+        const users = [
+            ['session-unbanned', 0, null],
+            ['session-active-indefinite', 1, null],
+            ['session-active-future', 1, '2999-01-01T00:00:00.000Z'],
+            ['session-expired', 1, '2000-01-01T00:00:00.000Z'],
+        ];
+        for (const [id, banned, banExpires] of users) {
+            await query(`INSERT INTO "user"
+                (id, name, email, "emailVerified", "createdAt", "updatedAt", banned, "banExpires")
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+            [id, id, `${id}@test.dev`, 1, timestamp, timestamp, banned, banExpires]);
+        }
+        const insertSession = userId => query(`INSERT INTO session
+            (id, "expiresAt", token, "createdAt", "updatedAt", "userId")
+            VALUES ($1, $2, $3, $4, $5, $6)`,
+        [`session-for-${userId}`, '2999-01-01T00:00:00.000Z', `token-${userId}`, timestamp, timestamp, userId]);
+
+        await expect(insertSession('session-unbanned')).resolves.toEqual([]);
+        await expect(insertSession('session-active-indefinite')).rejects.toThrow('session creation blocked for suspended user');
+        await expect(insertSession('session-active-future')).rejects.toThrow('session creation blocked for suspended user');
+        await expect(insertSession('session-expired')).resolves.toEqual([]);
     });
 });

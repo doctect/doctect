@@ -370,5 +370,45 @@ export const migrations = [
                     SELECT RAISE(ABORT, 'moderation_actions is append-only');
                 END`,
         ],
+    },
+    {
+        id: '012_session_suspension_guard',
+        pg: [
+            `CREATE OR REPLACE FUNCTION guard_session_insert_for_suspension()
+             RETURNS trigger AS $$
+             DECLARE
+                 referenced_banned BOOLEAN;
+                 referenced_ban_expires TIMESTAMP;
+             BEGIN
+                 SELECT banned, "banExpires"
+                 INTO referenced_banned, referenced_ban_expires
+                 FROM "user"
+                 WHERE id = NEW."userId"
+                 FOR UPDATE;
+                 IF referenced_banned AND (referenced_ban_expires IS NULL OR referenced_ban_expires > CURRENT_TIMESTAMP) THEN
+                     RAISE EXCEPTION 'session creation blocked for suspended user';
+                 END IF;
+                 RETURN NEW;
+             END;
+             $$ LANGUAGE plpgsql`,
+            'DROP TRIGGER IF EXISTS session_suspension_guard ON session',
+            `CREATE TRIGGER session_suspension_guard
+                BEFORE INSERT ON session
+                FOR EACH ROW EXECUTE FUNCTION guard_session_insert_for_suspension()`,
+        ],
+        sqlite: [
+            'DROP TRIGGER IF EXISTS session_suspension_guard',
+            `CREATE TRIGGER session_suspension_guard
+                BEFORE INSERT ON session
+                WHEN EXISTS (
+                    SELECT 1 FROM "user"
+                    WHERE id = NEW."userId"
+                      AND banned = 1
+                      AND ("banExpires" IS NULL OR julianday("banExpires") > julianday('now'))
+                )
+                BEGIN
+                    SELECT RAISE(ABORT, 'session creation blocked for suspended user');
+                END`,
+        ],
     }
 ];

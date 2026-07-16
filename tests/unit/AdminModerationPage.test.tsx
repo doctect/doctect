@@ -402,6 +402,22 @@ describe('AdminModerationPage', () => {
         expect(screen.queryByLabelText('Restoration reason')).toBeNull();
     });
 
+    it('shows administrator protection and suppresses all suspension controls', async () => {
+        api.getModerationUser.mockResolvedValueOnce({
+            ...detail,
+            account: { ...account, role: 'admin' },
+        });
+
+        await searchAndOpen();
+
+        expect(screen.getByText('Protected administrator account')).toBeInTheDocument();
+        expect(screen.queryByLabelText('Suspension duration')).toBeNull();
+        expect(screen.queryByLabelText('Suspension reason')).toBeNull();
+        expect(screen.queryByLabelText('Restoration reason')).toBeNull();
+        expect(screen.queryByRole('button', { name: /Review (suspension|restoration)/ })).toBeNull();
+        expect(screen.queryByRole('dialog')).toBeNull();
+    });
+
     it('ignores stale search and detail responses instead of replacing newer state', async () => {
         let resolveOldSearch: (value: unknown) => void = () => {};
         const oldAccount = { ...account, id: 'old-user', email: 'old@test.dev' };

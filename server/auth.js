@@ -107,6 +107,9 @@ export const createAuth = (config = {}) => {
         },
         hooks: {
             before: createAuthMiddleware(async (ctx) => {
+                if (ctx.path === "/admin" || ctx.path.startsWith("/admin/")) {
+                    throw new APIError("NOT_FOUND", { message: "Not found", code: "NOT_FOUND" });
+                }
                 if (!PASSWORD_SETTING_PATHS.includes(ctx.path)) return;
                 const password = ctx.body?.newPassword ?? ctx.body?.password;
                 if (typeof password !== "string") return; // missing field: better-auth's own validation handles it

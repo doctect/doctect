@@ -1,7 +1,7 @@
 # Account Moderation and Suspension Design
 
 **Date:** 2026-07-16
-**Status:** Approved, pending written-spec review
+**Status:** Approved and implemented
 
 ## Goal
 
@@ -60,6 +60,8 @@ banned = true AND (banExpires IS NULL OR banExpires > current time)
 ```
 
 An expired temporary suspension permits a fresh sign-in under Better Auth's expiry semantics. The audit history remains intact. Restoration explicitly clears `banned`, `banReason`, and `banExpires` and increments `moderationVersion`.
+
+Append migration `012_session_suspension_guard` after moderation schema migration. Both dialects add a `BEFORE INSERT` session trigger that rejects creation for an actively suspended referenced user. PostgreSQL trigger locks referenced user row with `FOR UPDATE` before evaluating fields, serializing session insertion with suspension's target-user lock: insert-first commits before suspension deletes sessions, while suspension-first exposes active state and rejects insert. SQLite uses equivalent active-state predicate under serialized writer behavior. Unbanned and expired users remain eligible for session creation.
 
 ### Moderation audit table
 
@@ -153,6 +155,7 @@ Add a role-gated navigation entry and `/admin/moderation` route.
 - Show account identity, role, suspension state, expiry, and recent moderation history.
 - List currently published projects with individual selection controls and links for review.
 - Never display session IPs, authentication tokens, or credential records.
+- Label administrator targets as protected and render no suspension/restoration controls or confirmation. Server-side `403` remains authoritative.
 
 ### Suspension flow
 
@@ -171,8 +174,9 @@ Restoration requires a new reason and confirmation. Successful restoration refre
 ## Validation and Error Handling
 
 - Reasons are trimmed, mandatory, and limited to 1,000 characters.
-- Temporary expiry must be a valid future timestamp. Indefinite suspension uses null.
-- Duplicate or malformed project IDs are rejected.
+- Temporary expiry must be calendar-valid ISO-8601 with `T`, seconds, and explicit `Z` or numeric timezone. Locale and timezone-less timestamps are rejected. Indefinite suspension uses null.
+- Future expiry is checked before transaction entry and again after target/project locks immediately before first write. Expiry elapsed under locks returns `400` with no account, session, project, or audit mutation.
+- Duplicate or malformed project IDs are rejected. `projectIdsToUnpublish` has a maximum cardinality of 20, matching default supported published-project scale.
 - `400` — malformed reason, expiry, project list, or concurrency input.
 - `403` — non-admin caller or administrator target.
 - `404` — target user not found.
@@ -185,6 +189,8 @@ The UI preserves reason, duration, and project selections after recoverable fail
 
 - Server authorization and transaction validation are authoritative; client checks cannot grant access.
 - Existing origin checking protects mutation routes. Existing write limiting also applies.
+- Express direct `/api/auth/admin` denial remains defense-in-depth. Better Auth `hooks.before` rejects normalized `/admin` and `/admin/*` paths, covering raw and percent-encoded dot-segment normalization before plugin execution while retaining `admin()` for sign-in ban semantics.
+- After Better Auth resolves a session, `requireAuth` and `optionalAuth` read fresh suspension fields. Active state deletes all target sessions and is treated as unauthenticated (`401` or null respectively).
 - Suspension never exposes or acts on stored session IP addresses.
 - Administrator accounts cannot be suspended through this workflow, reducing accidental or hostile lockout. Admin role changes remain an operator-only task.
 - Deployment documentation must explain suspension, expiry, restoration, audit lookup, and selected-content behavior.
@@ -207,6 +213,8 @@ The UI preserves reason, duration, and project selections after recoverable fail
 - Administrator targets cannot be suspended.
 - Indefinite and temporary suspension fields persist correctly.
 - Every target session is revoked on suspension.
+- Session insertion is allowed for unbanned/expired users and rejected for active users by SQLite behavior tests; PostgreSQL trigger SQL and row-lock serialization are asserted exactly because no live PostgreSQL harness exists.
+- Preexisting sessions followed by direct active state are denied and cleaned by required and optional auth guards.
 - Active suspension causes Better Auth's existing `BANNED_USER` sign-in response.
 - Expired temporary suspension permits a fresh sign-in.
 - Selected projects become private and lose published commit linkage; unselected projects remain published.
@@ -224,6 +232,7 @@ The UI preserves reason, duration, and project selections after recoverable fail
 - Duplicate-submit prevention and recoverable-error state retention.
 - Suspension success, immediate status refresh, history display, and restoration.
 - Sensitive authentication and session fields are neither requested nor rendered.
+- Protected administrator detail is labeled and has no suspension/restoration controls or confirmation.
 
 ### End-to-end verification
 
@@ -251,3 +260,5 @@ Run focused tests, the full unit suite, and the production build before completi
 8. Administrator accounts cannot be suspended through this workflow.
 9. No application-level IP denylist is introduced.
 10. SQLite and PostgreSQL behavior is covered, existing moderation routes continue to work, and the full build/test suite passes.
+
+PostgreSQL coverage in this repository is SQL-contract coverage rather than live server execution. Automated tests execute SQLite trigger behavior and assert exact PostgreSQL function/trigger statements, including target-user `FOR UPDATE`; they do not claim a live PostgreSQL migration run.

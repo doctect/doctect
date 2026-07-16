@@ -1,9 +1,16 @@
 // @vitest-environment node
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import http from 'node:http';
 import request from 'supertest';
 import { initTestApp, signUpUser } from './helpers.js';
 
-const faults = vi.hoisted(() => ({ pattern: null, decodeModerationDates: false, historyQueries: 0 }));
+const faults = vi.hoisted(() => ({
+    pattern: null,
+    afterQueryPattern: null,
+    afterQuery: null,
+    decodeModerationDates: false,
+    historyQueries: 0,
+}));
 vi.mock('../../../server/db.js', async importOriginal => {
     const actual = await importOriginal();
     const intercept = async (baseQuery, text, params = []) => {
@@ -13,6 +20,10 @@ vi.mock('../../../server/db.js', async importOriginal => {
         }
         if (/FROM moderation_actions/.test(text)) faults.historyQueries += 1;
         const rows = await baseQuery(text, params);
+        if (faults.afterQueryPattern?.test(text)) {
+            faults.afterQueryPattern = null;
+            faults.afterQuery?.();
+        }
         if (faults.decodeModerationDates && /FROM moderation_actions/.test(text)) {
             return rows.map(row => ({ ...row, created_at: new Date(row.created_at) }));
         }
@@ -47,9 +58,48 @@ const decodeTestCursor = raw => JSON.parse(Buffer.from(raw, 'base64url').toStrin
 
 beforeEach(() => {
     faults.pattern = null;
+    faults.afterQueryPattern = null;
+    faults.afterQuery = null;
     faults.decodeModerationDates = false;
     faults.historyQueries = 0;
 });
+
+const rawHttpRequest = async (path, { method = 'POST', cookie, body } = {}) => {
+    const server = app.listen(0);
+    await new Promise(resolve => server.once('listening', resolve));
+    const address = server.address();
+    const payload = body === undefined ? null : JSON.stringify(body);
+    try {
+        return await new Promise((resolve, reject) => {
+            const req = http.request({
+                hostname: '127.0.0.1',
+                port: address.port,
+                method,
+                path,
+                headers: {
+                    ...(cookie ? { Cookie: cookie } : {}),
+                    ...(payload ? {
+                        'Content-Type': 'application/json',
+                        'Content-Length': Buffer.byteLength(payload),
+                    } : {}),
+                },
+            }, res => {
+                let raw = '';
+                res.setEncoding('utf8');
+                res.on('data', chunk => { raw += chunk; });
+                res.on('end', () => resolve({
+                    status: res.statusCode,
+                    body: raw ? JSON.parse(raw) : null,
+                }));
+            });
+            req.on('error', reject);
+            if (payload) req.write(payload);
+            req.end();
+        });
+    } finally {
+        await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+    }
+};
 
 describe('account moderation authorization and reads', () => {
     it.each([
@@ -315,7 +365,7 @@ describe('Better Auth admin HTTP surface', () => {
         });
     });
 
-    it('blocks dangerous plugin writes without changing users, moderation state, roles, or audit', async () => {
+    it('blocks normalized plugin routes without changing users, accounts, sessions, roles, or audit', async () => {
         const { query } = await import('../../../server/db.js');
         const timestamp = '2026-07-16T00:00:00.000Z';
         const fixtures = [
@@ -337,28 +387,36 @@ describe('Better Auth admin HTTP surface', () => {
             ORDER BY id`);
         const auditSnapshot = () => query(`SELECT id, actor_user_id, target_user_id, action, reason, project_id
             FROM moderation_actions ORDER BY id`);
+        const accountSnapshot = () => query(`SELECT id, "accountId", "providerId", "userId"
+            FROM account WHERE "userId" LIKE 'plugin-%' ORDER BY id`);
+        const sessionSnapshot = () => query(`SELECT id, "userId" FROM session
+            WHERE "userId" LIKE 'plugin-%' ORDER BY id`);
         const beforeUsers = await userSnapshot();
         const beforeAudit = await auditSnapshot();
+        const beforeAccounts = await accountSnapshot();
+        const beforeSessions = await sessionSnapshot();
         let evidence;
 
         try {
             const calls = [
                 ['/api/auth/admin/ban-user', { userId: 'plugin-ban-target', banReason: 'Bypass ban' }],
-                ['/api/auth/admin/unban-user', { userId: 'plugin-unban-target' }],
-                ['/api/auth/admin/set-role', { userId: 'plugin-role-target', role: 'admin' }],
-                ['/api/auth/admin/create-user', {
+                ['/api/auth/x/../admin/unban-user', { userId: 'plugin-unban-target' }],
+                ['/api/auth/x/%2e%2e/admin/set-role', { userId: 'plugin-role-target', role: 'admin' }],
+                ['/api/auth/x/%2E%2E/admin/create-user', {
                     email: 'plugin-created@test.dev', password: 'Password-1234!', name: 'Plugin Created', role: 'admin',
                 }],
-                ['/api/auth/admin/remove-user', { userId: 'plugin-remove-target' }],
+                ['/api/auth/x/.%2e/admin/list-users', undefined, 'GET'],
+                ['/api/auth/x/%2e./admin/remove-user', { userId: 'plugin-remove-target' }],
             ];
             const responses = [];
-            for (const [path, body] of calls) {
-                const res = await request(app).post(path).set('Cookie', adminCookie).send(body);
-                responses.push({ status: res.status, body: res.body });
+            for (const [path, body, method] of calls) {
+                responses.push(await rawHttpRequest(path, { method, cookie: adminCookie, body }));
             }
             evidence = {
                 responses,
                 users: await userSnapshot(),
+                accounts: await accountSnapshot(),
+                sessions: await sessionSnapshot(),
                 audit: await auditSnapshot(),
             };
         } finally {
@@ -372,8 +430,10 @@ describe('Better Auth admin HTTP surface', () => {
         }
 
         expect(evidence).toEqual({
-            responses: Array.from({ length: 5 }, () => ({ status: 404, body: { error: 'Not found' } })),
+            responses: Array.from({ length: 6 }, () => expect.objectContaining({ status: 404 })),
             users: beforeUsers,
+            accounts: beforeAccounts,
+            sessions: beforeSessions,
             audit: beforeAudit,
         });
     });
@@ -420,6 +480,46 @@ describe('account suspension', () => {
         const forbidden = await request(app).post(`/api/admin/users/${adminId}/suspend`).set('Cookie', adminCookie).send(base);
         expect(forbidden.status).toBe(403);
         expect((await request(app).post('/api/admin/users/missing/suspend').set('Cookie', adminCookie).send(base)).status).toBe(404);
+    });
+
+    it.each([
+        '2999-01-01T00:00:00',
+        'January 1, 2999 00:00 UTC',
+        '2999-02-29T00:00:00.000Z',
+        '2999-01-01T00:00:00+24:00',
+    ])('rejects noncanonical or calendar-invalid expiry %s', async expiresAt => {
+        const res = await request(app).post(`/api/admin/users/${targetId}/suspend`).set('Cookie', adminCookie).send({
+            reason: 'Invalid expiry shape',
+            expiresAt,
+            projectIdsToUnpublish: [],
+            expectedModerationVersion: 0,
+        });
+        expect(res.status).toBe(400);
+    });
+
+    it('rejects more than 20 selected project IDs before transaction work', async () => {
+        const res = await request(app).post(`/api/admin/users/${targetId}/suspend`).set('Cookie', adminCookie).send({
+            reason: 'Oversized project selection',
+            expiresAt: null,
+            projectIdsToUnpublish: Array.from({ length: 21 }, (_, index) => `project-${index}`),
+            expectedModerationVersion: 0,
+        });
+        expect(res.status).toBe(400);
+    });
+
+    it('accepts a timezone-aware expiry and at most 20 selected projects', async () => {
+        const projectIds = Array.from({ length: 20 }, (_, index) => `boundary-project-${index}`);
+        for (const projectId of projectIds) await createPublishedProject(projectId, targetId, projectId);
+
+        const res = await request(app).post(`/api/admin/users/${targetId}/suspend`).set('Cookie', adminCookie).send({
+            reason: 'Platform-scale boundary',
+            expiresAt: '2999-01-01T00:00:00+05:30',
+            projectIdsToUnpublish: projectIds,
+            expectedModerationVersion: 0,
+        });
+
+        expect(res.status).toBe(200);
+        expect(res.body.actions).toHaveLength(21);
     });
 
     it('atomically applies an indefinite suspension, revokes every session, and unpublishes only selected projects', async () => {
@@ -519,6 +619,46 @@ describe('account suspension', () => {
         ]);
     });
 
+    it('rejects an expiry that elapses after locks with no account, session, project, or audit change', async () => {
+        const { query } = await import('../../../server/db.js');
+        const startedAt = Date.parse('2026-07-16T12:00:00.000Z');
+        const expiresAt = new Date(startedAt + 1000).toISOString();
+        const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(startedAt);
+        await createPublishedProject('elapsed-expiry-project', targetId, 'Elapsed expiry');
+        await query(`INSERT INTO session
+            (id, "expiresAt", token, "createdAt", "updatedAt", "userId")
+            VALUES ($1, $2, $3, $4, $5, $6)`,
+        ['elapsed-expiry-session', new Date(startedAt + 3600000).toISOString(), 'elapsed-expiry-token',
+            new Date(startedAt).toISOString(), new Date(startedAt).toISOString(), targetId]);
+        const beforeUser = await query(`SELECT banned, "banReason", "banExpires", "moderationVersion", "updatedAt"
+            FROM "user" WHERE id = $1`, [targetId]);
+        const beforeSessions = await query('SELECT id FROM session WHERE "userId" = $1 ORDER BY id', [targetId]);
+        const beforeProject = await query('SELECT visibility, published_commit_id FROM projects WHERE id = $1', ['elapsed-expiry-project']);
+        const beforeAudit = await query('SELECT id FROM moderation_actions WHERE target_user_id = $1 ORDER BY id', [targetId]);
+        faults.afterQueryPattern = /SELECT \* FROM projects WHERE id IN/;
+        faults.afterQuery = () => nowSpy.mockReturnValue(startedAt + 1000);
+
+        try {
+            const res = await request(app).post(`/api/admin/users/${targetId}/suspend`).set('Cookie', adminCookie).send({
+                reason: 'Expiry elapsed under lock',
+                expiresAt,
+                projectIdsToUnpublish: ['elapsed-expiry-project'],
+                expectedModerationVersion: 0,
+            });
+
+            expect(res.status).toBe(400);
+            expect(await query(`SELECT banned, "banReason", "banExpires", "moderationVersion", "updatedAt"
+                FROM "user" WHERE id = $1`, [targetId])).toEqual(beforeUser);
+            expect(await query('SELECT id FROM session WHERE "userId" = $1 ORDER BY id', [targetId])).toEqual(beforeSessions);
+            expect(await query('SELECT visibility, published_commit_id FROM projects WHERE id = $1', ['elapsed-expiry-project']))
+                .toEqual(beforeProject);
+            expect(await query('SELECT id FROM moderation_actions WHERE target_user_id = $1 ORDER BY id', [targetId]))
+                .toEqual(beforeAudit);
+        } finally {
+            nowSpy.mockRestore();
+        }
+    });
+
     it('returns 409 for stale version, active target, or invalid project selection without partial changes', async () => {
         const { query } = await import('../../../server/db.js');
         await query('UPDATE "user" SET "moderationVersion" = $1 WHERE id = $2', [1, targetId]);
@@ -585,16 +725,16 @@ describe('account restoration', () => {
     ])('restores an %s suspension, revokes sessions defensively, and never republishes content', async (_label, expiresAt) => {
         const { query } = await import('../../../server/db.js');
         const adminId = (await query('SELECT id FROM "user" WHERE email = $1', ['moderator@test.dev']))[0].id;
-        await query(`UPDATE "user"
-            SET banned = 1, "banReason" = 'Prior reason', "banExpires" = $1,
-                "moderationVersion" = "moderationVersion" + 1
-            WHERE id = $2`, [expiresAt, targetId]);
-        const version = (await query('SELECT "moderationVersion" FROM "user" WHERE id = $1', [targetId]))[0].moderationVersion;
         await query(`INSERT INTO session
             (id, "expiresAt", token, "createdAt", "updatedAt", "userId")
             VALUES ($1, $2, $3, $4, $5, $6)`,
         [`defensive-${_label}`, new Date(Date.now() + 3600000).toISOString(), `token-${_label}`,
             new Date().toISOString(), new Date().toISOString(), targetId]);
+        await query(`UPDATE "user"
+            SET banned = 1, "banReason" = 'Prior reason', "banExpires" = $1,
+                "moderationVersion" = "moderationVersion" + 1
+            WHERE id = $2`, [expiresAt, targetId]);
+        const version = (await query('SELECT "moderationVersion" FROM "user" WHERE id = $1', [targetId]))[0].moderationVersion;
         const projectId = `restore-${_label}-project`;
         await createPublishedProject(projectId, targetId, `Restore ${_label}`);
         await query(`UPDATE projects SET visibility = 'private', published_commit_id = NULL WHERE id = $1`, [projectId]);
@@ -689,16 +829,15 @@ describe('moderation transaction rollback', () => {
 
     it('rolls back restoration account and session writes when audit insertion fails', async () => {
         const { query } = await import('../../../server/db.js');
-        await query(`UPDATE "user"
-            SET banned = 1, "banReason" = 'Rollback restoration', "banExpires" = NULL,
-                "moderationVersion" = "moderationVersion" + 1
-            WHERE id = $1`, [targetId]);
-        await query('DELETE FROM session WHERE "userId" = $1', [targetId]);
         await query(`INSERT INTO session
             (id, "expiresAt", token, "createdAt", "updatedAt", "userId")
             VALUES ($1, $2, $3, $4, $5, $6)`,
         ['restore-rollback-session', new Date(Date.now() + 3600000).toISOString(), 'restore-rollback-token',
             new Date().toISOString(), new Date().toISOString(), targetId]);
+        await query(`UPDATE "user"
+            SET banned = 1, "banReason" = 'Rollback restoration', "banExpires" = NULL,
+                "moderationVersion" = "moderationVersion" + 1
+            WHERE id = $1`, [targetId]);
         const beforeUser = await query(`SELECT banned, "banReason", "banExpires", "moderationVersion", "updatedAt"
             FROM "user" WHERE id = $1`, [targetId]);
         const beforeSessions = await query('SELECT id FROM session WHERE "userId" = $1 ORDER BY id', [targetId]);

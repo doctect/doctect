@@ -60,6 +60,14 @@ beforeAll(async () => {
         username TEXT,
         "displayUsername" TEXT
     )`);
+    await query(`CREATE TABLE session (
+        id TEXT PRIMARY KEY,
+        "expiresAt" TIMESTAMP NOT NULL,
+        token TEXT NOT NULL UNIQUE,
+        "createdAt" TIMESTAMP NOT NULL,
+        "updatedAt" TIMESTAMP NOT NULL,
+        "userId" TEXT NOT NULL REFERENCES "user"(id) ON DELETE CASCADE
+    )`);
     await query(`CREATE TABLE projects (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,

@@ -7,8 +7,10 @@ import { lockProjectRows } from '../projectLocks.js';
 const router = Router();
 const PAGE_SIZE = 25;
 const MAX_CURSOR_LENGTH = 512;
+export const MAX_PROJECTS_TO_UNPUBLISH = 20;
 const BASE64URL_PATTERN = /^[A-Za-z0-9_-]+$/;
 const TIMESTAMP_PATTERN = /^(\d{4})-(\d{2})-(\d{2})([ T])(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,6}))?(Z)?$/;
+const EXPIRY_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?(Z|[+-](\d{2}):(\d{2}))$/;
 
 const asIso = value => value == null ? null : new Date(value).toISOString();
 const isBanned = value => value === true || value === 1 || value === '1';
@@ -97,13 +99,32 @@ const validateVersion = value => Number.isInteger(value) && value >= 0;
 const validateExpiry = raw => {
     if (raw === null) return { ok: true, value: null };
     if (typeof raw !== 'string') return { ok: false };
+    const match = EXPIRY_PATTERN.exec(raw);
+    if (!match) return { ok: false };
+    const [, yearText, monthText, dayText, hourText, minuteText, secondText, , zone, zoneHourText, zoneMinuteText] = match;
+    const year = Number(yearText);
+    const month = Number(monthText);
+    const day = Number(dayText);
+    const hour = Number(hourText);
+    const minute = Number(minuteText);
+    const second = Number(secondText);
+    const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+    const daysInMonth = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    if (year < 1 || month < 1 || month > 12 || day < 1 || day > daysInMonth[month - 1]
+        || hour > 23 || minute > 59 || second > 59) return { ok: false };
+    if (zone !== 'Z') {
+        const zoneHour = Number(zoneHourText);
+        const zoneMinute = Number(zoneMinuteText);
+        if (zoneHour > 14 || zoneMinute > 59 || (zoneHour === 14 && zoneMinute !== 0)) return { ok: false };
+    }
     const timestamp = Date.parse(raw);
     if (!Number.isFinite(timestamp) || timestamp <= Date.now()) return { ok: false };
     return { ok: true, value: new Date(timestamp).toISOString() };
 };
 
 const validateProjectIds = raw => {
-    if (!Array.isArray(raw) || raw.some(id => typeof id !== 'string' || id.length > 200)) return null;
+    if (!Array.isArray(raw) || raw.length > MAX_PROJECTS_TO_UNPUBLISH
+        || raw.some(id => typeof id !== 'string' || id.length > 200)) return null;
     const ids = raw.map(id => id.trim());
     if (ids.some(id => !id)) return null;
     return new Set(ids).size === ids.length ? ids : null;
@@ -259,7 +280,9 @@ router.post('/api/admin/users/:id/suspend', requireAdmin, async (req, res) => {
             });
             if (!validProjects) return { status: 409 };
 
-            const now = new Date().toISOString();
+            const nowMs = Date.now();
+            if (expiry.value !== null && Date.parse(expiry.value) <= nowMs) return { status: 400 };
+            const now = new Date(nowMs).toISOString();
             const updated = await txQuery(
                 `UPDATE "user"
                  SET banned = $1, "banReason" = $2, "banExpires" = $3,
@@ -299,6 +322,7 @@ router.post('/api/admin/users/:id/suspend', requireAdmin, async (req, res) => {
         });
         if (result.status === 403) return res.status(403).json({ error: 'Administrator accounts cannot be suspended' });
         if (result.status === 404) return res.status(404).json({ error: 'User not found' });
+        if (result.status === 400) return res.status(400).json({ error: 'Invalid suspension request' });
         if (result.status === 409) return res.status(409).json({ error: 'Moderation state changed; refresh and try again' });
         return res.json({ account: result.account, actions: result.actions });
     } catch (error) {

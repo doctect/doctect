@@ -166,7 +166,7 @@ export function AdminModerationPage() {
     };
 
     const reviewSuspend = () => {
-        if (!detail) return;
+        if (!detail || detail.account.role === 'admin') return;
         const trimmed = reason.trim();
         if (!trimmed || trimmed.length > 1000) {
             setError('Enter a reason from 1 to 1,000 characters.');
@@ -193,7 +193,7 @@ export function AdminModerationPage() {
     };
 
     const reviewRestore = () => {
-        if (!detail) return;
+        if (!detail || detail.account.role === 'admin') return;
         const trimmed = restoreReason.trim();
         if (!trimmed || trimmed.length > 1000) {
             setError('Enter a restoration reason from 1 to 1,000 characters.');
@@ -398,7 +398,12 @@ export function AdminModerationPage() {
                                 {detail.account.banExpires && <p>Expiry: {new Date(detail.account.banExpires).toLocaleString()}</p>}
                             </div>
 
-                            {detail.account.suspensionStatus !== 'active' ? (
+                            {detail.account.role === 'admin' ? (
+                                <div role="status" className="rounded border border-amber-300 bg-amber-50 p-3 text-amber-900">
+                                    <strong>Protected administrator account</strong>
+                                    <p>Administrator accounts cannot be suspended through this workflow.</p>
+                                </div>
+                            ) : detail.account.suspensionStatus !== 'active' ? (
                                 <>
                                     <label className="block text-sm font-medium">
                                         Suspension duration
@@ -523,7 +528,7 @@ export function AdminModerationPage() {
                         </section>
                     )}
 
-                    {confirming && (
+                    {confirming && detail?.account.role !== 'admin' && (
                         <div
                             role="dialog"
                             aria-modal="true"
