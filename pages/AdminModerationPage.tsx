@@ -1,4 +1,5 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import type { KeyboardEvent } from 'react';
 import { Link } from 'react-router-dom';
 import { AppHeader } from '../components/AppHeader';
 import { ApiError, cloudApi } from '../services/cloudApi';
@@ -11,7 +12,24 @@ import type {
 
 const durations = ['Indefinite', '24 hours', '7 days', '30 days', 'Custom'] as const;
 type Duration = typeof durations[number];
-type Confirmation = 'suspend' | 'restore';
+type Confirmation =
+    | {
+        action: 'suspend';
+        accountId: string;
+        accountEmail: string;
+        expectedModerationVersion: number;
+        reason: string;
+        duration: Duration;
+        expiresAt: string | null;
+        projects: { id: string; name: string }[];
+    }
+    | {
+        action: 'restore';
+        accountId: string;
+        accountEmail: string;
+        expectedModerationVersion: number;
+        reason: string;
+    };
 
 const expiryFor = (duration: Duration, custom: string): string | null | undefined => {
     if (duration === 'Indefinite') return null;
@@ -55,12 +73,34 @@ export function AdminModerationPage() {
     const [loadingSearch, setLoadingSearch] = useState(false);
     const [loadingDetail, setLoadingDetail] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [refreshFailure, setRefreshFailure] = useState<{ accountId: string; accountEmail: string } | null>(null);
 
     const searchGeneration = useRef(0);
     const activeSearchQuery = useRef('');
     const detailGeneration = useRef(0);
     const selectedAccountId = useRef<string | null>(null);
     const submitLock = useRef(false);
+    const searchInputRef = useRef<HTMLInputElement>(null);
+    const cancelButtonRef = useRef<HTMLButtonElement>(null);
+    const previousFocus = useRef<HTMLElement | null>(null);
+    const confirmationOpen = useRef(false);
+
+    useEffect(() => {
+        if (confirming && !confirmationOpen.current) {
+            previousFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+            confirmationOpen.current = true;
+            cancelButtonRef.current?.focus();
+        } else if (!confirming && confirmationOpen.current) {
+            confirmationOpen.current = false;
+            const target = previousFocus.current?.isConnected ? previousFocus.current : searchInputRef.current;
+            previousFocus.current = null;
+            target?.focus();
+        }
+    }, [confirming]);
+
+    useEffect(() => () => {
+        if (confirmationOpen.current && previousFocus.current?.isConnected) previousFocus.current.focus();
+    }, []);
 
     const resetAccountDrafts = () => {
         setReason('');
@@ -114,6 +154,7 @@ export function AdminModerationPage() {
                 if (selectedAccountId.current !== id) resetAccountDrafts();
                 selectedAccountId.current = id;
                 setDetail(result);
+                setRefreshFailure(null);
             }
             return true;
         } catch (requestError) {
@@ -125,62 +166,96 @@ export function AdminModerationPage() {
     };
 
     const reviewSuspend = () => {
+        if (!detail) return;
         const trimmed = reason.trim();
         if (!trimmed || trimmed.length > 1000) {
             setError('Enter a reason from 1 to 1,000 characters.');
             return;
         }
-        if (expiryFor(duration, customExpiry) === undefined) {
+        const expiresAt = expiryFor(duration, customExpiry);
+        if (expiresAt === undefined) {
             setError('Custom expiry must be in the future.');
             return;
         }
         setError(null);
-        setConfirming('suspend');
+        setConfirming({
+            action: 'suspend',
+            accountId: detail.account.id,
+            accountEmail: detail.account.email,
+            expectedModerationVersion: detail.account.moderationVersion,
+            reason: trimmed,
+            duration,
+            expiresAt,
+            projects: detail.projects
+                .filter(project => selected.includes(project.id))
+                .map(project => ({ id: project.id, name: project.name })),
+        });
     };
 
     const reviewRestore = () => {
+        if (!detail) return;
         const trimmed = restoreReason.trim();
         if (!trimmed || trimmed.length > 1000) {
             setError('Enter a restoration reason from 1 to 1,000 characters.');
             return;
         }
         setError(null);
-        setConfirming('restore');
+        setConfirming({
+            action: 'restore',
+            accountId: detail.account.id,
+            accountEmail: detail.account.email,
+            expectedModerationVersion: detail.account.moderationVersion,
+            reason: trimmed,
+        });
     };
 
     const submit = async () => {
-        if (!detail || !confirming || submitLock.current) return;
-        const action = confirming;
-        const accountId = detail.account.id;
+        if (!confirming || submitLock.current) return;
+        const confirmation = confirming;
+        if (
+            confirmation.action === 'suspend'
+            && confirmation.expiresAt !== null
+            && Date.parse(confirmation.expiresAt) <= Date.now()
+        ) {
+            setConfirming(null);
+            setError('Suspension expiry is no longer in the future. Choose a new duration and review again.');
+            return;
+        }
         submitLock.current = true;
         setBusy(true);
         setError(null);
         try {
-            if (action === 'suspend') {
-                await cloudApi.suspendAccount(accountId, {
-                    reason: reason.trim(),
-                    expiresAt: expiryFor(duration, customExpiry) as string | null,
-                    projectIdsToUnpublish: selected,
-                    expectedModerationVersion: detail.account.moderationVersion,
+            if (confirmation.action === 'suspend') {
+                await cloudApi.suspendAccount(confirmation.accountId, {
+                    reason: confirmation.reason,
+                    expiresAt: confirmation.expiresAt,
+                    projectIdsToUnpublish: confirmation.projects.map(project => project.id),
+                    expectedModerationVersion: confirmation.expectedModerationVersion,
                 });
             } else {
-                await cloudApi.restoreAccount(accountId, {
-                    reason: restoreReason.trim(),
-                    expectedModerationVersion: detail.account.moderationVersion,
+                await cloudApi.restoreAccount(confirmation.accountId, {
+                    reason: confirmation.reason,
+                    expectedModerationVersion: confirmation.expectedModerationVersion,
                 });
             }
 
             setConfirming(null);
-            const refreshed = await loadDetail(accountId);
-            if (refreshed) {
-                if (action === 'suspend') {
-                    setReason('');
-                    setDuration('Indefinite');
-                    setCustomExpiry('');
-                    setSelected([]);
-                } else {
-                    setRestoreReason('');
-                }
+            if (confirmation.action === 'suspend') {
+                setReason('');
+                setDuration('Indefinite');
+                setCustomExpiry('');
+                setSelected([]);
+            } else {
+                setRestoreReason('');
+            }
+            setDetail(null);
+            const refreshed = await loadDetail(confirmation.accountId);
+            if (!refreshed) {
+                setRefreshFailure({
+                    accountId: confirmation.accountId,
+                    accountEmail: confirmation.accountEmail,
+                });
+                setError('Account changed successfully, but refresh failed. Refresh account details to continue.');
             }
         } catch (requestError) {
             setConfirming(null);
@@ -191,13 +266,41 @@ export function AdminModerationPage() {
         }
     };
 
+    const refreshAccountDetails = async () => {
+        if (!refreshFailure || loadingDetail) return;
+        const target = refreshFailure;
+        const refreshed = await loadDetail(target.accountId);
+        if (!refreshed) {
+            setRefreshFailure(target);
+            setError('Account changed successfully, but refresh failed. Refresh account details to continue.');
+        }
+    };
+
+    const handleDialogKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+        if (event.key === 'Escape') {
+            event.preventDefault();
+            if (!busy) setConfirming(null);
+            return;
+        }
+        if (event.key !== 'Tab') return;
+        const focusable = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('button:not([disabled])'));
+        if (focusable.length === 0) {
+            event.preventDefault();
+            return;
+        }
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (event.shiftKey && (document.activeElement === first || !event.currentTarget.contains(document.activeElement))) {
+            event.preventDefault();
+            last.focus();
+        } else if (!event.shiftKey && (document.activeElement === last || !event.currentTarget.contains(document.activeElement))) {
+            event.preventDefault();
+            first.focus();
+        }
+    };
+
     const toggleProject = (id: string) => setSelected(current =>
         current.includes(id) ? current.filter(item => item !== id) : [...current, id]);
-
-    const selectedProjectNames = detail?.projects
-        .filter(project => selected.includes(project.id))
-        .map(project => project.name)
-        .join(', ');
 
     return (
         <div className="min-h-screen overflow-y-auto bg-slate-50 text-slate-900">
@@ -216,6 +319,7 @@ export function AdminModerationPage() {
                         <label className="flex-1 text-sm font-medium">
                             Search accounts
                             <input
+                                ref={searchInputRef}
                                 aria-label="Search accounts"
                                 value={query}
                                 onChange={event => setQuery(event.target.value)}
@@ -232,7 +336,24 @@ export function AdminModerationPage() {
                         </button>
                     </form>
 
-                    {error && <p role="alert" className="rounded border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</p>}
+                    {error && (
+                        <div role="alert" className="rounded border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                            <p>{error}</p>
+                            {refreshFailure && (
+                                <div className="mt-2 flex flex-wrap items-center gap-3">
+                                    <span>Target account: {refreshFailure.accountEmail} ({refreshFailure.accountId})</span>
+                                    <button
+                                        type="button"
+                                        onClick={() => void refreshAccountDetails()}
+                                        disabled={loadingDetail}
+                                        className="font-semibold text-blue-700 disabled:opacity-50"
+                                    >
+                                        Refresh account details
+                                    </button>
+                                </div>
+                            )}
+                        </div>
+                    )}
                     {loadingSearch && <p role="status">Loading accounts…</p>}
                     {loadingDetail && <p role="status">Loading account details…</p>}
 
@@ -320,14 +441,14 @@ export function AdminModerationPage() {
                                                 <label>
                                                     <input
                                                         type="checkbox"
-                                                        aria-label={`Unpublish ${project.name}`}
+                                                        aria-label={`Unpublish ${project.name} (${project.id})`}
                                                         checked={selected.includes(project.id)}
                                                         onChange={() => toggleProject(project.id)}
                                                     />{' '}
-                                                    <span>{project.name}</span>
+                                                    <span>{project.name} <span className="text-slate-500">({project.id})</span></span>
                                                 </label>
                                                 <Link
-                                                    aria-label={`Review ${project.name}`}
+                                                    aria-label={`Review ${project.name} (${project.id})`}
                                                     to={`/gallery/${project.id}`}
                                                     target="_blank"
                                                     rel="noreferrer"
@@ -402,31 +523,39 @@ export function AdminModerationPage() {
                         </section>
                     )}
 
-                    {confirming && detail && (
+                    {confirming && (
                         <div
                             role="dialog"
                             aria-modal="true"
                             aria-labelledby="moderation-confirm-title"
+                            onKeyDown={handleDialogKeyDown}
                             className="fixed inset-0 z-[60] grid place-items-center bg-slate-950/50 p-4"
                         >
                             <div className="w-full max-w-lg rounded-xl bg-white p-6 shadow-xl">
                                 <h2 id="moderation-confirm-title" className="text-xl font-bold">
-                                    Confirm {confirming === 'suspend' ? 'suspension' : 'restoration'}
+                                    Confirm {confirming.action === 'suspend' ? 'suspension' : 'restoration'}
                                 </h2>
                                 <div className="mt-3 space-y-1">
-                                    <p>Account: {detail.account.email}</p>
-                                    {confirming === 'suspend' ? (
+                                    <p>Account: {confirming.accountEmail}</p>
+                                    <p>Account ID: {confirming.accountId}</p>
+                                    <p>Moderation version: {confirming.expectedModerationVersion}</p>
+                                    {confirming.action === 'suspend' ? (
                                         <>
-                                            <p>Duration: {duration === 'Custom' ? `Until ${customExpiry}` : duration}</p>
-                                            <p>Reason: {reason.trim()}</p>
-                                            <p>Projects: {selectedProjectNames || 'None'}</p>
+                                            <p>Duration: {confirming.duration}</p>
+                                            <p>Expiry: {confirming.expiresAt || 'Indefinite'}</p>
+                                            <p>Reason: {confirming.reason}</p>
+                                            <p>Projects:</p>
+                                            {confirming.projects.length ? (
+                                                <ul>{confirming.projects.map(project => <li key={project.id}>{project.name} ({project.id})</li>)}</ul>
+                                            ) : <p>None</p>}
                                         </>
                                     ) : (
-                                        <p>Reason: {restoreReason.trim()}</p>
+                                        <p>Reason: {confirming.reason}</p>
                                     )}
                                 </div>
                                 <div className="mt-4 flex gap-2">
                                     <button
+                                        ref={cancelButtonRef}
                                         type="button"
                                         onClick={() => setConfirming(null)}
                                         disabled={busy}
@@ -442,7 +571,7 @@ export function AdminModerationPage() {
                                     >
                                         {busy
                                             ? 'Submitting…'
-                                            : confirming === 'suspend'
+                                            : confirming.action === 'suspend'
                                                 ? 'Confirm suspension'
                                                 : 'Confirm restoration'}
                                     </button>
