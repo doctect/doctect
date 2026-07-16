@@ -63,6 +63,8 @@ An expired temporary suspension permits a fresh sign-in under Better Auth's expi
 
 Append migration `012_session_suspension_guard` after moderation schema migration. Both dialects add a `BEFORE INSERT` session trigger that rejects creation for an actively suspended referenced user. PostgreSQL trigger locks referenced user row with `FOR UPDATE` before evaluating fields, serializing session insertion with suspension's target-user lock: insert-first commits before suspension deletes sessions, while suspension-first exposes active state and rejects insert. SQLite uses equivalent active-state predicate under serialized writer behavior. Unbanned and expired users remain eligible for session creation.
 
+Do not modify migration `012`. Append migration `013_session_suspension_wall_clock` to replace PostgreSQL trigger function with identical lock/guard behavior using `(clock_timestamp() AT TIME ZONE 'UTC')` for expiry comparison. Wall-clock time advances while row lock is awaited; explicit UTC conversion matches timestamp-without-time-zone `banExpires`. SQLite migration is safe `SELECT 1` because its trigger already uses `julianday('now')` at execution time.
+
 ### Moderation audit table
 
 Add `moderation_actions` with:
@@ -190,7 +192,7 @@ The UI preserves reason, duration, and project selections after recoverable fail
 - Server authorization and transaction validation are authoritative; client checks cannot grant access.
 - Existing origin checking protects mutation routes. Existing write limiting also applies.
 - Express direct `/api/auth/admin` denial remains defense-in-depth. Better Auth `hooks.before` rejects normalized `/admin` and `/admin/*` paths, covering raw and percent-encoded dot-segment normalization before plugin execution while retaining `admin()` for sign-in ban semantics.
-- After Better Auth resolves a session, `requireAuth` and `optionalAuth` read fresh suspension fields. Active state deletes all target sessions and is treated as unauthenticated (`401` or null respectively).
+- After Better Auth resolves a session, `requireAuth` and `optionalAuth` use one `withTransaction` operation to lock user, recheck fresh suspension fields, and delete sessions only if still active. PostgreSQL uses `FOR UPDATE`; SQLite uses transaction serialization. Guard-first cleanup commits before restoration/new sign-in, while restoration-first is observed as inactive and cannot delete post-restoration session. Active state remains unauthenticated (`401` or null respectively).
 - Suspension never exposes or acts on stored session IP addresses.
 - Administrator accounts cannot be suspended through this workflow, reducing accidental or hostile lockout. Admin role changes remain an operator-only task.
 - Deployment documentation must explain suspension, expiry, restoration, audit lookup, and selected-content behavior.
@@ -215,6 +217,7 @@ The UI preserves reason, duration, and project selections after recoverable fail
 - Every target session is revoked on suspension.
 - Session insertion is allowed for unbanned/expired users and rejected for active users by SQLite behavior tests; PostgreSQL trigger SQL and row-lock serialization are asserted exactly because no live PostgreSQL harness exists.
 - Preexisting sessions followed by direct active state are denied and cleaned by required and optional auth guards.
+- Deterministic barrier tests cover both guard-first and restoration-first lock orderings and prove no post-restoration session deletion.
 - Active suspension causes Better Auth's existing `BANNED_USER` sign-in response.
 - Expired temporary suspension permits a fresh sign-in.
 - Selected projects become private and lose published commit linkage; unselected projects remain published.
@@ -261,4 +264,4 @@ Run focused tests, the full unit suite, and the production build before completi
 9. No application-level IP denylist is introduced.
 10. SQLite and PostgreSQL behavior is covered, existing moderation routes continue to work, and the full build/test suite passes.
 
-PostgreSQL coverage in this repository is SQL-contract coverage rather than live server execution. Automated tests execute SQLite trigger behavior and assert exact PostgreSQL function/trigger statements, including target-user `FOR UPDATE`; they do not claim a live PostgreSQL migration run.
+PostgreSQL coverage in this repository is SQL-contract coverage rather than live server execution. Automated tests execute SQLite trigger behavior and assert exact PostgreSQL function/trigger statements, including target-user `FOR UPDATE` and migration `013` UTC wall-clock expression; they do not claim a live PostgreSQL migration run.

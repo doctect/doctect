@@ -103,4 +103,45 @@ describe('PostgreSQL migration contract', () => {
             params: ['012_session_suspension_guard'],
         });
     });
+
+    it('keeps 012 unchanged and appends a SQLite-safe 013 wall-clock migration', () => {
+        const guardIndex = migrations.findIndex(migration => migration.id === '012_session_suspension_guard');
+        const wallClockIndex = migrations.findIndex(migration => migration.id === '013_session_suspension_wall_clock');
+        expect(wallClockIndex).toBe(guardIndex + 1);
+        expect(migrations[guardIndex].pg[0]).toContain('referenced_ban_expires > CURRENT_TIMESTAMP');
+        expect(migrations[guardIndex].pg.join('\n')).not.toContain('clock_timestamp()');
+        expect(migrations[wallClockIndex].sqlite).toEqual(['SELECT 1']);
+    });
+
+    it('replaces the PostgreSQL trigger function with UTC wall-clock expiry evaluation', async () => {
+        migrationState.pendingId = '013_session_suspension_wall_clock';
+        const { runMigrations } = await import('../../../server/migrations.js');
+        await runMigrations();
+
+        const texts = dbCalls.map(call => call.text);
+        expect(texts).toContain(`CREATE OR REPLACE FUNCTION guard_session_insert_for_suspension()
+             RETURNS trigger AS $$
+             DECLARE
+                 referenced_banned BOOLEAN;
+                 referenced_ban_expires TIMESTAMP;
+             BEGIN
+                 SELECT banned, "banExpires"
+                 INTO referenced_banned, referenced_ban_expires
+                 FROM "user"
+                 WHERE id = NEW."userId"
+                 FOR UPDATE;
+                 IF referenced_banned AND (
+                     referenced_ban_expires IS NULL
+                     OR referenced_ban_expires > (clock_timestamp() AT TIME ZONE 'UTC')
+                 ) THEN
+                     RAISE EXCEPTION 'session creation blocked for suspended user';
+                 END IF;
+                 RETURN NEW;
+             END;
+             $$ LANGUAGE plpgsql`);
+        expect(dbCalls).toContainEqual({
+            text: 'INSERT INTO app_migrations (id) VALUES ($1)',
+            params: ['013_session_suspension_wall_clock'],
+        });
+    });
 });

@@ -1,6 +1,6 @@
 import rateLimit from 'express-rate-limit';
 import { getAuthForRequest } from '../authRequest.js';
-import { query } from '../db.js';
+import { dbType, withTransaction } from '../db.js';
 
 const trustedOrigins = () => (process.env.TRUSTED_ORIGINS || 'http://localhost:3000,http://localhost:3001')
     .split(',').map(o => o.trim()).filter(Boolean);
@@ -14,16 +14,19 @@ const resolveFreshUser = async req => {
     const auth = getAuthForRequest(req);
     const session = await auth.api.getSession({ headers: req.headers });
     if (!session?.user) return null;
-    const users = await query(
-        `SELECT banned, "banExpires" FROM "user" WHERE id = $1`,
-        [session.user.id],
-    );
-    if (!users[0]) return null;
-    if (isActiveSuspension(users[0])) {
-        await query('DELETE FROM session WHERE "userId" = $1', [session.user.id]);
-        return null;
-    }
-    return session.user;
+    return withTransaction(async txQuery => {
+        const lock = dbType === 'postgres' ? ' FOR UPDATE' : '';
+        const users = await txQuery(
+            `SELECT banned, "banExpires" FROM "user" WHERE id = $1${lock}`,
+            [session.user.id],
+        );
+        if (!users[0]) return null;
+        if (isActiveSuspension(users[0])) {
+            await txQuery('DELETE FROM session WHERE "userId" = $1', [session.user.id]);
+            return null;
+        }
+        return session.user;
+    });
 };
 
 // CSRF defense-in-depth: sameSite cookies + explicit Origin allow-list on writes.

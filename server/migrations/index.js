@@ -410,5 +410,31 @@ export const migrations = [
                     SELECT RAISE(ABORT, 'session creation blocked for suspended user');
                 END`,
         ],
+    },
+    {
+        id: '013_session_suspension_wall_clock',
+        pg: [
+            `CREATE OR REPLACE FUNCTION guard_session_insert_for_suspension()
+             RETURNS trigger AS $$
+             DECLARE
+                 referenced_banned BOOLEAN;
+                 referenced_ban_expires TIMESTAMP;
+             BEGIN
+                 SELECT banned, "banExpires"
+                 INTO referenced_banned, referenced_ban_expires
+                 FROM "user"
+                 WHERE id = NEW."userId"
+                 FOR UPDATE;
+                 IF referenced_banned AND (
+                     referenced_ban_expires IS NULL
+                     OR referenced_ban_expires > (clock_timestamp() AT TIME ZONE 'UTC')
+                 ) THEN
+                     RAISE EXCEPTION 'session creation blocked for suspended user';
+                 END IF;
+                 RETURN NEW;
+             END;
+             $$ LANGUAGE plpgsql`,
+        ],
+        sqlite: ['SELECT 1'],
     }
 ];

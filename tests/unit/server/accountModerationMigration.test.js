@@ -44,7 +44,8 @@ describe('011 account moderation migration', () => {
 
     it('migrates a pre-011 ordinary user without changing access state', () => {
         const legacyDb = new Database(':memory:');
-        for (const migration of migrations.filter(item => !['011_account_moderation', '012_session_suspension_guard'].includes(item.id))) {
+        const moderationIndex = migrations.findIndex(item => item.id === '011_account_moderation');
+        for (const migration of migrations.slice(0, moderationIndex)) {
             const sql = migration.sqlite ?? migration.pg;
             for (const statement of sql.split(';').map(value => value.trim()).filter(Boolean)) {
                 legacyDb.exec(statement);
