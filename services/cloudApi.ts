@@ -35,6 +35,62 @@ export interface CommitMeta { id: string; parentCommitId: string | null; message
 export interface MyProject extends CloudProject { storedBytes: number; commitCount: number; }
 export interface StorageUsage { usedBytes: number; quotaBytes: number; }
 
+export type SuspensionStatus = 'none' | 'active' | 'expired';
+
+export interface ModerationUserSearchItem {
+    id: string;
+    email: string;
+    username: string | null;
+    role: string | null;
+    createdAt: string;
+    suspensionStatus: SuspensionStatus;
+    banExpires: string | null;
+    moderationVersion: number;
+}
+
+export interface ModerationAccount extends ModerationUserSearchItem {
+    banReason: string | null;
+}
+
+export interface ModerationProject {
+    id: string;
+    name: string;
+    publishedAt: string | null;
+}
+
+export type ModerationActionType = 'account_suspended' | 'account_restored' | 'project_unpublished';
+
+export interface ModerationAction {
+    id: string;
+    actorUserId: string;
+    actorEmail: string;
+    targetUserId: string;
+    targetEmail: string;
+    action: ModerationActionType;
+    reason: string;
+    expiresAt: string | null;
+    projectId: string | null;
+    createdAt: string;
+}
+
+export interface ModerationUserDetail {
+    account: ModerationAccount;
+    projects: ModerationProject[];
+    history: { items: ModerationAction[]; nextCursor: string | null };
+}
+
+export interface SuspendAccountInput {
+    reason: string;
+    expiresAt: string | null;
+    projectIdsToUnpublish: string[];
+    expectedModerationVersion: number;
+}
+
+export interface RestoreAccountInput {
+    reason: string;
+    expectedModerationVersion: number;
+}
+
 export interface GalleryItem {
     id: string; name: string; description: string; tags: string[]; author: string;
     forkCount: number; downloadCount: number; updatedAt: string; thumbnailId: string | null;
@@ -149,4 +205,26 @@ export const cloudApi = {
     getMr: (id: string) => api<MrDetail>(`/api/merge-requests/${id}`),
     mergeMr: (id: string) => api<{ mergeRequest: MergeRequestDto; commit: { id: string } }>(`/api/merge-requests/${id}/merge`, { method: 'POST' }),
     closeMr: (id: string) => api<{ mergeRequest: MergeRequestDto }>(`/api/merge-requests/${id}/close`, { method: 'POST' }),
+
+    searchModerationUsers: (q: string, cursor?: string | null) => {
+        const params = new URLSearchParams({ q });
+        if (cursor) params.set('cursor', cursor);
+        return api<{ users: ModerationUserSearchItem[]; nextCursor: string | null }>(`/api/admin/users?${params}`);
+    },
+    getModerationUser: (id: string, historyCursor?: string | null) => {
+        const params = new URLSearchParams();
+        if (historyCursor) params.set('historyCursor', historyCursor);
+        const suffix = params.size ? `?${params}` : '';
+        return api<ModerationUserDetail>(`/api/admin/users/${encodeURIComponent(id)}${suffix}`);
+    },
+    suspendAccount: (id: string, input: SuspendAccountInput) =>
+        api<{ account: ModerationAccount; actions: ModerationAction[] }>(
+            `/api/admin/users/${encodeURIComponent(id)}/suspend`,
+            { method: 'POST', body: JSON.stringify(input) },
+        ),
+    restoreAccount: (id: string, input: RestoreAccountInput) =>
+        api<{ account: ModerationAccount; actions: ModerationAction[] }>(
+            `/api/admin/users/${encodeURIComponent(id)}/restore`,
+            { method: 'POST', body: JSON.stringify(input) },
+        ),
 };

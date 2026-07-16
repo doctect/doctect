@@ -135,3 +135,40 @@ describe('gallery v2 api methods', () => {
         expect(JSON.parse(opts.body)).toEqual({ reason: 'spam' });
     });
 });
+
+describe('account moderation api methods', () => {
+    const okJson = (body: unknown) =>
+        Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(body) } as Response);
+    afterEach(() => vi.unstubAllGlobals());
+
+    it('serializes bounded search and opaque cursor', async () => {
+        const fetchMock = vi.fn().mockReturnValue(okJson({ users: [], nextCursor: null }));
+        vi.stubGlobal('fetch', fetchMock);
+        await cloudApi.searchModerationUsers('user+tag@test.dev', 'opaque/cursor');
+        expect(fetchMock.mock.calls[0][0]).toContain('/api/admin/users?q=user%2Btag%40test.dev&cursor=opaque%2Fcursor');
+    });
+
+    it('loads detail with an optional history cursor', async () => {
+        const fetchMock = vi.fn().mockReturnValue(okJson({ account: {}, projects: [], history: { items: [], nextCursor: null } }));
+        vi.stubGlobal('fetch', fetchMock);
+        await cloudApi.getModerationUser('user/1', 'history+cursor');
+        expect(fetchMock.mock.calls[0][0]).toContain('/api/admin/users/user%2F1?historyCursor=history%2Bcursor');
+    });
+
+    it('posts exact suspend and restore bodies', async () => {
+        const fetchMock = vi.fn().mockReturnValue(okJson({ account: {}, actions: [] }));
+        vi.stubGlobal('fetch', fetchMock);
+        const suspend = {
+            reason: 'Confirmed abuse', expiresAt: null,
+            projectIdsToUnpublish: ['project-1'], expectedModerationVersion: 3,
+        };
+        await cloudApi.suspendAccount('user-1', suspend);
+        expect(fetchMock.mock.calls[0][1].method).toBe('POST');
+        expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual(suspend);
+        await cloudApi.restoreAccount('user-1', { reason: 'Appeal accepted', expectedModerationVersion: 4 });
+        expect(fetchMock.mock.calls[1][1].method).toBe('POST');
+        expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({
+            reason: 'Appeal accepted', expectedModerationVersion: 4,
+        });
+    });
+});
