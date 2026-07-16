@@ -211,7 +211,7 @@ describe('GeneratorVisualPreviewModal', () => {
   it('validates, trims, and submits the generated project name', () => {
     const { props } = renderModal();
     const mainDialog = screen.getByRole('dialog', { name: 'Generated Project Preview' });
-    fireEvent.click(screen.getByRole('button', { name: 'Create New Project' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create As New Project' }));
 
     const namingDialog = screen.getByRole('dialog', { name: 'Create Generated Project' });
     expect(mainDialog).toHaveAttribute('inert');
@@ -219,6 +219,8 @@ describe('GeneratorVisualPreviewModal', () => {
     expect(namingDialog).not.toHaveAttribute('inert');
     expect(namingDialog).not.toHaveAttribute('aria-hidden');
     expect(screen.queryByRole('dialog', { name: 'Generated Project Preview' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Create New Project' })).not.toBeInTheDocument();
+    expect(within(namingDialog).getByRole('button', { name: 'Create Project' })).toBeVisible();
     const input = within(namingDialog).getByRole('textbox', { name: 'Project name' });
     expect(input).toHaveValue('Current – Generated');
     expect(input).toHaveFocus();
@@ -238,7 +240,7 @@ describe('GeneratorVisualPreviewModal', () => {
 
   it('keeps naming open and reports callback failure', () => {
     const { props } = renderModal({ onCreateProject: vi.fn(() => false) });
-    fireEvent.click(screen.getByRole('button', { name: 'Create New Project' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create As New Project' }));
     const namingDialog = screen.getByRole('dialog', { name: 'Create Generated Project' });
 
     fireEvent.click(within(namingDialog).getByRole('button', { name: 'Create Project' }));
@@ -252,7 +254,7 @@ describe('GeneratorVisualPreviewModal', () => {
     renderModal({}, makePayload(3, true));
 
     expect(screen.getByRole('status')).toHaveTextContent('Could not render Template broken');
-    expect(screen.getByRole('button', { name: 'Create New Project' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Create As New Project' })).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Replace Current Project' })).toBeEnabled();
     expect(screen.getByTestId('live-preview-template-0')).toBeVisible();
   });
@@ -272,7 +274,7 @@ describe('GeneratorVisualPreviewModal', () => {
     fireEvent.keyDown(focusable.at(-1)!, { key: 'Tab' });
     expect(focusable[0]).toHaveFocus();
 
-    const createButton = screen.getByRole('button', { name: 'Create New Project' });
+    const createButton = screen.getByRole('button', { name: 'Create As New Project' });
     fireEvent.click(createButton);
     const namingDialog = screen.getByRole('dialog', { name: 'Create Generated Project' });
     const namingButtons = within(namingDialog).getAllByRole('button');

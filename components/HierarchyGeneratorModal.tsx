@@ -596,7 +596,7 @@ Now please generate scripts for: [DESCRIBE YOUR DOCUMENT STRUCTURE HERE]`;
 };
 
 
-const GENERATOR_WORKFLOW_HELP = 'Preview opens live canvas template previews. Back keeps your scripts, Create New Project preserves the original, and Replace Current Project creates one undo checkpoint.';
+const GENERATOR_WORKFLOW_HELP = 'Preview opens live canvas template previews. Back keeps your scripts, Create As New Project preserves the original, and Replace Current Project creates one undo checkpoint.';
 
 // Generator Help Panel component
 const GeneratorHelpPanel: React.FC<{ isOpen: boolean; onToggle: () => void }> = ({ isOpen, onToggle }) => {

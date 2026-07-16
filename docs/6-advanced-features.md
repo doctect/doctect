@@ -33,7 +33,7 @@ The Scripting feature (`HierarchyGeneratorModal.tsx`) allows users to define mas
 *   **Inert opening**: Opening a local, downloaded, historical, gallery, or forked project never runs its saved scripts.
 *   **Sandboxed visual Preview**: **Preview** is the only action that runs draft scripts. It uses an isolated, disposable browser sandbox with a fixed 10-second timeout, validates output, then opens live canvas template previews.
 *   **Template inspection**: Variant tabs show one representative page for every template. Usage counts identify used templates, **Unused** badges identify preview-only synthetic pages, and large sets load in batches. Select any thumbnail for a lightbox view.
-*   **Preview decisions**: **Back to Scripts** preserves exact drafts and the validated preview. **View Preview** reopens it without rerunning scripts. **Create New Project** asks for a name, retains source, and leaves the original project unchanged. **Replace Current Project** confirms before replacing generated fields and creates one undo checkpoint.
+*   **Preview decisions**: **Back to Scripts** preserves exact drafts and the validated preview. **View Preview** reopens it without rerunning scripts. **Create As New Project** asks for a name, retains source, and leaves the original project unchanged. **Replace Current Project** confirms before replacing generated fields and creates one undo checkpoint.
 *   **No reverse synchronization**: Manual canvas, template, hierarchy, and JSON edits do not rewrite saved JavaScript. Saved source remains the source from the last successful generator apply.
 *   **Variables**: It injects specific context variables (`templates`, `createId`, `RM_PP_WIDTH`).
 *   The script must return exactly two structures:

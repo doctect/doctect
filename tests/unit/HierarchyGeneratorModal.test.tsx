@@ -84,7 +84,7 @@ describe('HierarchyGeneratorModal', () => {
 
     it('explains visual preview decisions and retained source safety without detach guidance', () => {
         renderModal();
-        const workflow = 'Preview opens live canvas template previews. Back keeps your scripts, Create New Project preserves the original, and Replace Current Project creates one undo checkpoint.';
+        const workflow = 'Preview opens live canvas template previews. Back keeps your scripts, Create As New Project preserves the original, and Replace Current Project creates one undo checkpoint.';
         expect(screen.getByText(workflow, { exact: true })).toBeVisible();
         expect(screen.getByRole('dialog')).toHaveTextContent('Saved generator source is retained with the project and becomes public when published.');
         expect(screen.getByRole('dialog')).toHaveTextContent('Opening source never runs it; Preview uses the sandbox.');

@@ -41,10 +41,27 @@ const ONE_PAGE_HIERARCHY_SOURCE = `return {
 
 const VISUAL_PREVIEW_TEMPLATE_SOURCE = `const template = (id, name, color) => ({
     id, name, width: A4_WIDTH, height: A4_HEIGHT,
-    elements: [{
-        id: id + '-title', type: 'text', x: 40, y: 40, w: 300, h: 40,
-        text: name + ': {{title}}', fontSize: 20, color
-    }]
+    elements: [
+        {
+            id: id + '-title', type: 'text', x: 40, y: 40, w: 300, h: 40,
+            text: name + ': {{title}}', fontSize: 20, color
+        },
+        {
+            id: id + '-lines', type: 'rect', x: 40, y: 110, w: 220, h: 90,
+            fill: color, fillType: 'pattern', patternType: 'lines-h',
+            patternSpacing: 24, patternWeight: 1, stroke: '', strokeWidth: 0, opacity: 1
+        },
+        {
+            id: id + '-dots', type: 'rect', x: 40, y: 230, w: 220, h: 90,
+            fill: color, fillType: 'pattern', patternType: 'dots',
+            patternSpacing: 24, patternWeight: 1, stroke: '', strokeWidth: 0, opacity: 1
+        },
+        {
+            id: id + '-diagonal', type: 'rect', x: 40, y: 350, w: 220, h: 90,
+            fill: color, fillType: 'pattern', patternType: 'lines-d',
+            patternSpacing: 24, patternWeight: 1, stroke: '', strokeWidth: 0, opacity: 1
+        }
+    ]
 });
 return {
     variants: {
@@ -219,6 +236,23 @@ test.describe('Editor Advanced Features', () => {
         await expect(preview.getByRole('button', { name: 'Paper Cover, Paper, 1 use' })).toBeVisible();
         await expect(preview.getByRole('button', { name: 'Paper Content, Paper, 2 uses' })).toBeVisible();
         await expect(preview.getByRole('button', { name: 'Paper Spare, Paper, unused' })).toContainText('Unused');
+        const paperCover = preview.getByRole('button', { name: 'Paper Cover, Paper, 1 use' });
+        const patternStyle = async id => paperCover.locator(`[data-element-id="${id}"] > div`).evaluate(element => ({
+            backgroundImage: element.style.backgroundImage,
+            backgroundSize: element.style.backgroundSize,
+        }));
+        const pixelStops = value => [...value.matchAll(/(-?\d+(?:\.\d+)?)px/g)].map(match => Number(match[1]));
+        const previewScale = 240 / 842;
+        const lines = await patternStyle('cover-lines');
+        const dots = await patternStyle('cover-dots');
+        const diagonal = await patternStyle('cover-diagonal');
+        expect(lines.backgroundImage).toContain('repeating-linear-gradient(');
+        expect(pixelStops(lines.backgroundImage)[0] * previewScale).toBeGreaterThanOrEqual(1 - 0.001);
+        expect(dots.backgroundImage).toContain('radial-gradient');
+        expect(pixelStops(dots.backgroundImage).at(-1) * previewScale).toBeGreaterThanOrEqual(0.75 - 0.001);
+        expect(dots.backgroundSize).toBe('24px 24px');
+        expect(diagonal.backgroundImage).toContain('repeating-linear-gradient(135deg');
+        expect(pixelStops(diagonal.backgroundImage)[0] * previewScale).toBeGreaterThanOrEqual(1 - 0.001);
         expect(await readProject(page, original.id)).toEqual(originalBefore);
 
         const coverThumbnail = preview.getByRole('button', { name: 'Paper Cover, Paper, 1 use' });
@@ -238,7 +272,7 @@ test.describe('Editor Advanced Features', () => {
         await expect(preview).toBeVisible();
         expect(sandboxFrameCount).toBe(sandboxFramesBeforeReopen);
 
-        await preview.getByRole('button', { name: 'Create New Project' }).click();
+        await preview.getByRole('button', { name: 'Create As New Project' }).click();
         const naming = page.getByRole('dialog', { name: 'Create Generated Project' });
         await naming.getByRole('textbox', { name: 'Project name' }).fill('Visual Preview Copy');
         await naming.getByRole('button', { name: 'Create Project' }).click();

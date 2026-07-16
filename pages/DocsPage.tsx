@@ -613,7 +613,7 @@ nodes[refId] = {
                          <li><strong>Opening is inert:</strong> Loading saved or gallery source never runs it.</li>
                          <li><strong>Preview is visual and sandboxed:</strong> Preview runs drafts only in an isolated disposable sandbox with a fixed 10-second timeout. After validation, it opens live canvas previews instead of changing the project.</li>
                          <li><strong>Inspect every template:</strong> Variant tabs show one representative page for each template. Used templates show usage counts; unused templates use preview-only synthetic pages and show an <strong>Unused</strong> badge. Large sets load in batches, and selecting a thumbnail opens a lightbox.</li>
-                         <li><strong>Choose what happens next:</strong> Back to Scripts preserves exact drafts, and View Preview reopens the validated result without rerunning source. Create New Project asks for a name, retains source, and preserves the original. Replace Current Project confirms before replacing generated fields and creates one undo checkpoint.</li>
+                         <li><strong>Choose what happens next:</strong> Back to Scripts preserves exact drafts, and View Preview reopens the validated result without rerunning source. Create As New Project asks for a name, retains source, and preserves the original. Replace Current Project confirms before replacing generated fields and creates one undo checkpoint.</li>
                          <li><strong>No reverse synchronization:</strong> Manual project edits are not written back to JavaScript; saved source remains from the last successful generator apply.</li>
                      </ul>
                   </section>
