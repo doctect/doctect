@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { User, LogOut, Image, Settings, FolderOpen } from 'lucide-react';
+import { User, LogOut, Image, Settings, FolderOpen, Shield } from 'lucide-react';
 import { useSession, signOut } from '../lib/auth-client';
 
 export function AccountMenu() {
@@ -22,6 +22,7 @@ export function AccountMenu() {
         return <Link to="/login" state={{ from: location.pathname }} className="text-xs font-medium text-slate-500 hover:text-blue-600">Sign in</Link>;
     }
     const username = session.user.username as string | null;
+    const role = (session.user as { role?: string | null }).role;
     const profileTo = username ? `/u/${username}` : '/welcome';
     const profileState = username ? undefined : { from: location.pathname };
     return (
@@ -38,6 +39,11 @@ export function AccountMenu() {
                     <Link to={profileTo} state={profileState} onClick={() => setOpen(false)} className="block px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50">My profile</Link>
                     <Link to="/gallery" onClick={() => setOpen(false)} className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50"><Image size={12} /> Gallery</Link>
                     <Link to="/projects" onClick={() => setOpen(false)} className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50"><FolderOpen size={12} /> My projects</Link>
+                    {role === 'admin' && (
+                        <Link to="/admin/moderation" onClick={() => setOpen(false)} className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50">
+                            <Shield size={12} /> Moderation
+                        </Link>
+                    )}
                     <Link to="/account" onClick={() => setOpen(false)} className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50"><Settings size={12} /> Account settings</Link>
                     <button onClick={() => { setOpen(false); signOut(); }} className="w-full text-left flex items-center gap-1.5 px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50">
                         <LogOut size={12} /> Sign out

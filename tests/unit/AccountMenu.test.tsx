@@ -46,4 +46,22 @@ describe('AccountMenu', () => {
         fireEvent.click(screen.getByTitle('Account'));
         expect(screen.getByText('Account settings').closest('a')).toHaveAttribute('href', '/account');
     });
+
+    it('shows Moderation only for administrators', () => {
+        mockUseSession.mockReturnValue({
+            data: { user: { username: 'admin_user', name: 'Admin', role: 'admin' } }, isPending: false,
+        });
+        renderAt(['/gallery']);
+        fireEvent.click(screen.getByTitle('Account'));
+        expect(screen.getByText('Moderation').closest('a')).toHaveAttribute('href', '/admin/moderation');
+    });
+
+    it('does not show Moderation to an ordinary signed-in user', () => {
+        mockUseSession.mockReturnValue({
+            data: { user: { username: 'ordinary', name: 'Ordinary', role: null } }, isPending: false,
+        });
+        renderAt(['/gallery']);
+        fireEvent.click(screen.getByTitle('Account'));
+        expect(screen.queryByText('Moderation')).toBeNull();
+    });
 });
