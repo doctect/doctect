@@ -331,6 +331,7 @@ describe('account suspension', () => {
             { ...base, projectIdsToUnpublish: ['same', ' same '] },
             { ...base, projectIdsToUnpublish: [''] },
             { ...base, projectIdsToUnpublish: ['x'.repeat(201)] },
+            { ...base, projectIdsToUnpublish: [` ${'x'.repeat(200)} `] },
             { ...base, expectedModerationVersion: -1 },
             { ...base, expectedModerationVersion: 0.5 },
         ];
@@ -397,12 +398,15 @@ describe('account suspension', () => {
 
     it('persists a future temporary expiry and records complete actor/target/project audit snapshots', async () => {
         const { query } = await import('../../../server/db.js');
+        const adminId = (await query('SELECT id FROM "user" WHERE email = $1', ['moderator@test.dev']))[0].id;
         await createPublishedProject('temporary-project', targetId, 'Temporary project');
         const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+        const requestStartedAt = Date.now();
         const res = await request(app).post(`/api/admin/users/${targetId}/suspend`).set('Cookie', adminCookie).send({
             reason: 'Temporary investigation', expiresAt,
             projectIdsToUnpublish: ['temporary-project'], expectedModerationVersion: 0,
         });
+        const requestFinishedAt = Date.now();
         expect(res.status).toBe(200);
         expect(res.body.account.banExpires).toBe(expiresAt);
         for (const action of res.body.actions) {
@@ -415,15 +419,22 @@ describe('account suspension', () => {
         expect(res.body.actions.find(action => action.action === 'project_unpublished').projectId).toBe('temporary-project');
         expect(res.body.actions.find(action => action.action === 'account_suspended').projectId).toBeNull();
 
-        const persisted = await query(`SELECT actor_email, target_user_id, target_email, action, reason, expires_at, project_id
+        const persisted = await query(`SELECT actor_user_id, actor_email, target_user_id, target_email,
+                action, reason, expires_at, project_id, created_at
             FROM moderation_actions WHERE reason = $1 ORDER BY action`, ['Temporary investigation']);
-        expect(persisted).toEqual([
+        expect(persisted[0].created_at).toEqual(persisted[1].created_at);
+        const persistedCreatedAt = new Date(persisted[0].created_at).getTime();
+        expect(persistedCreatedAt).toBeGreaterThanOrEqual(requestStartedAt);
+        expect(persistedCreatedAt).toBeLessThanOrEqual(requestFinishedAt);
+        expect(persisted.map(({ created_at: _createdAt, ...action }) => action)).toEqual([
             {
-                actor_email: 'moderator@test.dev', target_user_id: targetId, target_email: 'target@test.dev',
+                actor_user_id: adminId, actor_email: 'moderator@test.dev',
+                target_user_id: targetId, target_email: 'target@test.dev',
                 action: 'account_suspended', reason: 'Temporary investigation', expires_at: expiresAt, project_id: null,
             },
             {
-                actor_email: 'moderator@test.dev', target_user_id: targetId, target_email: 'target@test.dev',
+                actor_user_id: adminId, actor_email: 'moderator@test.dev',
+                target_user_id: targetId, target_email: 'target@test.dev',
                 action: 'project_unpublished', reason: 'Temporary investigation', expires_at: expiresAt,
                 project_id: 'temporary-project',
             },

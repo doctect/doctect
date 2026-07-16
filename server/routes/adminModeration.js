@@ -103,9 +103,9 @@ const validateExpiry = raw => {
 };
 
 const validateProjectIds = raw => {
-    if (!Array.isArray(raw) || raw.some(id => typeof id !== 'string')) return null;
+    if (!Array.isArray(raw) || raw.some(id => typeof id !== 'string' || id.length > 200)) return null;
     const ids = raw.map(id => id.trim());
-    if (ids.some(id => !id || id.length > 200)) return null;
+    if (ids.some(id => !id)) return null;
     return new Set(ids).size === ids.length ? ids : null;
 };
 
