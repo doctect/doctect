@@ -3,7 +3,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import { initTestApp, signUpUser } from './helpers.js';
 
-const faults = vi.hoisted(() => ({ pattern: null, decodeModerationDates: false }));
+const faults = vi.hoisted(() => ({ pattern: null, decodeModerationDates: false, historyQueries: 0 }));
 vi.mock('../../../server/db.js', async importOriginal => {
     const actual = await importOriginal();
     const intercept = async (baseQuery, text, params = []) => {
@@ -11,6 +11,7 @@ vi.mock('../../../server/db.js', async importOriginal => {
             faults.pattern = null;
             throw new Error('Injected moderation failure');
         }
+        if (/FROM moderation_actions/.test(text)) faults.historyQueries += 1;
         const rows = await baseQuery(text, params);
         if (faults.decodeModerationDates && /FROM moderation_actions/.test(text)) {
             return rows.map(row => ({ ...row, created_at: new Date(row.created_at) }));
@@ -47,6 +48,7 @@ const decodeTestCursor = raw => JSON.parse(Buffer.from(raw, 'base64url').toStrin
 beforeEach(() => {
     faults.pattern = null;
     faults.decodeModerationDates = false;
+    faults.historyQueries = 0;
 });
 
 describe('account moderation authorization and reads', () => {
@@ -99,6 +101,18 @@ describe('account moderation authorization and reads', () => {
             .set('Cookie', adminCookie)).status).toBe(400);
     });
 
+    it('rejects a numeric-zone history cursor before querying history', async () => {
+        const invalidHistoryCursor = encodeTestCursor(['2026-06-01T00:00:00+16:00', 'history-id']);
+        const res = await request(app)
+            .get(`/api/admin/users/${targetId}?historyCursor=${encodeURIComponent(invalidHistoryCursor)}`)
+            .set('Cookie', adminCookie);
+
+        expect({ status: res.status, historyQueries: faults.historyQueries }).toEqual({
+            status: 400,
+            historyQueries: 0,
+        });
+    });
+
     it('treats underscore and backslash as literal LIKE characters', async () => {
         const { query } = await import('../../../server/db.js');
         for (const [id, email, username] of [
@@ -124,6 +138,7 @@ describe('account moderation authorization and reads', () => {
         for (const [id, banned, banExpires] of [
             ['status-none', 0, null],
             ['status-active', 1, '2999-01-01T00:00:00.000Z'],
+            ['status-indefinite', 1, null],
             ['status-expired', 1, '2000-01-01T00:00:00.000Z'],
         ]) {
             await query(`INSERT INTO "user"
@@ -137,6 +152,7 @@ describe('account moderation authorization and reads', () => {
         expect(Object.fromEntries(res.body.users.map(user => [user.id, user.suspensionStatus]))).toEqual({
             'status-active': 'active',
             'status-expired': 'expired',
+            'status-indefinite': 'active',
             'status-none': 'none',
         });
     });
