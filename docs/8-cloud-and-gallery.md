@@ -111,6 +111,10 @@ Two independent edits that happen to produce byte-identical results are *not* fl
 | `POST /api/merge-requests/:id/close` | author or target owner | Close without merging |
 | `GET /api/admin/reports` | admin | List reported projects |
 | `POST /api/admin/projects/:id/unpublish` | admin | Force-unpublish a project |
+| `GET /api/admin/users?q=&cursor=` | admin | Search accounts by email/username; safe bounded DTOs only |
+| `GET /api/admin/users/:id?historyCursor=` | admin | Account suspension state, published projects, and moderation history |
+| `POST /api/admin/users/:id/suspend` | admin | Suspend, revoke sessions, optionally unpublish selected projects, and audit atomically |
+| `POST /api/admin/users/:id/restore` | admin | Clear suspension, defensively revoke sessions, and audit atomically |
 
 ## Environment Variables
 
@@ -161,6 +165,20 @@ Cloud storage is real, billed infrastructure, so this layer adds a set of guardr
 - **Thumbnail magic-byte checks**: `parseThumbnail` doesn't trust the claimed `data:image/webp;base64,...` / `data:image/png;base64,...` prefix — it decodes the base64 payload, enforces a 300KB ceiling, and verifies the actual bytes (PNG signature, or `RIFF....WEBP`) match the claimed type before ever writing to the `thumbnails` table.
 - **CORP for public thumbnails**: `/api/thumbnails/:thumbId` explicitly sets `Cross-Origin-Resource-Policy: cross-origin` (overriding helmet's app-wide same-origin default) plus `X-Content-Type-Options: nosniff`, since these are unauthenticated, intentionally-public images that need to load as `<img>` tags across the client/API origin split (or a future CDN). This route reads no session/auth state, so relaxing CORP here crosses no privacy boundary.
 - **Content-Security-Policy** is disabled app-wide in helmet's config today (the SPA depends on Google Fonts and inline styles) — see [Known limitations](#known-limitations--follow-ups).
+
+## Account moderation operations
+
+Administrators use `/admin/moderation` to search by email or username; there is no unfiltered account directory. Search and history pages contain at most 25 rows and use opaque cursors. Search/detail responses contain identity, role, creation time, suspension state, published-project metadata, and moderation history only. They never include passwords, provider tokens, session tokens, or session IP addresses.
+
+Suspension requires a trimmed reason of 1-1,000 characters and may be indefinite or expire at a future server-validated time. Status is `active` when `banned = true` and either no expiry exists or expiry is later than current server time; it is `expired` when `banned = true` but expiry has passed, and `none` otherwise. Every target session is deleted in same transaction, so existing cookies stop authorizing immediately. Better Auth rejects fresh sign-in with `BANNED_USER` while suspension is active. After temporary expiry, Better Auth permits fresh sign-in even though historical suspension fields and audit events remain available to administrators.
+
+Suspension form lists currently published projects owned by target account. Only checked projects become private and have `published_commit_id` cleared; unchecked projects remain public. Suspension never automatically removes all account content. Restoration clears `banned`, `banReason`, and `banExpires`, increments moderation version, and defensively revokes any sessions, but never republishes content. Republishing remains an explicit owner action.
+
+Writes use optimistic moderation versions and one database transaction. Invalid reasons, expiries, project lists, cursors, or versions return `400`; non-admin callers and attempts to suspend administrator accounts return `403`; missing target accounts return `404`; stale moderation state or selected projects that are no longer both owned and published return `409`. Unexpected failures return `500` and roll back account, session, publication, and audit changes together.
+
+Every suspension and restoration creates a row in `moderation_actions`; each selected unpublish creates its own row with `project_id`. Rows snapshot actor/target IDs and emails, reason, expiry, and server timestamp. PostgreSQL and SQLite reject direct updates/deletes through database triggers. Operators can inspect one account's newest-first history in `/admin/moderation` or query `moderation_actions` by `target_user_id` or `target_email`, ordering by `created_at DESC, id DESC`; no application endpoint mutates audit history.
+
+Administrator accounts cannot be suspended through this workflow. Role changes remain an operator action. Application-level exact-IP and CIDR bans are intentionally absent: VPNs, shared networks, carrier NAT, IPv6 rotation, and incorrect proxy trust make such bans easy to evade or likely to block unrelated users. If evidence later requires IP controls, apply short-lived CDN, WAF, or load-balancer rules only after verifying ingress isolation and trusted proxy configuration. Horizontally scaled enforcement requires shared edge controls or a distributed store, not per-process application state.
 
 ## Known Limitations / Follow-ups
 
