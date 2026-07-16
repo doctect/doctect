@@ -7,6 +7,7 @@ All final whole-branch review findings were addressed in isolated worktree `/med
 Primary implementation commit:
 
 - `3db726701f713c09fb619fb8c56b91e8ac7f38ca` — `fix(auth): close suspension races`
+- `3ab8136bf6825fd2ef0dc99ada3dd5635be84018` — `fix(auth): serialize guard cleanup`
 
 ## Root Causes
 
@@ -20,7 +21,19 @@ Fix: retained Express prefix block and `admin()` plugin, then added normalized `
 
 Better Auth's admin plugin read user suspension state before inserting a session. Suspension locked user, updated suspension fields, and deleted current sessions, but no database invariant prevented a concurrent insert after deletion. Application auth guards then trusted Better Auth's resolved session user without re-reading current suspension fields.
 
-Fix: appended migration `012_session_suspension_guard`. PostgreSQL trigger locks referenced user row with `FOR UPDATE` before evaluating active suspension; SQLite trigger rejects active inserts under serialized writer behavior. Application guards now read fresh `banned`/`banExpires`, delete all target sessions on active state, and return required-auth `401` or optional-auth null.
+Fix: appended migration `012_session_suspension_guard`. PostgreSQL trigger locks referenced user row with `FOR UPDATE` before evaluating active suspension; SQLite trigger rejects active inserts under serialized writer behavior. Application guards now lock and read fresh `banned`/`banExpires` in one transaction, delete all target sessions in that transaction only while state remains active, and return required-auth `401` or optional-auth null.
+
+### Guard cleanup/restoration race
+
+Fresh guard read and session deletion originally used separate autocommit queries. Restoration could clear suspension, commit, and permit a new sign-in after guard read active state but before guard deletion; stale cleanup then deleted newly valid session.
+
+Fix: guard suspension check and cleanup share `withTransaction`. PostgreSQL locks target user `FOR UPDATE`; SQLite serializes with `BEGIN IMMEDIATE`. If guard locks first, cleanup commits before restoration and later sign-in survives. If restoration commits first, guard recheck sees inactive state and performs no deletion.
+
+### PostgreSQL transaction-start trigger clock
+
+Migration `012` compared expiry with PostgreSQL `CURRENT_TIMESTAMP`, fixed at transaction start. Session insert waiting on suspension's user lock could evaluate stale pre-wait time and reject a suspension that expired during wait.
+
+Fix: kept migrations `001`-`012` unchanged and appended `013_session_suspension_wall_clock`. It replaces PostgreSQL function comparison with `(clock_timestamp() AT TIME ZONE 'UTC')`; wall clock advances during lock wait, and UTC conversion matches timestamp-without-time-zone `banExpires`. SQLite uses safe `SELECT 1` because migration `012` trigger already evaluates `julianday('now')` at execution.
 
 ### Transaction-time expiry
 
@@ -59,6 +72,14 @@ Separate validation/cardinality RED command:
 - 21 project IDs reached transaction conflict and returned `409` instead of input `400`.
 - Existing invalid `+24:00` offset already returned `400`; retained as boundary regression coverage.
 
+Guard/restoration and wall-clock RED command:
+
+- `npx vitest run tests/unit/server/guardsRestorationRace.test.js tests/unit/server/migrationsPostgres.test.js`
+- Result: `2` files failed; `4` tests failed, `3` passed.
+- Guard-first ordering was `guard-check`, `restore-clear`, `sign-in`, `guard-delete`, proving stale cleanup deleted post-restoration session.
+- Both race tests proved guard used no transaction and generated no PostgreSQL `FOR UPDATE` query.
+- Migration-order test found no `013`; exact UTC wall-clock function statement was absent.
+
 ## GREEN Evidence
 
 - First focused GREEN: `5` files passed, `84` tests passed.
@@ -72,19 +93,29 @@ Separate validation/cardinality RED command:
 - Chromium E2E: isolated client/API ports `43920`/`43921`, scratch SQLite, empty `DATABASE_URL`; `1 passed (6.6s)`. Temporary config/database removed.
 - `git diff --check`: no output.
 
+Guard/restoration follow-up GREEN evidence:
+
+- Focused guards/migrations/moderation: `5` files passed, `66` tests passed.
+- Expanded focused suite: `7` files passed, `72` tests passed.
+- Final full `npx vitest run`: `128` files passed, `1077` tests passed, duration `21.55s`.
+- `npm run build`: exit `0`, `2114` modules transformed, built in `20.51s`; existing chunk-size warning remains.
+- `npx tsc --noEmit --pretty false`: exact same five baseline diagnostics, zero delta.
+- Chromium E2E: isolated client/API ports `43930`/`43931`, scratch SQLite, empty `DATABASE_URL`; `1 passed (6.7s)`. Temporary config/database removed.
+
 Normal sign-up/sign-in, active `BANNED_USER`, expired sign-in cleanup, required/optional guard behavior, migration idempotency, moderation rollback, protected page, and full administrator E2E workflow all ran in focused or full verification.
 
 ## Changed Files
 
 - `server/auth.js` — normalized Better Auth administrator path denial.
-- `server/migrations/index.js` — append-only migration `012_session_suspension_guard` for PostgreSQL and SQLite.
-- `server/middleware/guards.js` — fresh suspension read, active-session cleanup, unauthenticated handling.
+- `server/migrations/index.js` — append-only migrations `012_session_suspension_guard` and `013_session_suspension_wall_clock`.
+- `server/middleware/guards.js` — transaction-locked fresh suspension read, active-session cleanup, unauthenticated handling.
 - `server/routes/adminModeration.js` — canonical expiry validation, 20-ID cap, post-lock expiry check.
 - `pages/AdminModerationPage.tsx` — protected administrator state and suppressed controls/confirmation.
 - `tests/unit/server/accountModeration.test.js` — raw normalized-path integration, expiry/cardinality/clock coverage, trigger-compatible session fixtures.
 - `tests/unit/server/accountModerationMigration.test.js` — SQLite trigger behavior and statement-array coverage.
 - `tests/unit/server/migrationsPostgres.test.js` — exact PostgreSQL trigger SQL/serialization contract.
 - `tests/unit/server/guards.test.js` — fresh required/optional active-state denial and cleanup.
+- `tests/unit/server/guardsRestorationRace.test.js` — deterministic guard-first/restoration-first serialization and session-survival coverage.
 - `tests/unit/AdminModerationPage.test.tsx` — protected administrator page behavior.
 - `tests/unit/server/publishedSnapshotMigration.test.js` — complete migration-001 fixture schema.
 - `tests/unit/server/publishedMetadataMigrationAtomicity.test.js` — complete migration-001 fixture schema.
@@ -94,9 +125,12 @@ Normal sign-up/sign-in, active `BANNED_USER`, expired sign-in cleanup, required/
 
 ## Self-Review
 
-- Migration `011_account_moderation` unchanged; `012` appended.
+- Migrations `001`-`012` unchanged; `013` appended.
 - Trigger bodies remain intact array statements.
 - PostgreSQL insert trigger locks target user before evaluating active state, matching suspension's user-first lock order.
+- Application guard locks target user and conditionally deletes sessions in one transaction, matching restoration's user-first lock order.
+- Deterministic barriers prove both lock orderings preserve post-restoration session.
+- PostgreSQL expiry comparison uses wall-clock UTC timestamp compatible with `banExpires TIMESTAMP`.
 - SQLite behavior proves unbanned allowed, indefinite/future active rejected, expired allowed.
 - Every changed application SQL statement uses each `$n` once.
 - Express block retained as defense-in-depth; Better Auth `admin()` retained for `BANNED_USER` and expired-ban cleanup.
@@ -107,6 +141,6 @@ Normal sign-up/sign-in, active `BANNED_USER`, expired sign-in cleanup, required/
 
 ## Residual Concerns
 
-- No live PostgreSQL harness exists. PostgreSQL migration is exact SQL-contract tested, including `FOR UPDATE`, but not executed against live PostgreSQL. Documentation does not claim live execution.
+- No live PostgreSQL harness exists. PostgreSQL migrations `012`/`013` are exact SQL-contract tested, including `FOR UPDATE` and UTC wall-clock expression, but not executed against live PostgreSQL. Documentation does not claim live execution.
 - Existing five TypeScript diagnostics remain unchanged.
 - Existing React Router warnings, intentional rollback logs, test email fallbacks, and Vite chunk-size warning remain unrelated.
