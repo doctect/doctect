@@ -97,6 +97,10 @@ const expectDiagonalPattern = (pdf: string, bounds: { x: number; y: number; w: n
   }
 
   const intercepts = segments.map(segment => segment.x1 + segment.y1);
+  expect(intercepts[0] - bounds.x - bounds.y).toBeCloseTo(
+    PATTERN_WEIGHT / 2 * Math.SQRT2,
+    6,
+  );
   for (let index = 1; index < intercepts.length; index += 1) {
     expect(intercepts[index] - intercepts[index - 1]).toBeCloseTo(PATTERN_SPACING * Math.SQRT2, 6);
   }

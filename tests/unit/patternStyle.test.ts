@@ -44,6 +44,21 @@ describe('buildPatternBackgroundStyle', () => {
     expect(4 * scale).toBe(DOT_FEATHER_SCREEN_PX);
   });
 
+  it('keeps source dot weight above the minimum while preserving spacing and feather', () => {
+    const scale = 0.5;
+    const sourceWeight = 4;
+    const style = buildPatternBackgroundStyle({
+      type: 'dots', color: '#123456', spacing: 24, weight: sourceWeight, renderScale: scale,
+    });
+    const stops = style.backgroundImage?.match(/#123456 ([\d.]+)px, transparent ([\d.]+)px/);
+    expect(stops).not.toBeNull();
+    const solidRadius = Number(stops![1]);
+    const outerRadius = Number(stops![2]);
+    expect(outerRadius * 2).toBe(sourceWeight);
+    expect(style.backgroundSize).toBe('24px 24px');
+    expect((outerRadius - solidRadius) * scale).toBe(DOT_FEATHER_SCREEN_PX);
+  });
+
   it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY])(
     'falls back to scale 1 for invalid scale %s',
     renderScale => {

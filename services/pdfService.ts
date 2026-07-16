@@ -631,7 +631,7 @@ const drawPattern = (doc: jsPDF, type: string, x: number, y: number, w: number, 
     } else if (type === 'lines-d') {
         const diagonalStep = step * Math.SQRT2;
         const maxOffset = w + h;
-        for (let offset = halfW; offset <= maxOffset; offset += diagonalStep) {
+        for (let offset = halfW * Math.SQRT2; offset <= maxOffset; offset += diagonalStep) {
             const startX = Math.max(0, offset - h);
             const startY = Math.min(h, offset);
             const endX = Math.min(w, offset);

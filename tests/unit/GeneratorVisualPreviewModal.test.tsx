@@ -2,14 +2,15 @@ import React from 'react';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { GeneratorVisualPreviewModal } from '../../components/GeneratorVisualPreviewModal';
+import { fitTemplateScale } from '../../services/generatorVisualPreview';
 import type { GeneratorPreviewPayload } from '../../services/generatorVisualPreview';
 import type { PageTemplate } from '../../types';
 
 vi.mock('../../components/canvas/ReadOnlyPagePreview', () => ({
-  ReadOnlyPagePreview: ({ template, currentNodeId }: any) => {
+  ReadOnlyPagePreview: ({ template, currentNodeId, scale }: any) => {
     if (template.id === 'broken') throw new Error('Preview exploded.');
     return (
-      <div data-testid={`live-preview-${template.id}`} data-node-id={currentNodeId}>
+      <div data-testid={`live-preview-${template.id}`} data-node-id={currentNodeId} data-scale={scale}>
         {template.name}
       </div>
     );
@@ -150,6 +151,34 @@ describe('GeneratorVisualPreviewModal', () => {
     const unusedCard = screen.getByRole('button', { name: 'Template 2, Primary, unused' });
     expect(within(unusedCard).getByText('Unused')).toBeVisible();
     expect(screen.getByTestId('live-preview-template-2').getAttribute('data-node-id')).toMatch(/^generator-preview-/);
+  });
+
+  it('computes thumbnail and lightbox scales from their separate bounds', () => {
+    const originalWidth = Object.getOwnPropertyDescriptor(window, 'innerWidth');
+    const originalHeight = Object.getOwnPropertyDescriptor(window, 'innerHeight');
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1000 });
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 900 });
+
+    try {
+      renderModal();
+      const card = screen.getByRole('button', { name: 'Template 0, Primary, 1 use' });
+      const thumbnail = within(card).getByTestId('live-preview-template-0');
+      const thumbnailScale = fitTemplateScale(template('template-0'), 220, 240);
+      expect(Number(thumbnail.dataset.scale)).toBeCloseTo(thumbnailScale);
+
+      fireEvent.click(card);
+
+      const lightbox = screen.getByRole('dialog', { name: 'Template 0 preview' });
+      const lightboxPreview = within(lightbox).getByTestId('live-preview-template-0');
+      const lightboxScale = fitTemplateScale(template('template-0'), 840, 640);
+      expect(Number(lightboxPreview.dataset.scale)).toBeCloseTo(lightboxScale);
+      expect(Number(lightboxPreview.dataset.scale)).not.toBeCloseTo(thumbnailScale);
+    } finally {
+      if (originalWidth) Object.defineProperty(window, 'innerWidth', originalWidth);
+      else delete (window as any).innerWidth;
+      if (originalHeight) Object.defineProperty(window, 'innerHeight', originalHeight);
+      else delete (window as any).innerHeight;
+    }
   });
 
   it('navigates the lightbox and restores thumbnail focus when Escape closes it', () => {
