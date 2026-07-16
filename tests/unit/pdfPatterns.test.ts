@@ -4,7 +4,7 @@ import type { AppState, PatternType, TemplateElement } from '../../types';
 
 const PAGE_HEIGHT = 300;
 const PATTERN_SPACING = 12;
-const PATTERN_WEIGHT = 2;
+const PATTERN_WEIGHT = 0.25;
 const PDF_TOLERANCE = 1e-6;
 
 const patternElement = (patternType: PatternType): TemplateElement => ({
@@ -106,7 +106,9 @@ const expectDiagonalPattern = (pdf: string, bounds: { x: number; y: number; w: n
     .filter(match => (match.index ?? -1) < firstStrokeIndex);
   expect(clipOperators.length).toBeGreaterThan(0);
   const beforeFirstStroke = stream.slice(clipOperators.at(-1)!.index ?? 0, firstStrokeIndex);
-  expect(beforeFirstStroke).toMatch(new RegExp(`(?:^|\\s)${PATTERN_WEIGHT}\\. w(?=\\s|$)`));
+  const lineWidth = beforeFirstStroke.match(/(-?(?:\d+(?:\.\d*)?|\.\d+))\s+w(?=\s|$)/);
+  expect(lineWidth, 'pattern line width operator').not.toBeNull();
+  expect(Number(lineWidth![1])).toBeCloseTo(PATTERN_WEIGHT, 6);
 };
 
 describe('PDF pattern fills', () => {
