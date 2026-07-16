@@ -506,6 +506,7 @@ describe('account restoration', () => {
         ['expired', new Date(Date.now() - 1000).toISOString()],
     ])('restores an %s suspension, revokes sessions defensively, and never republishes content', async (_label, expiresAt) => {
         const { query } = await import('../../../server/db.js');
+        const adminId = (await query('SELECT id FROM "user" WHERE email = $1', ['moderator@test.dev']))[0].id;
         await query(`UPDATE "user"
             SET banned = 1, "banReason" = 'Prior reason', "banExpires" = $1,
                 "moderationVersion" = "moderationVersion" + 1
@@ -521,9 +522,11 @@ describe('account restoration', () => {
         await query(`UPDATE projects SET visibility = 'private', published_commit_id = NULL WHERE id = $1`, [projectId]);
         const project = await query('SELECT id, visibility, published_commit_id FROM projects WHERE id = $1', [projectId]);
 
+        const requestStartedAt = Date.now();
         const res = await request(app).post(`/api/admin/users/${targetId}/restore`).set('Cookie', adminCookie).send({
-            reason: `Restored ${_label}`, expectedModerationVersion: version,
+            reason: `  Restored ${_label}  `, expectedModerationVersion: version,
         });
+        const requestFinishedAt = Date.now();
         expect(res.status).toBe(200);
         expect(res.body.account).toMatchObject({
             suspensionStatus: 'none', banReason: null, banExpires: null, moderationVersion: version + 1,
@@ -532,6 +535,33 @@ describe('account restoration', () => {
         expect(res.body.actions[0]).toMatchObject({
             action: 'account_restored', reason: `Restored ${_label}`, expiresAt: null, projectId: null,
         });
+        const persistedAccount = (await query(`SELECT banned, "banReason", "banExpires", "moderationVersion", "updatedAt"
+            FROM "user" WHERE id = $1`, [targetId]))[0];
+        const persistedAction = (await query(`SELECT id, actor_user_id, actor_email, target_user_id, target_email,
+                action, reason, expires_at, project_id, created_at
+            FROM moderation_actions WHERE id = $1`, [res.body.actions[0].id]))[0];
+        expect(persistedAccount).toEqual({
+            banned: 0,
+            banReason: null,
+            banExpires: null,
+            moderationVersion: version + 1,
+            updatedAt: persistedAction.created_at,
+        });
+        expect(persistedAction).toEqual({
+            id: res.body.actions[0].id,
+            actor_user_id: adminId,
+            actor_email: 'moderator@test.dev',
+            target_user_id: targetId,
+            target_email: 'target@test.dev',
+            action: 'account_restored',
+            reason: `Restored ${_label}`,
+            expires_at: null,
+            project_id: null,
+            created_at: persistedAction.created_at,
+        });
+        const persistedTimestamp = new Date(persistedAction.created_at).getTime();
+        expect(persistedTimestamp).toBeGreaterThanOrEqual(requestStartedAt);
+        expect(persistedTimestamp).toBeLessThanOrEqual(requestFinishedAt);
         expect(await query('SELECT id FROM session WHERE "userId" = $1', [targetId])).toEqual([]);
         expect(await query('SELECT id, visibility, published_commit_id FROM projects WHERE id = $1', [projectId]))
             .toEqual(project);
@@ -559,7 +589,8 @@ describe('moderation transaction rollback', () => {
         [`session-${suffix}`, new Date(Date.now() + 3600000).toISOString(), `rollback-token-${suffix}`,
             new Date().toISOString(), new Date().toISOString(), targetId]);
         await createPublishedProject(projectId, targetId, `Rollback ${_stage}`);
-        const beforeUser = await query('SELECT banned, "banReason", "banExpires", "moderationVersion" FROM "user" WHERE id = $1', [targetId]);
+        const beforeUser = await query(`SELECT banned, "banReason", "banExpires", "moderationVersion", "updatedAt"
+            FROM "user" WHERE id = $1`, [targetId]);
         const beforeSessions = await query('SELECT id FROM session WHERE "userId" = $1 ORDER BY id', [targetId]);
         const beforeProject = await query('SELECT visibility, published_commit_id FROM projects WHERE id = $1', [projectId]);
         const beforeAudit = await query('SELECT id FROM moderation_actions WHERE target_user_id = $1 ORDER BY id', [targetId]);
@@ -570,7 +601,8 @@ describe('moderation transaction rollback', () => {
             expectedModerationVersion: beforeUser[0].moderationVersion,
         });
         expect(failed.status).toBe(500);
-        expect(await query('SELECT banned, "banReason", "banExpires", "moderationVersion" FROM "user" WHERE id = $1', [targetId]))
+        expect(await query(`SELECT banned, "banReason", "banExpires", "moderationVersion", "updatedAt"
+            FROM "user" WHERE id = $1`, [targetId]))
             .toEqual(beforeUser);
         expect(await query('SELECT id FROM session WHERE "userId" = $1 ORDER BY id', [targetId])).toEqual(beforeSessions);
         expect(await query('SELECT visibility, published_commit_id FROM projects WHERE id = $1', [projectId])).toEqual(beforeProject);
@@ -589,7 +621,8 @@ describe('moderation transaction rollback', () => {
             VALUES ($1, $2, $3, $4, $5, $6)`,
         ['restore-rollback-session', new Date(Date.now() + 3600000).toISOString(), 'restore-rollback-token',
             new Date().toISOString(), new Date().toISOString(), targetId]);
-        const beforeUser = await query('SELECT banned, "banReason", "banExpires", "moderationVersion" FROM "user" WHERE id = $1', [targetId]);
+        const beforeUser = await query(`SELECT banned, "banReason", "banExpires", "moderationVersion", "updatedAt"
+            FROM "user" WHERE id = $1`, [targetId]);
         const beforeSessions = await query('SELECT id FROM session WHERE "userId" = $1 ORDER BY id', [targetId]);
         const beforeAudit = await query('SELECT id FROM moderation_actions WHERE target_user_id = $1 ORDER BY id', [targetId]);
 
@@ -598,7 +631,8 @@ describe('moderation transaction rollback', () => {
             reason: 'Rollback failed restoration', expectedModerationVersion: beforeUser[0].moderationVersion,
         });
         expect(failed.status).toBe(500);
-        expect(await query('SELECT banned, "banReason", "banExpires", "moderationVersion" FROM "user" WHERE id = $1', [targetId]))
+        expect(await query(`SELECT banned, "banReason", "banExpires", "moderationVersion", "updatedAt"
+            FROM "user" WHERE id = $1`, [targetId]))
             .toEqual(beforeUser);
         expect(await query('SELECT id FROM session WHERE "userId" = $1 ORDER BY id', [targetId])).toEqual(beforeSessions);
         expect(await query('SELECT id FROM moderation_actions WHERE target_user_id = $1 ORDER BY id', [targetId])).toEqual(beforeAudit);
