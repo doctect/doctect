@@ -307,4 +307,51 @@ router.post('/api/admin/users/:id/suspend', requireAdmin, async (req, res) => {
     }
 });
 
+router.post('/api/admin/users/:id/restore', requireAdmin, async (req, res) => {
+    const reason = validateReason(req.body?.reason);
+    const expectedVersion = req.body?.expectedModerationVersion;
+    if (!reason || !validateVersion(expectedVersion)) {
+        return res.status(400).json({ error: 'Invalid restoration request' });
+    }
+
+    try {
+        const result = await withTransaction(async txQuery => {
+            const target = await lockUser(req.params.id, txQuery);
+            if (!target) return { status: 404 };
+            if (Number(target.moderationVersion) !== expectedVersion || !isBanned(target.banned)) {
+                return { status: 409 };
+            }
+            const now = new Date().toISOString();
+            const updated = await txQuery(
+                `UPDATE "user"
+                 SET banned = $1, "banReason" = NULL, "banExpires" = NULL,
+                     "moderationVersion" = "moderationVersion" + 1, "updatedAt" = $2
+                 WHERE id = $3 AND "moderationVersion" = $4
+                 RETURNING id, email, username, role, "createdAt", banned, "banReason", "banExpires", "moderationVersion"`,
+                [dbType === 'postgres' ? false : 0, now, target.id, expectedVersion],
+            );
+            if (!updated[0]) return { status: 409 };
+            await txQuery('DELETE FROM session WHERE "userId" = $1', [target.id]);
+            const action = await insertAction(txQuery, {
+                actorUserId: req.user.id,
+                actorEmail: req.user.email,
+                targetUserId: target.id,
+                targetEmail: target.email,
+                action: 'account_restored',
+                reason,
+                expiresAt: null,
+                projectId: null,
+                createdAt: now,
+            });
+            return { status: 200, account: accountDto(updated[0]), actions: [action] };
+        });
+        if (result.status === 404) return res.status(404).json({ error: 'User not found' });
+        if (result.status === 409) return res.status(409).json({ error: 'Moderation state changed; refresh and try again' });
+        return res.json({ account: result.account, actions: result.actions });
+    } catch (error) {
+        console.error('Account restoration failed:', error);
+        return res.status(500).json({ error: 'Account restoration failed' });
+    }
+});
+
 export default router;

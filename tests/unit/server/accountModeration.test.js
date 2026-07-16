@@ -479,3 +479,128 @@ describe('account suspension', () => {
         }
     });
 });
+
+describe('account restoration', () => {
+    it('requires a reason/version and rejects missing, stale, or unsuspended targets', async () => {
+        expect((await request(app).post(`/api/admin/users/${targetId}/restore`).set('Cookie', adminCookie)
+            .send({ reason: '', expectedModerationVersion: 0 })).status).toBe(400);
+        expect((await request(app).post(`/api/admin/users/${targetId}/restore`).set('Cookie', adminCookie)
+            .send({ reason: 'Missing version' })).status).toBe(400);
+        const { query } = await import('../../../server/db.js');
+        await query(`UPDATE "user"
+            SET banned = 1, "banReason" = 'Prior reason', "banExpires" = NULL,
+                "moderationVersion" = "moderationVersion" + 1
+            WHERE id = $1`, [targetId]);
+        const version = (await query('SELECT "moderationVersion" FROM "user" WHERE id = $1', [targetId]))[0].moderationVersion;
+        expect((await request(app).post('/api/admin/users/missing/restore').set('Cookie', adminCookie)
+            .send({ reason: 'Missing target', expectedModerationVersion: 0 })).status).toBe(404);
+        expect((await request(app).post(`/api/admin/users/${targetId}/restore`).set('Cookie', adminCookie)
+            .send({ reason: 'Stale version', expectedModerationVersion: version - 1 })).status).toBe(409);
+        await query(`UPDATE "user" SET banned = 0, "banReason" = NULL, "banExpires" = NULL WHERE id = $1`, [targetId]);
+        expect((await request(app).post(`/api/admin/users/${targetId}/restore`).set('Cookie', adminCookie)
+            .send({ reason: 'No suspension', expectedModerationVersion: version })).status).toBe(409);
+    });
+
+    it.each([
+        ['active', null],
+        ['expired', new Date(Date.now() - 1000).toISOString()],
+    ])('restores an %s suspension, revokes sessions defensively, and never republishes content', async (_label, expiresAt) => {
+        const { query } = await import('../../../server/db.js');
+        await query(`UPDATE "user"
+            SET banned = 1, "banReason" = 'Prior reason', "banExpires" = $1,
+                "moderationVersion" = "moderationVersion" + 1
+            WHERE id = $2`, [expiresAt, targetId]);
+        const version = (await query('SELECT "moderationVersion" FROM "user" WHERE id = $1', [targetId]))[0].moderationVersion;
+        await query(`INSERT INTO session
+            (id, "expiresAt", token, "createdAt", "updatedAt", "userId")
+            VALUES ($1, $2, $3, $4, $5, $6)`,
+        [`defensive-${_label}`, new Date(Date.now() + 3600000).toISOString(), `token-${_label}`,
+            new Date().toISOString(), new Date().toISOString(), targetId]);
+        const projectId = `restore-${_label}-project`;
+        await createPublishedProject(projectId, targetId, `Restore ${_label}`);
+        await query(`UPDATE projects SET visibility = 'private', published_commit_id = NULL WHERE id = $1`, [projectId]);
+        const project = await query('SELECT id, visibility, published_commit_id FROM projects WHERE id = $1', [projectId]);
+
+        const res = await request(app).post(`/api/admin/users/${targetId}/restore`).set('Cookie', adminCookie).send({
+            reason: `Restored ${_label}`, expectedModerationVersion: version,
+        });
+        expect(res.status).toBe(200);
+        expect(res.body.account).toMatchObject({
+            suspensionStatus: 'none', banReason: null, banExpires: null, moderationVersion: version + 1,
+        });
+        expect(res.body.actions).toHaveLength(1);
+        expect(res.body.actions[0]).toMatchObject({
+            action: 'account_restored', reason: `Restored ${_label}`, expiresAt: null, projectId: null,
+        });
+        expect(await query('SELECT id FROM session WHERE "userId" = $1', [targetId])).toEqual([]);
+        expect(await query('SELECT id, visibility, published_commit_id FROM projects WHERE id = $1', [projectId]))
+            .toEqual(project);
+    });
+});
+
+describe('moderation transaction rollback', () => {
+    it.each([
+        ['account update', /UPDATE "user"\s+SET banned/],
+        ['session deletion', /DELETE FROM session WHERE "userId"/],
+        ['project update', /UPDATE projects SET visibility = 'private'/],
+        ['audit insertion', /INSERT INTO moderation_actions/],
+    ])('rolls back every suspension write when %s fails', async (_stage, pattern) => {
+        const { query } = await import('../../../server/db.js');
+        const suffix = _stage.replaceAll(' ', '-');
+        const projectId = `rollback-${suffix}`;
+        await query(`UPDATE "user"
+            SET banned = 0, "banReason" = NULL, "banExpires" = NULL,
+                "moderationVersion" = "moderationVersion" + 1
+            WHERE id = $1`, [targetId]);
+        await query('DELETE FROM session WHERE "userId" = $1', [targetId]);
+        await query(`INSERT INTO session
+            (id, "expiresAt", token, "createdAt", "updatedAt", "userId")
+            VALUES ($1, $2, $3, $4, $5, $6)`,
+        [`session-${suffix}`, new Date(Date.now() + 3600000).toISOString(), `rollback-token-${suffix}`,
+            new Date().toISOString(), new Date().toISOString(), targetId]);
+        await createPublishedProject(projectId, targetId, `Rollback ${_stage}`);
+        const beforeUser = await query('SELECT banned, "banReason", "banExpires", "moderationVersion" FROM "user" WHERE id = $1', [targetId]);
+        const beforeSessions = await query('SELECT id FROM session WHERE "userId" = $1 ORDER BY id', [targetId]);
+        const beforeProject = await query('SELECT visibility, published_commit_id FROM projects WHERE id = $1', [projectId]);
+        const beforeAudit = await query('SELECT id FROM moderation_actions WHERE target_user_id = $1 ORDER BY id', [targetId]);
+
+        faults.pattern = pattern;
+        const failed = await request(app).post(`/api/admin/users/${targetId}/suspend`).set('Cookie', adminCookie).send({
+            reason: `Rollback ${_stage}`, expiresAt: null, projectIdsToUnpublish: [projectId],
+            expectedModerationVersion: beforeUser[0].moderationVersion,
+        });
+        expect(failed.status).toBe(500);
+        expect(await query('SELECT banned, "banReason", "banExpires", "moderationVersion" FROM "user" WHERE id = $1', [targetId]))
+            .toEqual(beforeUser);
+        expect(await query('SELECT id FROM session WHERE "userId" = $1 ORDER BY id', [targetId])).toEqual(beforeSessions);
+        expect(await query('SELECT visibility, published_commit_id FROM projects WHERE id = $1', [projectId])).toEqual(beforeProject);
+        expect(await query('SELECT id FROM moderation_actions WHERE target_user_id = $1 ORDER BY id', [targetId])).toEqual(beforeAudit);
+    });
+
+    it('rolls back restoration account and session writes when audit insertion fails', async () => {
+        const { query } = await import('../../../server/db.js');
+        await query(`UPDATE "user"
+            SET banned = 1, "banReason" = 'Rollback restoration', "banExpires" = NULL,
+                "moderationVersion" = "moderationVersion" + 1
+            WHERE id = $1`, [targetId]);
+        await query('DELETE FROM session WHERE "userId" = $1', [targetId]);
+        await query(`INSERT INTO session
+            (id, "expiresAt", token, "createdAt", "updatedAt", "userId")
+            VALUES ($1, $2, $3, $4, $5, $6)`,
+        ['restore-rollback-session', new Date(Date.now() + 3600000).toISOString(), 'restore-rollback-token',
+            new Date().toISOString(), new Date().toISOString(), targetId]);
+        const beforeUser = await query('SELECT banned, "banReason", "banExpires", "moderationVersion" FROM "user" WHERE id = $1', [targetId]);
+        const beforeSessions = await query('SELECT id FROM session WHERE "userId" = $1 ORDER BY id', [targetId]);
+        const beforeAudit = await query('SELECT id FROM moderation_actions WHERE target_user_id = $1 ORDER BY id', [targetId]);
+
+        faults.pattern = /INSERT INTO moderation_actions/;
+        const failed = await request(app).post(`/api/admin/users/${targetId}/restore`).set('Cookie', adminCookie).send({
+            reason: 'Rollback failed restoration', expectedModerationVersion: beforeUser[0].moderationVersion,
+        });
+        expect(failed.status).toBe(500);
+        expect(await query('SELECT banned, "banReason", "banExpires", "moderationVersion" FROM "user" WHERE id = $1', [targetId]))
+            .toEqual(beforeUser);
+        expect(await query('SELECT id FROM session WHERE "userId" = $1 ORDER BY id', [targetId])).toEqual(beforeSessions);
+        expect(await query('SELECT id FROM moderation_actions WHERE target_user_id = $1 ORDER BY id', [targetId])).toEqual(beforeAudit);
+    });
+});
