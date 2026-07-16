@@ -39,6 +39,9 @@ export const createApp = () => {
         next();
     });
 
+    // Keep plugin ban enforcement, but reserve moderation writes for audited application routes.
+    app.use('/api/auth/admin', (_req, res) => res.status(404).json({ error: 'Not found' }));
+
     app.use('/api/auth', (req, res, next) => {
         const auth = getAuthForRequest(req);
         return toNodeHandler(auth)(req, res, next);

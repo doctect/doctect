@@ -301,6 +301,84 @@ describe('account moderation authorization and reads', () => {
     });
 });
 
+describe('Better Auth admin HTTP surface', () => {
+    it.each([
+        '/api/auth/admin',
+        '/api/auth/admin/list-users',
+        '/api/auth/admin/get-user?id=probe-user',
+        '/api/auth/admin/unknown/descendant',
+    ])('returns a JSON 404 for GET %s', async path => {
+        const res = await request(app).get(path).set('Cookie', adminCookie);
+        expect({ status: res.status, body: res.body }).toEqual({
+            status: 404,
+            body: { error: 'Not found' },
+        });
+    });
+
+    it('blocks dangerous plugin writes without changing users, moderation state, roles, or audit', async () => {
+        const { query } = await import('../../../server/db.js');
+        const timestamp = '2026-07-16T00:00:00.000Z';
+        const fixtures = [
+            ['plugin-ban-target', 'Plugin Ban', 'plugin-ban@test.dev', 'admin', 0, null],
+            ['plugin-unban-target', 'Plugin Unban', 'plugin-unban@test.dev', 'user', 1, 'Existing suspension'],
+            ['plugin-role-target', 'Plugin Role', 'plugin-role@test.dev', 'user', 0, null],
+            ['plugin-remove-target', 'Plugin Remove', 'plugin-remove@test.dev', 'user', 0, null],
+        ];
+        for (const [id, name, email, role, banned, banReason] of fixtures) {
+            await query(`INSERT INTO "user"
+                (id, name, email, "emailVerified", "createdAt", "updatedAt", role, banned, "banReason", "moderationVersion")
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+            [id, name, email, 1, timestamp, timestamp, role, banned, banReason, 0]);
+        }
+
+        const userSnapshot = () => query(`SELECT id, email, role, banned, "banReason", "banExpires", "moderationVersion"
+            FROM "user"
+            WHERE id LIKE 'plugin-%' OR email = 'plugin-created@test.dev'
+            ORDER BY id`);
+        const auditSnapshot = () => query(`SELECT id, actor_user_id, target_user_id, action, reason, project_id
+            FROM moderation_actions ORDER BY id`);
+        const beforeUsers = await userSnapshot();
+        const beforeAudit = await auditSnapshot();
+        let evidence;
+
+        try {
+            const calls = [
+                ['/api/auth/admin/ban-user', { userId: 'plugin-ban-target', banReason: 'Bypass ban' }],
+                ['/api/auth/admin/unban-user', { userId: 'plugin-unban-target' }],
+                ['/api/auth/admin/set-role', { userId: 'plugin-role-target', role: 'admin' }],
+                ['/api/auth/admin/create-user', {
+                    email: 'plugin-created@test.dev', password: 'Password-1234!', name: 'Plugin Created', role: 'admin',
+                }],
+                ['/api/auth/admin/remove-user', { userId: 'plugin-remove-target' }],
+            ];
+            const responses = [];
+            for (const [path, body] of calls) {
+                const res = await request(app).post(path).set('Cookie', adminCookie).send(body);
+                responses.push({ status: res.status, body: res.body });
+            }
+            evidence = {
+                responses,
+                users: await userSnapshot(),
+                audit: await auditSnapshot(),
+            };
+        } finally {
+            await query(`DELETE FROM account WHERE "userId" IN (
+                SELECT id FROM "user" WHERE id LIKE 'plugin-%' OR email = 'plugin-created@test.dev'
+            )`);
+            await query(`DELETE FROM session WHERE "userId" IN (
+                SELECT id FROM "user" WHERE id LIKE 'plugin-%' OR email = 'plugin-created@test.dev'
+            )`);
+            await query(`DELETE FROM "user" WHERE id LIKE 'plugin-%' OR email = 'plugin-created@test.dev'`);
+        }
+
+        expect(evidence).toEqual({
+            responses: Array.from({ length: 5 }, () => ({ status: 404, body: { error: 'Not found' } })),
+            users: beforeUsers,
+            audit: beforeAudit,
+        });
+    });
+});
+
 const createPublishedProject = async (id, ownerId, name) => {
     const { query } = await import('../../../server/db.js');
     await query(`INSERT INTO projects

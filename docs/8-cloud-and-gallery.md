@@ -161,6 +161,7 @@ Cloud storage is real, billed infrastructure, so this layer adds a set of guardr
 - **Origin checks on writes**: `checkOrigin` (defense-in-depth alongside `sameSite` cookies) rejects any non-`GET`/`HEAD`/`OPTIONS` request whose `Origin` header isn't in `TRUSTED_ORIGINS` (or the request's own host) with a 403 — a CSRF mitigation independent of the cookie policy itself.
 - **Host allow-list**: `isHostAllowed`/`ALLOWED_HOSTS` rejects requests for `Host` headers the server doesn't recognize before auth is even constructed for that request.
 - **Rate limits**: a global `writeLimiter` caps non-`GET` `/api/*` requests to 200 per 15 minutes per client; better-auth additionally rate-limits its own endpoints (20 requests/60s).
+- **Better Auth administrator HTTP routes are disabled**: the application retains Better Auth's administrator plugin because sign-in uses its active-ban and expiry enforcement, but every request to `/api/auth/admin` or a descendant returns JSON `404 { "error": "Not found" }` before Better Auth's HTTP handler. Account administration is exposed only through the application-owned routes documented below.
 - **Validation caps**: every commit (create, save, or merge) is run through `validateAppState` — 5MB max serialized size, 20,000 nodes, 50 variants, 50,000 elements total. A merge that would exceed any of these is rejected (409) with nothing written, even if the merge itself is otherwise conflict-free.
 - **Thumbnail magic-byte checks**: `parseThumbnail` doesn't trust the claimed `data:image/webp;base64,...` / `data:image/png;base64,...` prefix — it decodes the base64 payload, enforces a 300KB ceiling, and verifies the actual bytes (PNG signature, or `RIFF....WEBP`) match the claimed type before ever writing to the `thumbnails` table.
 - **CORP for public thumbnails**: `/api/thumbnails/:thumbId` explicitly sets `Cross-Origin-Resource-Policy: cross-origin` (overriding helmet's app-wide same-origin default) plus `X-Content-Type-Options: nosniff`, since these are unauthenticated, intentionally-public images that need to load as `<img>` tags across the client/API origin split (or a future CDN). This route reads no session/auth state, so relaxing CORP here crosses no privacy boundary.
@@ -170,15 +171,128 @@ Cloud storage is real, billed infrastructure, so this layer adds a set of guardr
 
 Administrators use `/admin/moderation` to search by email or username; there is no unfiltered account directory. Search and history pages contain at most 25 rows and use opaque cursors. Search/detail responses contain identity, role, creation time, suspension state, published-project metadata, and moderation history only. They never include passwords, provider tokens, session tokens, or session IP addresses.
 
-Suspension requires a trimmed reason of 1-1,000 characters and may be indefinite or expire at a future server-validated time. Status is `active` when `banned = true` and either no expiry exists or expiry is later than current server time; it is `expired` when `banned = true` but expiry has passed, and `none` otherwise. Every target session is deleted in same transaction, so existing cookies stop authorizing immediately. Better Auth rejects fresh sign-in with `BANNED_USER` while suspension is active. After temporary expiry, Better Auth permits fresh sign-in even though historical suspension fields and audit events remain available to administrators.
+Suspension requires a trimmed reason of 1-1,000 characters and may be indefinite or expire at a future server-validated time. Status is `active` when `banned = true` and either no expiry exists or expiry is later than current server time; it is `expired` when `banned = true` but expiry has passed, and `none` otherwise. Every target session is deleted in same transaction, so existing cookies stop authorizing immediately. Better Auth rejects fresh sign-in with `BANNED_USER` while suspension is active. After temporary expiry, next successful Better Auth sign-in clears `banned`, `banReason`, and `banExpires`, changing application status from `expired` to `none`; immutable audit rows remain.
 
 Suspension form lists currently published projects owned by target account. Only checked projects become private and have `published_commit_id` cleared; unchecked projects remain public. Suspension never automatically removes all account content. Restoration clears `banned`, `banReason`, and `banExpires`, increments moderation version, and defensively revokes any sessions, but never republishes content. Republishing remains an explicit owner action.
 
-Writes use optimistic moderation versions and one database transaction. Invalid reasons, expiries, project lists, cursors, or versions return `400`; non-admin callers and attempts to suspend administrator accounts return `403`; missing target accounts return `404`; stale moderation state or selected projects that are no longer both owned and published return `409`. Unexpected failures return `500` and roll back account, session, publication, and audit changes together.
+Application-owned `/api/admin/users/*` writes use optimistic moderation versions and one database transaction. Invalid reasons, expiries, project lists, cursors, or versions return `400`; non-admin callers and attempts to suspend administrator accounts return `403`; missing target accounts return `404`; stale moderation state or selected projects that are no longer both owned and published return `409`. Unexpected failures return `500` and roll back account, session, publication, and audit changes together.
 
-Every suspension and restoration creates a row in `moderation_actions`; each selected unpublish creates its own row with `project_id`. Rows snapshot actor/target IDs and emails, reason, expiry, and server timestamp. PostgreSQL and SQLite reject direct updates/deletes through database triggers. Operators can inspect one account's newest-first history in `/admin/moderation` or query `moderation_actions` by `target_user_id` or `target_email`, ordering by `created_at DESC, id DESC`; no application endpoint mutates audit history.
+Every suspension and restoration through application-owned `/api/admin/users/*` creates a row in `moderation_actions`; each selected unpublish creates its own row with `project_id`. Rows snapshot actor/target IDs and emails, reason, expiry, and server timestamp. PostgreSQL and SQLite reject direct updates/deletes through database triggers. Operators can inspect one account's newest-first history in `/admin/moderation` or query `moderation_actions` by `target_user_id` or `target_email`, ordering by `created_at DESC, id DESC`; no application endpoint mutates audit history. Better Auth's administrator HTTP endpoints are intentionally blocked so they cannot bypass these transactions, audit rows, moderation versions, selected-content handling, or administrator-target protection; plugin-internal sign-in ban enforcement remains enabled.
 
-Administrator accounts cannot be suspended through this workflow. Role changes remain an operator action. Application-level exact-IP and CIDR bans are intentionally absent: VPNs, shared networks, carrier NAT, IPv6 rotation, and incorrect proxy trust make such bans easy to evade or likely to block unrelated users. If evidence later requires IP controls, apply short-lived CDN, WAF, or load-balancer rules only after verifying ingress isolation and trusted proxy configuration. Horizontally scaled enforcement requires shared edge controls or a distributed store, not per-process application state.
+Administrator accounts cannot be suspended through application-owned workflow. Role changes remain an operator action. Application-level exact-IP and CIDR bans are intentionally absent: VPNs, shared networks, carrier NAT, IPv6 rotation, and incorrect proxy trust make such bans easy to evade or likely to block unrelated users. If evidence later requires IP controls, apply short-lived CDN, WAF, or load-balancer rules only after verifying ingress isolation and trusted proxy configuration. Horizontally scaled enforcement requires shared edge controls or a distributed store, not per-process application state.
+
+### Account moderation HTTP contract
+
+All four routes require an administrator session cookie. Anonymous requests receive `401 { "error": "Unauthorized" }`; authenticated non-administrators receive `403 { "error": "Forbidden: Admins only" }`. Dates are ISO-8601 strings and cursors are opaque strings returned by previous responses.
+
+Shared response objects used below have these exact fields:
+
+```ts
+type ModerationAccount = {
+  id: string;
+  email: string;
+  username: string | null;
+  role: string | null;
+  createdAt: string;
+  suspensionStatus: 'none' | 'active' | 'expired';
+  banExpires: string | null;
+  moderationVersion: number;
+  banReason: string | null;
+};
+
+type ModerationAction = {
+  id: string;
+  actorUserId: string;
+  actorEmail: string;
+  targetUserId: string;
+  targetEmail: string;
+  action: 'account_suspended' | 'account_restored' | 'project_unpublished';
+  reason: string;
+  expiresAt: string | null;
+  projectId: string | null;
+  createdAt: string;
+};
+```
+
+`GET /api/admin/users?q=<email-or-username>&cursor=<optional-cursor>` has no request body. Its `200` response is:
+
+```ts
+{
+  users: Array<{
+    id: string;
+    email: string;
+    username: string | null;
+    role: string | null;
+    createdAt: string;
+    suspensionStatus: 'none' | 'active' | 'expired';
+    banExpires: string | null;
+    moderationVersion: number;
+  }>;
+  nextCursor: string | null;
+}
+```
+
+Missing, blank, or over-100-character `q` receives `400 { "error": "q must be 1 to 100 characters" }`; malformed cursor receives `400 { "error": "cursor is invalid" }`.
+
+`GET /api/admin/users/:id?historyCursor=<optional-cursor>` has no request body. Its `200` response is:
+
+```ts
+{
+  account: {
+    id: string;
+    email: string;
+    username: string | null;
+    role: string | null;
+    createdAt: string;
+    suspensionStatus: 'none' | 'active' | 'expired';
+    banExpires: string | null;
+    moderationVersion: number;
+    banReason: string | null;
+  };
+  projects: Array<{ id: string; name: string; publishedAt: string | null }>;
+  history: {
+    items: Array<{
+      id: string;
+      actorUserId: string;
+      actorEmail: string;
+      targetUserId: string;
+      targetEmail: string;
+      action: 'account_suspended' | 'account_restored' | 'project_unpublished';
+      reason: string;
+      expiresAt: string | null;
+      projectId: string | null;
+      createdAt: string;
+    }>;
+    nextCursor: string | null;
+  };
+}
+```
+
+Missing user receives `404 { "error": "User not found" }`; malformed history cursor receives `400 { "error": "historyCursor is invalid" }`.
+
+`POST /api/admin/users/:id/suspend` request envelope:
+
+```ts
+{
+  reason: string;
+  expiresAt: string | null;
+  projectIdsToUnpublish: string[];
+  expectedModerationVersion: number;
+}
+```
+
+Its `200` response is `{ account: ModerationAccount, actions: ModerationAction[] }`, using exact account/action fields shown in detail response above. First action is `account_suspended`; each selected project adds one `project_unpublished` action. Invalid input receives `400 { "error": "Invalid suspension request" }`; administrator target receives `403 { "error": "Administrator accounts cannot be suspended" }`; missing user receives `404 { "error": "User not found" }`; concurrency or project-state conflict receives `409 { "error": "Moderation state changed; refresh and try again" }`; unexpected failure receives `500 { "error": "Account suspension failed" }`.
+
+`POST /api/admin/users/:id/restore` request envelope:
+
+```ts
+{
+  reason: string;
+  expectedModerationVersion: number;
+}
+```
+
+Its `200` response is `{ account: ModerationAccount, actions: [ModerationAction] }`, using exact fields shown above; sole action is `account_restored`. Invalid input receives `400 { "error": "Invalid restoration request" }`; missing user receives `404 { "error": "User not found" }`; stale version or target without persisted suspension receives `409 { "error": "Moderation state changed; refresh and try again" }`; unexpected failure receives `500 { "error": "Account restoration failed" }`.
 
 ## Known Limitations / Follow-ups
 
