@@ -2375,7 +2375,7 @@ const HierarchyGeneratorSession: React.FC<HierarchyGeneratorSessionProps> = ({
             <div className="px-3 py-1.5 bg-[#252526] border-b border-slate-700 flex items-center gap-2">
               <LayoutTemplate size={14} className="text-indigo-400" />
               <span className="text-xs font-medium text-slate-300">1. Define Templates</span>
-              <InfoTooltip position="below" title="Template Structure" pinnedPosition={{ bottom: 200, left: 40 }} defaultPinned={true} content={
+              <InfoTooltip position="below" title="Template Structure" pinnedPosition={{ bottom: 200, left: 40 }} content={
                 <div className="space-y-2">
                   <p className="font-semibold">Templates define page layouts</p>
                   <p>Each template has:</p>
@@ -2399,7 +2399,7 @@ const HierarchyGeneratorSession: React.FC<HierarchyGeneratorSessionProps> = ({
             <div className="px-3 py-1.5 bg-[#252526] border-b border-slate-700 flex items-center gap-2">
               <Network size={14} className="text-purple-400" />
               <span className="text-xs font-medium text-slate-300">2. Build Hierarchy</span>
-              <InfoTooltip position="below" title="Node Structure" pinnedPosition={{ bottom: 200, right: 40 }} defaultPinned={true} content={
+              <InfoTooltip position="below" title="Node Structure" pinnedPosition={{ bottom: 200, right: 40 }} content={
                 <div className="space-y-2">
                   <p className="font-semibold">Nodes are your pages/content</p>
                   <p>Each node has:</p>

@@ -72,6 +72,48 @@ describe('HierarchyGeneratorModal', () => {
         runGeneratorSandbox.mockResolvedValue({ ok: true, value: validSandboxValue });
     });
 
+    it('starts structure help closed and resets it after remount', () => {
+        const props = {
+            isOpen: true,
+            projectName: 'Current Project',
+            savedGenerator: saved,
+            onClose: vi.fn(),
+            onApplyGenerated: vi.fn(() => true),
+            onCreateGeneratedProject: vi.fn(() => true),
+        };
+        const view = render(<HierarchyGeneratorModal {...props} />);
+        const templateHelp = screen.getByRole('button', { name: 'Template Structure help' });
+        const nodeHelp = screen.getByRole('button', { name: 'Node Structure help' });
+
+        expect(screen.queryByText('Templates define page layouts')).not.toBeInTheDocument();
+        expect(screen.queryByText('Nodes are your pages/content')).not.toBeInTheDocument();
+
+        fireEvent.mouseEnter(templateHelp);
+        expect(screen.getByText('Templates define page layouts')).toBeVisible();
+        fireEvent.mouseLeave(templateHelp);
+        expect(screen.queryByText('Templates define page layouts')).not.toBeInTheDocument();
+
+        fireEvent.mouseEnter(nodeHelp);
+        expect(screen.getByText('Nodes are your pages/content')).toBeVisible();
+        fireEvent.mouseLeave(nodeHelp);
+        expect(screen.queryByText('Nodes are your pages/content')).not.toBeInTheDocument();
+
+        fireEvent.click(templateHelp);
+        fireEvent.mouseLeave(templateHelp);
+        expect(screen.getByText('Templates define page layouts')).toBeVisible();
+        fireEvent.click(screen.getByRole('button', { name: 'Close Template Structure' }));
+        expect(screen.queryByText('Templates define page layouts')).not.toBeInTheDocument();
+
+        fireEvent.click(nodeHelp);
+        fireEvent.mouseLeave(nodeHelp);
+        expect(screen.getByText('Nodes are your pages/content')).toBeVisible();
+
+        view.unmount();
+        render(<HierarchyGeneratorModal {...props} />);
+        expect(screen.queryByText('Templates define page layouts')).not.toBeInTheDocument();
+        expect(screen.queryByText('Nodes are your pages/content')).not.toBeInTheDocument();
+    });
+
     it('opens saved source exactly without executing it', () => {
         renderModal();
 
