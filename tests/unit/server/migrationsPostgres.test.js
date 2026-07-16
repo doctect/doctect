@@ -3,13 +3,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { migrations } from '../../../server/migrations/index.js';
 
 const dbCalls = vi.hoisted(() => []);
+const migrationState = vi.hoisted(() => ({ pendingId: '010_published_metadata' }));
 vi.mock('../../../server/db.js', () => ({
     dbType: 'postgres',
     query: vi.fn(async () => { throw new Error('Migration query escaped transaction'); }),
     withTransaction: vi.fn(async callback => callback(async (text, params = []) => {
         dbCalls.push({ text, params });
         if (text === 'SELECT id FROM app_migrations') {
-            return migrations.filter(migration => migration.id !== '010_published_metadata').map(migration => ({ id: migration.id }));
+            return migrations
+                .filter(migration => migration.id !== migrationState.pendingId)
+                .map(migration => ({ id: migration.id }));
         }
         return [];
     })),
@@ -18,6 +21,7 @@ vi.mock('../../../server/db.js', () => ({
 describe('PostgreSQL migration contract', () => {
     beforeEach(() => {
         dbCalls.length = 0;
+        migrationState.pendingId = '010_published_metadata';
         vi.resetModules();
     });
 
@@ -36,6 +40,24 @@ describe('PostgreSQL migration contract', () => {
         expect(dbCalls).toContainEqual({
             text: 'INSERT INTO app_migrations (id) VALUES ($1)',
             params: ['010_published_metadata'],
+        });
+    });
+
+    it('executes PostgreSQL moderation trigger bodies as intact array statements', async () => {
+        migrationState.pendingId = '011_account_moderation';
+        const { runMigrations } = await import('../../../server/migrations.js');
+        await runMigrations();
+
+        const texts = dbCalls.map(call => call.text);
+        expect(texts).toContain('ALTER TABLE "user" ADD COLUMN IF NOT EXISTS "banReason" TEXT');
+        expect(texts).toContain('ALTER TABLE "user" ADD COLUMN IF NOT EXISTS "banExpires" TIMESTAMP');
+        expect(texts).toContain('ALTER TABLE "user" ADD COLUMN IF NOT EXISTS "moderationVersion" INTEGER NOT NULL DEFAULT 0');
+        const functionStatement = texts.find(text => text.includes('CREATE OR REPLACE FUNCTION reject_moderation_action_mutation()'));
+        expect(functionStatement).toContain("RAISE EXCEPTION 'moderation_actions is append-only';");
+        expect(functionStatement).toContain('$$ LANGUAGE plpgsql');
+        expect(dbCalls).toContainEqual({
+            text: 'INSERT INTO app_migrations (id) VALUES ($1)',
+            params: ['011_account_moderation'],
         });
     });
 });

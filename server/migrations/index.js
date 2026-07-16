@@ -301,5 +301,74 @@ export const migrations = [
                 published_at = updated_at
             WHERE published_commit_id IS NOT NULL AND published_name IS NULL
         `
+    },
+    {
+        id: '011_account_moderation',
+        pg: [
+            'ALTER TABLE "user" ADD COLUMN IF NOT EXISTS "banReason" TEXT',
+            'ALTER TABLE "user" ADD COLUMN IF NOT EXISTS "banExpires" TIMESTAMP',
+            'ALTER TABLE "user" ADD COLUMN IF NOT EXISTS "moderationVersion" INTEGER NOT NULL DEFAULT 0',
+            `CREATE TABLE IF NOT EXISTS moderation_actions (
+                id TEXT PRIMARY KEY,
+                actor_user_id TEXT NOT NULL,
+                actor_email TEXT NOT NULL,
+                target_user_id TEXT NOT NULL,
+                target_email TEXT NOT NULL,
+                action TEXT NOT NULL CHECK (action IN ('account_suspended', 'account_restored', 'project_unpublished')),
+                reason TEXT NOT NULL,
+                expires_at TIMESTAMP,
+                project_id TEXT,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )`,
+            `CREATE INDEX IF NOT EXISTS idx_moderation_actions_target_time
+                ON moderation_actions(target_user_id, created_at DESC, id DESC)`,
+            `CREATE INDEX IF NOT EXISTS idx_moderation_actions_actor_time
+                ON moderation_actions(actor_user_id, created_at DESC, id DESC)`,
+            `CREATE OR REPLACE FUNCTION reject_moderation_action_mutation()
+             RETURNS trigger AS $$
+             BEGIN
+                 RAISE EXCEPTION 'moderation_actions is append-only';
+             END;
+             $$ LANGUAGE plpgsql`,
+            'DROP TRIGGER IF EXISTS moderation_actions_no_update ON moderation_actions',
+            `CREATE TRIGGER moderation_actions_no_update
+                BEFORE UPDATE ON moderation_actions
+                FOR EACH ROW EXECUTE FUNCTION reject_moderation_action_mutation()`,
+            'DROP TRIGGER IF EXISTS moderation_actions_no_delete ON moderation_actions',
+            `CREATE TRIGGER moderation_actions_no_delete
+                BEFORE DELETE ON moderation_actions
+                FOR EACH ROW EXECUTE FUNCTION reject_moderation_action_mutation()`,
+        ],
+        sqlite: [
+            'ALTER TABLE "user" ADD COLUMN "banReason" TEXT',
+            'ALTER TABLE "user" ADD COLUMN "banExpires" TIMESTAMP',
+            'ALTER TABLE "user" ADD COLUMN "moderationVersion" INTEGER NOT NULL DEFAULT 0',
+            `CREATE TABLE IF NOT EXISTS moderation_actions (
+                id TEXT PRIMARY KEY,
+                actor_user_id TEXT NOT NULL,
+                actor_email TEXT NOT NULL,
+                target_user_id TEXT NOT NULL,
+                target_email TEXT NOT NULL,
+                action TEXT NOT NULL CHECK (action IN ('account_suspended', 'account_restored', 'project_unpublished')),
+                reason TEXT NOT NULL,
+                expires_at TIMESTAMP,
+                project_id TEXT,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )`,
+            `CREATE INDEX IF NOT EXISTS idx_moderation_actions_target_time
+                ON moderation_actions(target_user_id, created_at DESC, id DESC)`,
+            `CREATE INDEX IF NOT EXISTS idx_moderation_actions_actor_time
+                ON moderation_actions(actor_user_id, created_at DESC, id DESC)`,
+            `CREATE TRIGGER IF NOT EXISTS moderation_actions_no_update
+                BEFORE UPDATE ON moderation_actions
+                BEGIN
+                    SELECT RAISE(ABORT, 'moderation_actions is append-only');
+                END`,
+            `CREATE TRIGGER IF NOT EXISTS moderation_actions_no_delete
+                BEFORE DELETE ON moderation_actions
+                BEGIN
+                    SELECT RAISE(ABORT, 'moderation_actions is append-only');
+                END`,
+        ],
     }
 ];

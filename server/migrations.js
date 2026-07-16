@@ -19,7 +19,9 @@ export const runMigrations = async () => {
         for (const migration of migrations) {
             if (applied.has(migration.id)) continue;
             const sql = dbType === 'postgres' ? migration.pg : (migration.sqlite ?? migration.pg);
-            const statements = sql.split(';').map(statement => statement.trim()).filter(Boolean);
+            const statements = Array.isArray(sql)
+                ? sql.map(statement => statement.trim()).filter(Boolean)
+                : sql.split(';').map(statement => statement.trim()).filter(Boolean);
             for (const statement of statements) {
                 await txQuery(statement);
             }
