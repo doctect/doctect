@@ -6,6 +6,9 @@ import { lockProjectRows } from '../projectLocks.js';
 
 const router = Router();
 const PAGE_SIZE = 25;
+const MAX_CURSOR_LENGTH = 512;
+const BASE64URL_PATTERN = /^[A-Za-z0-9_-]+$/;
+const TIMESTAMP_PATTERN = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,6}))?(?:Z|([+-])(\d{2}):(\d{2}))?$/;
 
 const asIso = value => value == null ? null : new Date(value).toISOString();
 const isBanned = value => value === true || value === 1 || value === '1';
@@ -47,12 +50,35 @@ const actionDto = row => ({
 
 const encodeCursor = values => Buffer.from(JSON.stringify(values)).toString('base64url');
 const escapeLike = value => value.replace(/\\/g, '\\\\').replace(/[%_]/g, character => `\\${character}`);
-const decodeCursor = (raw, expectedLength) => {
-    if (!raw) return null;
+const isCursorPart = value => typeof value === 'string' && value.length > 0 && value.length <= 320;
+const isTimestampCursor = value => {
+    if (!isCursorPart(value)) return false;
+    const match = TIMESTAMP_PATTERN.exec(value);
+    if (!match) return false;
+    const [, yearText, monthText, dayText, hourText, minuteText, secondText,
+        , offsetSign, offsetHourText, offsetMinuteText] = match;
+    const year = Number(yearText);
+    const month = Number(monthText);
+    const day = Number(dayText);
+    const hour = Number(hourText);
+    const minute = Number(minuteText);
+    const second = Number(secondText);
+    if (year < 1 || month < 1 || month > 12 || hour > 23 || minute > 59 || second > 59) return false;
+    const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+    const daysInMonth = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    if (day < 1 || day > daysInMonth[month - 1]) return false;
+    if (offsetSign && (Number(offsetHourText) > 23 || Number(offsetMinuteText) > 59)) return false;
+    return true;
+};
+const decodeCursor = (raw, validators) => {
+    if (typeof raw !== 'string' || raw.length > MAX_CURSOR_LENGTH || !BASE64URL_PATTERN.test(raw)) return null;
     try {
-        const values = JSON.parse(Buffer.from(String(raw), 'base64url').toString('utf8'));
-        if (!Array.isArray(values) || values.length !== expectedLength
-            || values.some(value => typeof value !== 'string' || !value)) {
+        const decoded = Buffer.from(raw, 'base64url');
+        if (decoded.toString('base64url') !== raw) return null;
+        const values = JSON.parse(decoded.toString('utf8'));
+        if (!Array.isArray(values) || values.length !== validators.length
+            || values.some((value, index) => !validators[index](value))
+            || encodeCursor(values) !== raw) {
             return null;
         }
         return values;
@@ -66,7 +92,9 @@ router.use('/api/admin/users', requireAdmin);
 router.get('/api/admin/users', async (req, res) => {
     const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
     if (!q || q.length > 100) return res.status(400).json({ error: 'q must be 1 to 100 characters' });
-    const cursor = req.query.cursor === undefined ? [] : decodeCursor(req.query.cursor, 2);
+    const cursor = req.query.cursor === undefined
+        ? []
+        : decodeCursor(req.query.cursor, [isCursorPart, isCursorPart]);
     if (cursor === null) return res.status(400).json({ error: 'cursor is invalid' });
 
     const escapedQuery = escapeLike(q.toLowerCase());
@@ -94,7 +122,9 @@ router.get('/api/admin/users', async (req, res) => {
 });
 
 router.get('/api/admin/users/:id', async (req, res) => {
-    const cursor = req.query.historyCursor === undefined ? [] : decodeCursor(req.query.historyCursor, 2);
+    const cursor = req.query.historyCursor === undefined
+        ? []
+        : decodeCursor(req.query.historyCursor, [isTimestampCursor, isCursorPart]);
     if (cursor === null) return res.status(400).json({ error: 'historyCursor is invalid' });
     const users = await query(
         `SELECT id, email, username, role, "createdAt", banned, "banReason", "banExpires", "moderationVersion"
@@ -114,11 +144,14 @@ router.get('/api/admin/users/:id', async (req, res) => {
     let before = '';
     if (cursor.length) {
         params.push(cursor[0], cursor[0], cursor[1]);
-        before = 'AND (created_at < $2 OR (created_at = $3 AND id < $4))';
+        before = dbType === 'postgres'
+            ? 'AND (created_at < CAST($2 AS TIMESTAMP) OR (created_at = CAST($3 AS TIMESTAMP) AND id < $4))'
+            : 'AND (created_at < $2 OR (created_at = $3 AND id < $4))';
     }
     const actions = await query(
         `SELECT id, actor_user_id, actor_email, target_user_id, target_email,
-                action, reason, expires_at, project_id, created_at
+                action, reason, expires_at, project_id, created_at,
+                CAST(created_at AS TEXT) AS created_at_cursor
          FROM moderation_actions
          WHERE target_user_id = $1 ${before}
          ORDER BY created_at DESC, id DESC
@@ -137,7 +170,7 @@ router.get('/api/admin/users/:id', async (req, res) => {
         history: {
             items: historyPage.map(actionDto),
             nextCursor: actions.length > PAGE_SIZE
-                ? encodeCursor([typeof last.created_at === 'string' ? last.created_at : asIso(last.created_at), last.id])
+                ? encodeCursor([last.created_at_cursor, last.id])
                 : null,
         },
     });
