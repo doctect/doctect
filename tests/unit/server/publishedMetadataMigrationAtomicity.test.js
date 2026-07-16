@@ -54,6 +54,19 @@ beforeAll(async () => {
     ]) {
         await query('INSERT INTO app_migrations (id) VALUES ($1)', [id]);
     }
+    await query(`CREATE TABLE "user" (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        email TEXT NOT NULL UNIQUE,
+        "emailVerified" BOOLEAN NOT NULL DEFAULT FALSE,
+        image TEXT,
+        "createdAt" TIMESTAMP NOT NULL,
+        "updatedAt" TIMESTAMP NOT NULL,
+        role TEXT,
+        banned BOOLEAN,
+        username TEXT,
+        "displayUsername" TEXT
+    )`);
     await query(`CREATE TABLE projects (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
