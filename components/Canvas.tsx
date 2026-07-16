@@ -1578,6 +1578,7 @@ export const Canvas: React.FC<CanvasProps> = ({
                                 if (!layer?.locked) setEditingElementId(element.id);
                             }}
                             isEditing={editingElementId === element.id}
+                            renderScale={scale}
                         />
                     )}
                     backgroundOverlay={showGrid ? (

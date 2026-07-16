@@ -62,6 +62,7 @@ export const ReadOnlyPagePreview = forwardRef<HTMLDivElement, ReadOnlyPagePrevie
                 tool="select"
                 showHandles={false}
                 isEditing={false}
+                renderScale={scale}
               />
             )
           ))}

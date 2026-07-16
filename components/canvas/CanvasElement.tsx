@@ -4,6 +4,7 @@ import DOMPurify from 'dompurify';
 import { TemplateElement, AppNode } from '../../types';
 import { hasVisibleTextFontSize, isVisibleText, resolveTextFontSize } from '../../services/textVisibility';
 import { getElementBounds, traverseGridData } from './elementBounds';
+import { buildPatternBackgroundStyle } from './patternStyle';
 
 
 // Font family mapping for CSS (defined outside component for performance)
@@ -74,6 +75,7 @@ interface CanvasElementProps {
     showHandles: boolean;
     onDoubleClick?: () => void;
     isEditing?: boolean;
+    renderScale?: number;
 }
 
 // Helper: Evaluate simple arithmetic expression or look up field
@@ -245,7 +247,7 @@ const resolveText = (text: string | undefined, node: AppNode | undefined, nodes:
 };
 
 export const CanvasElement: React.FC<CanvasElementProps> = (props) => {
-    const { element, selected, nodes, currentNodeId, tool, showHandles, onDoubleClick, isEditing } = props;
+    const { element, selected, nodes, currentNodeId, tool, showHandles, onDoubleClick, isEditing, renderScale = 1 } = props;
 
     const contextNode = nodes[currentNodeId];
     const effectiveFontSize = resolveTextFontSize(element.fontSize);
@@ -285,16 +287,13 @@ export const CanvasElement: React.FC<CanvasElementProps> = (props) => {
         }
 
         if (el.fillType === 'pattern' && el.fill) {
-            const color = el.fill;
-            const spacing = el.patternSpacing || 10;
-            const weight = el.patternWeight || 1;
-            if (el.patternType === 'lines-h') bgStyle.backgroundImage = `repeating-linear-gradient(180deg, ${color}, ${color} ${weight}px, transparent ${weight}px, transparent ${spacing}px)`;
-            else if (el.patternType === 'lines-v') bgStyle.backgroundImage = `repeating-linear-gradient(90deg, ${color}, ${color} ${weight}px, transparent ${weight}px, transparent ${spacing}px)`;
-            else if (el.patternType === 'dots') {
-                const radius = weight / 2;
-                bgStyle.backgroundImage = `radial-gradient(circle, ${color} ${radius}px, transparent ${radius}px)`;
-                bgStyle.backgroundSize = `${spacing}px ${spacing}px`;
-            }
+            Object.assign(bgStyle, buildPatternBackgroundStyle({
+                type: el.patternType,
+                color: el.fill,
+                spacing: el.patternSpacing,
+                weight: el.patternWeight,
+                renderScale,
+            }));
         }
         return bgStyle;
     };
@@ -530,18 +529,15 @@ export const CanvasElement: React.FC<CanvasElementProps> = (props) => {
                     const cellBorderSides = getCellBorderSides(row, col);
 
                     // Build pattern fill CSS if needed
-                    const patternStyle: React.CSSProperties = {};
-                    if (element.fillType === 'pattern' && cellFill) {
-                        const spacing = element.patternSpacing || 10;
-                        const weight = element.patternWeight || 1;
-                        if (element.patternType === 'lines-h') patternStyle.backgroundImage = `repeating-linear-gradient(180deg, ${cellFill}, ${cellFill} ${weight}px, transparent ${weight}px, transparent ${spacing}px)`;
-                        else if (element.patternType === 'lines-v') patternStyle.backgroundImage = `repeating-linear-gradient(90deg, ${cellFill}, ${cellFill} ${weight}px, transparent ${weight}px, transparent ${spacing}px)`;
-                        else if (element.patternType === 'dots') {
-                            const radius = weight / 2;
-                            patternStyle.backgroundImage = `radial-gradient(circle, ${cellFill} ${radius}px, transparent ${radius}px)`;
-                            patternStyle.backgroundSize = `${spacing}px ${spacing}px`;
-                        }
-                    }
+                    const patternStyle = element.fillType === 'pattern' && cellFill
+                        ? buildPatternBackgroundStyle({
+                            type: element.patternType,
+                            color: cellFill,
+                            spacing: element.patternSpacing,
+                            weight: element.patternWeight,
+                            renderScale,
+                        })
+                        : {};
 
                     return (
                         <div key={idx} style={{
