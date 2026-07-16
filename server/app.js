@@ -11,6 +11,7 @@ import meRouter from './routes/me.js';
 import projectsRouter from './routes/projects.js';
 import galleryRouter from './routes/gallery.js';
 import mergeRequestsRouter from './routes/mergeRequests.js';
+import adminModerationRouter from './routes/adminModeration.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -72,6 +73,7 @@ export const createApp = () => {
     app.use(projectsRouter);
     app.use(galleryRouter);
     app.use(mergeRequestsRouter);
+    app.use(adminModerationRouter);
 
     const distPath = path.join(__dirname, '../dist');
     app.use(express.static(distPath));
