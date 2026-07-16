@@ -33,6 +33,24 @@ export const verifyUserByEmail = async (email) => {
     await query('UPDATE "user" SET "emailVerified" = $1 WHERE email = $2', [verified, email]);
 };
 
+export const promoteUserToAdmin = async (email) => {
+    const users = await query(
+        `UPDATE "user" SET role = 'admin' WHERE email = $1 RETURNING id, email, role`,
+        [email],
+    );
+    if (users.length !== 1 || users[0].role !== 'admin') {
+        throw new Error(`admin promotion failed for ${email}`);
+    }
+};
+
+export const moderationActionsForTarget = email => query(
+    `SELECT action, reason, project_id
+     FROM moderation_actions
+     WHERE target_email = $1
+     ORDER BY action`,
+    [email],
+);
+
 // Signs up through the real /login UI form, then completes verification out
 // of band (DB write above) and finishes by actually signing in through the
 // same form -- email/password state survives the "Back" click and the
