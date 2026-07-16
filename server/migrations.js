@@ -23,6 +23,20 @@ export const runMigrations = async () => {
                 ? sql.map(statement => statement.trim()).filter(Boolean)
                 : sql.split(';').map(statement => statement.trim()).filter(Boolean);
             for (const statement of statements) {
+                if (dbType === 'sqlite') {
+                    const addColumn = statement.match(
+                        /^ALTER TABLE\s+(?:"((?:[^"]|"")*)"|([A-Za-z_][A-Za-z0-9_]*))\s+ADD COLUMN\s+(?:"((?:[^"]|"")*)"|([A-Za-z_][A-Za-z0-9_]*))(?=\s|$)/i,
+                    );
+                    if (addColumn) {
+                        const tableName = (addColumn[1] ?? addColumn[2]).replaceAll('""', '"');
+                        const columnName = (addColumn[3] ?? addColumn[4]).replaceAll('""', '"');
+                        const quotedTable = `"${tableName.replaceAll('"', '""')}"`;
+                        const columns = await txQuery(`PRAGMA table_info(${quotedTable})`);
+                        if (columns.some(column => column.name.toLowerCase() === columnName.toLowerCase())) {
+                            continue;
+                        }
+                    }
+                }
                 await txQuery(statement);
             }
             await txQuery('INSERT INTO app_migrations (id) VALUES ($1)', [migration.id]);

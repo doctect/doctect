@@ -53,8 +53,18 @@ describe('PostgreSQL migration contract', () => {
         expect(texts).toContain('ALTER TABLE "user" ADD COLUMN IF NOT EXISTS "banExpires" TIMESTAMP');
         expect(texts).toContain('ALTER TABLE "user" ADD COLUMN IF NOT EXISTS "moderationVersion" INTEGER NOT NULL DEFAULT 0');
         const functionStatement = texts.find(text => text.includes('CREATE OR REPLACE FUNCTION reject_moderation_action_mutation()'));
-        expect(functionStatement).toContain("RAISE EXCEPTION 'moderation_actions is append-only';");
-        expect(functionStatement).toContain('$$ LANGUAGE plpgsql');
+        expect(functionStatement).toBe(`CREATE OR REPLACE FUNCTION reject_moderation_action_mutation()
+             RETURNS trigger AS $$
+             BEGIN
+                 RAISE EXCEPTION 'moderation_actions is append-only';
+             END;
+             $$ LANGUAGE plpgsql`);
+        expect(texts).toContain(`CREATE TRIGGER moderation_actions_no_update
+                BEFORE UPDATE ON moderation_actions
+                FOR EACH ROW EXECUTE FUNCTION reject_moderation_action_mutation()`);
+        expect(texts).toContain(`CREATE TRIGGER moderation_actions_no_delete
+                BEFORE DELETE ON moderation_actions
+                FOR EACH ROW EXECUTE FUNCTION reject_moderation_action_mutation()`);
         expect(dbCalls).toContainEqual({
             text: 'INSERT INTO app_migrations (id) VALUES ($1)',
             params: ['011_account_moderation'],
