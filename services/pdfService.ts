@@ -628,6 +628,16 @@ const drawPattern = (doc: jsPDF, type: string, x: number, y: number, w: number, 
             const lx = x + i + halfW;
             doc.line(lx, y, lx, y + h);
         }
+    } else if (type === 'lines-d') {
+        const diagonalStep = step * Math.SQRT2;
+        const maxOffset = w + h;
+        for (let offset = halfW; offset <= maxOffset; offset += diagonalStep) {
+            const startX = Math.max(0, offset - h);
+            const startY = Math.min(h, offset);
+            const endX = Math.min(w, offset);
+            const endY = Math.max(0, offset - w);
+            doc.line(x + startX, y + startY, x + endX, y + endY);
+        }
     }
 };
 
