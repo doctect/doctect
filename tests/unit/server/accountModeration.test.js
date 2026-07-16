@@ -300,3 +300,171 @@ describe('account moderation authorization and reads', () => {
         expect((await request(app).get(`/api/admin/users/${targetId}?historyCursor=broken`).set('Cookie', adminCookie)).status).toBe(400);
     });
 });
+
+const createPublishedProject = async (id, ownerId, name) => {
+    const { query } = await import('../../../server/db.js');
+    await query(`INSERT INTO projects
+        (id, owner_id, name, visibility, published_commit_id, published_name, published_at)
+        VALUES ($1, $2, $3, 'public', $4, $5, $6)`,
+    [id, ownerId, name, `commit-${id}`, name, '2026-07-16T11:00:00.000Z']);
+};
+
+describe('account suspension', () => {
+    beforeEach(async () => {
+        const { query } = await import('../../../server/db.js');
+        await query(`UPDATE "user"
+            SET banned = 0, "banReason" = NULL, "banExpires" = NULL, "moderationVersion" = 0
+            WHERE id = $1`, [targetId]);
+        await query('DELETE FROM session WHERE "userId" = $1', [targetId]);
+    });
+
+    it('rejects malformed input and administrator targets with exact status classes', async () => {
+        const { query } = await import('../../../server/db.js');
+        const adminId = (await query('SELECT id FROM "user" WHERE email = $1', ['moderator@test.dev']))[0].id;
+        const base = { reason: 'Confirmed abuse', expiresAt: null, projectIdsToUnpublish: [], expectedModerationVersion: 0 };
+        const malformed = [
+            { ...base, reason: ' ' },
+            { ...base, reason: 'x'.repeat(1001) },
+            { ...base, expiresAt: 'not-a-date' },
+            { ...base, expiresAt: new Date(Date.now() - 1000).toISOString() },
+            { ...base, projectIdsToUnpublish: ['same', 'same'] },
+            { ...base, projectIdsToUnpublish: ['same', ' same '] },
+            { ...base, projectIdsToUnpublish: [''] },
+            { ...base, projectIdsToUnpublish: ['x'.repeat(201)] },
+            { ...base, expectedModerationVersion: -1 },
+            { ...base, expectedModerationVersion: 0.5 },
+        ];
+        for (const body of malformed) {
+            const res = await request(app).post(`/api/admin/users/${targetId}/suspend`).set('Cookie', adminCookie).send(body);
+            expect(res.status).toBe(400);
+        }
+        const forbidden = await request(app).post(`/api/admin/users/${adminId}/suspend`).set('Cookie', adminCookie).send(base);
+        expect(forbidden.status).toBe(403);
+        expect((await request(app).post('/api/admin/users/missing/suspend').set('Cookie', adminCookie).send(base)).status).toBe(404);
+    });
+
+    it('atomically applies an indefinite suspension, revokes every session, and unpublishes only selected projects', async () => {
+        const { query } = await import('../../../server/db.js');
+        const firstSignin = await request(app).post('/api/auth/sign-in/email')
+            .send({ email: 'target@test.dev', password: 'Password-1234!' });
+        const firstCookie = firstSignin.headers['set-cookie'].map(cookie => cookie.split(';')[0]).join('; ');
+        await request(app).post('/api/auth/sign-in/email')
+            .send({ email: 'target@test.dev', password: 'Password-1234!' });
+        await createPublishedProject('selected-project', targetId, 'Selected project');
+        await createPublishedProject('untouched-project', targetId, 'Untouched project');
+
+        const res = await request(app).post(`/api/admin/users/${targetId}/suspend`).set('Cookie', adminCookie).send({
+            reason: '  Confirmed repeated abuse  ',
+            expiresAt: null,
+            projectIdsToUnpublish: ['selected-project'],
+            expectedModerationVersion: 0,
+        });
+        expect(res.status).toBe(200);
+        expect(res.body.account).toMatchObject({
+            suspensionStatus: 'active', banReason: 'Confirmed repeated abuse', banExpires: null, moderationVersion: 1,
+        });
+        expect(res.body.actions.map(action => action.action)).toEqual(['account_suspended', 'project_unpublished']);
+        expect(await query('SELECT id FROM session WHERE "userId" = $1', [targetId])).toEqual([]);
+        expect((await request(app).get('/api/projects').set('Cookie', firstCookie)).status).toBe(401);
+        expect((await query('SELECT visibility, published_commit_id FROM projects WHERE id = $1', ['selected-project']))[0])
+            .toEqual({ visibility: 'private', published_commit_id: null });
+        expect((await query('SELECT visibility, published_commit_id FROM projects WHERE id = $1', ['untouched-project']))[0])
+            .toEqual({ visibility: 'public', published_commit_id: 'commit-untouched-project' });
+    });
+
+    it('blocks fresh sign-in while active and permits sign-in after temporary expiry', async () => {
+        const expiresAt = new Date(Date.now() + 60_000).toISOString();
+        const suspended = await request(app).post(`/api/admin/users/${targetId}/suspend`).set('Cookie', adminCookie).send({
+            reason: 'Temporary login block', expiresAt, projectIdsToUnpublish: [], expectedModerationVersion: 0,
+        });
+        expect(suspended.status).toBe(200);
+
+        const active = await request(app).post('/api/auth/sign-in/email')
+            .send({ email: 'target@test.dev', password: 'Password-1234!' });
+        expect(active.status).toBe(403);
+        expect(active.body.code).toBe('BANNED_USER');
+
+        const { query } = await import('../../../server/db.js');
+        await query('UPDATE "user" SET "banExpires" = $1 WHERE id = $2', [new Date(Date.now() - 1000).toISOString(), targetId]);
+        const detail = await request(app).get(`/api/admin/users/${targetId}`).set('Cookie', adminCookie);
+        expect(detail.body.account.suspensionStatus).toBe('expired');
+        const expired = await request(app).post('/api/auth/sign-in/email')
+            .send({ email: 'target@test.dev', password: 'Password-1234!' });
+        expect(expired.status).toBe(200);
+        expect((await query('SELECT banned, "banReason", "banExpires" FROM "user" WHERE id = $1', [targetId]))[0])
+            .toEqual({ banned: 0, banReason: null, banExpires: null });
+    });
+
+    it('persists a future temporary expiry and records complete actor/target/project audit snapshots', async () => {
+        const { query } = await import('../../../server/db.js');
+        await createPublishedProject('temporary-project', targetId, 'Temporary project');
+        const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+        const res = await request(app).post(`/api/admin/users/${targetId}/suspend`).set('Cookie', adminCookie).send({
+            reason: 'Temporary investigation', expiresAt,
+            projectIdsToUnpublish: ['temporary-project'], expectedModerationVersion: 0,
+        });
+        expect(res.status).toBe(200);
+        expect(res.body.account.banExpires).toBe(expiresAt);
+        for (const action of res.body.actions) {
+            expect(action).toMatchObject({
+                actorEmail: 'moderator@test.dev', targetUserId: targetId,
+                targetEmail: 'target@test.dev', reason: 'Temporary investigation', expiresAt,
+            });
+            expect(new Date(action.createdAt).toString()).not.toBe('Invalid Date');
+        }
+        expect(res.body.actions.find(action => action.action === 'project_unpublished').projectId).toBe('temporary-project');
+        expect(res.body.actions.find(action => action.action === 'account_suspended').projectId).toBeNull();
+
+        const persisted = await query(`SELECT actor_email, target_user_id, target_email, action, reason, expires_at, project_id
+            FROM moderation_actions WHERE reason = $1 ORDER BY action`, ['Temporary investigation']);
+        expect(persisted).toEqual([
+            {
+                actor_email: 'moderator@test.dev', target_user_id: targetId, target_email: 'target@test.dev',
+                action: 'account_suspended', reason: 'Temporary investigation', expires_at: expiresAt, project_id: null,
+            },
+            {
+                actor_email: 'moderator@test.dev', target_user_id: targetId, target_email: 'target@test.dev',
+                action: 'project_unpublished', reason: 'Temporary investigation', expires_at: expiresAt,
+                project_id: 'temporary-project',
+            },
+        ]);
+    });
+
+    it('returns 409 for stale version, active target, or invalid project selection without partial changes', async () => {
+        const { query } = await import('../../../server/db.js');
+        await query('UPDATE "user" SET "moderationVersion" = $1 WHERE id = $2', [1, targetId]);
+        const stale = await request(app).post(`/api/admin/users/${targetId}/suspend`).set('Cookie', adminCookie).send({
+            reason: 'Stale', expiresAt: null, projectIdsToUnpublish: [], expectedModerationVersion: 0,
+        });
+        expect(stale.status).toBe(409);
+
+        await query('UPDATE "user" SET banned = $1 WHERE id = $2', [1, targetId]);
+        const active = await request(app).post(`/api/admin/users/${targetId}/suspend`).set('Cookie', adminCookie).send({
+            reason: 'Duplicate', expiresAt: null, projectIdsToUnpublish: [], expectedModerationVersion: 1,
+        });
+        expect(active.status).toBe(409);
+        await query('UPDATE "user" SET banned = $1 WHERE id = $2', [0, targetId]);
+
+        const ordinaryId = (await query('SELECT id FROM "user" WHERE email = $1', ['ordinary@test.dev']))[0].id;
+        await createPublishedProject('foreign-project', ordinaryId, 'Foreign');
+        await query(`INSERT INTO projects (id, owner_id, name, visibility, published_commit_id)
+            VALUES ($1, $2, $3, 'private', $4)`, ['already-private', targetId, 'Already private', 'private-commit']);
+        await query(`INSERT INTO projects (id, owner_id, name, visibility, published_commit_id)
+            VALUES ($1, $2, $3, 'public', NULL)`, ['already-unpublished', targetId, 'Already unpublished']);
+
+        for (const [reason, projectId] of [
+            ['Foreign selection', 'foreign-project'],
+            ['Private selection', 'already-private'],
+            ['Unpublished selection', 'already-unpublished'],
+            ['Missing selection', 'missing-project'],
+        ]) {
+            const conflict = await request(app).post(`/api/admin/users/${targetId}/suspend`).set('Cookie', adminCookie).send({
+                reason, expiresAt: null, projectIdsToUnpublish: [projectId], expectedModerationVersion: 1,
+            });
+            expect(conflict.status).toBe(409);
+            expect((await query('SELECT banned, "moderationVersion" FROM "user" WHERE id = $1', [targetId]))[0])
+                .toEqual({ banned: 0, moderationVersion: 1 });
+            expect(await query('SELECT id FROM moderation_actions WHERE reason = $1', [reason])).toEqual([]);
+        }
+    });
+});

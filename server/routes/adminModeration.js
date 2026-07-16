@@ -86,6 +86,62 @@ const decodeCursor = (raw, validators) => {
     }
 };
 
+const validateReason = raw => {
+    if (typeof raw !== 'string') return null;
+    const reason = raw.trim();
+    return reason.length >= 1 && reason.length <= 1000 ? reason : null;
+};
+
+const validateVersion = value => Number.isInteger(value) && value >= 0;
+
+const validateExpiry = raw => {
+    if (raw === null) return { ok: true, value: null };
+    if (typeof raw !== 'string') return { ok: false };
+    const timestamp = Date.parse(raw);
+    if (!Number.isFinite(timestamp) || timestamp <= Date.now()) return { ok: false };
+    return { ok: true, value: new Date(timestamp).toISOString() };
+};
+
+const validateProjectIds = raw => {
+    if (!Array.isArray(raw) || raw.some(id => typeof id !== 'string')) return null;
+    const ids = raw.map(id => id.trim());
+    if (ids.some(id => !id || id.length > 200)) return null;
+    return new Set(ids).size === ids.length ? ids : null;
+};
+
+const lockUser = async (id, txQuery) => {
+    const suffix = dbType === 'postgres' ? ' FOR UPDATE' : '';
+    const rows = await txQuery(
+        `SELECT id, email, username, role, "createdAt", banned, "banReason", "banExpires", "moderationVersion"
+         FROM "user" WHERE id = $1${suffix}`,
+        [id],
+    );
+    return rows[0] ?? null;
+};
+
+const insertAction = async (txQuery, values) => {
+    const id = randomUUID();
+    await txQuery(
+        `INSERT INTO moderation_actions
+         (id, actor_user_id, actor_email, target_user_id, target_email, action, reason, expires_at, project_id, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+        [id, values.actorUserId, values.actorEmail, values.targetUserId, values.targetEmail,
+            values.action, values.reason, values.expiresAt, values.projectId, values.createdAt],
+    );
+    return actionDto({
+        id,
+        actor_user_id: values.actorUserId,
+        actor_email: values.actorEmail,
+        target_user_id: values.targetUserId,
+        target_email: values.targetEmail,
+        action: values.action,
+        reason: values.reason,
+        expires_at: values.expiresAt,
+        project_id: values.projectId,
+        created_at: values.createdAt,
+    });
+};
+
 router.use('/api/admin/users', requireAdmin);
 
 router.get('/api/admin/users', async (req, res) => {
@@ -173,6 +229,82 @@ router.get('/api/admin/users/:id', async (req, res) => {
                 : null,
         },
     });
+});
+
+router.post('/api/admin/users/:id/suspend', requireAdmin, async (req, res) => {
+    const reason = validateReason(req.body?.reason);
+    const expiry = validateExpiry(req.body?.expiresAt);
+    const projectIds = validateProjectIds(req.body?.projectIdsToUnpublish);
+    const expectedVersion = req.body?.expectedModerationVersion;
+    if (!reason || !expiry.ok || projectIds === null || !validateVersion(expectedVersion)) {
+        return res.status(400).json({ error: 'Invalid suspension request' });
+    }
+
+    try {
+        const result = await withTransaction(async txQuery => {
+            const target = await lockUser(req.params.id, txQuery);
+            if (!target) return { status: 404 };
+            if (target.role === 'admin') return { status: 403 };
+            if (Number(target.moderationVersion) !== expectedVersion || suspensionStatus(target) === 'active') {
+                return { status: 409 };
+            }
+
+            const projects = await lockProjectRows(projectIds, txQuery);
+            const selected = new Map(projects.map(project => [project.id, project]));
+            const validProjects = projects.length === projectIds.length && projectIds.every(id => {
+                const project = selected.get(id);
+                return project?.owner_id === target.id
+                    && project.visibility === 'public'
+                    && project.published_commit_id != null;
+            });
+            if (!validProjects) return { status: 409 };
+
+            const now = new Date().toISOString();
+            const updated = await txQuery(
+                `UPDATE "user"
+                 SET banned = $1, "banReason" = $2, "banExpires" = $3,
+                     "moderationVersion" = "moderationVersion" + 1, "updatedAt" = $4
+                 WHERE id = $5 AND "moderationVersion" = $6
+                 RETURNING id, email, username, role, "createdAt", banned, "banReason", "banExpires", "moderationVersion"`,
+                [dbType === 'postgres' ? true : 1, reason, expiry.value, now, target.id, expectedVersion],
+            );
+            if (!updated[0]) return { status: 409 };
+            await txQuery('DELETE FROM session WHERE "userId" = $1', [target.id]);
+
+            for (const projectId of projectIds) {
+                await txQuery(
+                    `UPDATE projects SET visibility = 'private', published_commit_id = NULL WHERE id = $1`,
+                    [projectId],
+                );
+            }
+
+            const common = {
+                actorUserId: req.user.id,
+                actorEmail: req.user.email,
+                targetUserId: target.id,
+                targetEmail: target.email,
+                reason,
+                expiresAt: expiry.value,
+                createdAt: now,
+            };
+            const actions = [await insertAction(txQuery, {
+                ...common, action: 'account_suspended', projectId: null,
+            })];
+            for (const projectId of projectIds) {
+                actions.push(await insertAction(txQuery, {
+                    ...common, action: 'project_unpublished', projectId,
+                }));
+            }
+            return { status: 200, account: accountDto(updated[0]), actions };
+        });
+        if (result.status === 403) return res.status(403).json({ error: 'Administrator accounts cannot be suspended' });
+        if (result.status === 404) return res.status(404).json({ error: 'User not found' });
+        if (result.status === 409) return res.status(409).json({ error: 'Moderation state changed; refresh and try again' });
+        return res.json({ account: result.account, actions: result.actions });
+    } catch (error) {
+        console.error('Account suspension failed:', error);
+        return res.status(500).json({ error: 'Account suspension failed' });
+    }
 });
 
 export default router;
