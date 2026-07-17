@@ -260,6 +260,33 @@ const titleBlock = (templateId, title = '{{title}}', subtitle = '{{subtitle}}') 
   }),
 ];
 
+const navChips = (templateId, { prev = true, next = true } = {}) => {
+  const chips = [];
+  if (prev) {
+    chips.push(text(templateId, 'nav_prev', 336, 88, 70, 26, '{{nav_prev_label}}', {
+      dataBinding: 'nav_prev_label',
+      fontSize: 8.5,
+      fontWeight: 'bold',
+      textColor: COLORS.sageDeep,
+      align: 'right',
+      linkTarget: 'sibling',
+      linkValue: '-1',
+    }));
+  }
+  if (next) {
+    chips.push(text(templateId, 'nav_next', 411, 88, 70, 26, '{{nav_next_label}}', {
+      dataBinding: 'nav_next_label',
+      fontSize: 8.5,
+      fontWeight: 'bold',
+      textColor: COLORS.clayDeep,
+      align: 'right',
+      linkTarget: 'sibling',
+      linkValue: '1',
+    }));
+  }
+  return chips;
+};
+
 const coverElements = [
   rect('cover', 'paper', 0, 0, W, H, COLORS.warmGray),
   rect('cover', 'sage_field', 0, 0, 214, H, COLORS.sageDeep),
@@ -381,8 +408,19 @@ const monthHabitElements = [
   text('month_habits', 'matrix_note', 32, 184, 449, 19, 'Mark what happened. Empty squares are information, not failure.', { fontSize: 9, fontStyle: 'italic', textColor: COLORS.muted }),
   ...habitMatrix('days_01_16', Array.from({ length: 16 }, (_, index) => index + 1), 213),
   ...habitMatrix('days_17_31', Array.from({ length: 15 }, (_, index) => index + 17), 377),
-  text('month_habits', 'continue', 328, 571, 153, 34, 'BEGIN MONTH →', {
-    fontSize: 9, fontWeight: 'bold', textColor: COLORS.paper, fill: COLORS.sageDeep, align: 'center', borderRadius: 17,
+  text('month_habits', 'index_label', 32, 524, 200, 14, 'OPEN A WEEK', {
+    fontSize: 8, fontWeight: 'bold', textColor: COLORS.sageDeep,
+  }),
+  (() => {
+    const navigator = grid('month_habits', 'navigator', 32, 543, 47, 14, 9, {
+      gapX: 3, gapY: 3, dataSliceCount: 27,
+    });
+    navigator.fontSize = 6.5;
+    navigator.borderRadius = 3;
+    return navigator;
+  })(),
+  text('month_habits', 'continue', 328, 524, 153, 26, 'BEGIN MONTH →', {
+    fontSize: 9, fontWeight: 'bold', textColor: COLORS.paper, fill: COLORS.sageDeep, align: 'center', borderRadius: 13,
     linkTarget: 'child_index', linkValue: '0',
   }),
 ];
@@ -407,10 +445,12 @@ const weekElements = [
   text('week', 'energy', 105, 521, 121, 35, '{{energy}}', { dataBinding: 'energy', fontSize: 10, fontWeight: 'bold', fill: COLORS.sagePale, align: 'center' }),
   text('week', 'recovery_label', 240, 530, 88, 17, 'RECOVERY NOTE', { fontSize: 8, fontWeight: 'bold', textColor: COLORS.clay }),
   text('week', 'recovery_note', 329, 521, 152, 35, '{{recovery_note}}', { dataBinding: 'recovery_note', fontSize: 9, fill: COLORS.paper, align: 'center' }),
-  text('week', 'continue', 328, 574, 153, 32, 'NEXT PAGE →', {
+  text('week', 'continue', 328, 574, 153, 32, '{{continue_label}}', {
+    dataBinding: 'continue_label',
     fontSize: 9, fontWeight: 'bold', textColor: COLORS.paper, fill: COLORS.clay, align: 'center', borderRadius: 16,
     linkTarget: 'child_index', linkValue: '0',
   }),
+  ...navChips('week'),
 ];
 
 const workoutRows = Array.from({ length: 6 }, (_, index) => {
@@ -430,9 +470,10 @@ const workoutElements = [
     ['left', 'center', 'center', 'center', 'center', 'left']),
   text('workout', 'closing_label', 32, 554, 112, 17, 'HOW IT FELT', { fontSize: 8, fontWeight: 'bold', textColor: COLORS.sageDeep }),
   text('workout', 'closing', 145, 545, 177, 36, '{{session_note}}', { dataBinding: 'session_note', fontSize: 9, fill: COLORS.paper }),
-  text('workout', 'continue', 328, 550, 153, 32, 'NEXT PAGE →', {
+  text('workout', 'continue', 328, 550, 153, 32, '{{continue_label}}', {
+    dataBinding: 'continue_label',
     fontSize: 9, fontWeight: 'bold', textColor: COLORS.paper, fill: COLORS.sageDeep, align: 'center', borderRadius: 16,
-    linkTarget: 'child_index', linkValue: '0',
+    linkTarget: 'sibling', linkValue: '1',
   }),
 ];
 
@@ -454,10 +495,12 @@ const recoveryElements = [
   text('recovery', 'recovery_pattern', 270, 400, 211, 59, '{{recovery_pattern}}', { dataBinding: 'recovery_pattern', fontSize: 10, fill: COLORS.paper, verticalAlign: 'top' }),
   text('recovery', 'adjustment_label', 32, 493, 449, 18, 'ONE ADJUSTMENT FOR NEXT MONTH', { fontSize: 9, fontWeight: 'bold', textColor: COLORS.clay }),
   text('recovery', 'adjustment', 32, 520, 449, 48, '{{adjustment}}', { dataBinding: 'adjustment', fontSize: 11, fontFamily: 'georgia', fontStyle: 'italic', fill: COLORS.sagePale, align: 'center' }),
-  text('recovery', 'continue', 328, 578, 153, 28, 'REFLECT →', {
+  text('recovery', 'continue', 328, 578, 153, 28, '{{nav_next_label}}', {
+    dataBinding: 'nav_next_label',
     fontSize: 9, fontWeight: 'bold', textColor: COLORS.paper, fill: COLORS.clay, align: 'center', borderRadius: 14,
-    linkTarget: 'child_index', linkValue: '0',
+    linkTarget: 'sibling', linkValue: '1',
   }),
+  ...navChips('recovery', { next: false }),
 ];
 
 const reflectionElements = [
@@ -476,6 +519,7 @@ const reflectionElements = [
     fontSize: 9, fontWeight: 'bold', textColor: COLORS.paper, fill: COLORS.sageDeep, align: 'center', borderRadius: 16,
     linkTarget: 'specific_node', linkValue: 'blank_workspace',
   }),
+  ...navChips('month_reflection', { next: false }),
 ];
 
 const template = (id, name, elements) => ({ id, name, width: W, height: H, elements });

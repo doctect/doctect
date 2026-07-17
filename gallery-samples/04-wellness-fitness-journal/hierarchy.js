@@ -150,6 +150,9 @@ addNode('example_week', 'example_month', 'week', 'Balanced Week | Example', week
   movement_5: 'Rest', energy_5: '2 / 5', note_5: 'Earlier evening',
   movement_6: 'Easy walk, 40 min', energy_6: '4 / 5', note_6: 'Unhurried',
   movement_7: 'Easy walk, 25 min', energy_7: '3 / 5', note_7: 'Weekly reset',
+  nav_prev_label: '',
+  nav_next_label: 'RECOVERY »',
+  continue_label: 'STRENGTH 1 »',
 }), { example: true });
 
 addNode('example_workout_01', 'example_week', 'workout', 'Strength A | Example', workoutData(1, 1, {
@@ -162,9 +165,10 @@ addNode('example_workout_01', 'example_week', 'workout', 'Strength A | Example',
   movement_3: 'One-arm row', sets_3: '3', reps_3: '10', load_3: '10 kg', rpe_3: '7', notes_3: 'Each side',
   movement_4: 'Hip hinge', sets_4: '2', reps_4: '10', load_4: '16 kg', rpe_4: '6', notes_4: 'Easy range',
   movement_5: 'Carry', sets_5: '3', reps_5: '30 s', load_5: '12 kg', rpe_5: '6', notes_5: 'Tall posture',
+  continue_label: 'STRENGTH 2 »',
 }), { example: true });
 
-addNode('example_workout_02', 'example_workout_01', 'workout', 'Strength B | Example', workoutData(1, 2, {
+addNode('example_workout_02', 'example_week', 'workout', 'Strength B | Example', workoutData(1, 2, {
   subtitle: 'Thursday | A second moderate strength example',
   session_focus: 'Hinge, press, pull, and carry',
   readiness: '3 / 5 | settled',
@@ -174,20 +178,24 @@ addNode('example_workout_02', 'example_workout_01', 'workout', 'Strength B | Exa
   movement_3: 'Band row', sets_3: '3', reps_3: '12', load_3: 'Medium', rpe_3: '6', notes_3: 'Pause back',
   movement_4: 'Split squat', sets_4: '2', reps_4: '8', load_4: 'Body', rpe_4: '7', notes_4: 'Each side',
   movement_5: 'Suitcase carry', sets_5: '3', reps_5: '30 s', load_5: '12 kg', rpe_5: '6', notes_5: 'Switch sides',
+  continue_label: '',
 }), { example: true });
 
-addNode('example_recovery', 'example_workout_02', 'recovery', 'Recovery Notes | Example', recoveryData('Example month', {
+addNode('example_recovery', 'example_month', 'recovery', 'Recovery Notes | Example', recoveryData('Example month', {
   restored: 'Three easy walks, one quieter evening, and leaving margin in both strength sessions.',
   felt_heavy: 'Thursday work demands made the late afternoon feel crowded.',
   energy_pattern: 'Most steady before lunch; lower after long meeting blocks.',
   recovery_pattern: 'Earlier wind-down made the following morning feel less rushed.',
   adjustment: 'Keep Friday unscheduled for training and protect a short midday walk.',
+  nav_prev_label: '« WEEK 01',
+  nav_next_label: 'REFLECT »',
 }), { example: true });
 
-addNode('example_reflection', 'example_recovery', 'month_reflection', 'Rhythm Reflection | Example', reflectionData('Example month', {
+addNode('example_reflection', 'example_month', 'month_reflection', 'Rhythm Reflection | Example', reflectionData('Example month', {
   win: 'Both strength sessions happened without pushing aside walking or recovery.',
   lesson: 'Planned gentleness on Friday made the whole week easier to repeat.',
   carry_forward: 'Schedule two moderate sessions and leave one evening deliberately open.',
+  nav_prev_label: '« RECOVERY',
 }), { example: true });
 
 addNode('blank_workspace', 'start_here', 'workspace', 'Blank Wellbeing Workspace', {
@@ -217,6 +225,7 @@ for (let week = 1; week <= CONFIG.weekCount; week += 1) {
   weeksByMonth[monthIndex].push(week);
 }
 
+let previousWeekNumber = 0;
 for (let monthIndex = 0; monthIndex < CONFIG.monthCount; monthIndex += 1) {
   const monthNumber = String(monthIndex + 1).padStart(2, '0');
   const monthName = monthNames[monthIndex];
@@ -226,22 +235,38 @@ for (let monthIndex = 0; monthIndex < CONFIG.monthCount; monthIndex += 1) {
     subtitle: `${monthName} | Habits are cues to notice, not targets to perfect.`,
   });
 
-  let sequenceParent = monthId;
-  weeksByMonth[monthIndex].forEach(weekNumber => {
+  const monthWeeks = weeksByMonth[monthIndex];
+  monthWeeks.forEach((weekNumber, weekIndex) => {
     const weekId = `blank_week_${String(weekNumber).padStart(2, '0')}`;
-    addNode(weekId, sequenceParent, 'week', `Week ${String(weekNumber).padStart(2, '0')}`, weekData(weekNumber));
-    sequenceParent = weekId;
+    const isLastInMonth = weekIndex === monthWeeks.length - 1;
+    addNode(weekId, monthId, 'week', `Week ${String(weekNumber).padStart(2, '0')}`, {
+      ...weekData(weekNumber),
+      nav_prev_label: previousWeekNumber === 0 ? '' : `« WEEK ${String(previousWeekNumber).padStart(2, '0')}`,
+      nav_next_label: isLastInMonth ? 'RECOVERY »' : `WEEK ${String(weekNumber + 1).padStart(2, '0')} »`,
+      continue_label: CONFIG.workoutsPerWeek > 0 ? 'STRENGTH 1 »' : '',
+    });
+    previousWeekNumber = weekNumber;
 
     for (let workout = 1; workout <= CONFIG.workoutsPerWeek; workout += 1) {
-      const workoutId = `${weekId}_workout_${String(workout).padStart(2, '0')}`;
-      addNode(workoutId, sequenceParent, 'workout', `Week ${weekNumber} | Strength ${workout}`, workoutData(weekNumber, workout));
-      sequenceParent = workoutId;
+      addNode(`${weekId}_workout_${String(workout).padStart(2, '0')}`, weekId, 'workout', `Week ${weekNumber} | Strength ${workout}`, {
+        ...workoutData(weekNumber, workout),
+        continue_label: workout < CONFIG.workoutsPerWeek ? `STRENGTH ${workout + 1} »` : '',
+      });
     }
   });
 
-  const recoveryId = `blank_month_${monthNumber}_recovery`;
-  addNode(recoveryId, sequenceParent, 'recovery', `${monthName} Recovery Notes`, recoveryData(monthName));
-  addNode(`blank_month_${monthNumber}_reflection`, recoveryId, 'month_reflection', `${monthName} Reflection`, reflectionData(monthName));
+  const lastWeekLabel = monthWeeks.length > 0
+    ? `« WEEK ${String(monthWeeks[monthWeeks.length - 1]).padStart(2, '0')}`
+    : '';
+  addNode(`blank_month_${monthNumber}_recovery`, monthId, 'recovery', `${monthName} Recovery Notes`, {
+    ...recoveryData(monthName),
+    nav_prev_label: lastWeekLabel,
+    nav_next_label: 'REFLECT »',
+  });
+  addNode(`blank_month_${monthNumber}_reflection`, monthId, 'month_reflection', `${monthName} Reflection`, {
+    ...reflectionData(monthName),
+    nav_prev_label: '« RECOVERY',
+  });
 }
 
 return { nodes, rootId: 'root' };

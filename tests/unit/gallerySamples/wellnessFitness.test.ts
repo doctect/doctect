@@ -95,34 +95,56 @@ describe('Wellness & Fitness Journal gallery sample', () => {
         expect(() => loadGallerySample(contract.slug, { [key]: value })).toThrow(/Wellbeing Rhythm config/);
     });
 
-    it('keeps all 52 weeks and their workouts in an accessible ordered sequence', () => {
+    it('keeps weeks flat under months with chip navigation and indexable workouts', () => {
         const sample = loadGallerySample(contract.slug);
-        const visitedWeeks: any[] = [];
-        const visitedWorkouts: any[] = [];
+        const allWeeks: any[] = [];
 
         for (let month = 1; month <= 12; month += 1) {
-            const monthId = `blank_month_${String(month).padStart(2, '0')}`;
-            let current = sample.nodes[sample.nodes[monthId].children[0]];
+            const monthNode = sample.nodes[`blank_month_${String(month).padStart(2, '0')}`];
+            const children = monthNode.children.map((id: string) => sample.nodes[id]);
+            const weeks = children.filter((child: any) => child.type === 'week');
 
-            while (current.type === 'week' || current.type === 'workout') {
-                if (current.type === 'week') visitedWeeks.push(current);
-                else visitedWorkouts.push(current);
-                expect(current.children).toHaveLength(1);
-                current = sample.nodes[current.children[0]];
-            }
+            expect(children.at(-2).type, monthNode.id).toBe('recovery');
+            expect(children.at(-1).type, monthNode.id).toBe('month_reflection');
+            expect(children).toHaveLength(weeks.length + 2);
+            weeks.forEach((week: any) => {
+                const workouts = week.children.map((id: string) => sample.nodes[id]);
+                expect(workouts.every((workout: any) => workout.type === 'workout'), week.id).toBe(true);
+                expect(workouts, week.id).toHaveLength(2);
+                expect(workouts[0].data.continue_label, week.id).toBe('STRENGTH 2 »');
+                expect(workouts[1].data.continue_label, week.id).toBe('');
+                expect(week.data.continue_label, week.id).toBe('STRENGTH 1 »');
+            });
+            allWeeks.push(...weeks);
 
-            expect(current.type).toBe('recovery');
-            expect(sample.nodes[current.children[0]].type).toBe('month_reflection');
+            const recovery = children.at(-2);
+            const reflection = children.at(-1);
+            expect(recovery.data.nav_next_label).toBe('REFLECT »');
+            expect(recovery.data.nav_prev_label).toMatch(/^« WEEK \d{2}$/);
+            expect(reflection.data.nav_prev_label).toBe('« RECOVERY');
+            expect(weeks.at(-1).data.nav_next_label).toBe('RECOVERY »');
         }
 
-        expect(visitedWeeks.map(node => node.data.week_number)).toEqual(
+        expect(allWeeks.map(node => node.data.week_number)).toEqual(
             Array.from({ length: 52 }, (_, index) => index + 1),
         );
-        expect(visitedWorkouts).toHaveLength(104);
-        expect(visitedWorkouts.every(node => node.children.length === 1)).toBe(true);
-        expect(role(sample, 'week', 'continue')).toMatchObject({ linkTarget: 'child_index', linkValue: '0' });
-        expect(role(sample, 'workout', 'continue')).toMatchObject({ linkTarget: 'child_index', linkValue: '0' });
-        expect(role(sample, 'recovery', 'continue')).toMatchObject({ linkTarget: 'child_index', linkValue: '0' });
+        expect(allWeeks[0].data.nav_prev_label).toBe('');
+        expect(allWeeks[1].data.nav_prev_label).toBe('« WEEK 01');
+
+        const monthNavigator = role(sample, 'month_habits', 'navigator');
+        expect(monthNavigator).toBeTruthy();
+        expect(monthNavigator.gridConfig).toMatchObject({
+            sourceType: 'current', gridBorderMode: 'all', gridBorderStyle: 'solid',
+        });
+        expect(role(sample, 'week', 'continue')).toMatchObject({
+            linkTarget: 'child_index', linkValue: '0', dataBinding: 'continue_label',
+        });
+        expect(role(sample, 'workout', 'continue')).toMatchObject({
+            linkTarget: 'sibling', linkValue: '1', dataBinding: 'continue_label',
+        });
+        expect(role(sample, 'recovery', 'continue')).toMatchObject({
+            linkTarget: 'sibling', linkValue: '1', dataBinding: 'nav_next_label',
+        });
         expect(role(sample, 'month_reflection', 'workspace')).toMatchObject({
             linkTarget: 'specific_node',
             linkValue: 'blank_workspace',
@@ -148,8 +170,8 @@ describe('Wellness & Fitness Journal gallery sample', () => {
             energy: 'Steady, 3 / 5',
             recovery_note: 'Friday stayed gentle after a busy Thursday.',
         });
-        expect(guidedWorkouts).toHaveLength(1);
-        expect(sample.nodes[guidedWorkouts[0].children[0]].type).toBe('workout');
+        expect(guidedWorkouts).toHaveLength(2);
+        expect(guidedWorkouts[1].data.continue_label).toBe('');
         expect(exampleSource).not.toMatch(/diagnos|treat|cure|prescri|medical advice/i);
     });
 
