@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { cloudApi, ApiError } from '../../services/cloudApi';
+import { cloudApi, ApiError, API_BASE } from '../../services/cloudApi';
 
 describe('cloudApi error handling', () => {
     const originalFetch = global.fetch;
@@ -184,12 +184,12 @@ describe('account moderation api methods', () => {
             suspension: { expiresAt: null }, projectIdsToUnpublish: ['project-1'],
         });
 
-        expect(fetchMock.mock.calls[0][0]).toBe('/api/owner/users/user%2F1/promote-admin');
+        expect(fetchMock.mock.calls[0][0]).toBe(`${API_BASE}/api/owner/users/user%2F1/promote-admin`);
         expect(fetchMock.mock.calls[0][1].method).toBe('POST');
         expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
             reason: 'Coverage', expectedModerationVersion: 3,
         });
-        expect(fetchMock.mock.calls[1][0]).toBe('/api/owner/users/admin-1/revoke-admin');
+        expect(fetchMock.mock.calls[1][0]).toBe(`${API_BASE}/api/owner/users/admin-1/revoke-admin`);
         expect(fetchMock.mock.calls[1][1].method).toBe('POST');
         expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({
             reason: 'Abuse', expectedModerationVersion: 8,
@@ -208,12 +208,12 @@ describe('account moderation api methods', () => {
         const projectResult = await cloudApi.moderatorUnpublishProject('p/1', 'Policy violation');
         const reviewResult = await cloudApi.moderatorDeleteReview('r/1', 'Harassment');
 
-        expect(fetchMock.mock.calls[0][0]).toBe('/api/admin/projects/p%2F1/unpublish');
+        expect(fetchMock.mock.calls[0][0]).toBe(`${API_BASE}/api/admin/projects/p%2F1/unpublish`);
         expect(fetchMock.mock.calls[0][1].method).toBe('POST');
         expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ reason: 'Policy violation' });
         expect(projectResult).toEqual({ success: true, action: projectAction });
         expect(projectResult.success).toBe(true);
-        expect(fetchMock.mock.calls[1][0]).toBe('/api/admin/reviews/r%2F1');
+        expect(fetchMock.mock.calls[1][0]).toBe(`${API_BASE}/api/admin/reviews/r%2F1`);
         expect(fetchMock.mock.calls[1][1].method).toBe('DELETE');
         expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({ reason: 'Harassment' });
         expect(reviewResult).toEqual({ success: true, action: reviewAction });
@@ -234,7 +234,7 @@ describe('account moderation api methods', () => {
         });
 
         expect(fetchMock.mock.calls[0][0]).toBe(
-            '/api/owner/audit?actorEmail=Owner%2Btag%40test.dev&action=admin_demoted&from=2026-07-01T00%3A00%3A00.000Z&to=2026-07-16T23%3A59%3A59.999Z&cursor=a%2Fb',
+            `${API_BASE}/api/owner/audit?actorEmail=Owner%2Btag%40test.dev&action=admin_demoted&from=2026-07-01T00%3A00%3A00.000Z&to=2026-07-16T23%3A59%3A59.999Z&cursor=a%2Fb`,
         );
         expect(fetchMock.mock.calls[0][1].method).toBeUndefined();
         expect(fetchMock.mock.calls[0][1].body).toBeUndefined();
