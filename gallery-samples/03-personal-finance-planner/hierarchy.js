@@ -84,6 +84,21 @@ const blankCategoryData = (month) => ({
   reflection: '',
 });
 
+const blankBillsData = () => {
+  const data = {
+    subtitle: 'Recurring bills and subscriptions, with one paid-square per month.',
+    audit_note: '',
+    nav_prev_label: '« DEC',
+    nav_next_label: 'FUNDS »',
+  };
+  for (let row = 1; row <= 8; row += 1) {
+    data[`bill_${row}`] = '';
+    data[`due_${row}`] = '';
+    data[`amount_${row}`] = '';
+  }
+  return data;
+};
+
 const blankSinkingData = () => {
   const data = { subtitle: 'Name future costs and make their next transfers visible.', next_check: '' };
   for (let row = 1; row <= 6; row += 1) {
@@ -152,7 +167,7 @@ addNode('example_january', 'example_annual', 'month', 'January Plan | Fictional 
   planned_savings: '$900', actual_savings: '$900', difference_savings: '$0',
   planned_other: '$530', actual_other: '$487', difference_other: '+$43',
   nav_prev_label: '',
-  nav_next_label: 'FUNDS »',
+  nav_next_label: 'BILLS »',
 }, { example: true });
 addNode('example_transactions', 'example_january', 'transactions', 'January Transactions | Fictional', {
   subtitle: 'Fictional entries | January transaction sheet',
@@ -178,6 +193,20 @@ addNode('example_category_review', 'example_january', 'category_review', 'Januar
   reflection: 'Keep the automatic savings transfers. Add a little more room for social meals in February.',
   nav_prev_label: '« LOG 01',
 }, { example: true });
+addNode('example_bills', 'example_annual', 'bills', 'Bills Register | Fictional', {
+  subtitle: 'Fictional recurring costs | Shade squares as months are paid',
+  bill_1: 'Internet (fictional)', due_1: '05', amount_1: '$55.00',
+  bill_2: 'Music streaming (fictional)', due_2: '12', amount_2: '$11.99',
+  bill_3: 'Renter insurance (fictional)', due_3: '20', amount_3: '$18.50',
+  bill_4: '', due_4: '', amount_4: '',
+  bill_5: '', due_5: '', amount_5: '',
+  bill_6: '', due_6: '', amount_6: '',
+  bill_7: '', due_7: '', amount_7: '',
+  bill_8: '', due_8: '', amount_8: '',
+  audit_note: 'Streaming overlaps a bundle - review in March.',
+  nav_prev_label: '« JAN',
+  nav_next_label: 'FUNDS »',
+}, { example: true });
 addNode('example_sinking_funds', 'example_annual', 'sinking_funds', 'Sinking Funds | Fictional', {
   subtitle: 'Fictional allocations for known future costs',
   fund_1: 'Car maintenance', target_1: '$900', saved_1: '$340', next_1: '$80',
@@ -187,7 +216,7 @@ addNode('example_sinking_funds', 'example_annual', 'sinking_funds', 'Sinking Fun
   fund_5: 'Gifts', target_5: '$500', saved_5: '$90', next_5: '$40',
   fund_6: 'Technology', target_6: '$800', saved_6: '$180', next_6: '$50',
   next_check: 'Review transfers on the final Sunday of February.',
-  nav_prev_label: '« JAN',
+  nav_prev_label: '« BILLS',
   nav_next_label: 'GOAL 01 »',
 }, { example: true });
 addNode('example_goal', 'example_annual', 'goal', 'Emergency Fund Goal | Fictional', {
@@ -256,9 +285,11 @@ months.forEach((month, monthIndex) => {
   });
 });
 
+addNode('blank_bills', 'blank_annual', 'bills', 'Bills & Subscriptions', blankBillsData());
+
 addNode('blank_sinking_funds', 'blank_annual', 'sinking_funds', 'My Sinking Funds', {
   ...blankSinkingData(),
-  nav_prev_label: '« DEC',
+  nav_prev_label: '« BILLS',
   nav_next_label: 'GOAL 01 »',
 });
 

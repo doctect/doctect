@@ -8,9 +8,10 @@ Money Map is a reMarkable Paper Pro personal finance planner for connecting annu
 2. Set expected income, category limits, and one useful intention in each **Monthly Plan**.
 3. Write real money movement into fixed, PDF-visible **Transaction Logs**.
 4. Compare plan with actual movement in **Category Review** without treating variance as failure.
-5. Make irregular costs visible in **Sinking Funds**.
-6. Track debt reduction or savings milestones in configurable **Goals**.
-7. Close the loop with **Year Review**.
+5. Track recurring costs in **Bills & Subscriptions** (shade a square per paid month).
+6. Make irregular costs visible in **Sinking Funds**.
+7. Track debt reduction or savings milestones in configurable **Goals**.
+8. Close the loop with **Year Review**.
 
 Guided branch shows one clearly fictional January household plan. It includes income, housing, food, transport, leisure, savings allocations, eight transactions, category variance, sinking funds, and an emergency-fund goal. Figures are instructional examples, not financial advice. Every guided page is marked **EXAMPLE** and links directly to **Blank workspace**.
 
@@ -27,7 +28,7 @@ Supported integer ranges:
 - `transactionPagesPerMonth`: 1-4 for each of 12 months
 - `goalCount`: 1-8 debt or savings goals
 
-Unsupported values stop generation with a contextual error. Default configuration exports 66 pages. Minimum configuration (`1 / 1`) exports 51 pages. Maximum configuration (`4 / 8`) exports 94 pages.
+Unsupported values stop generation with a contextual error. Default configuration exports 68 pages. Minimum configuration (`1 / 1`) exports 53 pages. Maximum configuration (`4 / 8`) exports 96 pages.
 
 ## Page Inventory
 
@@ -36,6 +37,7 @@ Unsupported values stop generation with a contextual error. Default configuratio
 - Blank workspace and annual outlook
 - 12 complete blank months
 - Per month: monthly plan, configured transaction sheets, and category review
+- 1 recurring-bills register (and its guided example page)
 - 1 sinking-funds register
 - Configured debt or savings goal pages
 - 1 year review
@@ -50,6 +52,7 @@ Cover
     +-- Guided January
     |   +-- Annual Outlook
     |       +-- January Plan -> Transaction Log -> Category Review
+    |       +-- Bills & Subscriptions
     |       +-- Sinking Funds
     |       +-- Emergency Fund Goal
     |       +-- Year Review Preview
@@ -57,10 +60,13 @@ Cover
         +-- Annual Outlook
             +-- January ... December
             |   +-- configured Transaction Logs -> Category Review
+            +-- Bills & Subscriptions
             +-- Sinking Funds
             +-- configured Goals
             +-- Year Review
 ```
+
+Month pages chain with « / » chips; December continues to Bills, then Funds → Goals → Year Review. Transaction sheets chain forward into the month's Category Review; Up from any sheet returns to its month.
 
 Major entry points use stable IDs: `root`, `start_here`, `example_workspace`, and `blank_workspace`. Cover and Start Here controls target stable IDs directly. Annual navigator contains existing child pages only. Monthly **Open Transaction Log** and transaction **Next Log / Review** controls use proven first-child links: every supported month has at least one log, and every log has either another log or its category review. **Home** returns to cover and **Up** returns to current parent. Every guided page offers **Skip to blank workspace**.
 
