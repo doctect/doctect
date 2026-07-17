@@ -114,6 +114,13 @@ describe('repository configuration', () => {
         expect(rolloutRunbook).toContain('CREATE TRIGGER :"trigger_name"');
         expect(rolloutRunbook).toContain('trap cleanup_audit_failure_probe EXIT INT TERM');
         expect(rolloutRunbook.match(/--path-as-is/g)).toHaveLength(3);
+        expect(rolloutRunbook).toContain('mktemp -d /tmp/opencode/doctect-owner-rollout.XXXXXX');
+        expect(rolloutRunbook).toContain('ROLLOUT_SERVER_PID=$!');
+        expect(rolloutRunbook).toContain('ROLLOUT_SERVER_LOG');
+        expect(rolloutRunbook).toContain('${BASE_URL}/api/me');
+        expect(rolloutRunbook).toContain('read -r ROLLOUT_STARTED_AT < "$ROLLOUT_MARKER_FILE"');
+        expect(rolloutRunbook).toContain('trap cleanup_rollout_server EXIT');
+        expect(rolloutRunbook).toContain('inspect restricted log');
     });
 });
 

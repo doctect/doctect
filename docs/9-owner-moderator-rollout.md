@@ -18,17 +18,98 @@ SELECT role, COUNT(*) AS accounts_before FROM "user" GROUP BY role ORDER BY role
 
 ## 2. Run migrations and reconciliation
 
-In a staging server terminal, set the disposable branch connection and two non-production owner addresses, then start the production path:
+Use one dedicated staging shell for steps 2-8. The block below keeps the server available to later commands in that shell, persists the pre-start marker in a restricted directory, and exports both `BASE_URL` and `ROLLOUT_STARTED_AT`. It never writes `DATABASE_URL` or cookies to disk.
 
 ```bash
+set -euo pipefail
 export DATABASE_URL='postgresql://staging-branch-url'
 export OWNER_EMAILS='owner1@example.com,owner2@example.com'
-export ROLLOUT_STARTED_AT
-ROLLOUT_STARTED_AT=$(psql "$DATABASE_URL" -XAtqc "SELECT CURRENT_TIMESTAMP AT TIME ZONE 'UTC'")
-NODE_ENV=production node server/index.js
+test -d /tmp/opencode
+umask 077
+
+ROLLOUT_STATE_DIR=$(mktemp -d /tmp/opencode/doctect-owner-rollout.XXXXXX)
+ROLLOUT_MARKER_FILE="${ROLLOUT_STATE_DIR}/started-at"
+ROLLOUT_PID_FILE="${ROLLOUT_STATE_DIR}/server.pid"
+ROLLOUT_SERVER_LOG="${ROLLOUT_STATE_DIR}/server.log"
+ROLLOUT_PORT=${PORT:-3001}
+export ROLLOUT_STATE_DIR ROLLOUT_MARKER_FILE ROLLOUT_PID_FILE ROLLOUT_SERVER_LOG ROLLOUT_PORT
+printf 'Restricted rollout state: %s\n' "$ROLLOUT_STATE_DIR"
+export PORT="$ROLLOUT_PORT"
+export BASE_URL="http://127.0.0.1:${ROLLOUT_PORT}"
+export ALLOWED_HOSTS="127.0.0.1:${ROLLOUT_PORT}${ALLOWED_HOSTS:+,${ALLOWED_HOSTS}}"
+touch "$ROLLOUT_SERVER_LOG"
+chmod 600 "$ROLLOUT_SERVER_LOG"
+
+cleanup_rollout_server() {
+  if [ -n "${ROLLOUT_SERVER_PID:-}" ] && kill -0 "$ROLLOUT_SERVER_PID" 2>/dev/null; then
+    kill "$ROLLOUT_SERVER_PID" 2>/dev/null || true
+    wait "$ROLLOUT_SERVER_PID" 2>/dev/null || true
+  fi
+  ROLLOUT_SERVER_PID=''
+}
+
+start_rollout_server() {
+  if ! psql "$DATABASE_URL" -XAtq -v ON_ERROR_STOP=1 \
+    -c "SELECT CURRENT_TIMESTAMP AT TIME ZONE 'UTC'" > "$ROLLOUT_MARKER_FILE"; then
+    printf '%s\n' 'ERROR: failed to capture rollout marker' >&2
+    return 1
+  fi
+  if ! chmod 600 "$ROLLOUT_MARKER_FILE" || ! : > "$ROLLOUT_SERVER_LOG"; then
+    printf 'ERROR: cannot secure rollout marker/log under %s\n' "$ROLLOUT_STATE_DIR" >&2
+    return 1
+  fi
+
+  NODE_ENV=production node server/index.js > "$ROLLOUT_SERVER_LOG" 2>&1 &
+  ROLLOUT_SERVER_PID=$!
+  export ROLLOUT_SERVER_PID
+  if ! printf '%s\n' "$ROLLOUT_SERVER_PID" > "$ROLLOUT_PID_FILE" \
+    || ! chmod 600 "$ROLLOUT_PID_FILE" "$ROLLOUT_SERVER_LOG"; then
+    printf 'ERROR: cannot secure rollout PID/log under %s\n' "$ROLLOUT_STATE_DIR" >&2
+    return 1
+  fi
+
+  local ready='false'
+  local server_status
+  for _ in $(seq 1 60); do
+    if ! kill -0 "$ROLLOUT_SERVER_PID" 2>/dev/null; then
+      if wait "$ROLLOUT_SERVER_PID"; then server_status=0; else server_status=$?; fi
+      printf 'ERROR: startup/reconciliation exited with status %s; inspect restricted log: %s\n' \
+        "$server_status" "$ROLLOUT_SERVER_LOG" >&2
+      ROLLOUT_SERVER_PID=''
+      return 1
+    fi
+    if curl -fsS "${BASE_URL}/api/me" >/dev/null 2>&1; then
+      ready='true'
+      break
+    fi
+    sleep 1
+  done
+  if [ "$ready" != 'true' ]; then
+    printf 'ERROR: server health timeout; inspect restricted log: %s\n' "$ROLLOUT_SERVER_LOG" >&2
+    return 1
+  fi
+
+  if ! read -r ROLLOUT_STARTED_AT < "$ROLLOUT_MARKER_FILE"; then
+    printf '%s\n' 'ERROR: rollout marker is unreadable' >&2
+    return 1
+  fi
+  export ROLLOUT_STARTED_AT
+  printf 'Server ready: PID %s; marker and log restricted under %s\n' \
+    "$ROLLOUT_SERVER_PID" "$ROLLOUT_STATE_DIR"
+}
+
+restart_rollout_server() {
+  cleanup_rollout_server
+  start_rollout_server
+}
+
+trap cleanup_rollout_server EXIT
+trap 'cleanup_rollout_server; exit 130' INT
+trap 'cleanup_rollout_server; exit 143' TERM
+if ! start_rollout_server; then exit 1; fi
 ```
 
-Do not open staging traffic until startup logs show migrations and owner reconciliation completed. Empty, whitespace-only, or comma-only `OWNER_EMAILS` must stop production startup.
+`/api/me` can return only after `server/index.js` finishes migrations and owner reconciliation and begins listening. A failed migration/reconciliation exits the process, fails this block, and prints process status plus restricted log path without printing log contents. Keep this shell open for steps 3-8. Empty, whitespace-only, or comma-only `OWNER_EMAILS` must stop production startup.
 
 ## 3. Verify migration, backfill, and owners
 
@@ -534,7 +615,7 @@ On staging, change configuration to one retained owner and restart the productio
 
 ```bash
 export OWNER_EMAILS='owner2@example.com'
-NODE_ENV=production node server/index.js
+if ! restart_rollout_server; then exit 1; fi
 ```
 
 - [ ] Removed `owner1@example.com` is now `user`; retained owner remains `owner`.
@@ -546,7 +627,7 @@ Restore the two-owner configuration and restart before rollout approval:
 
 ```bash
 export OWNER_EMAILS='owner1@example.com,owner2@example.com'
-NODE_ENV=production node server/index.js
+if ! restart_rollout_server; then exit 1; fi
 ```
 
 Verify comma-separated values arrive intact in the deployment environment. `deploy.sh` must use gcloud custom delimiter `^;^` for both deploy and update commands; owner commas must not become pipes.
@@ -563,6 +644,21 @@ ORDER BY LOWER(email), id;
 - [ ] Assign a named reviewer to every existing admin.
 - [ ] Keep only accounts with current moderator need.
 - [ ] Use owner workflow, not direct SQL, to demote unwanted admins so sessions, versions, optional content changes, and audit remain atomic.
+
+After steps 3-8 pass, copy required non-secret evidence to approved storage, then stop the managed server and remove restricted temporary state:
+
+```bash
+cleanup_rollout_server
+trap - EXIT INT TERM
+rm -f "$ROLLOUT_PID_FILE" "$ROLLOUT_MARKER_FILE" "$ROLLOUT_SERVER_LOG"
+rmdir "$ROLLOUT_STATE_DIR"
+unset ROLLOUT_SERVER_PID ROLLOUT_STARTED_AT ROLLOUT_PID_FILE ROLLOUT_MARKER_FILE
+unset ROLLOUT_SERVER_LOG ROLLOUT_STATE_DIR ROLLOUT_PORT BASE_URL DATABASE_URL OWNER_EMAILS
+unset ALLOWED_HOSTS PORT
+unset -f cleanup_rollout_server start_rollout_server restart_rollout_server
+```
+
+If startup or any later command fails, exiting the dedicated shell invokes the process cleanup trap. Restricted marker/PID/log files remain for diagnosis; inspect the log locally, then run the removal commands above with the printed state-directory path. Never paste log contents into tickets without checking them for infrastructure identifiers or other sensitive operational data.
 
 ## 9. Production rollout gate
 
