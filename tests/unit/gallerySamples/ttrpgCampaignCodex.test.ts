@@ -389,4 +389,60 @@ describe('TTRPG Campaign Codex gallery sample', () => {
         expect(artwork.svgContent).toContain('<polygon');
         expect(artwork.svgContent).toContain('<circle');
     });
+
+    it('gives every interior page a bank tab rail with one active tab on records', () => {
+        const sample = loadGallerySample(contract.slug);
+        const railTemplates = [
+            'campaign', 'bank', 'party', 'character', 'session', 'quest',
+            'npc', 'location', 'faction', 'encounter', 'lore', 'threads',
+        ];
+        const expectedTargets = [
+            'blank_session_bank', 'blank_quest_bank', 'blank_npc_bank', 'blank_location_bank',
+            'blank_faction_bank', 'blank_encounter_bank', 'blank_lore_bank',
+        ];
+        const activeByTemplate: Record<string, string> = {
+            session: 'ses', quest: 'qst', npc: 'npc', location: 'loc',
+            faction: 'fac', encounter: 'enc', lore: 'lor',
+        };
+
+        railTemplates.forEach(templateId => {
+            const elements = sample.templates[templateId].elements;
+            const links = elements.filter((element: any) => element.id.includes('_rail_link_'));
+            const tabs = elements.filter((element: any) => element.id.includes('_rail_tab_'));
+            const labels = elements.filter((element: any) => element.id.includes('_rail_label_'));
+
+            expect(links, templateId).toHaveLength(7);
+            expect(tabs, templateId).toHaveLength(7);
+            expect(labels, templateId).toHaveLength(7);
+            expect(links.map((link: any) => link.linkValue)).toEqual(expectedTargets);
+            links.forEach((link: any) => {
+                expect(link.linkTarget, link.id).toBe('specific_node');
+                expect(link.fill, link.id).toBe('');
+                expect(link.stroke, link.id).toBe('');
+                expect(link.rotation, link.id).toBe(0);
+                expect(link.x, link.id).toBeGreaterThanOrEqual(485);
+                expect(link.x + link.w, link.id).toBeLessThanOrEqual(509);
+            });
+            labels.forEach((label: any) => {
+                // Fallback branch: getElementBounds ignores rotation, so labels stay
+                // horizontal (rotation 0) to keep element.x + w inside the 509 page.
+                expect(label.rotation, label.id).toBe(0);
+            });
+
+            const activeKey = activeByTemplate[templateId];
+            const activeTabs = tabs.filter((tab: any) => tab.fill === '#783f38');
+            if (activeKey) {
+                expect(activeTabs, templateId).toHaveLength(1);
+                expect(activeTabs[0].id).toContain(`_rail_tab_${activeKey}_`);
+            } else {
+                expect(activeTabs, templateId).toHaveLength(0);
+            }
+        });
+
+        ['cover', 'start', 'workspace'].forEach(templateId => {
+            expect(sample.templates[templateId].elements.some((element: any) =>
+                element.id.includes('_rail_'),
+            ), templateId).toBe(false);
+        });
+    });
 });
