@@ -123,6 +123,12 @@ describe('repository configuration', () => {
         expect(readme).toMatch(/migrations at startup/i);
         expect(cloudDocs).toContain('actor kind `system`, null actor user ID, actor label `OWNER_EMAILS reconciliation`, and fixed reason `Synchronize account role with OWNER_EMAILS configuration`');
         expect(cloudDocs).toContain('Shared moderation routes protected by `requireAdmin` accept an `admin` or a currently configured `owner`. A stale stored `owner` absent from current `OWNER_EMAILS` is denied as an actor but remains protected as a moderation target.');
+        expect(cloudDocs).not.toContain('| admin or owner');
+        expect(cloudDocs).not.toContain('`requireAdmin` accepts fresh `admin` or `owner`');
+        expect(cloudDocs.match(/\| admin or currently configured owner(?:, hierarchy enforced)? \|/g)).toHaveLength(13);
+        expect(cloudDocs.match(/\| currently configured owner \|/g)).toHaveLength(6);
+        expect(cloudDocs).toContain('| Capability | Currently configured owner | Admin (moderator) | User |');
+        expect(cloudDocs).toContain('only currently configured owners can inspect system events and global history');
         expect(rolloutRunbook).toContain('changed_sessions_zero');
         expect(rolloutRunbook).toContain('DISPOSABLE_ADMIN_EMAIL');
         expect(rolloutRunbook).toContain('Expected at least one matching `admin_demoted` action');

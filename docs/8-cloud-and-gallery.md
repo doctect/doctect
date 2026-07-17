@@ -109,16 +109,16 @@ Two independent edits that happen to produce byte-identical results are *not* fl
 | `GET /api/merge-requests/:id` | author or target owner | Detail + live-recomputed diff |
 | `POST /api/merge-requests/:id/merge` | target owner | Merge (re-verifies conflict-free) |
 | `POST /api/merge-requests/:id/close` | author or target owner | Close without merging |
-| `GET /api/admin/reports` | admin or owner | List reported projects |
-| `POST /api/admin/projects/:id/unpublish` | admin or owner, hierarchy enforced | Force-unpublish a project with a reason and audit |
-| `DELETE /api/admin/reviews/:id` | admin or owner, hierarchy enforced | Delete a review with a reason and audit |
-| `GET /api/admin/users?q=&cursor=` | admin or owner | Search accounts by email/username; safe bounded DTOs only |
-| `GET /api/admin/users/:id?historyCursor=` | admin or owner | Account suspension state, published projects, and moderation history |
-| `POST /api/admin/users/:id/suspend` | admin or owner, hierarchy enforced | Suspend, revoke sessions, optionally unpublish selected projects, and audit atomically |
-| `POST /api/admin/users/:id/restore` | admin or owner, hierarchy enforced | Clear suspension, defensively revoke sessions, and audit atomically |
-| `POST /api/owner/users/:id/promote-admin` | owner | Promote a user to admin, revoke sessions, and audit atomically |
-| `POST /api/owner/users/:id/revoke-admin` | owner | Demote an admin, optionally suspend/unpublish, revoke sessions, and audit atomically |
-| `GET /api/owner/audit` | owner | Filter and page global immutable platform audit |
+| `GET /api/admin/reports` | admin or currently configured owner | List reported projects |
+| `POST /api/admin/projects/:id/unpublish` | admin or currently configured owner, hierarchy enforced | Force-unpublish a project with a reason and audit |
+| `DELETE /api/admin/reviews/:id` | admin or currently configured owner, hierarchy enforced | Delete a review with a reason and audit |
+| `GET /api/admin/users?q=&cursor=` | admin or currently configured owner | Search accounts by email/username; safe bounded DTOs only |
+| `GET /api/admin/users/:id?historyCursor=` | admin or currently configured owner | Account suspension state, published projects, and moderation history |
+| `POST /api/admin/users/:id/suspend` | admin or currently configured owner, hierarchy enforced | Suspend, revoke sessions, optionally unpublish selected projects, and audit atomically |
+| `POST /api/admin/users/:id/restore` | admin or currently configured owner, hierarchy enforced | Clear suspension, defensively revoke sessions, and audit atomically |
+| `POST /api/owner/users/:id/promote-admin` | currently configured owner | Promote a user to admin, revoke sessions, and audit atomically |
+| `POST /api/owner/users/:id/revoke-admin` | currently configured owner | Demote an admin, optionally suspend/unpublish, revoke sessions, and audit atomically |
+| `GET /api/owner/audit` | currently configured owner | Filter and page global immutable platform audit |
 
 Shared moderation routes protected by `requireAdmin` accept an `admin` or a currently configured `owner`. A stale stored `owner` absent from current `OWNER_EMAILS` is denied as an actor but remains protected as a moderation target.
 
@@ -178,7 +178,7 @@ Cloud storage is real, billed infrastructure, so this layer adds a set of guardr
 
 Stored roles have one explicit authority order; null or unknown values behave as `user`:
 
-| Capability | Owner | Admin (moderator) | User |
+| Capability | Currently configured owner | Admin (moderator) | User |
 |---|---:|---:|---:|
 | View reports, account search/detail, and moderation stats | Yes | Yes | No |
 | Suspend/restore users and moderate user content | Yes | Yes | No |
@@ -190,9 +190,9 @@ Stored roles have one explicit authority order; null or unknown values behave as
 
 `OWNER_EMAILS` is the only owner-membership source. Entries are trimmed, lowercased, deduplicated, and compared with normalized account emails. Production refuses to start with an empty normalized set; development and tests may use an empty set. Startup runs migrations, then reconciles authority in one transaction before listening: configured existing accounts become owners, stale stored owners become users, every changed account increments `moderationVersion`, all its sessions are revoked, and an immutable `owner_granted` or `owner_removed` system action is written. Every reconciliation action has actor kind `system`, null actor user ID, actor label `OWNER_EMAILS reconciliation`, and fixed reason `Synchronize account role with OWNER_EMAILS configuration`. A configured address without an account creates no row; signup reconciliation grants authority only if its role/session/audit transaction succeeds. Configure at least two owners.
 
-Every authenticated request resolves the session, locks and re-reads account email, role, suspension fields, and moderation version, and places those fresh values in `req.user`. `requireAdmin` accepts fresh `admin` or `owner`; `requireOwner` additionally requires fresh role `owner` and current configured-email membership. Role changes revoke sessions. Stored owner rows remain protected even during temporary configuration drift, and startup reconciliation repairs that drift before traffic.
+Every authenticated request resolves the session, locks and re-reads account email, role, suspension fields, and moderation version, and places those fresh values in `req.user`. `requireAdmin` accepts a fresh `admin` or a fresh `owner` with current configured-email membership; `requireOwner` requires the same fresh owner role and current membership. Role changes revoke sessions. A stale stored owner absent from current `OWNER_EMAILS` is denied as an actor on both shared and owner-only routes, but stored owner rows remain protected as moderation targets during temporary configuration drift. Startup reconciliation repairs that drift before traffic.
 
-Admins can target users and user-owned/authored content only. Owners can target users or admins and their content, never owners. Suspension and restoration use optimistic `moderationVersion`, revoke sessions, and commit account, selected-content, and audit changes atomically. Only explicitly selected published projects become private; restoration never republishes content or changes role. Demoting an admin always produces a user, so later restoration remains user. Reasons are trimmed, mandatory, and 1-1,000 characters. Expiries must be future calendar-valid ISO-8601 timestamps with seconds and an explicit `Z` or numeric timezone. Project selections contain 0-20 unique non-empty IDs.
+Admins can target users and user-owned/authored content only. Currently configured owners can target users or admins and their content, never stored owners. Suspension and restoration use optimistic `moderationVersion`, revoke sessions, and commit account, selected-content, and audit changes atomically. Only explicitly selected published projects become private; restoration never republishes content or changes role. Demoting an admin always produces a user, so later restoration remains user. Reasons are trimmed, mandatory, and 1-1,000 characters. Expiries must be future calendar-valid ISO-8601 timestamps with seconds and an explicit `Z` or numeric timezone. Project selections contain 0-20 unique non-empty IDs.
 
 Migration `012_session_suspension_guard` rejects session insertion for active suspensions. PostgreSQL locks the referenced user and migration `013_session_suspension_wall_clock` evaluates expiry with `(clock_timestamp() AT TIME ZONE 'UTC')`; SQLite uses the same active predicate under its serialized writer. Expired suspensions permit sign-in, which clears persisted suspension fields; audit remains.
 
@@ -238,19 +238,19 @@ Account search returns `{ users: Array<Omit<ModerationAccount, 'banReason'>>, ne
 
 ### Stable moderation HTTP contract
 
-Anonymous protected requests receive `401 { "error": "Unauthorized" }`. A user at an admin route receives `403 { "error": "Forbidden: Admins only" }`; a non-owner at an owner route receives `403 { "error": "Forbidden: Owners only" }`.
+Anonymous protected requests receive `401 { "error": "Unauthorized" }`. An actor without admin or current configured-owner authority at an admin route receives `403 { "error": "Forbidden: Admins only" }`; an actor without current configured-owner authority at an owner route receives `403 { "error": "Forbidden: Owners only" }`.
 
 | Method and path | Authority | Request | `200` response |
 |---|---|---|---|
-| `GET /api/admin/users?q=&cursor=` | admin or owner | Query: required 1-100 character `q`, optional opaque `cursor` | Account search DTO |
-| `GET /api/admin/users/:id?historyCursor=` | admin or owner | Optional opaque `historyCursor` | Account detail DTO |
-| `POST /api/admin/users/:id/suspend` | admin or owner, hierarchy enforced | `{ reason, expiresAt: string \| null, projectIdsToUnpublish: string[], expectedModerationVersion }` | `{ account: ModerationAccount, actions: PlatformAuditAction[] }` |
-| `POST /api/admin/users/:id/restore` | admin or owner, hierarchy enforced | `{ reason, expectedModerationVersion }` | `{ account: ModerationAccount, actions: [PlatformAuditAction] }` |
-| `POST /api/owner/users/:id/promote-admin` | owner | `{ reason, expectedModerationVersion }` | `{ account: ModerationAccount, actions: [PlatformAuditAction] }` |
-| `POST /api/owner/users/:id/revoke-admin` | owner | `{ reason, expectedModerationVersion, suspension: { expiresAt: string \| null } \| null, projectIdsToUnpublish: string[] }` | `{ account: ModerationAccount, actions: PlatformAuditAction[] }` |
-| `POST /api/admin/projects/:id/unpublish` | admin or owner, hierarchy enforced | `{ reason }` | `{ success: true, action: PlatformAuditAction }` |
-| `DELETE /api/admin/reviews/:id` | admin or owner, hierarchy enforced | `{ reason }` | `{ success: true, action: PlatformAuditAction }` |
-| `GET /api/owner/audit` | owner | Query filters below | `{ items: PlatformAuditAction[], nextCursor: string \| null }` |
+| `GET /api/admin/users?q=&cursor=` | admin or currently configured owner | Query: required 1-100 character `q`, optional opaque `cursor` | Account search DTO |
+| `GET /api/admin/users/:id?historyCursor=` | admin or currently configured owner | Optional opaque `historyCursor` | Account detail DTO |
+| `POST /api/admin/users/:id/suspend` | admin or currently configured owner, hierarchy enforced | `{ reason, expiresAt: string \| null, projectIdsToUnpublish: string[], expectedModerationVersion }` | `{ account: ModerationAccount, actions: PlatformAuditAction[] }` |
+| `POST /api/admin/users/:id/restore` | admin or currently configured owner, hierarchy enforced | `{ reason, expectedModerationVersion }` | `{ account: ModerationAccount, actions: [PlatformAuditAction] }` |
+| `POST /api/owner/users/:id/promote-admin` | currently configured owner | `{ reason, expectedModerationVersion }` | `{ account: ModerationAccount, actions: [PlatformAuditAction] }` |
+| `POST /api/owner/users/:id/revoke-admin` | currently configured owner | `{ reason, expectedModerationVersion, suspension: { expiresAt: string \| null } \| null, projectIdsToUnpublish: string[] }` | `{ account: ModerationAccount, actions: PlatformAuditAction[] }` |
+| `POST /api/admin/projects/:id/unpublish` | admin or currently configured owner, hierarchy enforced | `{ reason }` | `{ success: true, action: PlatformAuditAction }` |
+| `DELETE /api/admin/reviews/:id` | admin or currently configured owner, hierarchy enforced | `{ reason }` | `{ success: true, action: PlatformAuditAction }` |
+| `GET /api/owner/audit` | currently configured owner | Query filters below | `{ items: PlatformAuditAction[], nextCursor: string \| null }` |
 
 Search errors are `400 { "error": "q must be 1 to 100 characters" }` and `400 { "error": "cursor is invalid" }`. Detail uses `400 { "error": "historyCursor is invalid" }` and `404 { "error": "User not found" }`. Suspend uses `400 "Invalid suspension request"`, `403 "Target is protected by role hierarchy"`, `404 "User not found"`, `409 "Moderation state changed; refresh and try again"`, and `500 "Account suspension failed"`. Restore uses the same hierarchy/missing/conflict errors with `400 "Invalid restoration request"` and `500 "Account restoration failed"`.
 
@@ -262,7 +262,7 @@ Global audit accepts optional exact normalized `actorEmail` and `targetEmail` fi
 
 Migration `014_platform_audit_actions` creates `platform_audit_actions`, backfills every legacy `moderation_actions` row with the same ID, and installs PostgreSQL/SQLite triggers rejecting update or delete. `moderation_actions` remains immutable historical storage but receives no future writes; every current history read and moderation write uses `platform_audit_actions`. Actions cover owner reconciliation, role promotion/demotion, account suspension/restoration, selected or standalone project unpublishing, and review deletion. Audit insertion shares the state-change transaction.
 
-Rows snapshot actor kind/ID/email label, target ID/email, project/review IDs, reason, expiry, timestamp, action, and server-generated constrained metadata. Metadata contains only action source, old/new role, prior public visibility, or deleted rating. Audit never stores passwords, provider/session tokens, session IDs, IP addresses, arbitrary request payloads, or review text. Search, report views, account-detail reads, and moderation-page access are not audited. Target history exposes user-actor case events to moderators; only owners can inspect system events and global history.
+Rows snapshot actor kind/ID/email label, target ID/email, project/review IDs, reason, expiry, timestamp, action, and server-generated constrained metadata. Metadata contains only action source, old/new role, prior public visibility, or deleted rating. Audit never stores passwords, provider/session tokens, session IDs, IP addresses, arbitrary request payloads, or review text. Search, report views, account-detail reads, and moderation-page access are not audited. Target history exposes user-actor case events to moderators; only currently configured owners can inspect system events and global history.
 
 ### Emergency owner recovery
 
