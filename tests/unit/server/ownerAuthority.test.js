@@ -100,6 +100,20 @@ describe('repository configuration', () => {
         expect(envExample).toMatch(/sole deployment-controlled owner root of trust/i);
         expect(deployScript.match(/--set-env-vars "\^;\^OWNER_EMAILS=\$\{OWNER_EMAILS\}"/g)).toHaveLength(2);
         expect(deployScript).toContain('OWNER_EMAILS_NORMALIZED');
+        expect(deployScript).toMatch(/^#!\/bin\/bash\nset -euo pipefail\n/);
+        for (const variable of [
+            'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'OWNER_EMAILS', 'DATABASE_URL',
+            'RESEND_API_KEY', 'EMAIL_FROM', 'TRUSTED_ORIGINS', 'CLIENT_URL', 'BETTER_AUTH_URL',
+        ]) {
+            expect(deployScript).toContain(`${variable}="\${${variable}:-}"`);
+        }
+        expect(deployScript.match(/\|\| echo/g)).toHaveLength(2);
+        expect(deployScript).toContain('gcloud config set project "$PROJECT_ID"');
+        expect(deployScript).toContain('sudo docker build -t "${APP_NAME}:latest" .');
+        expect(deployScript).toContain('sudo docker push "$IMAGE_URI"');
+        expect(deployScript.indexOf('gcloud run services update "$APP_NAME"')).toBeLessThan(
+            deployScript.indexOf('echo "Deployment complete!"'),
+        );
         expect(playwrightConfig).toContain('OWNER_EMAILS: e2eOwnerEmail');
         expect(unitHelpers).toContain("process.env.OWNER_EMAILS = ''");
         expect(readme).toContain('npm run server');
