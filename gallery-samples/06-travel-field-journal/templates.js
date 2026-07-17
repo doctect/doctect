@@ -403,6 +403,14 @@ const reservation = {
       fill: COLORS.rust,
       align: 'center',
     }),
+    rect('reservation', 'tick_confirmed', 330, 176, 13, 13, COLORS.paper, { stroke: COLORS.sea, strokeWidth: 0.8 }),
+    text('reservation', 'tick_confirmed_label', 348, 172, 60, 20, 'CONFIRMED', {
+      fontSize: 7.5, fontWeight: 'bold', textColor: COLORS.seaDeep,
+    }),
+    rect('reservation', 'tick_paid', 420, 176, 13, 13, COLORS.paper, { stroke: COLORS.sea, strokeWidth: 0.8 }),
+    text('reservation', 'tick_paid_label', 438, 172, 43, 20, 'PAID', {
+      fontSize: 7.5, fontWeight: 'bold', textColor: COLORS.seaDeep,
+    }),
     ...field('reservation', 'provider', 'Place / service', 'provider', 34, 215, 447, 64),
     ...field('reservation', 'address', 'Address / meeting point', 'address', 34, 291, 447, 66),
     ...field('reservation', 'arrival', 'Arrival', 'arrival', 34, 369, 214, 62),
@@ -439,7 +447,7 @@ const day = {
   elements: [
     ...pageBase('day', 'daily field notes'),
     ...titleBlock('day'),
-    text('day', 'date_label', 34, 164, 447, 24, '{{date_label}}', {
+    text('day', 'date_label', 34, 164, 250, 24, '{{date_label}}', {
       dataBinding: 'date_label',
       fontSize: 9,
       fontWeight: 'bold',
@@ -455,6 +463,24 @@ const day = {
     ...field('day', 'field_notes', 'Field notes - details, sounds, fragments', 'field_notes', 34, 410, 447, 118, { fontSize: 10 }),
     ...field('day', 'weather', 'Weather / light', 'weather', 34, 541, 214, 59, { fontSize: 9 }),
     ...field('day', 'moment', 'One moment to keep', 'moment', 267, 541, 214, 59, { fontSize: 9 }),
+    text('day', 'nav_prev', 296, 164, 85, 24, '{{nav_prev_label}}', {
+      dataBinding: 'nav_prev_label',
+      fontSize: 9,
+      fontWeight: 'bold',
+      textColor: COLORS.seaDeep,
+      align: 'right',
+      linkTarget: 'sibling',
+      linkValue: '-1',
+    }),
+    text('day', 'nav_next', 391, 164, 90, 24, '{{nav_next_label}}', {
+      dataBinding: 'nav_next_label',
+      fontSize: 9,
+      fontWeight: 'bold',
+      textColor: COLORS.rustDeep,
+      align: 'right',
+      linkTarget: 'sibling',
+      linkValue: '1',
+    }),
   ],
 };
 

@@ -318,4 +318,31 @@ describe('Travel Field Journal gallery sample', () => {
         expect(artwork.svgContent).toContain('<path');
         expect(artwork.svgContent).toContain('<circle');
     });
+
+    it('chips day-to-day navigation and reservation status ticks', () => {
+        const sample = loadGallerySample(contract.slug);
+        const prev = role(sample, 'day', 'nav_prev');
+        const next = role(sample, 'day', 'nav_next');
+
+        expect(prev).toMatchObject({ linkTarget: 'sibling', linkValue: '-1', dataBinding: 'nav_prev_label' });
+        expect(next).toMatchObject({ linkTarget: 'sibling', linkValue: '1', dataBinding: 'nav_next_label' });
+
+        const days = sample.nodes.blank_trip_01_itinerary.children.map((id: string) => sample.nodes[id]);
+        expect(days[0].data.nav_prev_label).toBe('');
+        expect(days[0].data.nav_next_label).toBe('DAY 02 »');
+        expect(days.at(-1)!.data.nav_prev_label).toBe('« DAY 04');
+        expect(days.at(-1)!.data.nav_next_label).toBe('');
+
+        const lisbonDays = sample.nodes.example_itinerary.children.map((id: string) => sample.nodes[id]);
+        expect(lisbonDays[1].data.nav_prev_label).toBe('« DAY 01');
+        expect(lisbonDays[1].data.nav_next_label).toBe('DAY 03 »');
+
+        const ticks = sample.templates.reservation.elements.filter((element: any) =>
+            element.type === 'rect' && (element.id.includes('_tick_confirmed_') || element.id.includes('_tick_paid_')),
+        );
+        expect(ticks).toHaveLength(2);
+        ticks.forEach((tick: any) => {
+            expect(tick).toMatchObject({ w: 13, h: 13, fill: '#fffaf1', stroke: '#356f66', strokeWidth: 0.8 });
+        });
+    });
 });

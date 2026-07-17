@@ -64,7 +64,7 @@ const reservationData = (values = {}) => ({
   ...values,
 });
 
-const dayData = (dayNumber, values = {}) => ({
+const dayData = (dayNumber, dayCount, values = {}) => ({
   subtitle: `Day ${String(dayNumber).padStart(2, '0')} | Shape a route, then record what was not on the list.`,
   menu_label: `DAY ${String(dayNumber).padStart(2, '0')}`,
   date_label: '',
@@ -72,6 +72,8 @@ const dayData = (dayNumber, values = {}) => ({
   field_notes: '',
   weather: '',
   moment: '',
+  nav_prev_label: dayNumber === 1 ? '' : `« DAY ${String(dayNumber - 1).padStart(2, '0')}`,
+  nav_next_label: dayNumber === dayCount ? '' : `DAY ${String(dayNumber + 1).padStart(2, '0')} »`,
   ...values,
 });
 
@@ -182,7 +184,7 @@ addNode('example_itinerary', 'example_trip_lisbon', 'itinerary', 'Three Days in 
   menu_label: 'ITINERARY',
 }, { example: true });
 
-addNode('example_day_01', 'example_itinerary', 'day', 'Day 01 | Baixa to Alfama', dayData(1, {
+addNode('example_day_01', 'example_itinerary', 'day', 'Day 01 | Baixa to Alfama', dayData(1, 3, {
   menu_label: 'DAY 01 / BAIXA + ALFAMA',
   date_label: 'DAY 01 / BAIXA + ALFAMA',
   timeline: '09:30  Settle near Graça\n11:00  Walk down through Mouraria\n13:00  Lunch near Baixa\n15:30  Alfama lanes + small viewpoints\n18:15  Ferry light from the river edge',
@@ -191,7 +193,7 @@ addNode('example_day_01', 'example_itinerary', 'day', 'Day 01 | Baixa to Alfama'
   moment: 'Blue tile fragments beside a repair shop',
 }), { example: true });
 
-addNode('example_day_02', 'example_itinerary', 'day', 'Day 02 | Belém to Ajuda', dayData(2, {
+addNode('example_day_02', 'example_itinerary', 'day', 'Day 02 | Belém to Ajuda', dayData(2, 3, {
   menu_label: 'DAY 02 / BELÉM + AJUDA',
   date_label: 'DAY 02 / BELÉM + AJUDA',
   timeline: '08:30  Tram west before crowds\n09:30  Riverside walk in Belém\n11:30  Garden pause\n13:15  Lunch uphill toward Ajuda\n16:00  Quiet streets + local café\n18:00  Return by bus',
@@ -200,7 +202,7 @@ addNode('example_day_02', 'example_itinerary', 'day', 'Day 02 | Belém to Ajuda'
   moment: 'Custard scent drifting into the tram queue',
 }), { example: true });
 
-addNode('example_day_03', 'example_itinerary', 'day', 'Day 03 | Estrela to the River', dayData(3, {
+addNode('example_day_03', 'example_itinerary', 'day', 'Day 03 | Estrela to the River', dayData(3, 3, {
   menu_label: 'DAY 03 / ESTRELA + RIVER',
   date_label: 'DAY 03 / ESTRELA + RIVER',
   timeline: '09:00  Estrela garden\n10:30  Fictional tile study visit\n12:30  Market lunch\n15:00  Unplanned bookshop hour\n17:30  Walk to Cais do Sodré\n19:00  Final river crossing',
@@ -270,7 +272,7 @@ for (let tripNumber = 1; tripNumber <= CONFIG.tripCount; tripNumber += 1) {
   });
   for (let dayNumber = 1; dayNumber <= CONFIG.daysPerTrip; dayNumber += 1) {
     const dayLabel = String(dayNumber).padStart(2, '0');
-    addNode(`${prefix}_day_${dayLabel}`, itineraryId, 'day', `Day ${dayLabel}`, dayData(dayNumber));
+    addNode(`${prefix}_day_${dayLabel}`, itineraryId, 'day', `Day ${dayLabel}`, dayData(dayNumber, CONFIG.daysPerTrip));
   }
 
   addNode(`${prefix}_packing`, prefix, 'packing', `Journey ${tripLabel} | Packing`, packingData());
