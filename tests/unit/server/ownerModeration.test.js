@@ -92,6 +92,27 @@ const insertProject = async (id, ownerIdToUse, visibility = 'public', publishedC
     [id, ownerIdToUse, id, visibility, publishedCommitId, id, '2026-07-17T00:00:00.000Z']);
 };
 
+const snapshotLifecycleState = async (targetId, projectPrefix = null) => ({
+    user: await query('SELECT * FROM "user" WHERE id = $1', [targetId]),
+    sessions: await query('SELECT * FROM session WHERE "userId" = $1 ORDER BY id', [targetId]),
+    projects: projectPrefix === null
+        ? []
+        : await query('SELECT * FROM projects WHERE id LIKE $1 ORDER BY id', [`${projectPrefix}%`]),
+    audit: await query('SELECT * FROM platform_audit_actions WHERE target_user_id = $1 ORDER BY rowid', [targetId]),
+});
+
+const resetPromotionFaultFixture = async () => {
+    dbHarness.failPattern = null;
+    await query('DELETE FROM session WHERE "userId" = $1', [promotionTargetId]);
+    await query(`UPDATE "user"
+        SET role = 'user', banned = 1, "banReason" = 'expired promotion fixture',
+            "banExpires" = '2026-01-01T00:00:00.000Z', "moderationVersion" = 4,
+            "updatedAt" = '2026-07-17T00:00:00.000Z'
+        WHERE id = $1`, [promotionTargetId]);
+    await insertSession(promotionTargetId, 'promotion-fault-a');
+    await insertSession(promotionTargetId, 'promotion-fault-b');
+};
+
 const snapshotRevocationState = async () => ({
     account: await query(`SELECT role, banned, "banReason", "banExpires", "moderationVersion", "updatedAt"
         FROM "user" WHERE id = $1`, [revocationTargetId]),
@@ -194,18 +215,23 @@ describe('owner lifecycle authorization and status contracts', () => {
         const missing = await promote('missing-lifecycle-user', promotionBody());
         expect({ status: missing.status, body: missing.body }).toEqual({ status: 404, body: { error: 'User not found' } });
 
-        await query(`UPDATE "user" SET role = 'admin' WHERE id = $1`, [promotionTargetId]);
-        expect((await promote(promotionTargetId, promotionBody())).status).toBe(409);
-        await query(`UPDATE "user" SET role = 'user', banned = 1, "banExpires" = NULL WHERE id = $1`, [promotionTargetId]);
-        expect((await promote(promotionTargetId, promotionBody())).status).toBe(409);
-        await query(`UPDATE "user" SET role = 'user' WHERE id = $1`, [revocationTargetId]);
-        expect((await revoke(revocationTargetId, revocationBody())).status).toBe(409);
-        await query(`UPDATE "user" SET role = 'admin', "moderationVersion" = 1 WHERE id = $1`, [revocationTargetId]);
-        const stale = await revoke(revocationTargetId, revocationBody());
-        expect({ status: stale.status, body: stale.body }).toEqual({
+        const conflict = {
             status: 409,
             body: { error: 'Role or moderation state changed; refresh and try again' },
-        });
+        };
+
+        await query(`UPDATE "user" SET role = 'admin' WHERE id = $1`, [promotionTargetId]);
+        const adminPromotion = await promote(promotionTargetId, promotionBody());
+        expect({ status: adminPromotion.status, body: adminPromotion.body }).toEqual(conflict);
+        await query(`UPDATE "user" SET role = 'user', banned = 1, "banExpires" = NULL WHERE id = $1`, [promotionTargetId]);
+        const suspendedPromotion = await promote(promotionTargetId, promotionBody());
+        expect({ status: suspendedPromotion.status, body: suspendedPromotion.body }).toEqual(conflict);
+        await query(`UPDATE "user" SET role = 'user' WHERE id = $1`, [revocationTargetId]);
+        const userRevocation = await revoke(revocationTargetId, revocationBody());
+        expect({ status: userRevocation.status, body: userRevocation.body }).toEqual(conflict);
+        await query(`UPDATE "user" SET role = 'admin', "moderationVersion" = 1 WHERE id = $1`, [revocationTargetId]);
+        const stale = await revoke(revocationTargetId, revocationBody());
+        expect({ status: stale.status, body: stale.body }).toEqual(conflict);
     });
 
     it('rejects malformed promotion and complete revocation bodies with exact 400 envelopes', async () => {
@@ -248,6 +274,11 @@ describe('owner moderator lifecycle success', () => {
             .send({ email: PROMOTION_EMAIL, password: TEST_PASSWORD });
         const oldCookie = firstSignin.headers['set-cookie'].map(value => value.split(';')[0]).join('; ');
         await request(app).post('/api/auth/sign-in/email').send({ email: PROMOTION_EMAIL, password: TEST_PASSWORD });
+        const sessionsBefore = await query(`SELECT id, "expiresAt" FROM session
+            WHERE "userId" = $1 ORDER BY id`, [promotionTargetId]);
+        expect(sessionsBefore).toHaveLength(2);
+        expect(sessionsBefore.every(session => new Date(session.expiresAt).getTime() > Date.now())).toBe(true);
+        expect((await request(app).get('/api/projects').set('Cookie', oldCookie)).status).toBe(200);
 
         const response = await promote(promotionTargetId, promotionBody({ reason: '  Add incident coverage  ' }));
 
@@ -353,6 +384,32 @@ describe('owner moderator lifecycle success', () => {
 });
 
 describe('owner lifecycle locking and atomicity', () => {
+    it('rejects foreign, private, and unpublished project selections without changing any state', async () => {
+        const foreignOwnerId = await userIdFor(USER_EMAIL);
+        await insertProject('lifecycle-project-invalid-foreign', foreignOwnerId);
+        await insertProject('lifecycle-project-invalid-private', revocationTargetId, 'private');
+        await insertProject('lifecycle-project-invalid-unpublished', revocationTargetId, 'public', null);
+        await insertSession(revocationTargetId, 'invalid-selection');
+        const before = await snapshotLifecycleState(revocationTargetId, 'lifecycle-project-invalid-');
+
+        for (const projectId of [
+            'lifecycle-project-invalid-foreign',
+            'lifecycle-project-invalid-private',
+            'lifecycle-project-invalid-unpublished',
+        ]) {
+            const response = await revoke(revocationTargetId, revocationBody({
+                reason: `Reject ${projectId}`,
+                projectIdsToUnpublish: [projectId],
+            }));
+
+            expect({ status: response.status, body: response.body }).toEqual({
+                status: 409,
+                body: { error: 'Role or moderation state changed; refresh and try again' },
+            });
+            expect(await snapshotLifecycleState(revocationTargetId, 'lifecycle-project-invalid-')).toEqual(before);
+        }
+    });
+
     it('locks target first and projects in sorted order before one account update', async () => {
         await insertProject('lifecycle-project-lock-z', revocationTargetId);
         await insertProject('lifecycle-project-lock-a', revocationTargetId);
@@ -440,6 +497,38 @@ describe('owner lifecycle locking and atomicity', () => {
             });
             expect(await snapshotRevocationState()).toEqual(before);
             expect(errorLog).toHaveBeenCalledWith('Admin revocation failed:', expect.any(Error));
+            errorLog.mockRestore();
+        }
+    });
+
+    it('rolls back complete promotion state when any write fails', async () => {
+        const cases = [
+            ['role update', /UPDATE "user"/],
+            ['session deletion', /DELETE FROM session/],
+            ['audit insertion', /INSERT INTO platform_audit_actions/],
+        ];
+
+        for (const [label, pattern] of cases) {
+            await resetPromotionFaultFixture();
+            const before = await snapshotLifecycleState(promotionTargetId);
+            dbHarness.failPattern = pattern;
+            dbHarness.failAt = 1;
+            dbHarness.matchCount = 0;
+            const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+            const response = await promote(promotionTargetId, promotionBody({
+                reason: `Promotion fault at ${label}`,
+                expectedModerationVersion: 4,
+            }));
+
+            dbHarness.failPattern = null;
+            expect({ label, status: response.status, body: response.body }).toEqual({
+                label,
+                status: 500,
+                body: { error: 'Admin promotion failed' },
+            });
+            expect(await snapshotLifecycleState(promotionTargetId)).toEqual(before);
+            expect(errorLog).toHaveBeenCalledWith('Admin promotion failed:', expect.any(Error));
             errorLog.mockRestore();
         }
     });
