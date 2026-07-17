@@ -4,12 +4,13 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { AccountMenu } from '../../components/AccountMenu';
 
 const api = vi.hoisted(() => ({ me: vi.fn() }));
+const auth = vi.hoisted(() => ({ signOut: vi.fn() }));
 const sessionState = vi.hoisted(() => ({ value: { data: null as any, isPending: false } }));
 
 vi.mock('../../services/cloudApi', () => ({ cloudApi: api }));
 vi.mock('../../lib/auth-client', () => ({
     useSession: () => sessionState.value,
-    signOut: vi.fn(),
+    signOut: auth.signOut,
 }));
 
 const renderAt = () => render(
@@ -32,6 +33,20 @@ describe('AccountMenu', () => {
         api.me.mockResolvedValue(null);
         renderAt();
         expect(await screen.findByText('Sign in')).toBeInTheDocument();
+    });
+
+    it('shows authority failure controls instead of sign-in and retries safely', async () => {
+        api.me.mockRejectedValueOnce(new Error('Authority unavailable'));
+        renderAt();
+
+        expect(await screen.findByRole('alert')).toHaveTextContent('Unable to verify account authority.');
+        expect(screen.queryByText('Sign in')).toBeNull();
+        fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
+        expect(auth.signOut).toHaveBeenCalledTimes(1);
+
+        api.me.mockResolvedValueOnce(user('admin', 'recovered-admin'));
+        fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+        expect(await screen.findByTitle('Account')).toHaveTextContent('recovered-admin');
     });
 
     it('uses fresh username for profile routing', async () => {

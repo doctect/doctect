@@ -5,6 +5,7 @@ import { AdminModerationPage } from '../../pages/AdminModerationPage';
 import { ApiError } from '../../services/cloudApi';
 
 const api = vi.hoisted(() => ({
+    me: vi.fn(),
     searchModerationUsers: vi.fn(),
     getModerationUser: vi.fn(),
     suspendAccount: vi.fn(),
@@ -48,6 +49,7 @@ const searchAndOpen = async (actorRole: 'admin' | 'owner' = 'admin') => {
 describe('AdminModerationPage', () => {
     beforeEach(() => {
         vi.clearAllMocks();
+        api.me.mockResolvedValue(null);
         api.searchModerationUsers.mockResolvedValue({ users: [account], nextCursor: 'next-search' });
         api.getModerationUser.mockResolvedValue(detail);
         api.suspendAccount.mockResolvedValue({
@@ -602,6 +604,57 @@ describe('AdminModerationPage', () => {
         expect(screen.queryByRole('button', { name: 'Promote to moderator' })).toBeNull();
         expect(screen.getByLabelText('Role change reason')).toHaveValue('Keep conflict draft');
         expect(api.promoteAdmin).toHaveBeenCalledTimes(1);
+    });
+
+    it('resets owner drafts when conflict refresh changes the target role', async () => {
+        const promotedDetail = { ...detail, account: { ...account, role: 'admin' as const, moderationVersion: 4 } };
+        api.getModerationUser.mockResolvedValueOnce(detail).mockResolvedValueOnce(promotedDetail);
+        api.promoteAdmin.mockRejectedValueOnce(new ApiError(409, 'Role changed'));
+        await searchAndOpen('owner');
+        fireEvent.change(screen.getByLabelText('Role change reason'), { target: { value: 'Stale promotion draft' } });
+        fireEvent.click(screen.getByRole('button', { name: 'Promote to moderator' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Confirm promotion' }));
+        await screen.findByText('Account changed. Refresh account details before trying again.');
+
+        fireEvent.click(screen.getByRole('button', { name: 'Refresh account details' }));
+        expect(await screen.findByRole('button', { name: 'Remove moderator access' })).toBeInTheDocument();
+        expect(screen.getByLabelText('Role change reason')).toHaveValue('');
+        expect(screen.getByLabelText('Suspend account after removing moderator access')).not.toBeChecked();
+        expect(screen.getByLabelText('Unpublish One (project-1)')).not.toBeChecked();
+    });
+
+    it('retains owner drafts when conflict refresh keeps the same target role', async () => {
+        const refreshedDetail = { ...detail, account: { ...account, moderationVersion: 4 } };
+        api.getModerationUser.mockResolvedValueOnce(detail).mockResolvedValueOnce(refreshedDetail);
+        api.promoteAdmin.mockRejectedValueOnce(new ApiError(409, 'Version changed'));
+        await searchAndOpen('owner');
+        fireEvent.change(screen.getByLabelText('Role change reason'), { target: { value: 'Still valid promotion draft' } });
+        fireEvent.click(screen.getByRole('button', { name: 'Promote to moderator' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Confirm promotion' }));
+        await screen.findByText('Account changed. Refresh account details before trying again.');
+
+        fireEvent.click(screen.getByRole('button', { name: 'Refresh account details' }));
+        expect(await screen.findByRole('button', { name: 'Promote to moderator' })).toBeInTheDocument();
+        expect(screen.getByLabelText('Role change reason')).toHaveValue('Still valid promotion draft');
+    });
+
+    it('clears a role-success notice when another target is selected', async () => {
+        const secondAccount = { ...account, id: 'user-2', email: 'second@test.dev' };
+        const promotedDetail = { ...detail, account: { ...account, role: 'admin' as const, moderationVersion: 4 } };
+        api.searchModerationUsers.mockResolvedValueOnce({ users: [account, secondAccount], nextCursor: null });
+        api.getModerationUser
+            .mockResolvedValueOnce(detail)
+            .mockResolvedValueOnce(promotedDetail)
+            .mockResolvedValueOnce({ ...detail, account: secondAccount });
+        await searchAndOpen('owner');
+        fireEvent.change(screen.getByLabelText('Role change reason'), { target: { value: 'Trusted reviewer' } });
+        fireEvent.click(screen.getByRole('button', { name: 'Promote to moderator' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Confirm promotion' }));
+        expect(await screen.findByText('Role updated. Target sessions were signed out.')).toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole('button', { name: 'Review second@test.dev' }));
+        expect(await screen.findByRole('heading', { name: 'second@test.dev' })).toBeInTheDocument();
+        expect(screen.queryByText('Role updated. Target sessions were signed out.')).toBeNull();
     });
 
     it('ignores stale search and detail responses instead of replacing newer state', async () => {

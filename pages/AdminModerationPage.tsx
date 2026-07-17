@@ -103,6 +103,7 @@ export function AdminModerationPage({ actorRole }: { actorRole: Extract<Platform
     };
 
     const loadDetail = async (id: string, historyCursor: string | null = null) => {
+        if (!historyCursor && selectedAccountId.current !== id) setSuccess(null);
         const generation = historyCursor ? detailGeneration.current : ++detailGeneration.current;
         setError(null);
         setLoadingDetail(true);
@@ -510,7 +511,7 @@ export function AdminModerationPage({ actorRole }: { actorRole: Extract<Platform
 
                             {(detail.account.role === 'user' || detail.account.role === 'admin') && (
                                 <OwnerRoleLifecyclePanel
-                                    key={detail.account.id}
+                                    key={`${detail.account.id}:${detail.account.role}`}
                                     actorRole={actorRole}
                                     account={detail.account}
                                     projects={detail.projects}

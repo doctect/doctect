@@ -5,7 +5,7 @@ import { signOut } from '../lib/auth-client';
 import { useCurrentUser } from '../hooks/useCurrentUser';
 
 export function AccountMenu() {
-    const { user, loading } = useCurrentUser();
+    const { user, loading, error, refresh } = useCurrentUser();
     const [open, setOpen] = useState(false);
     const ref = useRef<HTMLDivElement>(null);
     const location = useLocation();
@@ -19,6 +19,15 @@ export function AccountMenu() {
     }, []);
 
     if (loading) return null;
+    if (error) {
+        return (
+            <div role="alert" className="flex items-center gap-2 text-xs text-red-700">
+                <span>Unable to verify account authority.</span>
+                <button type="button" onClick={() => void refresh()} className="font-semibold hover:text-red-900">Retry</button>
+                <button type="button" onClick={() => void signOut()} className="font-semibold hover:text-red-900">Sign out</button>
+            </div>
+        );
+    }
     if (!user) {
         return <Link to="/login" state={{ from: location.pathname }} className="text-xs font-medium text-slate-500 hover:text-blue-600">Sign in</Link>;
     }
