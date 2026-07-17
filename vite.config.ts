@@ -27,9 +27,9 @@ export default defineConfig(({ mode }) => {
       // recurse into a nested checkout's own node_modules - e.g. a git worktree living under
       // .worktrees/ is a real, traversable directory on disk with its own full node_modules,
       // and without the '**/' prefix a plain 'node_modules' pattern only reliably excludes the
-      // top-level one. '.worktrees/**' is an explicit belt-and-suspenders exclude for the same
-      // reason: worktrees also duplicate this project's own tests/** at a nested path.
-      exclude: ['**/node_modules/**', '.worktrees/**', 'tests/e2e/**'],
+      // top-level one. Project-local worktree directories are explicit belt-and-suspenders
+      // excludes for the same reason: they duplicate this project's own tests/** at nested paths.
+      exclude: ['**/node_modules/**', '.worktrees/**', '.claude/worktrees/**', 'tests/e2e/**'],
     }
   };
 });
