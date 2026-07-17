@@ -9,7 +9,7 @@ router.get('/api/me', optionalAuth, (req, res) => {
     // Deliberately excludes the account's real `name` field: it's the signup "Name" field,
     // never intended to be public, and no client code reads it off this endpoint.
     const { id, email, username, role } = req.user;
-    res.json({ user: { id, email, username: username ?? null, role: role ?? null } });
+    res.json({ user: { id, email, username: username ?? null, role } });
 });
 
 router.get('/api/users/:username', async (req, res) => {

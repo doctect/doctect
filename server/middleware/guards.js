@@ -1,6 +1,7 @@
 import rateLimit from 'express-rate-limit';
 import { getAuthForRequest } from '../authRequest.js';
 import { dbType, withTransaction } from '../db.js';
+import { effectiveRole, isConfiguredOwner } from '../ownerAuthority.js';
 
 const trustedOrigins = () => (process.env.TRUSTED_ORIGINS || 'http://localhost:3000,http://localhost:3001')
     .split(',').map(o => o.trim()).filter(Boolean);
@@ -17,7 +18,8 @@ const resolveFreshUser = async req => {
     return withTransaction(async txQuery => {
         const lock = dbType === 'postgres' ? ' FOR UPDATE' : '';
         const users = await txQuery(
-            `SELECT banned, "banExpires" FROM "user" WHERE id = $1${lock}`,
+            `SELECT id, email, username, role, banned, "banExpires", "moderationVersion"
+             FROM "user" WHERE id = $1${lock}`,
             [session.user.id],
         );
         if (!users[0]) return null;
@@ -25,7 +27,12 @@ const resolveFreshUser = async req => {
             await txQuery('DELETE FROM session WHERE "userId" = $1', [session.user.id]);
             return null;
         }
-        return session.user;
+        return {
+            ...session.user,
+            ...users[0],
+            role: effectiveRole(users[0].role),
+            moderationVersion: Number(users[0].moderationVersion),
+        };
     });
 };
 
@@ -64,7 +71,16 @@ export const optionalAuth = async (req, res, next) => {
 
 export const requireAdmin = async (req, res, next) => {
     await requireAuth(req, res, () => {
-        if (req.user.role !== 'admin') return res.status(403).json({ error: 'Forbidden: Admins only' });
+        if (req.user.role !== 'admin' && req.user.role !== 'owner') {
+            return res.status(403).json({ error: 'Forbidden: Admins only' });
+        }
+        next();
+    });
+};
+
+export const requireOwner = async (req, res, next) => {
+    await requireAuth(req, res, () => {
+        if (!isConfiguredOwner(req.user)) return res.status(403).json({ error: 'Forbidden: Owners only' });
         next();
     });
 };
