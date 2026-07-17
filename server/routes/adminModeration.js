@@ -1,54 +1,30 @@
 import { Router } from 'express';
-import { randomUUID } from 'crypto';
 import { dbType, query, withTransaction } from '../db.js';
 import { requireAdmin } from '../middleware/guards.js';
+import {
+    accountDto,
+    lockUser,
+    suspensionStatus,
+    validateExpiry,
+    validateProjectIds,
+    validateVersion,
+} from '../moderationSupport.js';
+import { canModerateRole } from '../ownerAuthority.js';
+import { insertPlatformAudit, platformAuditActionDto, validateReason } from '../platformAudit.js';
 import { lockProjectRows } from '../projectLocks.js';
 
 const router = Router();
 const PAGE_SIZE = 25;
 const MAX_CURSOR_LENGTH = 512;
-export const MAX_PROJECTS_TO_UNPUBLISH = 20;
 const BASE64URL_PATTERN = /^[A-Za-z0-9_-]+$/;
 const TIMESTAMP_PATTERN = /^(\d{4})-(\d{2})-(\d{2})([ T])(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,6}))?(Z)?$/;
-const EXPIRY_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?(Z|[+-](\d{2}):(\d{2}))$/;
 
 const asIso = value => value == null ? null : new Date(value).toISOString();
-const isBanned = value => value === true || value === 1 || value === '1';
 
-const suspensionStatus = (row, now = Date.now()) => {
-    if (!isBanned(row.banned)) return 'none';
-    if (row.banExpires == null) return 'active';
-    return new Date(row.banExpires).getTime() > now ? 'active' : 'expired';
+const searchUserDto = row => {
+    const { banReason: _banReason, ...dto } = accountDto(row);
+    return dto;
 };
-
-const searchUserDto = row => ({
-    id: row.id,
-    email: row.email,
-    username: row.username ?? null,
-    role: row.role ?? null,
-    createdAt: asIso(row.createdAt),
-    suspensionStatus: suspensionStatus(row),
-    banExpires: asIso(row.banExpires),
-    moderationVersion: Number(row.moderationVersion),
-});
-
-const accountDto = row => ({
-    ...searchUserDto(row),
-    banReason: row.banReason ?? null,
-});
-
-const actionDto = row => ({
-    id: row.id,
-    actorUserId: row.actor_user_id,
-    actorEmail: row.actor_email,
-    targetUserId: row.target_user_id,
-    targetEmail: row.target_email,
-    action: row.action,
-    reason: row.reason,
-    expiresAt: asIso(row.expires_at),
-    projectId: row.project_id ?? null,
-    createdAt: asIso(row.created_at),
-});
 
 const encodeCursor = values => Buffer.from(JSON.stringify(values)).toString('base64url');
 const escapeLike = value => value.replace(/\\/g, '\\\\').replace(/[%_]/g, character => `\\${character}`);
@@ -86,81 +62,6 @@ const decodeCursor = (raw, validators) => {
     } catch {
         return null;
     }
-};
-
-const validateReason = raw => {
-    if (typeof raw !== 'string') return null;
-    const reason = raw.trim();
-    return reason.length >= 1 && reason.length <= 1000 ? reason : null;
-};
-
-const validateVersion = value => Number.isInteger(value) && value >= 0;
-
-const validateExpiry = raw => {
-    if (raw === null) return { ok: true, value: null };
-    if (typeof raw !== 'string') return { ok: false };
-    const match = EXPIRY_PATTERN.exec(raw);
-    if (!match) return { ok: false };
-    const [, yearText, monthText, dayText, hourText, minuteText, secondText, , zone, zoneHourText, zoneMinuteText] = match;
-    const year = Number(yearText);
-    const month = Number(monthText);
-    const day = Number(dayText);
-    const hour = Number(hourText);
-    const minute = Number(minuteText);
-    const second = Number(secondText);
-    const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
-    const daysInMonth = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    if (year < 1 || month < 1 || month > 12 || day < 1 || day > daysInMonth[month - 1]
-        || hour > 23 || minute > 59 || second > 59) return { ok: false };
-    if (zone !== 'Z') {
-        const zoneHour = Number(zoneHourText);
-        const zoneMinute = Number(zoneMinuteText);
-        if (zoneHour > 14 || zoneMinute > 59 || (zoneHour === 14 && zoneMinute !== 0)) return { ok: false };
-    }
-    const timestamp = Date.parse(raw);
-    if (!Number.isFinite(timestamp) || timestamp <= Date.now()) return { ok: false };
-    return { ok: true, value: new Date(timestamp).toISOString() };
-};
-
-const validateProjectIds = raw => {
-    if (!Array.isArray(raw) || raw.length > MAX_PROJECTS_TO_UNPUBLISH
-        || raw.some(id => typeof id !== 'string' || id.length > 200)) return null;
-    const ids = raw.map(id => id.trim());
-    if (ids.some(id => !id)) return null;
-    return new Set(ids).size === ids.length ? ids : null;
-};
-
-const lockUser = async (id, txQuery) => {
-    const suffix = dbType === 'postgres' ? ' FOR UPDATE' : '';
-    const rows = await txQuery(
-        `SELECT id, email, username, role, "createdAt", banned, "banReason", "banExpires", "moderationVersion"
-         FROM "user" WHERE id = $1${suffix}`,
-        [id],
-    );
-    return rows[0] ?? null;
-};
-
-const insertAction = async (txQuery, values) => {
-    const id = randomUUID();
-    await txQuery(
-        `INSERT INTO moderation_actions
-         (id, actor_user_id, actor_email, target_user_id, target_email, action, reason, expires_at, project_id, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-        [id, values.actorUserId, values.actorEmail, values.targetUserId, values.targetEmail,
-            values.action, values.reason, values.expiresAt, values.projectId, values.createdAt],
-    );
-    return actionDto({
-        id,
-        actor_user_id: values.actorUserId,
-        actor_email: values.actorEmail,
-        target_user_id: values.targetUserId,
-        target_email: values.targetEmail,
-        action: values.action,
-        reason: values.reason,
-        expires_at: values.expiresAt,
-        project_id: values.projectId,
-        created_at: values.createdAt,
-    });
 };
 
 router.use('/api/admin/users', requireAdmin);
@@ -225,11 +126,11 @@ router.get('/api/admin/users/:id', async (req, res) => {
             : 'AND (created_at < $2 OR (created_at = $3 AND id < $4))';
     }
     const actions = await query(
-        `SELECT id, actor_user_id, actor_email, target_user_id, target_email,
-                action, reason, expires_at, project_id, created_at,
+        `SELECT id, actor_kind, actor_user_id, actor_email, target_user_id, target_email,
+                project_id, review_id, action, reason, expires_at, created_at, metadata_json,
                 CAST(created_at AS TEXT) AS created_at_cursor
-         FROM moderation_actions
-         WHERE target_user_id = $1 ${before}
+         FROM platform_audit_actions
+         WHERE target_user_id = $1 AND actor_kind = 'user' ${before}
          ORDER BY created_at DESC, id DESC
          LIMIT ${PAGE_SIZE + 1}`,
         params,
@@ -244,7 +145,7 @@ router.get('/api/admin/users/:id', async (req, res) => {
             publishedAt: asIso(project.published_at),
         })),
         history: {
-            items: historyPage.map(actionDto),
+            items: historyPage.map(platformAuditActionDto),
             nextCursor: actions.length > PAGE_SIZE
                 ? encodeCursor([last.created_at_cursor, last.id])
                 : null,
@@ -265,7 +166,7 @@ router.post('/api/admin/users/:id/suspend', requireAdmin, async (req, res) => {
         const result = await withTransaction(async txQuery => {
             const target = await lockUser(req.params.id, txQuery);
             if (!target) return { status: 404 };
-            if (target.role === 'admin') return { status: 403 };
+            if (!canModerateRole(req.user.role, target.role)) return { status: 403 };
             if (Number(target.moderationVersion) !== expectedVersion || suspensionStatus(target) === 'active') {
                 return { status: 409 };
             }
@@ -302,25 +203,33 @@ router.post('/api/admin/users/:id/suspend', requireAdmin, async (req, res) => {
             }
 
             const common = {
+                actorKind: 'user',
                 actorUserId: req.user.id,
                 actorEmail: req.user.email,
                 targetUserId: target.id,
                 targetEmail: target.email,
+                reviewId: null,
                 reason,
                 expiresAt: expiry.value,
                 createdAt: now,
             };
-            const actions = [await insertAction(txQuery, {
-                ...common, action: 'account_suspended', projectId: null,
+            const actions = [await insertPlatformAudit(txQuery, {
+                ...common,
+                action: 'account_suspended',
+                projectId: null,
+                metadata: { source: 'account_workflow' },
             })];
             for (const projectId of projectIds) {
-                actions.push(await insertAction(txQuery, {
-                    ...common, action: 'project_unpublished', projectId,
+                actions.push(await insertPlatformAudit(txQuery, {
+                    ...common,
+                    action: 'project_unpublished',
+                    projectId,
+                    metadata: { source: 'account_workflow', previousProjectVisibility: 'public' },
                 }));
             }
             return { status: 200, account: accountDto(updated[0]), actions };
         });
-        if (result.status === 403) return res.status(403).json({ error: 'Administrator accounts cannot be suspended' });
+        if (result.status === 403) return res.status(403).json({ error: 'Target is protected by role hierarchy' });
         if (result.status === 404) return res.status(404).json({ error: 'User not found' });
         if (result.status === 400) return res.status(400).json({ error: 'Invalid suspension request' });
         if (result.status === 409) return res.status(409).json({ error: 'Moderation state changed; refresh and try again' });
@@ -342,7 +251,8 @@ router.post('/api/admin/users/:id/restore', requireAdmin, async (req, res) => {
         const result = await withTransaction(async txQuery => {
             const target = await lockUser(req.params.id, txQuery);
             if (!target) return { status: 404 };
-            if (Number(target.moderationVersion) !== expectedVersion || !isBanned(target.banned)) {
+            if (!canModerateRole(req.user.role, target.role)) return { status: 403 };
+            if (Number(target.moderationVersion) !== expectedVersion || suspensionStatus(target) === 'none') {
                 return { status: 409 };
             }
             const now = new Date().toISOString();
@@ -356,19 +266,23 @@ router.post('/api/admin/users/:id/restore', requireAdmin, async (req, res) => {
             );
             if (!updated[0]) return { status: 409 };
             await txQuery('DELETE FROM session WHERE "userId" = $1', [target.id]);
-            const action = await insertAction(txQuery, {
+            const action = await insertPlatformAudit(txQuery, {
+                actorKind: 'user',
                 actorUserId: req.user.id,
                 actorEmail: req.user.email,
                 targetUserId: target.id,
                 targetEmail: target.email,
+                reviewId: null,
                 action: 'account_restored',
                 reason,
                 expiresAt: null,
                 projectId: null,
                 createdAt: now,
+                metadata: { source: 'account_workflow' },
             });
             return { status: 200, account: accountDto(updated[0]), actions: [action] };
         });
+        if (result.status === 403) return res.status(403).json({ error: 'Target is protected by role hierarchy' });
         if (result.status === 404) return res.status(404).json({ error: 'User not found' });
         if (result.status === 409) return res.status(409).json({ error: 'Moderation state changed; refresh and try again' });
         return res.json({ account: result.account, actions: result.actions });
