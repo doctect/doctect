@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Link, useLocation } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { User, LogOut, Image, Settings, FolderOpen, Shield } from 'lucide-react';
 import { signOut } from '../lib/auth-client';
 import { useCurrentUser } from '../hooks/useCurrentUser';
@@ -7,8 +7,23 @@ import { useCurrentUser } from '../hooks/useCurrentUser';
 export function AccountMenu() {
     const { user, loading, error, refresh } = useCurrentUser();
     const [open, setOpen] = useState(false);
+    const [logoutError, setLogoutError] = useState(false);
     const ref = useRef<HTMLDivElement>(null);
     const location = useLocation();
+    const navigate = useNavigate();
+
+    const handleSignOut = async () => {
+        setLogoutError(false);
+        try {
+            const result = await signOut();
+            if (result?.error) throw result.error;
+            await refresh();
+            setOpen(false);
+            navigate('/login', { replace: true });
+        } catch {
+            setLogoutError(true);
+        }
+    };
 
     useEffect(() => {
         const onClick = (e: MouseEvent) => {
@@ -24,7 +39,8 @@ export function AccountMenu() {
             <div role="alert" className="flex items-center gap-2 text-xs text-red-700">
                 <span>Unable to verify account authority.</span>
                 <button type="button" onClick={() => void refresh()} className="font-semibold hover:text-red-900">Retry</button>
-                <button type="button" onClick={() => void signOut()} className="font-semibold hover:text-red-900">Sign out</button>
+                <button type="button" onClick={() => void handleSignOut()} className="font-semibold hover:text-red-900">Sign out</button>
+                {logoutError && <span>Unable to sign out. Try again.</span>}
             </div>
         );
     }
@@ -54,7 +70,8 @@ export function AccountMenu() {
                         </Link>
                     )}
                     <Link to="/account" onClick={() => setOpen(false)} className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50"><Settings size={12} /> Account settings</Link>
-                    <button onClick={() => { setOpen(false); signOut(); }} className="w-full text-left flex items-center gap-1.5 px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50">
+                    {logoutError && <div role="alert" className="px-3 py-1.5 text-xs text-red-700">Unable to sign out. Try again.</div>}
+                    <button onClick={() => void handleSignOut()} className="w-full text-left flex items-center gap-1.5 px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50">
                         <LogOut size={12} /> Sign out
                     </button>
                 </div>

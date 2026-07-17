@@ -118,6 +118,8 @@ describe('security guards', () => {
         expect(configured.body).toEqual({ role: 'owner' });
 
         process.env.OWNER_EMAILS = 'someone-else@test.dev';
+        const removedStats = await request(app).get('/api/stats').set('Cookie', ownerCookie);
+        expect(removedStats.status).toBe(403);
         const removed = await request(ownerProbe).get('/owner').set('Cookie', ownerCookie);
         expect(removed.status).toBe(403);
     });

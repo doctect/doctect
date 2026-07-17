@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { describe, it, expect, beforeAll, vi } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
 import request from 'supertest';
 import { initTestApp, signUpUser, signUpUserNoUsername, minimalState, PNG_1X1 } from './helpers.js';
 
@@ -30,6 +30,11 @@ vi.mock('../../../server/db.js', async importOriginal => {
 });
 
 let app, ownerCookie, raterCookie, rater2Cookie, noUsernameCookie, projectId;
+beforeEach(() => {
+    process.env.OWNER_EMAILS = 'rev-owner-moderator@test.dev';
+    moderationFault.failAudit = false;
+});
+
 beforeAll(async () => {
     app = await initTestApp();
     ownerCookie = await signUpUser(app, { email: 'rev-schema-owner@test.dev', username: 'rev_schema_owner' });
@@ -335,6 +340,24 @@ describe('review reporting and moderation', () => {
         }]);
         expect(JSON.stringify(persisted)).not.toContain(secretBody);
         expect((await query('SELECT COUNT(*) AS count FROM moderation_actions'))[0].count).toBe(legacyCount);
+    });
+
+    it('revokes stored-owner review moderation immediately after configuration removal', async () => {
+        const userReview = 'standalone-review-removed-owner-user';
+        const adminReview = 'standalone-review-removed-owner-admin';
+        await insertReview(userReview, rater2Id);
+        await insertReview(adminReview, adminAuthorId);
+        process.env.OWNER_EMAILS = '';
+
+        try {
+            for (const id of [userReview, adminReview]) {
+                const res = await deleteReview(id, ownerModeratorCookie);
+                expect(res.status).toBe(403);
+                expect(await query('SELECT id FROM reviews WHERE id = $1', [id])).toEqual([{ id }]);
+            }
+        } finally {
+            await query('DELETE FROM reviews WHERE id IN ($1, $2)', [userReview, adminReview]);
+        }
     });
 
     it('rolls back review deletion when audit insertion fails', async () => {

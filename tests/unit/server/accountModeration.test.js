@@ -75,6 +75,7 @@ const encodeTestCursor = values => Buffer.from(JSON.stringify(values)).toString(
 const decodeTestCursor = raw => JSON.parse(Buffer.from(raw, 'base64url').toString('utf8'));
 
 beforeEach(() => {
+    process.env.OWNER_EMAILS = 'platform-owner@test.dev';
     faults.pattern = null;
     faults.afterQueryPattern = null;
     faults.afterQuery = null;
@@ -198,6 +199,41 @@ describe('account moderation authorization and reads', () => {
 
         expect(res.status).toBe(200);
         expect(res.body.account.moderationVersion).toBe(1);
+    });
+
+    it('revokes stored-owner suspend and restore authority immediately after configuration removal', async () => {
+        process.env.OWNER_EMAILS = '';
+        const attempts = [
+            [hierarchyUserTargetId, 'suspend', {
+                reason: 'Removed owner user suspension', expiresAt: null,
+                projectIdsToUnpublish: [], expectedModerationVersion: 0,
+            }],
+            [hierarchyUserTargetId, 'restore', {
+                reason: 'Removed owner user restoration', expectedModerationVersion: 0,
+            }],
+            [adminTargetId, 'suspend', {
+                reason: 'Removed owner admin suspension', expiresAt: null,
+                projectIdsToUnpublish: [], expectedModerationVersion: 0,
+            }],
+            [adminTargetId, 'restore', {
+                reason: 'Removed owner admin restoration', expectedModerationVersion: 0,
+            }],
+        ];
+
+        for (const [id, action, body] of attempts) {
+            const res = await request(app).post(`/api/admin/users/${id}/${action}`)
+                .set('Cookie', ownerCookie).send(body);
+            expect(res.status).toBe(403);
+        }
+
+        const protectedOwner = await request(app).post(`/api/admin/users/${ownerTargetId}/suspend`)
+            .set('Cookie', adminCookie)
+            .send({
+                reason: 'Stored owner remains protected', expiresAt: null,
+                projectIdsToUnpublish: [], expectedModerationVersion: 0,
+            });
+        expect(protectedOwner.status).toBe(403);
+        expect(protectedOwner.body).toEqual({ error: 'Target is protected by role hierarchy' });
     });
 
     it('rejects a crafted admin restoration of a suspended admin', async () => {

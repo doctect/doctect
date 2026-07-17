@@ -69,9 +69,19 @@ export const optionalAuth = async (req, res, next) => {
     next();
 };
 
+export const strictOptionalAuth = async (req, res, next) => {
+    try {
+        req.user = await resolveFreshUser(req);
+        next();
+    } catch (error) {
+        console.error('Auth Error:', error);
+        res.status(500).json({ error: 'Internal Server Error' });
+    }
+};
+
 export const requireAdmin = async (req, res, next) => {
     await requireAuth(req, res, () => {
-        if (req.user.role !== 'admin' && req.user.role !== 'owner') {
+        if (req.user.role !== 'admin' && !isConfiguredOwner(req.user)) {
             return res.status(403).json({ error: 'Forbidden: Admins only' });
         }
         next();

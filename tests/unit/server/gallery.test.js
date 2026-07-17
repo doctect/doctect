@@ -1,9 +1,9 @@
 // @vitest-environment node
-import { describe, it, expect, beforeAll, vi } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
 import request from 'supertest';
 import { initTestApp, signUpUser, minimalState, PNG_1X1, saveProjectCommit } from './helpers.js';
 
-const galleryInterleave = vi.hoisted(() => ({ afterDetailRead: null }));
+const galleryInterleave = vi.hoisted(() => ({ afterDetailRead: null, failProjectAudit: false }));
 vi.mock('../../../server/db.js', async importOriginal => {
     const actual = await importOriginal();
     return {
@@ -18,7 +18,21 @@ vi.mock('../../../server/db.js', async importOriginal => {
             }
             return rows;
         },
+        withTransaction: callback => actual.withTransaction(
+            txQuery => callback((text, params = []) => {
+                if (galleryInterleave.failProjectAudit && /INSERT INTO platform_audit_actions/.test(text)) {
+                    galleryInterleave.failProjectAudit = false;
+                    throw new Error('Injected project audit failure');
+                }
+                return txQuery(text, params);
+            }),
+        ),
     };
+});
+
+beforeEach(() => {
+    process.env.OWNER_EMAILS = 'gallery-owner@test.dev';
+    galleryInterleave.failProjectAudit = false;
 });
 
 let app, cookie, publicId, privateId, query, adminCookie, ownerModeratorCookie;
@@ -219,6 +233,40 @@ describe('gallery', () => {
                 metadata_json: JSON.stringify({ source: 'standalone_project', previousProjectVisibility: 'public' }),
             }]);
             expect((await query('SELECT COUNT(*) AS count FROM moderation_actions'))[0].count).toBe(legacyCount);
+        });
+
+        it('revokes stored-owner project moderation immediately after configuration removal', async () => {
+            const userProject = 'standalone-project-removed-owner-user';
+            const adminProject = 'standalone-project-removed-owner-admin';
+            await insertProject(userProject, userId);
+            await insertProject(adminProject, adminId);
+            process.env.OWNER_EMAILS = '';
+
+            for (const id of [userProject, adminProject]) {
+                const res = await unpublish(id, ownerModeratorCookie);
+                expect(res.status).toBe(403);
+                expect(await query('SELECT visibility, published_commit_id FROM projects WHERE id = $1', [id]))
+                    .toEqual([{ visibility: 'public', published_commit_id: `commit-${id}` }]);
+            }
+        });
+
+        it('rolls back project and audit state when standalone audit insertion fails', async () => {
+            const id = 'standalone-project-audit-rollback';
+            await insertProject(id, userId);
+            const beforeProject = await query('SELECT visibility, published_commit_id FROM projects WHERE id = $1', [id]);
+            const beforeAudit = await query('SELECT * FROM platform_audit_actions WHERE project_id = $1 ORDER BY id', [id]);
+            const beforeLegacyAudit = await query('SELECT * FROM moderation_actions ORDER BY id');
+            galleryInterleave.failProjectAudit = true;
+
+            const res = await unpublish(id, adminCookie, { reason: 'Rollback project audit failure' });
+
+            expect(res.status).toBe(500);
+            expect(res.body).toEqual({ error: 'Project unpublish failed' });
+            expect(await query('SELECT visibility, published_commit_id FROM projects WHERE id = $1', [id]))
+                .toEqual(beforeProject);
+            expect(await query('SELECT * FROM platform_audit_actions WHERE project_id = $1 ORDER BY id', [id]))
+                .toEqual(beforeAudit);
+            expect(await query('SELECT * FROM moderation_actions ORDER BY id')).toEqual(beforeLegacyAudit);
         });
     });
 });

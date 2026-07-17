@@ -1,6 +1,6 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useNavigationType } from 'react-router-dom';
 import { AccountMenu } from '../../components/AccountMenu';
 
 const api = vi.hoisted(() => ({ me: vi.fn() }));
@@ -15,9 +15,24 @@ vi.mock('../../lib/auth-client', () => ({
 
 const renderAt = () => render(
     <MemoryRouter initialEntries={['/gallery']}>
-        <Routes><Route path="/gallery" element={<AccountMenu />} /></Routes>
+        <Routes>
+            <Route path="/gallery" element={<AccountMenu />} />
+            <Route path="/login" element={<LoginDestination />} />
+        </Routes>
     </MemoryRouter>,
 );
+
+function LoginDestination() {
+    return <div>LOGIN_PAGE:{useNavigationType()}</div>;
+}
+
+const deferred = <T,>() => {
+    let resolve: (value: T) => void = () => {};
+    const promise = new Promise<T>(resolvePromise => {
+        resolve = resolvePromise;
+    });
+    return { promise, resolve };
+};
 
 const user = (role: 'user' | 'admin' | 'owner', username: string | null = role) => ({
     id: `${role}-1`, email: `${role}@test.dev`, username, role,
@@ -25,7 +40,8 @@ const user = (role: 'user' | 'admin' | 'owner', username: string | null = role) 
 
 describe('AccountMenu', () => {
     beforeEach(() => {
-        vi.clearAllMocks();
+        api.me.mockReset();
+        auth.signOut.mockReset();
         sessionState.value = { data: null, isPending: false };
     });
 
@@ -41,8 +57,7 @@ describe('AccountMenu', () => {
 
         expect(await screen.findByRole('alert')).toHaveTextContent('Unable to verify account authority.');
         expect(screen.queryByText('Sign in')).toBeNull();
-        fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
-        expect(auth.signOut).toHaveBeenCalledTimes(1);
+        expect(screen.getByRole('button', { name: 'Sign out' })).toBeInTheDocument();
 
         api.me.mockResolvedValueOnce(user('admin', 'recovered-admin'));
         fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
@@ -79,5 +94,43 @@ describe('AccountMenu', () => {
         fireEvent.click(await screen.findByTitle('Account'));
         expect(screen.queryByText('Moderation')).toBeNull();
         expect(screen.getByText('ordinary')).toBeInTheDocument();
+    });
+
+    it('awaits sign-out, refreshes fresh authority, then routes to login', async () => {
+        const logout = deferred<void>();
+        const authority = deferred<ReturnType<typeof user> | null>();
+        auth.signOut.mockReturnValueOnce(logout.promise);
+        api.me.mockResolvedValueOnce(user('admin')).mockReturnValueOnce(authority.promise);
+        renderAt();
+        fireEvent.click(await screen.findByTitle('Account'));
+
+        fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
+
+        expect(api.me).toHaveBeenCalledTimes(1);
+        expect(screen.queryByText('LOGIN_PAGE')).toBeNull();
+        await act(async () => {
+            logout.resolve();
+            await logout.promise;
+        });
+        await waitFor(() => expect(api.me).toHaveBeenCalledTimes(2));
+        expect(screen.queryByText(/LOGIN_PAGE/)).toBeNull();
+        await act(async () => {
+            authority.resolve(null);
+            await authority.promise;
+        });
+        expect(await screen.findByText('LOGIN_PAGE:REPLACE')).toBeInTheDocument();
+    });
+
+    it('handles sign-out failure without navigating away', async () => {
+        auth.signOut.mockRejectedValueOnce(new Error('Sign-out unavailable'));
+        api.me.mockResolvedValueOnce(user('admin'));
+        renderAt();
+        fireEvent.click(await screen.findByTitle('Account'));
+
+        fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
+
+        expect(await screen.findByRole('alert')).toHaveTextContent('Unable to sign out. Try again.');
+        expect(screen.queryByText(/LOGIN_PAGE/)).toBeNull();
+        expect(api.me).toHaveBeenCalledTimes(1);
     });
 });
