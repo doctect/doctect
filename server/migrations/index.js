@@ -466,6 +466,7 @@ export const migrations = [
             END
      FROM moderation_actions
      ON CONFLICT (id) DO NOTHING`,
+            `CREATE INDEX IF NOT EXISTS idx_platform_audit_time ON platform_audit_actions(created_at DESC, id DESC)`,
             `CREATE INDEX IF NOT EXISTS idx_platform_audit_target_time ON platform_audit_actions(target_user_id, created_at DESC, id DESC)`,
             `CREATE INDEX IF NOT EXISTS idx_platform_audit_actor_email_time ON platform_audit_actions(LOWER(actor_email), created_at DESC, id DESC)`,
             `CREATE INDEX IF NOT EXISTS idx_platform_audit_target_email_time ON platform_audit_actions(LOWER(target_email), created_at DESC, id DESC)`,
@@ -505,6 +506,7 @@ export const migrations = [
               ELSE json_object('source', 'account_workflow')
             END
      FROM moderation_actions`,
+            `CREATE INDEX IF NOT EXISTS idx_platform_audit_time ON platform_audit_actions(created_at DESC, id DESC)`,
             `CREATE INDEX IF NOT EXISTS idx_platform_audit_target_time ON platform_audit_actions(target_user_id, created_at DESC, id DESC)`,
             `CREATE INDEX IF NOT EXISTS idx_platform_audit_actor_email_time ON platform_audit_actions(LOWER(actor_email), created_at DESC, id DESC)`,
             `CREATE INDEX IF NOT EXISTS idx_platform_audit_target_email_time ON platform_audit_actions(LOWER(target_email), created_at DESC, id DESC)`,

@@ -6,6 +6,7 @@ import { migrations } from '../../../server/migrations/index.js';
 
 let query;
 let runMigrations;
+let legacyModerationSnapshot;
 
 beforeAll(async () => {
     process.env.SQLITE_PATH = path.join(os.tmpdir(), `doctect-platform-audit-${Date.now()}.db`);
@@ -27,6 +28,7 @@ beforeAll(async () => {
                 (id, actor_user_id, actor_email, target_user_id, target_email, action, reason, expires_at, project_id, created_at)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`, values);
         }
+        legacyModerationSnapshot = await query('SELECT * FROM moderation_actions ORDER BY id');
     } finally {
         migrations.push(...pendingMigrations);
     }
@@ -45,12 +47,7 @@ describe('014 platform audit actions migration', () => {
 
         await runMigrations();
         expect((await query('SELECT COUNT(*) AS count FROM platform_audit_actions'))[0].count).toBe(3);
-        expect((await query('SELECT COUNT(*) AS count FROM moderation_actions'))[0].count).toBe(3);
-        expect(await query('SELECT id, reason FROM moderation_actions ORDER BY id')).toEqual([
-            { id: 'legacy-restored', reason: 'Appeal accepted' },
-            { id: 'legacy-suspended', reason: 'Confirmed abuse' },
-            { id: 'legacy-unpublished', reason: 'Unsafe project' },
-        ]);
+        expect(await query('SELECT * FROM moderation_actions ORDER BY id')).toEqual(legacyModerationSnapshot);
     });
 
     it('creates standalone JSON-backed audit storage with query indexes', async () => {
@@ -62,11 +59,40 @@ describe('014 platform audit actions migration', () => {
         expect((await query('SELECT json_valid(metadata_json) AS valid FROM platform_audit_actions'))
             .every(row => row.valid === 1)).toBe(true);
         expect((await query('PRAGMA index_list(platform_audit_actions)')).map(index => index.name)).toEqual(expect.arrayContaining([
+            'idx_platform_audit_time',
             'idx_platform_audit_target_time',
             'idx_platform_audit_actor_email_time',
             'idx_platform_audit_target_email_time',
             'idx_platform_audit_action_time',
         ]));
+
+        const indexColumns = async name => (await query(`PRAGMA index_xinfo("${name}")`))
+            .filter(column => column.key === 1)
+            .map(column => ({ name: column.name, desc: column.desc }));
+        expect(await indexColumns('idx_platform_audit_time')).toEqual([
+            { name: 'created_at', desc: 1 },
+            { name: 'id', desc: 1 },
+        ]);
+        expect(await indexColumns('idx_platform_audit_target_time')).toEqual([
+            { name: 'target_user_id', desc: 0 },
+            { name: 'created_at', desc: 1 },
+            { name: 'id', desc: 1 },
+        ]);
+        expect(await indexColumns('idx_platform_audit_actor_email_time')).toEqual([
+            { name: null, desc: 0 },
+            { name: 'created_at', desc: 1 },
+            { name: 'id', desc: 1 },
+        ]);
+        expect(await indexColumns('idx_platform_audit_target_email_time')).toEqual([
+            { name: null, desc: 0 },
+            { name: 'created_at', desc: 1 },
+            { name: 'id', desc: 1 },
+        ]);
+        expect(await indexColumns('idx_platform_audit_action_time')).toEqual([
+            { name: 'action', desc: 0 },
+            { name: 'created_at', desc: 1 },
+            { name: 'id', desc: 1 },
+        ]);
     });
 
     it('allows inserts and rejects direct updates and deletes', async () => {
@@ -74,8 +100,15 @@ describe('014 platform audit actions migration', () => {
             (id, actor_kind, actor_user_id, actor_email, review_id, action, reason, created_at, metadata_json)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`, [
             'new-review-delete', 'system', null, 'system@doctect.local', 'review-1',
-            'review_deleted', 'Policy violation', '2026-07-16T13:00:00.000Z', '{"source":"review_workflow"}',
+            'review_deleted', 'Policy violation', '2026-07-16T13:00:00.000Z',
+            '{"source":"standalone_review","deletedReviewRating":2}',
         ])).resolves.toEqual([]);
+        await expect(query(`INSERT INTO platform_audit_actions
+            (id, actor_kind, actor_user_id, actor_email, action, reason, metadata_json)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)`, [
+            'unsupported-action', 'system', null, 'system@doctect.local',
+            'review_hidden', 'Unsupported action', '{"source":"standalone_review"}',
+        ])).rejects.toThrow('CHECK constraint failed');
         await expect(query(`UPDATE platform_audit_actions SET reason = $1 WHERE id = $2`, ['changed', 'legacy-restored']))
             .rejects.toThrow('platform_audit_actions is append-only');
         await expect(query('DELETE FROM platform_audit_actions WHERE id = $1', ['legacy-restored']))

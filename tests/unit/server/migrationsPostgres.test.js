@@ -157,6 +157,22 @@ describe('PostgreSQL migration contract', () => {
             '014_platform_audit_actions',
         ]);
         const texts = dbCalls.map(call => call.text);
+        expect(texts).toContain(`CREATE TABLE IF NOT EXISTS platform_audit_actions (
+      id TEXT PRIMARY KEY,
+      actor_kind TEXT NOT NULL CHECK (actor_kind IN ('user', 'system')),
+      actor_user_id TEXT,
+      actor_email TEXT NOT NULL,
+      target_user_id TEXT,
+      target_email TEXT,
+      project_id TEXT,
+      review_id TEXT,
+      action TEXT NOT NULL CHECK (action IN ('owner_granted', 'owner_removed', 'admin_promoted', 'admin_demoted', 'account_suspended', 'account_restored', 'project_unpublished', 'review_deleted')),
+      reason TEXT NOT NULL,
+      expires_at TIMESTAMP,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      metadata_json JSONB NOT NULL,
+      CHECK ((actor_kind = 'system' AND actor_user_id IS NULL) OR (actor_kind = 'user' AND actor_user_id IS NOT NULL))
+    )`);
         expect(texts).toContain(`INSERT INTO platform_audit_actions
       (id, actor_kind, actor_user_id, actor_email, target_user_id, target_email, project_id, review_id, action, reason, expires_at, created_at, metadata_json)
      SELECT id, 'user', actor_user_id, actor_email, target_user_id, target_email, project_id, NULL,
@@ -167,13 +183,14 @@ describe('PostgreSQL migration contract', () => {
             END
      FROM moderation_actions
      ON CONFLICT (id) DO NOTHING`);
-        for (const indexName of [
-            'idx_platform_audit_target_time',
-            'idx_platform_audit_actor_email_time',
-            'idx_platform_audit_target_email_time',
-            'idx_platform_audit_action_time',
+        for (const indexStatement of [
+            'CREATE INDEX IF NOT EXISTS idx_platform_audit_time ON platform_audit_actions(created_at DESC, id DESC)',
+            'CREATE INDEX IF NOT EXISTS idx_platform_audit_target_time ON platform_audit_actions(target_user_id, created_at DESC, id DESC)',
+            'CREATE INDEX IF NOT EXISTS idx_platform_audit_actor_email_time ON platform_audit_actions(LOWER(actor_email), created_at DESC, id DESC)',
+            'CREATE INDEX IF NOT EXISTS idx_platform_audit_target_email_time ON platform_audit_actions(LOWER(target_email), created_at DESC, id DESC)',
+            'CREATE INDEX IF NOT EXISTS idx_platform_audit_action_time ON platform_audit_actions(action, created_at DESC, id DESC)',
         ]) {
-            expect(texts.some(text => text.includes(`CREATE INDEX IF NOT EXISTS ${indexName}`))).toBe(true);
+            expect(texts).toContain(indexStatement);
         }
         expect(texts).toContain(`CREATE OR REPLACE FUNCTION reject_platform_audit_action_mutation()
      RETURNS trigger AS $$
