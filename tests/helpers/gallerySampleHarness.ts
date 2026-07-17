@@ -188,6 +188,40 @@ const siblingDestination = (node: any, offset: number, nodes: Record<string, any
     return nodes[parent.children[index + offset]];
 };
 
+// Mirrors the PDF engine's cousin fallback (services/pdfService.ts, sibling links):
+// at a sequence end, walk uncles in the offset direction and take the first uncle's
+// first (forward) or last (backward) child of the SAME template type.
+const cousinDestination = (node: any, offset: number, nodes: Record<string, any>) => {
+    if (typeof node.parentId !== 'string') return undefined;
+    const parent = nodes[node.parentId];
+    if (!isRecord(parent) || typeof parent.parentId !== 'string') return undefined;
+    const grandparent = nodes[parent.parentId];
+    if (!isRecord(grandparent) || !Array.isArray(grandparent.children)) return undefined;
+    const parentIndex = grandparent.children.indexOf(parent.id);
+    if (parentIndex < 0) return undefined;
+    const direction = offset > 0 ? 1 : -1;
+    let uncleIndex = parentIndex + direction;
+    while (uncleIndex >= 0 && uncleIndex < grandparent.children.length) {
+        const uncle = nodes[grandparent.children[uncleIndex]];
+        if (isRecord(uncle) && Array.isArray(uncle.children) && uncle.children.length > 0) {
+            const candidates = uncle.children
+                .map((childId: string) => nodes[childId])
+                .filter((candidate: any) => isRecord(candidate) && candidate.type === node.type);
+            if (candidates.length > 0) return direction > 0 ? candidates[0] : candidates[candidates.length - 1];
+        }
+        uncleIndex += direction;
+    }
+    return undefined;
+};
+
+// Design contract for bound nav chrome: an element whose visible label is data-bound
+// and empty on this node renders nothing and emits no annotation, so an unresolved
+// link is not a defect there.
+const hasEmptyBoundLabel = (element: any, node: any) =>
+    typeof element?.dataBinding === 'string'
+    && element.dataBinding.length > 0
+    && node?.data?.[element.dataBinding] === '';
+
 const ancestorDestination = (node: any, levels: number, nodes: Record<string, any>) => {
     let current = node;
     for (let level = 0; level < levels; level += 1) {
@@ -246,7 +280,8 @@ const validateElementLink = (
     }
     if (target === 'child_index') {
         const index = parseInteger(element.linkValue);
-        if (index === undefined || index < 0 || !nodes[node.children?.[index]]) {
+        if (index === undefined || index < 0
+            || (!nodes[node.children?.[index]] && !hasEmptyBoundLabel(element, node))) {
             errors.push(`${context} child index ${element.linkValue ?? ''} does not resolve for node '${node.id}'`);
         }
         return;
@@ -266,7 +301,10 @@ const validateElementLink = (
     }
     if (target === 'sibling') {
         const offset = parseInteger(element.linkValue ?? '1');
-        if (offset === undefined || offset === 0 || !siblingDestination(node, offset, nodes)) {
+        if (offset === undefined || offset === 0
+            || (!siblingDestination(node, offset, nodes)
+                && !cousinDestination(node, offset, nodes)
+                && !hasEmptyBoundLabel(element, node))) {
             errors.push(`${context} sibling offset ${element.linkValue ?? '1'} does not resolve for node '${node.id}'`);
         }
         return;
