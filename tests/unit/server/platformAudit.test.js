@@ -34,16 +34,19 @@ const reviewEvent = {
     metadata: { source: 'standalone_review', deletedReviewRating: 2 },
 };
 
-const validMetadata = {
-    owner_granted: { source: 'owner_emails_reconciliation', previousRole: 'user', newRole: 'owner' },
-    owner_removed: { source: 'owner_emails_reconciliation', previousRole: 'owner', newRole: 'user' },
-    admin_promoted: { source: 'owner_role_workflow', previousRole: 'user', newRole: 'admin' },
-    admin_demoted: { source: 'owner_role_workflow', previousRole: 'admin', newRole: 'user' },
-    account_suspended: { source: 'account_workflow' },
-    account_restored: { source: 'account_workflow' },
-    project_unpublished: { source: 'standalone_project', previousProjectVisibility: 'public' },
-    review_deleted: { source: 'standalone_review', deletedReviewRating: 2 },
-};
+const validMetadata = [
+    ['owner_granted', { source: 'owner_emails_reconciliation', previousRole: 'user', newRole: 'owner' }],
+    ['owner_removed', { source: 'owner_emails_reconciliation', previousRole: 'owner', newRole: 'user' }],
+    ['admin_promoted', { source: 'owner_role_workflow', previousRole: 'user', newRole: 'admin' }],
+    ['admin_demoted', { source: 'owner_role_workflow', previousRole: 'admin', newRole: 'user' }],
+    ['account_suspended', { source: 'account_workflow' }],
+    ['account_suspended', { source: 'owner_role_workflow' }],
+    ['account_restored', { source: 'account_workflow' }],
+    ['project_unpublished', { source: 'account_workflow', previousProjectVisibility: 'public' }],
+    ['project_unpublished', { source: 'owner_role_workflow', previousProjectVisibility: 'public' }],
+    ['project_unpublished', { source: 'standalone_project', previousProjectVisibility: 'public' }],
+    ['review_deleted', { source: 'standalone_review', deletedReviewRating: 2 }],
+];
 
 describe('platform audit support', () => {
     it('writes one privacy-safe audit row with each placeholder used once', async () => {
@@ -86,7 +89,22 @@ describe('platform audit support', () => {
         expect(txQuery).not.toHaveBeenCalled();
     });
 
-    it.each(Object.entries(validMetadata))('accepts exact %s metadata', async (action, metadata) => {
+    it('rejects a past audit expiry before issuing SQL', async () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date('2026-07-17T10:00:00.000Z'));
+        const txQuery = vi.fn();
+        try {
+            await expect(insertPlatformAudit(txQuery, {
+                ...reviewEvent,
+                expiresAt: '2026-07-16T10:00:00.000Z',
+            })).rejects.toThrow('Invalid audit event');
+            expect(txQuery).not.toHaveBeenCalled();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it.each(validMetadata)('accepts exact %s metadata', async (action, metadata) => {
         const txQuery = vi.fn(async () => []);
         await expect(insertPlatformAudit(txQuery, { ...reviewEvent, action, metadata })).resolves.toMatchObject({
             action,

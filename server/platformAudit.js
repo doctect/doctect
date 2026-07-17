@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto';
-import { validateIsoTimestamp } from './moderationSupport.js';
+import { validateExpiry, validateIsoTimestamp } from './moderationSupport.js';
 
 const PLATFORM_ROLES = new Set(['owner', 'admin', 'user']);
 const EVENT_KEYS = [
@@ -54,7 +54,7 @@ const validateAuditEvent = raw => {
         || EVENT_KEYS.some(key => !Object.hasOwn(raw, key))) throw new Error('Invalid audit event');
     const reason = validateReason(raw.reason);
     const createdAt = validateIsoTimestamp(raw.createdAt);
-    const expiresAt = raw.expiresAt === null ? { ok: true, value: null } : validateIsoTimestamp(raw.expiresAt);
+    const expiresAt = validateExpiry(raw.expiresAt);
     if (!reason || !createdAt.ok || !expiresAt.ok
         || (raw.actorKind !== 'user' && raw.actorKind !== 'system')
         || (raw.actorKind === 'user' ? typeof raw.actorUserId !== 'string' : raw.actorUserId !== null)
