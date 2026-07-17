@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 
 # Configuration
 PROJECT_ID="gen-lang-client-0725532671"  # REPLACE THIS
@@ -9,7 +10,7 @@ REPO_NAME="doctect-repo" # You might need to create this in Artifact Registry fi
 # 1. Access Google Cloud
 echo "Logging in to Google Cloud..."
 gcloud auth login
-gcloud config set project $PROJECT_ID
+gcloud config set project "$PROJECT_ID"
 
 # 2. Enable Services (if not already enabled)
 echo "Enabling necessary services..."
@@ -17,29 +18,42 @@ gcloud services enable run.googleapis.com artifactregistry.googleapis.com
 
 # 2b. Create Artifact Registry Repository (if not exists)
 echo "Ensuring Artifact Registry repository exists..."
-gcloud artifacts repositories create $REPO_NAME \
-    --repository-format=docker \
-    --location=$REGION \
-    --description="Docker repository for Doctect" \
-    || echo "Repository $REPO_NAME likely already exists, skipping creation."
+EXISTING_REPOSITORIES=$(gcloud artifacts repositories list \
+    --location="$REGION" \
+    --format='value(name.basename())')
+REPOSITORY_EXISTS=false
+while IFS= read -r repository; do
+    if [ "$repository" = "$REPO_NAME" ]; then
+        REPOSITORY_EXISTS=true
+        break
+    fi
+done <<< "$EXISTING_REPOSITORIES"
+if [ "$REPOSITORY_EXISTS" = false ]; then
+    gcloud artifacts repositories create "$REPO_NAME" \
+        --repository-format=docker \
+        --location="$REGION" \
+        --description="Docker repository for Doctect"
+else
+    echo "Artifact Registry repository already exists."
+fi
 
 # 3. Authenticate Docker (Explicit Login for sudo)
 echo "Configuring Docker authentication..."
 # gcloud auth configure-docker ${REGION}-docker.pkg.dev
 # We use explicit login because sudo docker cannot see user's gcloud credential helper
-gcloud auth print-access-token | sudo docker login -u oauth2accesstoken --password-stdin https://${REGION}-docker.pkg.dev
+gcloud auth print-access-token | sudo docker login -u oauth2accesstoken --password-stdin "https://${REGION}-docker.pkg.dev"
 
 # 4. Build, Tag and Push Image
 IMAGE_URI="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO_NAME}/${APP_NAME}:latest"
 
 echo "Building Docker image..."
-sudo docker build -t ${APP_NAME}:latest .
+sudo docker build -t "${APP_NAME}:latest" .
 
 echo "Tagging image as $IMAGE_URI..."
-sudo docker tag ${APP_NAME}:latest $IMAGE_URI
+sudo docker tag "${APP_NAME}:latest" "$IMAGE_URI"
 
 echo "Pushing image..."
-sudo docker push $IMAGE_URI
+sudo docker push "$IMAGE_URI"
 
 # 5. Deploy to Cloud Run
 echo "Deploying to Cloud Run..."
@@ -61,50 +75,85 @@ if [ -f .env ]; then
   done < .env
 fi
 
+# Normalize optional environment inputs before strict-mode reads.
+GOOGLE_CLIENT_ID="${GOOGLE_CLIENT_ID:-}"
+GOOGLE_CLIENT_SECRET="${GOOGLE_CLIENT_SECRET:-}"
+OWNER_EMAILS="${OWNER_EMAILS:-}"
+DATABASE_URL="${DATABASE_URL:-}"
+RESEND_API_KEY="${RESEND_API_KEY:-}"
+EMAIL_FROM="${EMAIL_FROM:-}"
+TRUSTED_ORIGINS="${TRUSTED_ORIGINS:-}"
+CLIENT_URL="${CLIENT_URL:-}"
+BETTER_AUTH_URL="${BETTER_AUTH_URL:-}"
+
 # Fallback prompts if sensitive vars are missing
 if [ -z "$GOOGLE_CLIENT_ID" ]; then
-    read -p "Enter your Google Client ID: " GOOGLE_CLIENT_ID
+    read -r -p "Enter your Google Client ID: " GOOGLE_CLIENT_ID
 fi
 
 if [ -z "$GOOGLE_CLIENT_SECRET" ]; then
-    read -p "Enter your Google Client Secret: " GOOGLE_CLIENT_SECRET
+    read -r -p "Enter your Google Client Secret: " GOOGLE_CLIENT_SECRET
 fi
 
-if [ -z "$ADMIN_EMAILS" ]; then
-    read -p "Enter Admin Emails (comma separated) for Cloud Run: " ADMIN_EMAILS
+if [ -z "$OWNER_EMAILS" ]; then
+    read -r -p "Enter Owner Emails (comma separated) for Cloud Run: " OWNER_EMAILS
 fi
+
+# Match application normalization so whitespace-only/comma-only input fails before deployment.
+OWNER_EMAILS_NORMALIZED=""
+declare -A SEEN_OWNER_EMAILS=()
+IFS=',' read -r -a OWNER_EMAIL_CANDIDATES <<< "$OWNER_EMAILS"
+for OWNER_EMAIL_CANDIDATE in "${OWNER_EMAIL_CANDIDATES[@]}"; do
+    OWNER_EMAIL_CANDIDATE="${OWNER_EMAIL_CANDIDATE#"${OWNER_EMAIL_CANDIDATE%%[![:space:]]*}"}"
+    OWNER_EMAIL_CANDIDATE="${OWNER_EMAIL_CANDIDATE%"${OWNER_EMAIL_CANDIDATE##*[![:space:]]}"}"
+    OWNER_EMAIL_CANDIDATE="${OWNER_EMAIL_CANDIDATE,,}"
+    if [ -n "$OWNER_EMAIL_CANDIDATE" ] && [ -z "${SEEN_OWNER_EMAILS[$OWNER_EMAIL_CANDIDATE]+set}" ]; then
+        SEEN_OWNER_EMAILS[$OWNER_EMAIL_CANDIDATE]=1
+        if [ -n "$OWNER_EMAILS_NORMALIZED" ]; then
+            OWNER_EMAILS_NORMALIZED="${OWNER_EMAILS_NORMALIZED},${OWNER_EMAIL_CANDIDATE}"
+        else
+            OWNER_EMAILS_NORMALIZED="$OWNER_EMAIL_CANDIDATE"
+        fi
+    fi
+done
+if [ -z "$OWNER_EMAILS_NORMALIZED" ]; then
+    echo "ERROR: OWNER_EMAILS must contain at least one email after normalization." >&2
+    exit 1
+fi
+OWNER_EMAILS="$OWNER_EMAILS_NORMALIZED"
+echo "Recommendation: configure at least two owner addresses for recovery."
 
 if [ -z "$DATABASE_URL" ]; then
-    read -p "Enter Database URL (Postgres/Neon) [Leave empty for local SQLite]: " DATABASE_URL
+    read -r -p "Enter Database URL (Postgres/Neon) [Leave empty for local SQLite]: " DATABASE_URL
 fi
 
-gcloud run deploy $APP_NAME \
-  --image $IMAGE_URI \
+gcloud run deploy "$APP_NAME" \
+  --image "$IMAGE_URI" \
   --platform managed \
-  --region $REGION \
+  --region "$REGION" \
   --allow-unauthenticated \
-  --set-env-vars GOOGLE_CLIENT_ID=$GOOGLE_CLIENT_ID \
-  --set-env-vars GOOGLE_CLIENT_SECRET=$GOOGLE_CLIENT_SECRET \
-  --set-env-vars ADMIN_EMAILS="$ADMIN_EMAILS" \
-  --set-env-vars DATABASE_URL="$DATABASE_URL" \
-  --set-env-vars RESEND_API_KEY="$RESEND_API_KEY" \
-  --set-env-vars EMAIL_FROM="$EMAIL_FROM" \
+  --set-env-vars "GOOGLE_CLIENT_ID=$GOOGLE_CLIENT_ID" \
+  --set-env-vars "GOOGLE_CLIENT_SECRET=$GOOGLE_CLIENT_SECRET" \
+  --set-env-vars "^;^OWNER_EMAILS=${OWNER_EMAILS}" \
+  --set-env-vars "DATABASE_URL=$DATABASE_URL" \
+  --set-env-vars "RESEND_API_KEY=$RESEND_API_KEY" \
+  --set-env-vars "EMAIL_FROM=$EMAIL_FROM"
 # Get the deployed URL
-SERVICE_URL=$(gcloud run services describe $APP_NAME --platform managed --region $REGION --format 'value(status.url)')
+SERVICE_URL=$(gcloud run services describe "$APP_NAME" --platform managed --region "$REGION" --format 'value(status.url)')
 
 echo "Service URL: $SERVICE_URL"
 
 # Determine URLs for env vars
 # If CLIENT_URL is already set (e.g. from .env), use it. Otherwise use the Service URL.
-FINAL_CLIENT_URL=${CLIENT_URL:-$SERVICE_URL}
-FINAL_BETTER_AUTH_URL=${BETTER_AUTH_URL:-"${FINAL_CLIENT_URL}/api/auth"}
+FINAL_CLIENT_URL="${CLIENT_URL:-$SERVICE_URL}"
+FINAL_BETTER_AUTH_URL="${BETTER_AUTH_URL:-${FINAL_CLIENT_URL}/api/auth}"
 
 echo "Configuring Service with URLs:"
 echo "  CLIENT_URL: $FINAL_CLIENT_URL"
 
 # Escape commas in TRUSTED_ORIGINS by replacing them with pipes (|)
 # This avoids gcloud's comma delimiter issue entirely.
-SAFE_TRUSTED_ORIGINS=$(echo "$TRUSTED_ORIGINS" | tr ',' '|')
+SAFE_TRUSTED_ORIGINS="${TRUSTED_ORIGINS//,/|}"
 
 # Check if keys are loaded
 if [ -z "$GOOGLE_CLIENT_ID" ]; then
@@ -114,22 +163,32 @@ else
 fi
 
 # Step 1: Explicitly remove BETTER_AUTH_URL if it exists
-echo "Removing BETTER_AUTH_URL to allow dynamic domain inference..."
-gcloud run services update $APP_NAME \
+SERVICE_ENV_NAMES=$(gcloud run services describe "$APP_NAME" \
   --platform managed \
-  --region $REGION \
-  --remove-env-vars BETTER_AUTH_URL || echo "BETTER_AUTH_URL was not present or could not be removed (ignoring)."
+  --region "$REGION" \
+  --format='value[delimiter=";"](spec.template.spec.containers[].env[].name)')
+SERVICE_ENV_NAMES="${SERVICE_ENV_NAMES//$'\n'/;}"
+case ";$SERVICE_ENV_NAMES;" in
+  *';BETTER_AUTH_URL;'*)
+    echo "Removing BETTER_AUTH_URL to allow dynamic domain inference..."
+    gcloud run services update "$APP_NAME" \
+      --platform managed \
+      --region "$REGION" \
+      --remove-env-vars BETTER_AUTH_URL
+    ;;
+  *) echo "BETTER_AUTH_URL is already absent." ;;
+esac
 
 # Step 2: Update all other environment variables
 echo "Updating environment variables..."
-gcloud run services update $APP_NAME \
+gcloud run services update "$APP_NAME" \
   --platform managed \
-  --region $REGION \
+  --region "$REGION" \
   --set-env-vars CLIENT_URL="$FINAL_CLIENT_URL" \
   --set-env-vars TRUSTED_ORIGINS="$SAFE_TRUSTED_ORIGINS" \
   --set-env-vars GOOGLE_CLIENT_ID="$GOOGLE_CLIENT_ID" \
   --set-env-vars GOOGLE_CLIENT_SECRET="$GOOGLE_CLIENT_SECRET" \
-  --set-env-vars ADMIN_EMAILS="$ADMIN_EMAILS" \
+  --set-env-vars "^;^OWNER_EMAILS=${OWNER_EMAILS}" \
   --set-env-vars DATABASE_URL="$DATABASE_URL" \
   --set-env-vars RESEND_API_KEY="$RESEND_API_KEY" \
   --set-env-vars EMAIL_FROM="$EMAIL_FROM"

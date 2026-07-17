@@ -1,15 +1,15 @@
 import { Router } from 'express';
-import { optionalAuth } from '../middleware/guards.js';
+import { strictOptionalAuth } from '../middleware/guards.js';
 import { query } from '../db.js';
 
 const router = Router();
 
-router.get('/api/me', optionalAuth, (req, res) => {
+router.get('/api/me', strictOptionalAuth, (req, res) => {
     if (!req.user) return res.json({ user: null });
     // Deliberately excludes the account's real `name` field: it's the signup "Name" field,
     // never intended to be public, and no client code reads it off this endpoint.
     const { id, email, username, role } = req.user;
-    res.json({ user: { id, email, username: username ?? null, role: role ?? null } });
+    res.json({ user: { id, email, username: username ?? null, role } });
 });
 
 router.get('/api/users/:username', async (req, res) => {

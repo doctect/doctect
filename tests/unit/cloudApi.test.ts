@@ -171,4 +171,72 @@ describe('account moderation api methods', () => {
             reason: 'Appeal accepted', expectedModerationVersion: 4,
         });
     });
+
+    it('posts exact owner lifecycle bodies to encoded target paths', async () => {
+        const fetchMock = vi.fn().mockReturnValue(okJson({ account: {}, actions: [] }));
+        vi.stubGlobal('fetch', fetchMock);
+
+        await cloudApi.promoteAdmin('user/1', {
+            reason: 'Coverage', expectedModerationVersion: 3,
+        });
+        await cloudApi.revokeAdmin('admin-1', {
+            reason: 'Abuse', expectedModerationVersion: 8,
+            suspension: { expiresAt: null }, projectIdsToUnpublish: ['project-1'],
+        });
+
+        expect(fetchMock.mock.calls[0][0]).toBe('/api/owner/users/user%2F1/promote-admin');
+        expect(fetchMock.mock.calls[0][1].method).toBe('POST');
+        expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+            reason: 'Coverage', expectedModerationVersion: 3,
+        });
+        expect(fetchMock.mock.calls[1][0]).toBe('/api/owner/users/admin-1/revoke-admin');
+        expect(fetchMock.mock.calls[1][1].method).toBe('POST');
+        expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({
+            reason: 'Abuse', expectedModerationVersion: 8,
+            suspension: { expiresAt: null }, projectIdsToUnpublish: ['project-1'],
+        });
+    });
+
+    it('posts exact standalone content moderation bodies to encoded paths', async () => {
+        const projectAction = { id: 'project-action' };
+        const reviewAction = { id: 'review-action' };
+        const fetchMock = vi.fn()
+            .mockReturnValueOnce(okJson({ success: true, action: projectAction }))
+            .mockReturnValueOnce(okJson({ success: true, action: reviewAction }));
+        vi.stubGlobal('fetch', fetchMock);
+
+        const projectResult = await cloudApi.moderatorUnpublishProject('p/1', 'Policy violation');
+        const reviewResult = await cloudApi.moderatorDeleteReview('r/1', 'Harassment');
+
+        expect(fetchMock.mock.calls[0][0]).toBe('/api/admin/projects/p%2F1/unpublish');
+        expect(fetchMock.mock.calls[0][1].method).toBe('POST');
+        expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ reason: 'Policy violation' });
+        expect(projectResult).toEqual({ success: true, action: projectAction });
+        expect(projectResult.success).toBe(true);
+        expect(fetchMock.mock.calls[1][0]).toBe('/api/admin/reviews/r%2F1');
+        expect(fetchMock.mock.calls[1][1].method).toBe('DELETE');
+        expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({ reason: 'Harassment' });
+        expect(reviewResult).toEqual({ success: true, action: reviewAction });
+        expect(reviewResult.success).toBe(true);
+    });
+
+    it('serializes only defined global audit filters without a GET body', async () => {
+        const fetchMock = vi.fn().mockReturnValue(okJson({ items: [], nextCursor: null }));
+        vi.stubGlobal('fetch', fetchMock);
+
+        await cloudApi.getGlobalAudit({
+            actorEmail: 'Owner+tag@test.dev',
+            targetEmail: undefined,
+            action: 'admin_demoted',
+            from: '2026-07-01T00:00:00.000Z',
+            to: '2026-07-16T23:59:59.999Z',
+            cursor: 'a/b',
+        });
+
+        expect(fetchMock.mock.calls[0][0]).toBe(
+            '/api/owner/audit?actorEmail=Owner%2Btag%40test.dev&action=admin_demoted&from=2026-07-01T00%3A00%3A00.000Z&to=2026-07-16T23%3A59%3A59.999Z&cursor=a%2Fb',
+        );
+        expect(fetchMock.mock.calls[0][1].method).toBeUndefined();
+        expect(fetchMock.mock.calls[0][1].body).toBeUndefined();
+    });
 });

@@ -33,23 +33,77 @@ export const verifyUserByEmail = async (email) => {
     await query('UPDATE "user" SET "emailVerified" = $1 WHERE email = $2', [verified, email]);
 };
 
-export const promoteUserToAdmin = async (email) => {
-    const users = await query(
-        `UPDATE "user" SET role = 'admin' WHERE email = $1 RETURNING id, email, role`,
-        [email],
+export const platformAuditActionsForTargets = async emails => {
+    const placeholders = emails.map((_, index) => `$${index + 1}`).join(', ');
+    const rows = await query(
+        `SELECT actor_kind, actor_email, target_email, action, reason, project_id, metadata_json
+         FROM platform_audit_actions
+         WHERE target_email IN (${placeholders})
+         ORDER BY created_at,
+           CASE action
+             WHEN 'owner_granted' THEN 1
+             WHEN 'admin_promoted' THEN 2
+             WHEN 'admin_demoted' THEN 3
+             WHEN 'account_suspended' THEN 4
+             WHEN 'project_unpublished' THEN 5
+             WHEN 'account_restored' THEN 6
+             ELSE 7
+           END,
+           id`,
+        emails,
     );
-    if (users.length !== 1 || users[0].role !== 'admin') {
-        throw new Error(`admin promotion failed for ${email}`);
-    }
+    return rows.map(({ metadata_json: metadata, ...row }) => ({
+        ...row,
+        metadata: typeof metadata === 'string' ? JSON.parse(metadata) : metadata,
+    }));
 };
 
-export const moderationActionsForTarget = email => query(
-    `SELECT action, reason, project_id
-     FROM moderation_actions
-     WHERE target_email = $1
-     ORDER BY action`,
-    [email],
-);
+export const legacyModerationActionsForReasons = reasons => {
+    const placeholders = reasons.map((_, index) => `$${index + 1}`).join(', ');
+    return query(
+        `SELECT action, reason, project_id
+         FROM moderation_actions
+         WHERE reason IN (${placeholders})
+         ORDER BY created_at, id`,
+        reasons,
+    );
+};
+
+export const ensureConfiguredOwner = async (
+    requestContext,
+    apiBase,
+    { email, password = TEST_PASSWORD, name, username },
+) => {
+    const signUpRes = await requestContext.post(`${apiBase}/api/auth/sign-up/email`, {
+        data: { email, password, name, username },
+    });
+    const created = signUpRes.ok();
+    if (created) {
+        await verifyUserByEmail(email);
+    } else {
+        const errorText = await signUpRes.text();
+        let code;
+        try { code = JSON.parse(errorText).code; } catch { /* Preserve response in thrown error. */ }
+        if (signUpRes.status() !== 422 || code !== 'USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL') {
+            throw new Error(`owner sign-up failed: ${signUpRes.status()} ${errorText}`);
+        }
+    }
+
+    const signInRes = await requestContext.post(`${apiBase}/api/auth/sign-in/email`, {
+        data: { email, password },
+    });
+    if (!signInRes.ok()) {
+        throw new Error(`owner sign-in failed: ${signInRes.status()} ${await signInRes.text()}`);
+    }
+
+    const meRes = await requestContext.get(`${apiBase}/api/me`);
+    if (!meRes.ok()) throw new Error(`owner identity failed: ${meRes.status()} ${await meRes.text()}`);
+    const user = (await meRes.json()).user;
+    if (user?.email?.toLowerCase() !== email.toLowerCase() || user.role !== 'owner') {
+        throw new Error(`configured owner authority missing for ${email}`);
+    }
+    return { created, user };
+};
 
 // Signs up through the real /login UI form, then completes verification out
 // of band (DB write above) and finishes by actually signing in through the

@@ -6,7 +6,9 @@ const state = vi.hoisted(() => ({}));
 vi.mock('../../../server/authRequest.js', () => ({
     getAuthForRequest: () => ({
         api: {
-            getSession: async () => ({ user: { id: 'target-user', email: 'target@test.dev' } }),
+            getSession: async () => ({
+                user: { id: 'target-user', email: 'stale@test.dev', role: 'user', name: 'Sensitive Name' },
+            }),
         },
     }),
 }));
@@ -44,7 +46,15 @@ const response = () => {
 
 beforeEach(() => {
     vi.clearAllMocks();
-    state.user = { banned: true, banExpires: null };
+    state.user = {
+        id: 'target-user',
+        email: 'fresh@test.dev',
+        username: 'fresh_user',
+        role: 'admin',
+        banned: true,
+        banExpires: null,
+        moderationVersion: '3',
+    };
     state.sessions = new Set(['old-session']);
     state.events = [];
     state.selectTexts = [];
@@ -63,7 +73,7 @@ beforeEach(() => {
         }
     };
     state.executeSql = async text => {
-        if (/SELECT banned, "banExpires" FROM "user"/.test(text)) {
+        if (/FROM "user" WHERE id = \$1/.test(text)) {
             const snapshot = { ...state.user };
             state.events.push('guard-check');
             state.selectTexts.push(text);
@@ -83,7 +93,7 @@ beforeEach(() => {
 const restoreAndSignIn = async () => {
     await state.runLocked(async () => {
         state.events.push('restore-clear');
-        state.user = { banned: false, banExpires: null };
+        state.user = { ...state.user, banned: false, banExpires: null };
         state.sessions.clear();
     });
     state.events.push('sign-in');
@@ -121,11 +131,23 @@ describe('auth guard and restoration serialization', () => {
 
         await optionalAuth(req, res, next);
 
-        expect(req.user).toMatchObject({ id: 'target-user' });
+        expect(req.user).toEqual({
+            id: 'target-user',
+            email: 'fresh@test.dev',
+            role: 'admin',
+            name: 'Sensitive Name',
+            username: 'fresh_user',
+            banned: false,
+            banExpires: null,
+            moderationVersion: 3,
+        });
         expect(next).toHaveBeenCalledTimes(1);
         expect(state.events).toEqual(['restore-clear', 'sign-in', 'guard-check']);
         expect([...state.sessions]).toEqual(['post-restore-session']);
         expect(state.selectTexts[0]).toMatch(/FOR UPDATE$/);
+        expect(state.selectTexts[0]).toContain(
+            'SELECT id, email, username, role, banned, "banExpires", "moderationVersion"',
+        );
         expect(withTransaction).toHaveBeenCalledTimes(1);
         expect(query).not.toHaveBeenCalled();
     });

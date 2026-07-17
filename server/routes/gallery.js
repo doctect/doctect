@@ -3,6 +3,9 @@ import { randomUUID } from 'crypto';
 import { dbType, query, withTransaction } from '../db.js';
 import { optionalAuth, requireAdmin, requireAuth, requireUsername } from '../middleware/guards.js';
 import { userWriteLimiter } from '../middleware/limits.js';
+import { lockUser } from '../moderationSupport.js';
+import { canModerateRole } from '../ownerAuthority.js';
+import { insertPlatformAudit, validateReason } from '../platformAudit.js';
 import { decodeStateRow } from '../stateCodec.js';
 import { lockProjectRows } from '../projectLocks.js';
 
@@ -192,8 +195,50 @@ router.get('/api/admin/reports', requireAdmin, async (req, res) => {
 });
 
 router.post('/api/admin/projects/:id/unpublish', requireAdmin, async (req, res) => {
-    await query(`UPDATE projects SET visibility = 'private', published_commit_id = NULL WHERE id = $1`, [req.params.id]);
-    res.json({ success: true });
+    const reason = validateReason(req.body?.reason);
+    if (!reason) return res.status(400).json({ error: 'Invalid project unpublish request' });
+
+    try {
+        const discovered = await query('SELECT owner_id FROM projects WHERE id = $1', [req.params.id]);
+        if (!discovered[0]) return res.status(404).json({ error: 'Project not found' });
+
+        const result = await withTransaction(async txQuery => {
+            const target = await lockUser(discovered[0].owner_id, txQuery);
+            const projects = await lockProjectRows([req.params.id], txQuery);
+            const project = projects[0];
+            if (!target || !project || project.owner_id !== discovered[0].owner_id) return { status: 409 };
+            if (!canModerateRole(req.user.role, target.role)) return { status: 403 };
+            if (!isPublishedProject(project)) return { status: 409 };
+
+            await txQuery(
+                `UPDATE projects SET visibility = 'private', published_commit_id = NULL WHERE id = $1`,
+                [project.id],
+            );
+            const action = await insertPlatformAudit(txQuery, {
+                actorKind: 'user',
+                actorUserId: req.user.id,
+                actorEmail: req.user.email,
+                targetUserId: target.id,
+                targetEmail: target.email,
+                projectId: project.id,
+                reviewId: null,
+                action: 'project_unpublished',
+                reason,
+                expiresAt: null,
+                createdAt: new Date().toISOString(),
+                metadata: { source: 'standalone_project', previousProjectVisibility: 'public' },
+            });
+            return { status: 200, action };
+        });
+        if (result.status === 403) return res.status(403).json({ error: 'Target is protected by role hierarchy' });
+        if (result.status === 409) {
+            return res.status(409).json({ error: 'Project state changed; refresh and try again' });
+        }
+        return res.json({ success: true, action: result.action });
+    } catch (error) {
+        console.error('Project unpublish failed:', error);
+        return res.status(500).json({ error: 'Project unpublish failed' });
+    }
 });
 
 router.get('/api/gallery/:id/reviews', optionalAuth, loadPublicProject, async (req, res) => {
@@ -285,8 +330,55 @@ router.post('/api/gallery/:id/reviews/:reviewId/report', optionalAuth, loadPubli
 });
 
 router.delete('/api/admin/reviews/:id', requireAdmin, async (req, res) => {
-    await query('DELETE FROM reviews WHERE id = $1', [req.params.id]);
-    res.json({ success: true });
+    const reason = validateReason(req.body?.reason);
+    if (!reason) return res.status(400).json({ error: 'Invalid review deletion request' });
+
+    try {
+        const discovered = await query('SELECT user_id, project_id FROM reviews WHERE id = $1', [req.params.id]);
+        if (!discovered[0]) return res.status(404).json({ error: 'Review not found' });
+
+        const result = await withTransaction(async txQuery => {
+            const target = await lockUser(discovered[0].user_id, txQuery);
+            const projects = await lockProjectRows([discovered[0].project_id], txQuery);
+            const project = projects[0];
+            const lockSuffix = dbType === 'postgres' ? ' FOR UPDATE' : '';
+            const reviews = await txQuery(
+                `SELECT id, project_id, user_id, rating FROM reviews WHERE id = $1${lockSuffix}`,
+                [req.params.id],
+            );
+            const review = reviews[0];
+            if (!target || !project || !review
+                || project.id !== discovered[0].project_id
+                || review.project_id !== discovered[0].project_id
+                || review.user_id !== discovered[0].user_id) return { status: 409 };
+            if (!canModerateRole(req.user.role, target.role)) return { status: 403 };
+
+            await txQuery('DELETE FROM reviews WHERE id = $1', [review.id]);
+            const action = await insertPlatformAudit(txQuery, {
+                actorKind: 'user',
+                actorUserId: req.user.id,
+                actorEmail: req.user.email,
+                targetUserId: target.id,
+                targetEmail: target.email,
+                projectId: review.project_id,
+                reviewId: review.id,
+                action: 'review_deleted',
+                reason,
+                expiresAt: null,
+                createdAt: new Date().toISOString(),
+                metadata: { source: 'standalone_review', deletedReviewRating: Number(review.rating) },
+            });
+            return { status: 200, action };
+        });
+        if (result.status === 403) return res.status(403).json({ error: 'Target is protected by role hierarchy' });
+        if (result.status === 409) {
+            return res.status(409).json({ error: 'Review state changed; refresh and try again' });
+        }
+        return res.json({ success: true, action: result.action });
+    } catch (error) {
+        console.error('Review deletion failed:', error);
+        return res.status(500).json({ error: 'Review deletion failed' });
+    }
 });
 
 export default router;

@@ -436,5 +436,83 @@ export const migrations = [
              $$ LANGUAGE plpgsql`,
         ],
         sqlite: ['SELECT 1'],
+    },
+    {
+        id: '014_platform_audit_actions',
+        pg: [
+            `CREATE TABLE IF NOT EXISTS platform_audit_actions (
+      id TEXT PRIMARY KEY,
+      actor_kind TEXT NOT NULL CHECK (actor_kind IN ('user', 'system')),
+      actor_user_id TEXT,
+      actor_email TEXT NOT NULL,
+      target_user_id TEXT,
+      target_email TEXT,
+      project_id TEXT,
+      review_id TEXT,
+      action TEXT NOT NULL CHECK (action IN ('owner_granted', 'owner_removed', 'admin_promoted', 'admin_demoted', 'account_suspended', 'account_restored', 'project_unpublished', 'review_deleted')),
+      reason TEXT NOT NULL,
+      expires_at TIMESTAMP,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      metadata_json JSONB NOT NULL,
+      CHECK ((actor_kind = 'system' AND actor_user_id IS NULL) OR (actor_kind = 'user' AND actor_user_id IS NOT NULL))
+    )`,
+            `INSERT INTO platform_audit_actions
+      (id, actor_kind, actor_user_id, actor_email, target_user_id, target_email, project_id, review_id, action, reason, expires_at, created_at, metadata_json)
+     SELECT id, 'user', actor_user_id, actor_email, target_user_id, target_email, project_id, NULL,
+            action, reason, expires_at, created_at,
+            CASE action
+              WHEN 'project_unpublished' THEN jsonb_build_object('source', 'account_workflow', 'previousProjectVisibility', 'public')
+              ELSE jsonb_build_object('source', 'account_workflow')
+            END
+     FROM moderation_actions
+     ON CONFLICT (id) DO NOTHING`,
+            `CREATE INDEX IF NOT EXISTS idx_platform_audit_time ON platform_audit_actions(created_at DESC, id DESC)`,
+            `CREATE INDEX IF NOT EXISTS idx_platform_audit_target_time ON platform_audit_actions(target_user_id, created_at DESC, id DESC)`,
+            `CREATE INDEX IF NOT EXISTS idx_platform_audit_actor_email_time ON platform_audit_actions(LOWER(actor_email), created_at DESC, id DESC)`,
+            `CREATE INDEX IF NOT EXISTS idx_platform_audit_target_email_time ON platform_audit_actions(LOWER(target_email), created_at DESC, id DESC)`,
+            `CREATE INDEX IF NOT EXISTS idx_platform_audit_action_time ON platform_audit_actions(action, created_at DESC, id DESC)`,
+            `CREATE OR REPLACE FUNCTION reject_platform_audit_action_mutation()
+     RETURNS trigger AS $$
+     BEGIN
+       RAISE EXCEPTION 'platform_audit_actions is append-only';
+     END;
+     $$ LANGUAGE plpgsql`,
+            `CREATE TRIGGER platform_audit_actions_no_update BEFORE UPDATE ON platform_audit_actions FOR EACH ROW EXECUTE FUNCTION reject_platform_audit_action_mutation()`,
+            `CREATE TRIGGER platform_audit_actions_no_delete BEFORE DELETE ON platform_audit_actions FOR EACH ROW EXECUTE FUNCTION reject_platform_audit_action_mutation()`,
+        ],
+        sqlite: [
+            `CREATE TABLE IF NOT EXISTS platform_audit_actions (
+      id TEXT PRIMARY KEY,
+      actor_kind TEXT NOT NULL CHECK (actor_kind IN ('user', 'system')),
+      actor_user_id TEXT,
+      actor_email TEXT NOT NULL,
+      target_user_id TEXT,
+      target_email TEXT,
+      project_id TEXT,
+      review_id TEXT,
+      action TEXT NOT NULL CHECK (action IN ('owner_granted', 'owner_removed', 'admin_promoted', 'admin_demoted', 'account_suspended', 'account_restored', 'project_unpublished', 'review_deleted')),
+      reason TEXT NOT NULL,
+      expires_at TIMESTAMP,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      metadata_json TEXT NOT NULL CHECK (json_valid(metadata_json)),
+      CHECK ((actor_kind = 'system' AND actor_user_id IS NULL) OR (actor_kind = 'user' AND actor_user_id IS NOT NULL))
+    )`,
+            `INSERT OR IGNORE INTO platform_audit_actions
+      (id, actor_kind, actor_user_id, actor_email, target_user_id, target_email, project_id, review_id, action, reason, expires_at, created_at, metadata_json)
+     SELECT id, 'user', actor_user_id, actor_email, target_user_id, target_email, project_id, NULL,
+            action, reason, expires_at, created_at,
+            CASE action
+              WHEN 'project_unpublished' THEN json_object('source', 'account_workflow', 'previousProjectVisibility', 'public')
+              ELSE json_object('source', 'account_workflow')
+            END
+     FROM moderation_actions`,
+            `CREATE INDEX IF NOT EXISTS idx_platform_audit_time ON platform_audit_actions(created_at DESC, id DESC)`,
+            `CREATE INDEX IF NOT EXISTS idx_platform_audit_target_time ON platform_audit_actions(target_user_id, created_at DESC, id DESC)`,
+            `CREATE INDEX IF NOT EXISTS idx_platform_audit_actor_email_time ON platform_audit_actions(LOWER(actor_email), created_at DESC, id DESC)`,
+            `CREATE INDEX IF NOT EXISTS idx_platform_audit_target_email_time ON platform_audit_actions(LOWER(target_email), created_at DESC, id DESC)`,
+            `CREATE INDEX IF NOT EXISTS idx_platform_audit_action_time ON platform_audit_actions(action, created_at DESC, id DESC)`,
+            `CREATE TRIGGER IF NOT EXISTS platform_audit_actions_no_update BEFORE UPDATE ON platform_audit_actions BEGIN SELECT RAISE(ABORT, 'platform_audit_actions is append-only'); END`,
+            `CREATE TRIGGER IF NOT EXISTS platform_audit_actions_no_delete BEFORE DELETE ON platform_audit_actions BEGIN SELECT RAISE(ABORT, 'platform_audit_actions is append-only'); END`,
+        ],
     }
 ];

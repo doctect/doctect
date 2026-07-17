@@ -1,15 +1,40 @@
 // @vitest-environment node
-import { describe, it, expect, beforeAll } from 'vitest';
+import express from 'express';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import { initTestApp, signUpUser } from './helpers.js';
 
 let app;
+let ownerProbe;
 let requiredCookie;
 let optionalCookie;
+let adminCookie;
+let ownerCookie;
+let normalizedUserCookie;
+const originalOwnerEmails = process.env.OWNER_EMAILS;
 beforeAll(async () => {
+    process.env.OWNER_EMAILS = '';
     app = await initTestApp();
     requiredCookie = await signUpUser(app, { email: 'required-guard@test.dev', username: 'required_guard' });
     optionalCookie = await signUpUser(app, { email: 'optional-guard@test.dev', username: 'optional_guard' });
+    adminCookie = await signUpUser(app, { email: 'fresh-admin@test.dev', username: 'fresh_admin' });
+    ownerCookie = await signUpUser(app, { email: 'fresh-owner@test.dev', username: 'fresh_owner' });
+    normalizedUserCookie = await signUpUser(app, { email: 'fresh-user@test.dev', username: 'fresh_user' });
+
+    const { query } = await import('../../../server/db.js');
+    await query(`UPDATE "user" SET role = 'admin' WHERE email = $1`, ['fresh-admin@test.dev']);
+    await query(`UPDATE "user" SET role = 'owner' WHERE email = $1`, ['fresh-owner@test.dev']);
+    await query(`UPDATE "user" SET role = 'unexpected', banned = 0, "banExpires" = NULL,
+        "moderationVersion" = 7 WHERE email = $1`, ['fresh-user@test.dev']);
+
+    const { requireOwner } = await import('../../../server/middleware/guards.js');
+    ownerProbe = express();
+    ownerProbe.get('/owner', requireOwner, (req, res) => res.json({ role: req.user.role }));
+});
+
+afterAll(() => {
+    if (originalOwnerEmails === undefined) delete process.env.OWNER_EMAILS;
+    else process.env.OWNER_EMAILS = originalOwnerEmails;
 });
 
 describe('security guards', () => {
@@ -67,5 +92,48 @@ describe('security guards', () => {
         expect(res.status).toBe(200);
         expect(res.body).toEqual({ user: null });
         expect(await query('SELECT id FROM session WHERE "userId" = $1', [user.id])).toEqual([]);
+    });
+
+    it('uses fresh admin authority and rejects the same session immediately after demotion', async () => {
+        const promoted = await request(app).get('/api/stats').set('Cookie', adminCookie);
+        expect(promoted.status).toBe(200);
+
+        const adminOwnerProbe = await request(ownerProbe).get('/owner').set('Cookie', adminCookie);
+        expect(adminOwnerProbe.status).toBe(403);
+
+        const { query } = await import('../../../server/db.js');
+        await query(`UPDATE "user" SET role = 'user' WHERE email = $1`, ['fresh-admin@test.dev']);
+
+        const demoted = await request(app).get('/api/stats').set('Cookie', adminCookie);
+        expect(demoted.status).toBe(403);
+    });
+
+    it('authorizes configured fresh owners and revokes owner-only access when configuration changes', async () => {
+        process.env.OWNER_EMAILS = ' FRESH-OWNER@test.dev ';
+
+        const stats = await request(app).get('/api/stats').set('Cookie', ownerCookie);
+        expect(stats.status).toBe(200);
+        const configured = await request(ownerProbe).get('/owner').set('Cookie', ownerCookie);
+        expect(configured.status).toBe(200);
+        expect(configured.body).toEqual({ role: 'owner' });
+
+        process.env.OWNER_EMAILS = 'someone-else@test.dev';
+        const removedStats = await request(app).get('/api/stats').set('Cookie', ownerCookie);
+        expect(removedStats.status).toBe(403);
+        const removed = await request(ownerProbe).get('/owner').set('Cookie', ownerCookie);
+        expect(removed.status).toBe(403);
+    });
+
+    it('returns a fresh normalized role from /api/me without moderation fields', async () => {
+        const res = await request(app).get('/api/me').set('Cookie', normalizedUserCookie);
+
+        expect(res.status).toBe(200);
+        expect(res.body.user).toEqual({
+            id: expect.any(String),
+            email: 'fresh-user@test.dev',
+            username: 'fresh_user',
+            role: 'user',
+        });
+        expect(Object.keys(res.body.user).sort()).toEqual(['email', 'id', 'role', 'username']);
     });
 });

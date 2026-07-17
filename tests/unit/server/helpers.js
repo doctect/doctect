@@ -37,6 +37,9 @@ export const initTestApp = async () => {
     // overrides the configured window/max); any test file that creates 4+ users in its
     // beforeAll would 429. server/auth.js reads this to skip rate limiting under test.
     process.env.DISABLE_AUTH_RATE_LIMIT = 'true';
+    // OWNER_EMAILS is read lazily by startup/signup reconciliation. Prevent a
+    // developer's .env from silently granting owner authority in unit tests.
+    process.env.OWNER_EMAILS = '';
     // A developer's local .env may hold a real Resend API key (see .env.example);
     // tests must always exercise the console fallback (or an injected impl via
     // setSendEmailImpl) and never attempt to send a real email.

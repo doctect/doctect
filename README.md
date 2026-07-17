@@ -76,10 +76,18 @@ The most powerful tool for planner creation.
     npm install
     ```
 
-3.  Run the development server:
+3.  Start the API server by itself:
     ```bash
-    npm start
+    npm run server
     ```
+
+4.  Or start the Vite client and API server together for development:
+    ```bash
+    npm run dev
+    ```
+
+The server applies all schema migrations at startup. Migrations are the sole
+supported database bootstrap; no separate schema setup script is required.
 
 ---
 

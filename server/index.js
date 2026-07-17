@@ -6,8 +6,12 @@ if (!global.crypto) {
     global.crypto = webcrypto;
 }
 
+const { assertOwnerConfiguration, reconcileOwnerAuthority } = await import('./ownerAuthority.js');
+assertOwnerConfiguration();
+
 const { runMigrations } = await import('./migrations.js');
 await runMigrations();
+await reconcileOwnerAuthority();
 
 const { createApp } = await import('./app.js');
 const app = createApp();

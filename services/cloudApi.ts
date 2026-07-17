@@ -24,7 +24,9 @@ async function api<T>(path: string, opts: RequestInit = {}): Promise<T> {
     return body as T;
 }
 
-export interface MeUser { id: string; email: string; username: string | null; role: string | null; }
+export type PlatformRole = 'owner' | 'admin' | 'user';
+
+export interface MeUser { id: string; email: string; username: string | null; role: PlatformRole; }
 export interface CloudProject {
     id: string; ownerId: string; name: string; description: string; tags: string[];
     visibility: 'private' | 'public'; headCommitId: string | null; publishedCommitId: string | null;
@@ -41,7 +43,7 @@ export interface ModerationUserSearchItem {
     id: string;
     email: string;
     username: string | null;
-    role: string | null;
+    role: PlatformRole;
     createdAt: string;
     suspensionStatus: SuspensionStatus;
     banExpires: string | null;
@@ -58,25 +60,53 @@ export interface ModerationProject {
     publishedAt: string | null;
 }
 
-export type ModerationActionType = 'account_suspended' | 'account_restored' | 'project_unpublished';
+export type ModerationActionType =
+    | 'owner_granted'
+    | 'owner_removed'
+    | 'admin_promoted'
+    | 'admin_demoted'
+    | 'account_suspended'
+    | 'account_restored'
+    | 'project_unpublished'
+    | 'review_deleted';
 
-export interface ModerationAction {
+export type AuditSource =
+    | 'owner_emails_reconciliation'
+    | 'account_workflow'
+    | 'owner_role_workflow'
+    | 'standalone_project'
+    | 'standalone_review';
+
+export interface AuditMetadata {
+    source: AuditSource;
+    previousRole?: PlatformRole;
+    newRole?: PlatformRole;
+    previousProjectVisibility?: 'public';
+    deletedReviewRating?: number;
+}
+
+export interface PlatformAuditAction {
     id: string;
-    actorUserId: string;
+    actorKind: 'user' | 'system';
+    actorUserId: string | null;
     actorEmail: string;
-    targetUserId: string;
-    targetEmail: string;
+    targetUserId: string | null;
+    targetEmail: string | null;
+    projectId: string | null;
+    reviewId: string | null;
     action: ModerationActionType;
     reason: string;
     expiresAt: string | null;
-    projectId: string | null;
     createdAt: string;
+    metadata: AuditMetadata;
 }
+
+export type ModerationAction = PlatformAuditAction;
 
 export interface ModerationUserDetail {
     account: ModerationAccount;
     projects: ModerationProject[];
-    history: { items: ModerationAction[]; nextCursor: string | null };
+    history: { items: PlatformAuditAction[]; nextCursor: string | null };
 }
 
 export interface SuspendAccountInput {
@@ -89,6 +119,27 @@ export interface SuspendAccountInput {
 export interface RestoreAccountInput {
     reason: string;
     expectedModerationVersion: number;
+}
+
+export interface PromoteAdminInput {
+    reason: string;
+    expectedModerationVersion: number;
+}
+
+export interface RevokeAdminInput {
+    reason: string;
+    expectedModerationVersion: number;
+    suspension: { expiresAt: string | null } | null;
+    projectIdsToUnpublish: string[];
+}
+
+export interface GlobalAuditFilters {
+    actorEmail?: string;
+    targetEmail?: string;
+    action?: ModerationActionType;
+    from?: string;
+    to?: string;
+    cursor?: string;
 }
 
 export interface GalleryItem {
@@ -218,13 +269,44 @@ export const cloudApi = {
         return api<ModerationUserDetail>(`/api/admin/users/${encodeURIComponent(id)}${suffix}`);
     },
     suspendAccount: (id: string, input: SuspendAccountInput) =>
-        api<{ account: ModerationAccount; actions: ModerationAction[] }>(
+        api<{ account: ModerationAccount; actions: PlatformAuditAction[] }>(
             `/api/admin/users/${encodeURIComponent(id)}/suspend`,
             { method: 'POST', body: JSON.stringify(input) },
         ),
     restoreAccount: (id: string, input: RestoreAccountInput) =>
-        api<{ account: ModerationAccount; actions: ModerationAction[] }>(
+        api<{ account: ModerationAccount; actions: [PlatformAuditAction] }>(
             `/api/admin/users/${encodeURIComponent(id)}/restore`,
             { method: 'POST', body: JSON.stringify(input) },
         ),
+    promoteAdmin: (id: string, input: PromoteAdminInput) =>
+        api<{ account: ModerationAccount; actions: [PlatformAuditAction] }>(
+            `/api/owner/users/${encodeURIComponent(id)}/promote-admin`,
+            { method: 'POST', body: JSON.stringify(input) },
+        ),
+    revokeAdmin: (id: string, input: RevokeAdminInput) =>
+        api<{ account: ModerationAccount; actions: PlatformAuditAction[] }>(
+            `/api/owner/users/${encodeURIComponent(id)}/revoke-admin`,
+            { method: 'POST', body: JSON.stringify(input) },
+        ),
+    moderatorUnpublishProject: (id: string, reason: string) =>
+        api<{ success: true; action: PlatformAuditAction }>(
+            `/api/admin/projects/${encodeURIComponent(id)}/unpublish`,
+            { method: 'POST', body: JSON.stringify({ reason }) },
+        ),
+    moderatorDeleteReview: (id: string, reason: string) =>
+        api<{ success: true; action: PlatformAuditAction }>(
+            `/api/admin/reviews/${encodeURIComponent(id)}`,
+            { method: 'DELETE', body: JSON.stringify({ reason }) },
+        ),
+    getGlobalAudit: (filters: GlobalAuditFilters = {}) => {
+        const params = new URLSearchParams();
+        if (filters.actorEmail !== undefined) params.set('actorEmail', filters.actorEmail);
+        if (filters.targetEmail !== undefined) params.set('targetEmail', filters.targetEmail);
+        if (filters.action !== undefined) params.set('action', filters.action);
+        if (filters.from !== undefined) params.set('from', filters.from);
+        if (filters.to !== undefined) params.set('to', filters.to);
+        if (filters.cursor !== undefined) params.set('cursor', filters.cursor);
+        const suffix = params.size ? `?${params}` : '';
+        return api<{ items: PlatformAuditAction[]; nextCursor: string | null }>(`/api/owner/audit${suffix}`);
+    },
 };

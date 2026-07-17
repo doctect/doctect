@@ -18,13 +18,13 @@ vi.mock('../../../server/db.js', async importOriginal => {
             faults.pattern = null;
             throw new Error('Injected moderation failure');
         }
-        if (/FROM moderation_actions/.test(text)) faults.historyQueries += 1;
+        if (/FROM platform_audit_actions/.test(text)) faults.historyQueries += 1;
         const rows = await baseQuery(text, params);
         if (faults.afterQueryPattern?.test(text)) {
             faults.afterQueryPattern = null;
             faults.afterQuery?.();
         }
-        if (faults.decodeModerationDates && /FROM moderation_actions/.test(text)) {
+        if (faults.decodeModerationDates && /FROM platform_audit_actions/.test(text)) {
             return rows.map(row => ({ ...row, created_at: new Date(row.created_at) }));
         }
         return rows;
@@ -40,23 +40,42 @@ vi.mock('../../../server/db.js', async importOriginal => {
 
 let app;
 let adminCookie;
+let ownerCookie;
 let ordinaryCookie;
 let targetId;
+let hierarchyUserTargetId;
+let adminTargetId;
+let ownerTargetId;
+let unknownRoleTargetId;
 
 beforeAll(async () => {
     app = await initTestApp();
     adminCookie = await signUpUser(app, { email: 'moderator@test.dev', username: 'moderator' });
+    ownerCookie = await signUpUser(app, { email: 'platform-owner@test.dev', username: 'platform_owner' });
     ordinaryCookie = await signUpUser(app, { email: 'ordinary@test.dev', username: 'ordinary' });
     await signUpUser(app, { email: 'target@test.dev', username: 'target_user' });
+    await signUpUser(app, { email: 'hierarchy-user@test.dev', username: 'hierarchy_user' });
+    await signUpUser(app, { email: 'protected-admin@test.dev', username: 'protected_admin' });
+    await signUpUser(app, { email: 'protected-owner@test.dev', username: 'protected_owner' });
+    await signUpUser(app, { email: 'unknown-role@test.dev', username: 'unknown_role' });
     const { query } = await import('../../../server/db.js');
     await query(`UPDATE "user" SET role = 'admin' WHERE email = $1`, ['moderator@test.dev']);
+    await query(`UPDATE "user" SET role = 'owner' WHERE email = $1`, ['platform-owner@test.dev']);
+    await query(`UPDATE "user" SET role = 'admin' WHERE email = $1`, ['protected-admin@test.dev']);
+    await query(`UPDATE "user" SET role = 'owner' WHERE email = $1`, ['protected-owner@test.dev']);
+    await query(`UPDATE "user" SET role = 'moderator' WHERE email = $1`, ['unknown-role@test.dev']);
     targetId = (await query('SELECT id FROM "user" WHERE email = $1', ['target@test.dev']))[0].id;
+    hierarchyUserTargetId = (await query('SELECT id FROM "user" WHERE email = $1', ['hierarchy-user@test.dev']))[0].id;
+    adminTargetId = (await query('SELECT id FROM "user" WHERE email = $1', ['protected-admin@test.dev']))[0].id;
+    ownerTargetId = (await query('SELECT id FROM "user" WHERE email = $1', ['protected-owner@test.dev']))[0].id;
+    unknownRoleTargetId = (await query('SELECT id FROM "user" WHERE email = $1', ['unknown-role@test.dev']))[0].id;
 });
 
 const encodeTestCursor = values => Buffer.from(JSON.stringify(values)).toString('base64url');
 const decodeTestCursor = raw => JSON.parse(Buffer.from(raw, 'base64url').toString('utf8'));
 
 beforeEach(() => {
+    process.env.OWNER_EMAILS = 'platform-owner@test.dev';
     faults.pattern = null;
     faults.afterQueryPattern = null;
     faults.afterQuery = null;
@@ -135,6 +154,116 @@ describe('account moderation authorization and reads', () => {
         expect((await request(app)
             .get(`/api/admin/users?q=target&cursor=${encodeURIComponent(`${searchCursor}=`)}`)
             .set('Cookie', adminCookie)).status).toBe(400);
+    });
+
+    it.each([
+        ['admin', 'admin', 'suspend'],
+        ['admin', 'admin', 'restore'],
+        ['admin', 'owner', 'suspend'],
+        ['admin', 'owner', 'restore'],
+        ['owner', 'owner', 'suspend'],
+        ['owner', 'owner', 'restore'],
+    ])('rejects %s actor against %s target via %s before state/version validation', async (actor, targetRole, action) => {
+        const target = targetRole === 'admin' ? adminTargetId : ownerTargetId;
+        const body = action === 'suspend'
+            ? { reason: 'Hierarchy check', expiresAt: null, projectIdsToUnpublish: [], expectedModerationVersion: 999 }
+            : { reason: 'Hierarchy check', expectedModerationVersion: 999 };
+        const res = await request(app).post(`/api/admin/users/${target}/${action}`)
+            .set('Cookie', actor === 'admin' ? adminCookie : ownerCookie)
+            .send(body);
+
+        expect({ status: res.status, body: res.body }).toEqual({
+            status: 403,
+            body: { error: 'Target is protected by role hierarchy' },
+        });
+    });
+
+    it.each([
+        ['user', 'suspend'],
+        ['user', 'restore'],
+        ['admin', 'suspend'],
+        ['admin', 'restore'],
+    ])('allows an owner against %s target via %s', async (targetRole, action) => {
+        const { query } = await import('../../../server/db.js');
+        const target = targetRole === 'admin' ? adminTargetId : hierarchyUserTargetId;
+        await query(`UPDATE "user"
+            SET banned = $1, "banReason" = $2, "banExpires" = NULL, "moderationVersion" = 0
+            WHERE id = $3`, [action === 'restore' ? 1 : 0, action === 'restore' ? 'Existing suspension' : null, target]);
+        const body = action === 'suspend'
+            ? { reason: 'Owner moderation', expiresAt: null, projectIdsToUnpublish: [], expectedModerationVersion: 0 }
+            : { reason: 'Owner moderation', expectedModerationVersion: 0 };
+
+        const res = await request(app).post(`/api/admin/users/${target}/${action}`)
+            .set('Cookie', ownerCookie)
+            .send(body);
+
+        expect(res.status).toBe(200);
+        expect(res.body.account.moderationVersion).toBe(1);
+    });
+
+    it('revokes stored-owner suspend and restore authority immediately after configuration removal', async () => {
+        process.env.OWNER_EMAILS = '';
+        const attempts = [
+            [hierarchyUserTargetId, 'suspend', {
+                reason: 'Removed owner user suspension', expiresAt: null,
+                projectIdsToUnpublish: [], expectedModerationVersion: 0,
+            }],
+            [hierarchyUserTargetId, 'restore', {
+                reason: 'Removed owner user restoration', expectedModerationVersion: 0,
+            }],
+            [adminTargetId, 'suspend', {
+                reason: 'Removed owner admin suspension', expiresAt: null,
+                projectIdsToUnpublish: [], expectedModerationVersion: 0,
+            }],
+            [adminTargetId, 'restore', {
+                reason: 'Removed owner admin restoration', expectedModerationVersion: 0,
+            }],
+        ];
+
+        for (const [id, action, body] of attempts) {
+            const res = await request(app).post(`/api/admin/users/${id}/${action}`)
+                .set('Cookie', ownerCookie).send(body);
+            expect(res.status).toBe(403);
+        }
+
+        const protectedOwner = await request(app).post(`/api/admin/users/${ownerTargetId}/suspend`)
+            .set('Cookie', adminCookie)
+            .send({
+                reason: 'Stored owner remains protected', expiresAt: null,
+                projectIdsToUnpublish: [], expectedModerationVersion: 0,
+            });
+        expect(protectedOwner.status).toBe(403);
+        expect(protectedOwner.body).toEqual({ error: 'Target is protected by role hierarchy' });
+    });
+
+    it('rejects a crafted admin restoration of a suspended admin', async () => {
+        const { query } = await import('../../../server/db.js');
+        await query(`UPDATE "user"
+            SET banned = 1, "banReason" = 'Direct suspension', "banExpires" = NULL, "moderationVersion" = 7
+            WHERE id = $1`, [adminTargetId]);
+
+        const res = await request(app).post(`/api/admin/users/${adminTargetId}/restore`)
+            .set('Cookie', adminCookie)
+            .send({ reason: 'Crafted restoration', expectedModerationVersion: 7 });
+
+        expect({ status: res.status, body: res.body }).toEqual({
+            status: 403,
+            body: { error: 'Target is protected by role hierarchy' },
+        });
+    });
+
+    it('treats an unknown stored target role as user for moderation and DTOs', async () => {
+        const { query } = await import('../../../server/db.js');
+        await query(`UPDATE "user"
+            SET role = 'moderator', banned = 0, "banReason" = NULL, "banExpires" = NULL, "moderationVersion" = 0
+            WHERE id = $1`, [unknownRoleTargetId]);
+
+        const res = await request(app).post(`/api/admin/users/${unknownRoleTargetId}/suspend`)
+            .set('Cookie', adminCookie)
+            .send({ reason: 'Unknown role policy', expiresAt: null, projectIdsToUnpublish: [], expectedModerationVersion: 0 });
+
+        expect(res.status).toBe(200);
+        expect(res.body.account.role).toBe('user');
     });
 
     it('rejects an oversized cursor', async () => {
@@ -268,15 +397,41 @@ describe('account moderation authorization and reads', () => {
         expect(JSON.stringify(res.body)).not.toMatch(/password|token|ipAddress/i);
     });
 
+    it('returns generalized user history while excluding system actor rows', async () => {
+        const { query } = await import('../../../server/db.js');
+        await query(`INSERT INTO platform_audit_actions
+            (id, actor_kind, actor_user_id, actor_email, target_user_id, target_email, action, reason, created_at, metadata_json)
+            VALUES ($1, 'system', NULL, $2, $3, $4, 'owner_granted', $5, $6, $7)`,
+        ['system-history-row', 'OWNER_EMAILS reconciliation', ownerTargetId, 'protected-owner@test.dev',
+            'System role event', '2026-07-16T09:00:00.000Z', JSON.stringify({
+                source: 'owner_emails_reconciliation', previousRole: 'user', newRole: 'owner',
+            })]);
+        await query(`INSERT INTO platform_audit_actions
+            (id, actor_kind, actor_user_id, actor_email, target_user_id, target_email, action, reason, created_at, metadata_json)
+            VALUES ($1, 'user', $2, $3, $4, $5, 'account_restored', $6, $7, $8)`,
+        ['user-history-row', 'history-admin', 'history-admin@test.dev', ownerTargetId, 'protected-owner@test.dev',
+            'Visible user event', '2026-07-16T10:00:00.000Z', JSON.stringify({ source: 'account_workflow' })]);
+
+        const res = await request(app).get(`/api/admin/users/${ownerTargetId}`).set('Cookie', adminCookie);
+
+        expect(res.body.history.items).toEqual([{
+            id: 'user-history-row', actorKind: 'user', actorUserId: 'history-admin',
+            actorEmail: 'history-admin@test.dev', targetUserId: ownerTargetId, targetEmail: 'protected-owner@test.dev',
+            projectId: null, reviewId: null, action: 'account_restored', reason: 'Visible user event',
+            expiresAt: null, createdAt: '2026-07-16T10:00:00.000Z', metadata: { source: 'account_workflow' },
+        }]);
+    });
+
     it('bounds history pages at 25 and resumes in descending time order', async () => {
         const { query } = await import('../../../server/db.js');
         for (let index = 0; index < 26; index += 1) {
             const suffix = String(index).padStart(2, '0');
-            await query(`INSERT INTO moderation_actions
-                (id, actor_user_id, actor_email, target_user_id, target_email, action, reason, created_at)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+            await query(`INSERT INTO platform_audit_actions
+                (id, actor_kind, actor_user_id, actor_email, target_user_id, target_email, action, reason, created_at, metadata_json)
+                VALUES ($1, 'user', $2, $3, $4, $5, $6, $7, $8, $9)`,
             [`history-${suffix}`, 'admin-history', 'history-admin@test.dev', targetId, 'target@test.dev',
-                'account_restored', `History ${suffix}`, `2026-06-${String(index + 1).padStart(2, '0')}T00:00:00.000Z`]);
+                'account_restored', `History ${suffix}`, `2026-06-${String(index + 1).padStart(2, '0')}T00:00:00.000Z`,
+                JSON.stringify({ source: 'account_workflow' })]);
         }
         const first = await request(app).get(`/api/admin/users/${targetId}`).set('Cookie', adminCookie);
         expect(first.body.history.items).toHaveLength(25);
@@ -299,11 +454,12 @@ describe('account moderation authorization and reads', () => {
             '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', 'native_history', 0]);
         for (let index = 0; index < 26; index += 1) {
             const suffix = String(index).padStart(2, '0');
-            await query(`INSERT INTO moderation_actions
-                (id, actor_user_id, actor_email, target_user_id, target_email, action, reason, created_at)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+            await query(`INSERT INTO platform_audit_actions
+                (id, actor_kind, actor_user_id, actor_email, target_user_id, target_email, action, reason, created_at, metadata_json)
+                VALUES ($1, 'user', $2, $3, $4, $5, $6, $7, $8, $9)`,
             [`native-history-${suffix}`, 'admin-history', 'history-admin@test.dev', 'native-history-user',
-                'native-history@test.dev', 'account_restored', `Native history ${suffix}`, '2026-06-01 00:00:00']);
+                'native-history@test.dev', 'account_restored', `Native history ${suffix}`, '2026-06-01 00:00:00',
+                JSON.stringify({ source: 'account_workflow' })]);
         }
 
         const first = await request(app).get('/api/admin/users/native-history-user').set('Cookie', adminCookie);
@@ -326,11 +482,12 @@ describe('account moderation authorization and reads', () => {
             '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', 'driver_date', 0]);
         for (let index = 0; index < 26; index += 1) {
             const suffix = String(index).padStart(2, '0');
-            await query(`INSERT INTO moderation_actions
-                (id, actor_user_id, actor_email, target_user_id, target_email, action, reason, created_at)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+            await query(`INSERT INTO platform_audit_actions
+                (id, actor_kind, actor_user_id, actor_email, target_user_id, target_email, action, reason, created_at, metadata_json)
+                VALUES ($1, 'user', $2, $3, $4, $5, $6, $7, $8, $9)`,
             [`driver-date-${suffix}`, 'admin-history', 'history-admin@test.dev', 'driver-date-user',
-                'driver-date@test.dev', 'account_restored', `Driver date ${suffix}`, '2026-06-01T00:00:00.123456Z']);
+                'driver-date@test.dev', 'account_restored', `Driver date ${suffix}`, '2026-06-01T00:00:00.123456Z',
+                JSON.stringify({ source: 'account_workflow' })]);
         }
         faults.decodeModerationDates = true;
 
@@ -385,8 +542,8 @@ describe('Better Auth admin HTTP surface', () => {
             FROM "user"
             WHERE id LIKE 'plugin-%' OR email = 'plugin-created@test.dev'
             ORDER BY id`);
-        const auditSnapshot = () => query(`SELECT id, actor_user_id, target_user_id, action, reason, project_id
-            FROM moderation_actions ORDER BY id`);
+        const auditSnapshot = () => query(`SELECT id, actor_kind, actor_user_id, target_user_id, action, reason, project_id
+            FROM platform_audit_actions ORDER BY id`);
         const accountSnapshot = () => query(`SELECT id, "accountId", "providerId", "userId"
             FROM account WHERE "userId" LIKE 'plugin-%' ORDER BY id`);
         const sessionSnapshot = () => query(`SELECT id, "userId" FROM session
@@ -577,6 +734,7 @@ describe('account suspension', () => {
     it('persists a future temporary expiry and records complete actor/target/project audit snapshots', async () => {
         const { query } = await import('../../../server/db.js');
         const adminId = (await query('SELECT id FROM "user" WHERE email = $1', ['moderator@test.dev']))[0].id;
+        const legacyCount = (await query('SELECT COUNT(*) AS count FROM moderation_actions'))[0].count;
         await createPublishedProject('temporary-project', targetId, 'Temporary project');
         const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
         const requestStartedAt = Date.now();
@@ -588,35 +746,48 @@ describe('account suspension', () => {
         expect(res.status).toBe(200);
         expect(res.body.account.banExpires).toBe(expiresAt);
         for (const action of res.body.actions) {
+            expect(Object.keys(action).sort()).toEqual([
+                'action', 'actorEmail', 'actorKind', 'actorUserId', 'createdAt', 'expiresAt', 'id',
+                'metadata', 'projectId', 'reason', 'reviewId', 'targetEmail', 'targetUserId',
+            ]);
             expect(action).toMatchObject({
-                actorEmail: 'moderator@test.dev', targetUserId: targetId,
+                actorKind: 'user', actorUserId: adminId, actorEmail: 'moderator@test.dev', targetUserId: targetId,
                 targetEmail: 'target@test.dev', reason: 'Temporary investigation', expiresAt,
             });
             expect(new Date(action.createdAt).toString()).not.toBe('Invalid Date');
         }
         expect(res.body.actions.find(action => action.action === 'project_unpublished').projectId).toBe('temporary-project');
+        expect(res.body.actions.find(action => action.action === 'project_unpublished').metadata).toEqual({
+            source: 'account_workflow', previousProjectVisibility: 'public',
+        });
         expect(res.body.actions.find(action => action.action === 'account_suspended').projectId).toBeNull();
+        expect(res.body.actions.find(action => action.action === 'account_suspended').metadata)
+            .toEqual({ source: 'account_workflow' });
+        expect(JSON.stringify(res.body.actions)).not.toMatch(/password|token|session|ipAddress|banReason/i);
 
-        const persisted = await query(`SELECT actor_user_id, actor_email, target_user_id, target_email,
-                action, reason, expires_at, project_id, created_at
-            FROM moderation_actions WHERE reason = $1 ORDER BY action`, ['Temporary investigation']);
+        const persisted = await query(`SELECT actor_kind, actor_user_id, actor_email, target_user_id, target_email,
+                action, reason, expires_at, project_id, review_id, created_at, metadata_json
+            FROM platform_audit_actions WHERE reason = $1 ORDER BY action`, ['Temporary investigation']);
         expect(persisted[0].created_at).toEqual(persisted[1].created_at);
         const persistedCreatedAt = new Date(persisted[0].created_at).getTime();
         expect(persistedCreatedAt).toBeGreaterThanOrEqual(requestStartedAt);
         expect(persistedCreatedAt).toBeLessThanOrEqual(requestFinishedAt);
         expect(persisted.map(({ created_at: _createdAt, ...action }) => action)).toEqual([
             {
-                actor_user_id: adminId, actor_email: 'moderator@test.dev',
+                actor_kind: 'user', actor_user_id: adminId, actor_email: 'moderator@test.dev',
                 target_user_id: targetId, target_email: 'target@test.dev',
-                action: 'account_suspended', reason: 'Temporary investigation', expires_at: expiresAt, project_id: null,
+                action: 'account_suspended', reason: 'Temporary investigation', expires_at: expiresAt,
+                project_id: null, review_id: null, metadata_json: JSON.stringify({ source: 'account_workflow' }),
             },
             {
-                actor_user_id: adminId, actor_email: 'moderator@test.dev',
+                actor_kind: 'user', actor_user_id: adminId, actor_email: 'moderator@test.dev',
                 target_user_id: targetId, target_email: 'target@test.dev',
                 action: 'project_unpublished', reason: 'Temporary investigation', expires_at: expiresAt,
-                project_id: 'temporary-project',
+                project_id: 'temporary-project', review_id: null,
+                metadata_json: JSON.stringify({ source: 'account_workflow', previousProjectVisibility: 'public' }),
             },
         ]);
+        expect((await query('SELECT COUNT(*) AS count FROM moderation_actions'))[0].count).toBe(legacyCount);
     });
 
     it('rejects an expiry that elapses after locks with no account, session, project, or audit change', async () => {
@@ -634,7 +805,7 @@ describe('account suspension', () => {
             FROM "user" WHERE id = $1`, [targetId]);
         const beforeSessions = await query('SELECT id FROM session WHERE "userId" = $1 ORDER BY id', [targetId]);
         const beforeProject = await query('SELECT visibility, published_commit_id FROM projects WHERE id = $1', ['elapsed-expiry-project']);
-        const beforeAudit = await query('SELECT id FROM moderation_actions WHERE target_user_id = $1 ORDER BY id', [targetId]);
+        const beforeAudit = await query('SELECT id FROM platform_audit_actions WHERE target_user_id = $1 ORDER BY id', [targetId]);
         faults.afterQueryPattern = /SELECT \* FROM projects WHERE id IN/;
         faults.afterQuery = () => nowSpy.mockReturnValue(startedAt + 1000);
 
@@ -652,7 +823,7 @@ describe('account suspension', () => {
             expect(await query('SELECT id FROM session WHERE "userId" = $1 ORDER BY id', [targetId])).toEqual(beforeSessions);
             expect(await query('SELECT visibility, published_commit_id FROM projects WHERE id = $1', ['elapsed-expiry-project']))
                 .toEqual(beforeProject);
-            expect(await query('SELECT id FROM moderation_actions WHERE target_user_id = $1 ORDER BY id', [targetId]))
+            expect(await query('SELECT id FROM platform_audit_actions WHERE target_user_id = $1 ORDER BY id', [targetId]))
                 .toEqual(beforeAudit);
         } finally {
             nowSpy.mockRestore();
@@ -693,7 +864,7 @@ describe('account suspension', () => {
             expect(conflict.status).toBe(409);
             expect((await query('SELECT banned, "moderationVersion" FROM "user" WHERE id = $1', [targetId]))[0])
                 .toEqual({ banned: 0, moderationVersion: 1 });
-            expect(await query('SELECT id FROM moderation_actions WHERE reason = $1', [reason])).toEqual([]);
+            expect(await query('SELECT id FROM platform_audit_actions WHERE reason = $1', [reason])).toEqual([]);
         }
     });
 });
@@ -725,6 +896,7 @@ describe('account restoration', () => {
     ])('restores an %s suspension, revokes sessions defensively, and never republishes content', async (_label, expiresAt) => {
         const { query } = await import('../../../server/db.js');
         const adminId = (await query('SELECT id FROM "user" WHERE email = $1', ['moderator@test.dev']))[0].id;
+        const legacyCount = (await query('SELECT COUNT(*) AS count FROM moderation_actions'))[0].count;
         await query(`INSERT INTO session
             (id, "expiresAt", token, "createdAt", "updatedAt", "userId")
             VALUES ($1, $2, $3, $4, $5, $6)`,
@@ -751,13 +923,15 @@ describe('account restoration', () => {
         });
         expect(res.body.actions).toHaveLength(1);
         expect(res.body.actions[0]).toMatchObject({
+            actorKind: 'user', actorUserId: adminId, actorEmail: 'moderator@test.dev',
             action: 'account_restored', reason: `Restored ${_label}`, expiresAt: null, projectId: null,
+            reviewId: null, metadata: { source: 'account_workflow' },
         });
         const persistedAccount = (await query(`SELECT banned, "banReason", "banExpires", "moderationVersion", "updatedAt"
             FROM "user" WHERE id = $1`, [targetId]))[0];
-        const persistedAction = (await query(`SELECT id, actor_user_id, actor_email, target_user_id, target_email,
-                action, reason, expires_at, project_id, created_at
-            FROM moderation_actions WHERE id = $1`, [res.body.actions[0].id]))[0];
+        const persistedAction = (await query(`SELECT id, actor_kind, actor_user_id, actor_email, target_user_id, target_email,
+                action, reason, expires_at, project_id, review_id, created_at, metadata_json
+            FROM platform_audit_actions WHERE id = $1`, [res.body.actions[0].id]))[0];
         expect(persistedAccount).toEqual({
             banned: 0,
             banReason: null,
@@ -767,6 +941,7 @@ describe('account restoration', () => {
         });
         expect(persistedAction).toEqual({
             id: res.body.actions[0].id,
+            actor_kind: 'user',
             actor_user_id: adminId,
             actor_email: 'moderator@test.dev',
             target_user_id: targetId,
@@ -775,7 +950,9 @@ describe('account restoration', () => {
             reason: `Restored ${_label}`,
             expires_at: null,
             project_id: null,
+            review_id: null,
             created_at: persistedAction.created_at,
+            metadata_json: JSON.stringify({ source: 'account_workflow' }),
         });
         const persistedTimestamp = new Date(persistedAction.created_at).getTime();
         expect(persistedTimestamp).toBeGreaterThanOrEqual(requestStartedAt);
@@ -783,6 +960,7 @@ describe('account restoration', () => {
         expect(await query('SELECT id FROM session WHERE "userId" = $1', [targetId])).toEqual([]);
         expect(await query('SELECT id, visibility, published_commit_id FROM projects WHERE id = $1', [projectId]))
             .toEqual(project);
+        expect((await query('SELECT COUNT(*) AS count FROM moderation_actions'))[0].count).toBe(legacyCount);
     });
 });
 
@@ -791,7 +969,7 @@ describe('moderation transaction rollback', () => {
         ['account update', /UPDATE "user"\s+SET banned/],
         ['session deletion', /DELETE FROM session WHERE "userId"/],
         ['project update', /UPDATE projects SET visibility = 'private'/],
-        ['audit insertion', /INSERT INTO moderation_actions/],
+        ['audit insertion', /INSERT INTO platform_audit_actions/],
     ])('rolls back every suspension write when %s fails', async (_stage, pattern) => {
         const { query } = await import('../../../server/db.js');
         const suffix = _stage.replaceAll(' ', '-');
@@ -811,7 +989,7 @@ describe('moderation transaction rollback', () => {
             FROM "user" WHERE id = $1`, [targetId]);
         const beforeSessions = await query('SELECT id FROM session WHERE "userId" = $1 ORDER BY id', [targetId]);
         const beforeProject = await query('SELECT visibility, published_commit_id FROM projects WHERE id = $1', [projectId]);
-        const beforeAudit = await query('SELECT id FROM moderation_actions WHERE target_user_id = $1 ORDER BY id', [targetId]);
+        const beforeAudit = await query('SELECT id FROM platform_audit_actions WHERE target_user_id = $1 ORDER BY id', [targetId]);
 
         faults.pattern = pattern;
         const failed = await request(app).post(`/api/admin/users/${targetId}/suspend`).set('Cookie', adminCookie).send({
@@ -824,7 +1002,7 @@ describe('moderation transaction rollback', () => {
             .toEqual(beforeUser);
         expect(await query('SELECT id FROM session WHERE "userId" = $1 ORDER BY id', [targetId])).toEqual(beforeSessions);
         expect(await query('SELECT visibility, published_commit_id FROM projects WHERE id = $1', [projectId])).toEqual(beforeProject);
-        expect(await query('SELECT id FROM moderation_actions WHERE target_user_id = $1 ORDER BY id', [targetId])).toEqual(beforeAudit);
+        expect(await query('SELECT id FROM platform_audit_actions WHERE target_user_id = $1 ORDER BY id', [targetId])).toEqual(beforeAudit);
     });
 
     it('rolls back restoration account and session writes when audit insertion fails', async () => {
@@ -841,9 +1019,9 @@ describe('moderation transaction rollback', () => {
         const beforeUser = await query(`SELECT banned, "banReason", "banExpires", "moderationVersion", "updatedAt"
             FROM "user" WHERE id = $1`, [targetId]);
         const beforeSessions = await query('SELECT id FROM session WHERE "userId" = $1 ORDER BY id', [targetId]);
-        const beforeAudit = await query('SELECT id FROM moderation_actions WHERE target_user_id = $1 ORDER BY id', [targetId]);
+        const beforeAudit = await query('SELECT id FROM platform_audit_actions WHERE target_user_id = $1 ORDER BY id', [targetId]);
 
-        faults.pattern = /INSERT INTO moderation_actions/;
+        faults.pattern = /INSERT INTO platform_audit_actions/;
         const failed = await request(app).post(`/api/admin/users/${targetId}/restore`).set('Cookie', adminCookie).send({
             reason: 'Rollback failed restoration', expectedModerationVersion: beforeUser[0].moderationVersion,
         });
@@ -852,6 +1030,6 @@ describe('moderation transaction rollback', () => {
             FROM "user" WHERE id = $1`, [targetId]))
             .toEqual(beforeUser);
         expect(await query('SELECT id FROM session WHERE "userId" = $1 ORDER BY id', [targetId])).toEqual(beforeSessions);
-        expect(await query('SELECT id FROM moderation_actions WHERE target_user_id = $1 ORDER BY id', [targetId])).toEqual(beforeAudit);
+        expect(await query('SELECT id FROM platform_audit_actions WHERE target_user_id = $1 ORDER BY id', [targetId])).toEqual(beforeAudit);
     });
 });

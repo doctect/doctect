@@ -1,9 +1,40 @@
 // @vitest-environment node
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
 import request from 'supertest';
 import { initTestApp, signUpUser, signUpUserNoUsername, minimalState, PNG_1X1 } from './helpers.js';
 
+const moderationFault = vi.hoisted(() => ({ failAudit: false, afterDiscovery: null }));
+vi.mock('../../../server/db.js', async importOriginal => {
+    const actual = await importOriginal();
+    return {
+        ...actual,
+        query: async (text, params = []) => {
+            const rows = await actual.query(text, params);
+            if (moderationFault.afterDiscovery
+                && text === 'SELECT user_id, project_id FROM reviews WHERE id = $1') {
+                const hook = moderationFault.afterDiscovery;
+                moderationFault.afterDiscovery = null;
+                await hook();
+            }
+            return rows;
+        },
+        withTransaction: callback => actual.withTransaction(
+            txQuery => callback((text, params = []) => {
+                if (moderationFault.failAudit && /INSERT INTO platform_audit_actions/.test(text)) {
+                    throw new Error('Injected review audit failure');
+                }
+                return txQuery(text, params);
+            }),
+        ),
+    };
+});
+
 let app, ownerCookie, raterCookie, rater2Cookie, noUsernameCookie, projectId;
+beforeEach(() => {
+    process.env.OWNER_EMAILS = 'rev-owner-moderator@test.dev';
+    moderationFault.failAudit = false;
+});
+
 beforeAll(async () => {
     app = await initTestApp();
     ownerCookie = await signUpUser(app, { email: 'rev-schema-owner@test.dev', username: 'rev_schema_owner' });
@@ -168,14 +199,33 @@ describe('review CRUD', () => {
 });
 
 describe('review reporting and moderation', () => {
-    let adminCookie, reviewId;
+    let adminCookie, ownerModeratorCookie, reviewId, query;
+    let userId, rater2Id, adminId, adminAuthorId, ownerModeratorId;
     beforeAll(async () => {
-        const { query } = await import('../../../server/db.js');
+        ({ query } = await import('../../../server/db.js'));
         adminCookie = await signUpUser(app, { email: 'rev-admin@test.dev', username: 'rev_admin' });
+        await signUpUser(app, { email: 'rev-admin-author@test.dev', username: 'rev_admin_author' });
+        ownerModeratorCookie = await signUpUser(app, { email: 'rev-owner-moderator@test.dev', username: 'rev_owner_moderator' });
         await query(`UPDATE "user" SET role = 'admin' WHERE email = $1`, ['rev-admin@test.dev']);
+        await query(`UPDATE "user" SET role = 'admin' WHERE email = $1`, ['rev-admin-author@test.dev']);
+        await query(`UPDATE "user" SET role = 'owner' WHERE email = $1`, ['rev-owner-moderator@test.dev']);
+        userId = (await query('SELECT id FROM "user" WHERE email = $1', ['rev-rater@test.dev']))[0].id;
+        rater2Id = (await query('SELECT id FROM "user" WHERE email = $1', ['rev-rater2@test.dev']))[0].id;
+        adminId = (await query('SELECT id FROM "user" WHERE email = $1', ['rev-admin@test.dev']))[0].id;
+        adminAuthorId = (await query('SELECT id FROM "user" WHERE email = $1', ['rev-admin-author@test.dev']))[0].id;
+        ownerModeratorId = (await query('SELECT id FROM "user" WHERE email = $1', ['rev-owner-moderator@test.dev']))[0].id;
         const list = await request(app).get(`/api/gallery/${projectId}/reviews`);
         reviewId = list.body.reviews.find(r => r.author === 'rev_rater').id;
     });
+
+    const insertReview = async (id, authorId, body = 'private review body', rating = 3, targetProjectId = projectId) => {
+        const now = new Date().toISOString();
+        await query(`INSERT INTO reviews (id, project_id, user_id, rating, body, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [id, targetProjectId, authorId, rating, body, now, now]);
+    };
+    const deleteReview = (id, actorCookie, body = { reason: 'Review policy violation' }) => request(app)
+        .delete(`/api/admin/reviews/${id}`).set('Cookie', actorCookie).send(body);
 
     it('accepts an anonymous review report and requires a reason', async () => {
         const bad = await request(app).post(`/api/gallery/${projectId}/reviews/${reviewId}/report`).send({});
@@ -200,12 +250,128 @@ describe('review reporting and moderation', () => {
         expect(rep.review_body).toBe('Changed my mind.');
     });
 
-    it('lets an admin delete a review; non-admins cannot', async () => {
+    it('rejects non-admin review deletion', async () => {
         const forbidden = await request(app).delete(`/api/admin/reviews/${reviewId}`).set('Cookie', raterCookie);
         expect(forbidden.status).toBe(403);
-        const res = await request(app).delete(`/api/admin/reviews/${reviewId}`).set('Cookie', adminCookie);
+    });
+
+    it.each([
+        ['missing', {}],
+        ['blank', { reason: '   ' }],
+        ['overlong', { reason: 'x'.repeat(1001) }],
+    ])('rejects %s review deletion reasons', async (_label, body) => {
+        const res = await deleteReview(reviewId, adminCookie, body);
+        expect(res.status).toBe(400);
+        expect(res.body).toEqual({ error: 'Invalid review deletion request' });
+    });
+
+    it('returns 404 for a missing review and 409 when it disappears after discovery', async () => {
+        const missing = await deleteReview('standalone-review-missing', adminCookie);
+        expect(missing.status).toBe(404);
+        expect(missing.body).toEqual({ error: 'Review not found' });
+
+        const id = 'standalone-review-concurrent-delete';
+        await insertReview(id, rater2Id, 'stale body', 2);
+        moderationFault.afterDiscovery = () => query('DELETE FROM reviews WHERE id = $1', [id]);
+        const stale = await deleteReview(id, adminCookie);
+        expect(stale.status).toBe(409);
+        expect(stale.body).toEqual({ error: 'Review state changed; refresh and try again' });
+    });
+
+    it('enforces admin and owner hierarchy for review authors', async () => {
+        await insertReview('standalone-review-admin-protected', adminId);
+        await insertReview('standalone-review-owner-admin-attempt', ownerModeratorId);
+
+        for (const [id, actor] of [
+            ['standalone-review-admin-protected', adminCookie],
+            ['standalone-review-owner-admin-attempt', adminCookie],
+            ['standalone-review-owner-admin-attempt', ownerModeratorCookie],
+        ]) {
+            const res = await deleteReview(id, actor);
+            expect(res.status).toBe(403);
+            expect(res.body).toEqual({ error: 'Target is protected by role hierarchy' });
+        }
+    });
+
+    it.each([
+        ['admin', () => adminCookie, 'rev-admin@test.dev', () => rater2Id, 'rev-rater2@test.dev'],
+        ['owner', () => ownerModeratorCookie, 'rev-owner-moderator@test.dev', () => adminAuthorId, 'rev-admin-author@test.dev'],
+    ])('lets %s delete lower-role reviews without exposing body text', async (
+        label, actorCookie, actorEmail, targetId, targetEmail,
+    ) => {
+        const id = `standalone-review-success-${label}`;
+        const secretBody = `secret-${label}-review-body`;
+        await insertReview(id, targetId(), secretBody, 4);
+        const legacyCount = (await query('SELECT COUNT(*) AS count FROM moderation_actions'))[0].count;
+
+        const res = await deleteReview(id, actorCookie(), { reason: '  Abusive review  ' });
+
         expect(res.status).toBe(200);
-        const list = await request(app).get(`/api/gallery/${projectId}/reviews`);
-        expect(list.body.reviews.find(r => r.id === reviewId)).toBeUndefined();
+        expect(res.body).toEqual({
+            success: true,
+            action: {
+                id: expect.any(String),
+                actorKind: 'user',
+                actorUserId: label === 'admin' ? adminId : ownerModeratorId,
+                actorEmail,
+                targetUserId: targetId(),
+                targetEmail,
+                projectId,
+                reviewId: id,
+                action: 'review_deleted',
+                reason: 'Abusive review',
+                expiresAt: null,
+                createdAt: expect.any(String),
+                metadata: { source: 'standalone_review', deletedReviewRating: 4 },
+            },
+        });
+        expect(JSON.stringify(res.body)).not.toContain(secretBody);
+        expect(await query('SELECT id FROM reviews WHERE id = $1', [id])).toEqual([]);
+        const persisted = await query(`SELECT target_user_id, target_email, project_id, review_id,
+            action, reason, metadata_json FROM platform_audit_actions WHERE id = $1`, [res.body.action.id]);
+        expect(persisted).toEqual([{
+            target_user_id: targetId(),
+            target_email: targetEmail,
+            project_id: projectId,
+            review_id: id,
+            action: 'review_deleted',
+            reason: 'Abusive review',
+            metadata_json: JSON.stringify({ source: 'standalone_review', deletedReviewRating: 4 }),
+        }]);
+        expect(JSON.stringify(persisted)).not.toContain(secretBody);
+        expect((await query('SELECT COUNT(*) AS count FROM moderation_actions'))[0].count).toBe(legacyCount);
+    });
+
+    it('revokes stored-owner review moderation immediately after configuration removal', async () => {
+        const userReview = 'standalone-review-removed-owner-user';
+        const adminReview = 'standalone-review-removed-owner-admin';
+        await insertReview(userReview, rater2Id);
+        await insertReview(adminReview, adminAuthorId);
+        process.env.OWNER_EMAILS = '';
+
+        try {
+            for (const id of [userReview, adminReview]) {
+                const res = await deleteReview(id, ownerModeratorCookie);
+                expect(res.status).toBe(403);
+                expect(await query('SELECT id FROM reviews WHERE id = $1', [id])).toEqual([{ id }]);
+            }
+        } finally {
+            await query('DELETE FROM reviews WHERE id IN ($1, $2)', [userReview, adminReview]);
+        }
+    });
+
+    it('rolls back review deletion when audit insertion fails', async () => {
+        const id = 'standalone-review-audit-rollback';
+        await insertReview(id, rater2Id, 'rollback body', 5);
+        moderationFault.failAudit = true;
+
+        const res = await deleteReview(id, adminCookie, { reason: 'Rollback audit failure' });
+        moderationFault.failAudit = false;
+
+        expect(res.status).toBe(500);
+        expect(res.body).toEqual({ error: 'Review deletion failed' });
+        expect(await query('SELECT id, rating, body FROM reviews WHERE id = $1', [id]))
+            .toEqual([{ id, rating: 5, body: 'rollback body' }]);
+        expect(await query('SELECT id FROM platform_audit_actions WHERE review_id = $1', [id])).toEqual([]);
     });
 });

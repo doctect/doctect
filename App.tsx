@@ -19,6 +19,7 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { trackEvent } from './services/analytics';
 import { useSession } from './lib/auth-client';
 import { Navigate } from 'react-router-dom';
+import { useCurrentUser } from './hooks/useCurrentUser';
 
 function App() {
   return (
@@ -79,9 +80,7 @@ function AppRoutes() {
         <Route
           path="/admin/moderation"
           element={
-            <AdminGuard>
-              <AdminModerationPage />
-            </AdminGuard>
+            <ModeratorGuard />
           }
         />
       </Routes>
@@ -124,17 +123,16 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
-export function AdminGuard({ children }: { children: React.ReactNode }) {
-  const { data: session, isPending } = useSession();
+export function ModeratorGuard() {
+  const { user, loading, error } = useCurrentUser();
   const location = useLocation();
 
-  if (isPending) return <div aria-label="Loading session" className="p-10 flex justify-center"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" /></div>;
-  if (!session) return <Navigate to="/login" state={{ from: location.pathname }} />;
+  if (loading) return <div aria-label="Loading account authority" className="p-10 flex justify-center"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" /></div>;
+  if (error) return <div role="alert" className="p-8 text-center text-red-700">Unable to verify account authority. Try again.</div>;
+  if (!user) return <Navigate to="/login" state={{ from: location.pathname }} />;
+  if (user.role !== 'admin' && user.role !== 'owner') return <div className="p-8 text-center text-red-700">Access denied. Moderators only.</div>;
 
-  const role = (session.user as { role?: string | null }).role;
-  if (role !== 'admin') return <div className="p-8 text-center text-red-700">Access denied. Administrators only.</div>;
-
-  return <>{children}</>;
+  return <AdminModerationPage actorRole={user.role} />;
 }
 
 export default App;
