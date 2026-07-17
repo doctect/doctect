@@ -1,37 +1,19 @@
-import { useEffect, useRef, useState } from 'react';
-import type { KeyboardEvent } from 'react';
+import { useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { AppHeader } from '../components/AppHeader';
+import { ModerationConfirmationDialog, moderationDurations } from '../components/moderation/ModerationConfirmationDialog';
+import type { ModerationConfirmation, ModerationDuration } from '../components/moderation/ModerationConfirmationDialog';
+import { OwnerRoleLifecyclePanel } from '../components/moderation/OwnerRoleLifecyclePanel';
 import { ApiError, cloudApi } from '../services/cloudApi';
 import type {
     ModerationAction,
     ModerationUserDetail,
     ModerationUserSearchItem,
+    PlatformRole,
     SuspensionStatus,
 } from '../services/cloudApi';
 
-const durations = ['Indefinite', '24 hours', '7 days', '30 days', 'Custom'] as const;
-type Duration = typeof durations[number];
-type Confirmation =
-    | {
-        action: 'suspend';
-        accountId: string;
-        accountEmail: string;
-        expectedModerationVersion: number;
-        reason: string;
-        duration: Duration;
-        expiresAt: string | null;
-        projects: { id: string; name: string }[];
-    }
-    | {
-        action: 'restore';
-        accountId: string;
-        accountEmail: string;
-        expectedModerationVersion: number;
-        reason: string;
-    };
-
-const expiryFor = (duration: Duration, custom: string): string | null | undefined => {
+const expiryFor = (duration: ModerationDuration, custom: string): string | null | undefined => {
     if (duration === 'Indefinite') return null;
     if (duration === 'Custom') {
         const timestamp = Date.parse(custom);
@@ -57,23 +39,28 @@ const errorMessage = (error: unknown) => {
     return error instanceof Error ? error.message : 'Request failed';
 };
 
-export function AdminModerationPage() {
+export function AdminModerationPage({ actorRole }: { actorRole: Extract<PlatformRole, 'admin' | 'owner'> }) {
     const [query, setQuery] = useState('');
     const [users, setUsers] = useState<ModerationUserSearchItem[]>([]);
     const [searchCursor, setSearchCursor] = useState<string | null>(null);
     const [searched, setSearched] = useState(false);
     const [detail, setDetail] = useState<ModerationUserDetail | null>(null);
     const [reason, setReason] = useState('');
-    const [duration, setDuration] = useState<Duration>('Indefinite');
+    const [duration, setDuration] = useState<ModerationDuration>('Indefinite');
     const [customExpiry, setCustomExpiry] = useState('');
     const [selected, setSelected] = useState<string[]>([]);
     const [restoreReason, setRestoreReason] = useState('');
-    const [confirming, setConfirming] = useState<Confirmation | null>(null);
+    const [confirming, setConfirming] = useState<ModerationConfirmation | null>(null);
     const [busy, setBusy] = useState(false);
     const [loadingSearch, setLoadingSearch] = useState(false);
     const [loadingDetail, setLoadingDetail] = useState(false);
     const [error, setError] = useState<string | null>(null);
-    const [refreshFailure, setRefreshFailure] = useState<{ accountId: string; accountEmail: string } | null>(null);
+    const [success, setSuccess] = useState<string | null>(null);
+    const [refreshFailure, setRefreshFailure] = useState<{
+        accountId: string;
+        accountEmail: string;
+        kind: 'success' | 'conflict';
+    } | null>(null);
 
     const searchGeneration = useRef(0);
     const activeSearchQuery = useRef('');
@@ -81,26 +68,6 @@ export function AdminModerationPage() {
     const selectedAccountId = useRef<string | null>(null);
     const submitLock = useRef(false);
     const searchInputRef = useRef<HTMLInputElement>(null);
-    const cancelButtonRef = useRef<HTMLButtonElement>(null);
-    const previousFocus = useRef<HTMLElement | null>(null);
-    const confirmationOpen = useRef(false);
-
-    useEffect(() => {
-        if (confirming && !confirmationOpen.current) {
-            previousFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-            confirmationOpen.current = true;
-            cancelButtonRef.current?.focus();
-        } else if (!confirming && confirmationOpen.current) {
-            confirmationOpen.current = false;
-            const target = previousFocus.current?.isConnected ? previousFocus.current : searchInputRef.current;
-            previousFocus.current = null;
-            target?.focus();
-        }
-    }, [confirming]);
-
-    useEffect(() => () => {
-        if (confirmationOpen.current && previousFocus.current?.isConnected) previousFocus.current.focus();
-    }, []);
 
     const resetAccountDrafts = () => {
         setReason('');
@@ -166,7 +133,7 @@ export function AdminModerationPage() {
     };
 
     const reviewSuspend = () => {
-        if (!detail || detail.account.role === 'admin') return;
+        if (!detail || detail.account.role !== 'user' || (actorRole !== 'admin' && actorRole !== 'owner')) return;
         const trimmed = reason.trim();
         if (!trimmed || trimmed.length > 1000) {
             setError('Enter a reason from 1 to 1,000 characters.');
@@ -193,7 +160,7 @@ export function AdminModerationPage() {
     };
 
     const reviewRestore = () => {
-        if (!detail || detail.account.role === 'admin') return;
+        if (!detail || detail.account.role !== 'user' || (actorRole !== 'admin' && actorRole !== 'owner')) return;
         const trimmed = restoreReason.trim();
         if (!trimmed || trimmed.length > 1000) {
             setError('Enter a restoration reason from 1 to 1,000 characters.');
@@ -209,11 +176,41 @@ export function AdminModerationPage() {
         });
     };
 
+    const reviewPromote = (confirmation: Extract<ModerationConfirmation, { action: 'promote-admin' }>) => {
+        if (actorRole !== 'owner' || detail?.account.role !== 'user' || detail.account.id !== confirmation.accountId) return;
+        setError(null);
+        setConfirming(confirmation);
+    };
+
+    const reviewRevoke = (confirmation: Extract<ModerationConfirmation, { action: 'revoke-admin' }>) => {
+        if (actorRole !== 'owner' || detail?.account.role !== 'admin' || detail.account.id !== confirmation.accountId) return;
+        setError(null);
+        setConfirming(confirmation);
+    };
+
+    const hasCurrentAuthority = (confirmation: ModerationConfirmation) => {
+        if (!detail || detail.account.id !== confirmation.accountId) return false;
+        if (confirmation.action === 'promote-admin') return actorRole === 'owner' && detail.account.role === 'user';
+        if (confirmation.action === 'revoke-admin') return actorRole === 'owner' && detail.account.role === 'admin';
+        return (actorRole === 'admin' || actorRole === 'owner') && detail.account.role === 'user';
+    };
+
     const submit = async () => {
         if (!confirming || submitLock.current) return;
         const confirmation = confirming;
+        if (!hasCurrentAuthority(confirmation)) {
+            setConfirming(null);
+            setError('Account changed. Refresh account details before trying again.');
+            setRefreshFailure({
+                accountId: confirmation.accountId,
+                accountEmail: confirmation.accountEmail,
+                kind: 'conflict',
+            });
+            return;
+        }
         if (
-            confirmation.action === 'suspend'
+            (confirmation.action === 'suspend'
+                || (confirmation.action === 'revoke-admin' && confirmation.suspensionDuration !== null))
             && confirmation.expiresAt !== null
             && Date.parse(confirmation.expiresAt) <= Date.now()
         ) {
@@ -224,6 +221,7 @@ export function AdminModerationPage() {
         submitLock.current = true;
         setBusy(true);
         setError(null);
+        setSuccess(null);
         try {
             if (confirmation.action === 'suspend') {
                 await cloudApi.suspendAccount(confirmation.accountId, {
@@ -232,10 +230,24 @@ export function AdminModerationPage() {
                     projectIdsToUnpublish: confirmation.projects.map(project => project.id),
                     expectedModerationVersion: confirmation.expectedModerationVersion,
                 });
-            } else {
+            } else if (confirmation.action === 'restore') {
                 await cloudApi.restoreAccount(confirmation.accountId, {
                     reason: confirmation.reason,
                     expectedModerationVersion: confirmation.expectedModerationVersion,
+                });
+            } else if (confirmation.action === 'promote-admin') {
+                await cloudApi.promoteAdmin(confirmation.accountId, {
+                    reason: confirmation.reason,
+                    expectedModerationVersion: confirmation.expectedModerationVersion,
+                });
+            } else {
+                await cloudApi.revokeAdmin(confirmation.accountId, {
+                    reason: confirmation.reason,
+                    expectedModerationVersion: confirmation.expectedModerationVersion,
+                    suspension: confirmation.suspensionDuration === null
+                        ? null
+                        : { expiresAt: confirmation.expiresAt },
+                    projectIdsToUnpublish: confirmation.projects.map(project => project.id),
                 });
             }
 
@@ -245,8 +257,11 @@ export function AdminModerationPage() {
                 setDuration('Indefinite');
                 setCustomExpiry('');
                 setSelected([]);
-            } else {
+            } else if (confirmation.action === 'restore') {
                 setRestoreReason('');
+            }
+            if (confirmation.action === 'promote-admin' || confirmation.action === 'revoke-admin') {
+                setSuccess('Role updated. Target sessions were signed out.');
             }
             setDetail(null);
             const refreshed = await loadDetail(confirmation.accountId);
@@ -254,12 +269,20 @@ export function AdminModerationPage() {
                 setRefreshFailure({
                     accountId: confirmation.accountId,
                     accountEmail: confirmation.accountEmail,
+                    kind: 'success',
                 });
                 setError('Account changed successfully, but refresh failed. Refresh account details to continue.');
             }
         } catch (requestError) {
             setConfirming(null);
             setError(errorMessage(requestError));
+            if (requestError instanceof ApiError && requestError.status === 409) {
+                setRefreshFailure({
+                    accountId: confirmation.accountId,
+                    accountEmail: confirmation.accountEmail,
+                    kind: 'conflict',
+                });
+            }
         } finally {
             submitLock.current = false;
             setBusy(false);
@@ -272,35 +295,17 @@ export function AdminModerationPage() {
         const refreshed = await loadDetail(target.accountId);
         if (!refreshed) {
             setRefreshFailure(target);
-            setError('Account changed successfully, but refresh failed. Refresh account details to continue.');
-        }
-    };
-
-    const handleDialogKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-        if (event.key === 'Escape') {
-            event.preventDefault();
-            if (!busy) setConfirming(null);
-            return;
-        }
-        if (event.key !== 'Tab') return;
-        const focusable = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('button:not([disabled])'));
-        if (focusable.length === 0) {
-            event.preventDefault();
-            return;
-        }
-        const first = focusable[0];
-        const last = focusable[focusable.length - 1];
-        if (event.shiftKey && (document.activeElement === first || !event.currentTarget.contains(document.activeElement))) {
-            event.preventDefault();
-            last.focus();
-        } else if (!event.shiftKey && (document.activeElement === last || !event.currentTarget.contains(document.activeElement))) {
-            event.preventDefault();
-            first.focus();
+            setError(target.kind === 'success'
+                ? 'Account changed successfully, but refresh failed. Refresh account details to continue.'
+                : 'Account details could not be refreshed. Refresh account details before trying again.');
         }
     };
 
     const toggleProject = (id: string) => setSelected(current =>
         current.includes(id) ? current.filter(item => item !== id) : [...current, id]);
+
+    const detailConflict = refreshFailure?.kind === 'conflict'
+        && refreshFailure.accountId === detail?.account.id;
 
     return (
         <div className="min-h-screen overflow-y-auto bg-slate-50 text-slate-900">
@@ -320,6 +325,7 @@ export function AdminModerationPage() {
                             Search accounts
                             <input
                                 ref={searchInputRef}
+                                data-moderation-dialog-fallback
                                 aria-label="Search accounts"
                                 value={query}
                                 onChange={event => setQuery(event.target.value)}
@@ -354,6 +360,7 @@ export function AdminModerationPage() {
                             )}
                         </div>
                     )}
+                    {success && <div role="status" className="rounded border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">{success}</div>}
                     {loadingSearch && <p role="status">Loading accounts…</p>}
                     {loadingDetail && <p role="status">Loading account details…</p>}
 
@@ -398,22 +405,27 @@ export function AdminModerationPage() {
                                 {detail.account.banExpires && <p>Expiry: {new Date(detail.account.banExpires).toLocaleString()}</p>}
                             </div>
 
-                            {detail.account.role === 'admin' ? (
+                            {detail.account.role === 'owner' ? (
                                 <div role="status" className="rounded border border-amber-300 bg-amber-50 p-3 text-amber-900">
-                                    <strong>Protected administrator account</strong>
-                                    <p>Administrator accounts cannot be suspended through this workflow.</p>
+                                    <strong>Protected owner account</strong>
+                                    <p>Owner accounts cannot be changed through this workflow.</p>
                                 </div>
-                            ) : detail.account.suspensionStatus !== 'active' ? (
+                            ) : detail.account.role === 'admin' && actorRole === 'admin' ? (
+                                <div role="status" className="rounded border border-amber-300 bg-amber-50 p-3 text-amber-900">
+                                    <strong>Protected moderator account</strong>
+                                    <p>Moderators cannot change other moderator accounts.</p>
+                                </div>
+                            ) : detail.account.role === 'user' && detail.account.suspensionStatus !== 'active' ? (
                                 <>
                                     <label className="block text-sm font-medium">
                                         Suspension duration
                                         <select
                                             aria-label="Suspension duration"
                                             value={duration}
-                                            onChange={event => setDuration(event.target.value as Duration)}
+                                            onChange={event => setDuration(event.target.value as ModerationDuration)}
                                             className="mt-1 block rounded border px-3 py-2"
                                         >
-                                            {durations.map(item => <option key={item}>{item}</option>)}
+                                            {moderationDurations.map(item => <option key={item}>{item}</option>)}
                                         </select>
                                     </label>
                                     {duration === 'Custom' && (
@@ -467,13 +479,13 @@ export function AdminModerationPage() {
                                     <button
                                         type="button"
                                         onClick={reviewSuspend}
-                                        disabled={busy}
+                                        disabled={busy || detailConflict}
                                         className="rounded bg-red-700 px-4 py-2 text-white disabled:opacity-50"
                                     >
                                         Review suspension
                                     </button>
                                 </>
-                            ) : (
+                            ) : detail.account.role === 'user' ? (
                                 <>
                                     <label className="block text-sm font-medium">
                                         Restoration reason
@@ -488,12 +500,24 @@ export function AdminModerationPage() {
                                     <button
                                         type="button"
                                         onClick={reviewRestore}
-                                        disabled={busy}
+                                        disabled={busy || detailConflict}
                                         className="rounded bg-emerald-700 px-4 py-2 text-white disabled:opacity-50"
                                     >
                                         Review restoration
                                     </button>
                                 </>
+                            ) : null}
+
+                            {(detail.account.role === 'user' || detail.account.role === 'admin') && (
+                                <OwnerRoleLifecyclePanel
+                                    key={detail.account.id}
+                                    actorRole={actorRole}
+                                    account={detail.account}
+                                    projects={detail.projects}
+                                    busy={busy || detailConflict}
+                                    onReviewPromote={reviewPromote}
+                                    onReviewRevoke={reviewRevoke}
+                                />
                             )}
 
                             <div>
@@ -528,61 +552,14 @@ export function AdminModerationPage() {
                         </section>
                     )}
 
-                    {confirming && detail?.account.role !== 'admin' && (
-                        <div
-                            role="dialog"
-                            aria-modal="true"
-                            aria-labelledby="moderation-confirm-title"
-                            onKeyDown={handleDialogKeyDown}
-                            className="fixed inset-0 z-[60] grid place-items-center bg-slate-950/50 p-4"
-                        >
-                            <div className="w-full max-w-lg rounded-xl bg-white p-6 shadow-xl">
-                                <h2 id="moderation-confirm-title" className="text-xl font-bold">
-                                    Confirm {confirming.action === 'suspend' ? 'suspension' : 'restoration'}
-                                </h2>
-                                <div className="mt-3 space-y-1">
-                                    <p>Account: {confirming.accountEmail}</p>
-                                    <p>Account ID: {confirming.accountId}</p>
-                                    <p>Moderation version: {confirming.expectedModerationVersion}</p>
-                                    {confirming.action === 'suspend' ? (
-                                        <>
-                                            <p>Duration: {confirming.duration}</p>
-                                            <p>Expiry: {confirming.expiresAt || 'Indefinite'}</p>
-                                            <p>Reason: {confirming.reason}</p>
-                                            <p>Projects:</p>
-                                            {confirming.projects.length ? (
-                                                <ul>{confirming.projects.map(project => <li key={project.id}>{project.name} ({project.id})</li>)}</ul>
-                                            ) : <p>None</p>}
-                                        </>
-                                    ) : (
-                                        <p>Reason: {confirming.reason}</p>
-                                    )}
-                                </div>
-                                <div className="mt-4 flex gap-2">
-                                    <button
-                                        ref={cancelButtonRef}
-                                        type="button"
-                                        onClick={() => setConfirming(null)}
-                                        disabled={busy}
-                                        className="rounded border px-3 py-2 disabled:opacity-50"
-                                    >
-                                        Cancel
-                                    </button>
-                                    <button
-                                        type="button"
-                                        onClick={() => void submit()}
-                                        disabled={busy}
-                                        className="rounded bg-slate-900 px-3 py-2 text-white disabled:opacity-50"
-                                    >
-                                        {busy
-                                            ? 'Submitting…'
-                                            : confirming.action === 'suspend'
-                                                ? 'Confirm suspension'
-                                                : 'Confirm restoration'}
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
+                    {confirming && hasCurrentAuthority(confirming) && (
+                        <ModerationConfirmationDialog
+                            confirmation={confirming}
+                            busy={busy}
+                            fallbackFocusRef={searchInputRef}
+                            onConfirm={() => void submit()}
+                            onCancel={() => setConfirming(null)}
+                        />
                     )}
                 </div>
             </main>
