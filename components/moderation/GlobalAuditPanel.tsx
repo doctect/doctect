@@ -46,6 +46,7 @@ export function GlobalAuditPanel({ actorRole }: { actorRole: PlatformRole }) {
         try {
             const result = await cloudApi.getGlobalAudit(filters);
             if (requestGeneration !== generation.current) return;
+            if (!append) appliedFilters.current = filters;
             setItems(current => append ? [...current, ...result.items] : result.items);
             setNextCursor(result.nextCursor);
             setSearched(true);
@@ -76,7 +77,6 @@ export function GlobalAuditPanel({ actorRole }: { actorRole: PlatformRole }) {
         if (action) filters.action = action;
         if (fromIso) filters.from = fromIso;
         if (toIso) filters.to = toIso;
-        appliedFilters.current = filters;
         void request(filters, false);
     };
 

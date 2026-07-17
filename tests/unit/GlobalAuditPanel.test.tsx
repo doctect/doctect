@@ -137,7 +137,9 @@ describe('GlobalAuditPanel global audit', () => {
         api.getGlobalAudit.mockResolvedValueOnce({ items: [auditAction()], nextCursor: 'audit-cursor' });
         renderPanel();
         fireEvent.change(screen.getByLabelText('Audit actor email'), { target: { value: 'actor@test.dev' } });
+        fireEvent.change(screen.getByLabelText('Audit target email'), { target: { value: 'target@test.dev' } });
         fireEvent.change(screen.getByLabelText('Audit action'), { target: { value: 'admin_promoted' } });
+        fireEvent.change(screen.getByLabelText('Audit to'), { target: { value: '2026-07-16T18:45' } });
         fireEvent.click(screen.getByRole('button', { name: 'Search global audit' }));
         expect(await screen.findByText('Trusted reviewer')).toBeInTheDocument();
         fireEvent.change(screen.getByLabelText('Audit from'), { target: { value: '999999-01-01T00:00' } });
@@ -154,6 +156,33 @@ describe('GlobalAuditPanel global audit', () => {
         expect(screen.queryByText('Trusted reviewer')).toBeNull();
         expect(screen.queryByRole('button', { name: 'More audit actions' })).toBeNull();
         expect(screen.queryByRole('alert')).toBeNull();
+    });
+
+    it('keeps old cursor filters after a replacement search fails', async () => {
+        api.getGlobalAudit
+            .mockResolvedValueOnce({ items: [auditAction()], nextCursor: 'old-cursor' })
+            .mockRejectedValueOnce(new Error('Replacement unavailable'))
+            .mockResolvedValueOnce({
+                items: [auditAction({ id: 'old-page-2', reason: 'Old page two' })],
+                nextCursor: null,
+            });
+        renderPanel();
+        fireEvent.change(screen.getByLabelText('Audit actor email'), { target: { value: 'old@test.dev' } });
+        fireEvent.click(screen.getByRole('button', { name: 'Search global audit' }));
+        expect(await screen.findByText('Trusted reviewer')).toBeInTheDocument();
+
+        fireEvent.change(screen.getByLabelText('Audit actor email'), { target: { value: 'new@test.dev' } });
+        fireEvent.click(screen.getByRole('button', { name: 'Search global audit' }));
+        expect(await screen.findByRole('alert')).toHaveTextContent('Replacement unavailable');
+        expect(screen.getByText('Trusted reviewer')).toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole('button', { name: 'More audit actions' }));
+
+        expect(await screen.findByText('Old page two')).toBeInTheDocument();
+        expect(api.getGlobalAudit).toHaveBeenLastCalledWith({
+            actorEmail: 'old@test.dev',
+            cursor: 'old-cursor',
+        });
     });
 
     it('ignores a stale global audit response after a newer filter response', async () => {
