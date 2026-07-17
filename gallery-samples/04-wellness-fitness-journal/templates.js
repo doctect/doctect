@@ -196,6 +196,28 @@ const smallArc = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 70">
   </g>
 </svg>`;
 
+const bodyFront = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 90 150">
+  <g fill="none" stroke="#7f9473" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="45" cy="16" r="10"/>
+    <path d="M45 26 V88"/>
+    <path d="M45 34 L20 44 L14 74 M45 34 L70 44 L76 74"/>
+    <path d="M32 32 C32 58 34 74 36 88 L34 142 M58 32 C58 58 56 74 54 88 L56 142"/>
+    <path d="M36 88 H54"/>
+    <path d="M34 142 H26 M56 142 H64"/>
+  </g>
+</svg>`;
+
+const bodyBack = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 90 150">
+  <g fill="none" stroke="#a96551" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="45" cy="16" r="10"/>
+    <path d="M45 26 V60 M45 60 C40 76 40 82 42 88 M45 60 C50 76 50 82 48 88"/>
+    <path d="M45 34 L20 44 L14 74 M45 34 L70 44 L76 74"/>
+    <path d="M32 32 C32 58 34 74 36 88 L34 142 M58 32 C58 58 56 74 54 88 L56 142"/>
+    <path d="M36 88 H54 M31 50 H59"/>
+    <path d="M34 142 H26 M56 142 H64"/>
+  </g>
+</svg>`;
+
 const pageBase = (templateId, section) => [
   rect(templateId, 'paper', 0, 0, W, H, COLORS.warmGray),
   rect(templateId, 'left_soft_tab', 0, 126, 18, 86, COLORS.sage, { borderRadius: 9 }),
@@ -489,12 +511,19 @@ const recoveryElements = [
   text('recovery', 'heavy_label', 270, 207, 211, 18, 'WHAT FELT HEAVY', { fontSize: 9, fontWeight: 'bold', textColor: COLORS.clay }),
   rect('recovery', 'heavy_box', 270, 233, 211, 111, COLORS.paper, { stroke: COLORS.rule, strokeWidth: 0.8 }),
   text('recovery', 'heavy', 282, 244, 187, 88, '{{felt_heavy}}', { dataBinding: 'felt_heavy', fontSize: 11, verticalAlign: 'top' }),
-  text('recovery', 'energy_label', 32, 374, 211, 18, 'ENERGY PATTERN', { fontSize: 9, fontWeight: 'bold', textColor: COLORS.sageDeep }),
-  text('recovery', 'energy_pattern', 32, 400, 211, 59, '{{energy_pattern}}', { dataBinding: 'energy_pattern', fontSize: 10, fill: COLORS.paper, verticalAlign: 'top' }),
-  text('recovery', 'recovery_label', 270, 374, 211, 18, 'RECOVERY PATTERN', { fontSize: 9, fontWeight: 'bold', textColor: COLORS.sageDeep }),
-  text('recovery', 'recovery_pattern', 270, 400, 211, 59, '{{recovery_pattern}}', { dataBinding: 'recovery_pattern', fontSize: 10, fill: COLORS.paper, verticalAlign: 'top' }),
-  text('recovery', 'adjustment_label', 32, 493, 449, 18, 'ONE ADJUSTMENT FOR NEXT MONTH', { fontSize: 9, fontWeight: 'bold', textColor: COLORS.clay }),
-  text('recovery', 'adjustment', 32, 520, 449, 48, '{{adjustment}}', { dataBinding: 'adjustment', fontSize: 11, fontFamily: 'georgia', fontStyle: 'italic', fill: COLORS.sagePale, align: 'center' }),
+  text('recovery', 'energy_label', 32, 366, 211, 16, 'ENERGY PATTERN', { fontSize: 9, fontWeight: 'bold', textColor: COLORS.sageDeep }),
+  text('recovery', 'energy_pattern', 32, 384, 211, 44, '{{energy_pattern}}', { dataBinding: 'energy_pattern', fontSize: 10, fill: COLORS.paper, verticalAlign: 'top' }),
+  text('recovery', 'recovery_label', 32, 436, 211, 16, 'RECOVERY PATTERN', { fontSize: 9, fontWeight: 'bold', textColor: COLORS.sageDeep }),
+  text('recovery', 'recovery_pattern', 32, 454, 211, 44, '{{recovery_pattern}}', { dataBinding: 'recovery_pattern', fontSize: 10, fill: COLORS.paper, verticalAlign: 'top' }),
+  text('recovery', 'body_label', 270, 366, 211, 16, 'MARK STRAIN / TIGHTNESS', { fontSize: 9, fontWeight: 'bold', textColor: COLORS.clay }),
+  rect('recovery', 'body_panel', 270, 384, 211, 114, COLORS.paper, { stroke: COLORS.rule, strokeWidth: 0.8 }),
+  svg('recovery', 'body_front', 292, 390, 62, 103, bodyFront),
+  svg('recovery', 'body_back', 380, 390, 62, 103, bodyBack),
+  text('recovery', 'body_caption', 270, 498, 211, 13, 'front              back', {
+    fontSize: 7.5, textColor: COLORS.muted, align: 'center',
+  }),
+  text('recovery', 'adjustment_label', 32, 516, 449, 18, 'ONE ADJUSTMENT FOR NEXT MONTH', { fontSize: 9, fontWeight: 'bold', textColor: COLORS.clay }),
+  text('recovery', 'adjustment', 32, 534, 449, 40, '{{adjustment}}', { dataBinding: 'adjustment', fontSize: 11, fontFamily: 'georgia', fontStyle: 'italic', fill: COLORS.sagePale, align: 'center' }),
   text('recovery', 'continue', 328, 578, 153, 28, '{{nav_next_label}}', {
     dataBinding: 'nav_next_label',
     fontSize: 9, fontWeight: 'bold', textColor: COLORS.paper, fill: COLORS.clay, align: 'center', borderRadius: 14,
@@ -522,6 +551,22 @@ const reflectionElements = [
   ...navChips('month_reflection', { next: false }),
 ];
 
+const milestoneRows = Array.from({ length: 8 }, (_, index) => {
+  const row = index + 1;
+  return [`movement_${row}`, `date_${row}`, `best_${row}`, `target_${row}`];
+});
+
+const milestonesElements = [
+  ...pageBase('milestones', 'Strength milestones'),
+  ...titleBlock('milestones'),
+  text('milestones', 'note', 32, 155, 449, 28, 'Personal records without a deadline. Update whenever a number quietly moves.', {
+    fontSize: 10, fontStyle: 'italic', textColor: COLORS.muted, fill: COLORS.sagePale, align: 'center',
+  }),
+  ...staticTable('milestones', 'records', 32, 205, [150, 80, 90, 129], 42,
+    ['MOVEMENT', 'DATE', 'BEST', 'NEXT TARGET'], milestoneRows,
+    ['left', 'center', 'center', 'left']),
+];
+
 const template = (id, name, elements) => ({ id, name, width: W, height: H, elements });
 
 return {
@@ -534,4 +579,5 @@ return {
   workout: template('workout', 'Strength Session Log', workoutElements),
   recovery: template('recovery', 'Recovery Notes', recoveryElements),
   month_reflection: template('month_reflection', 'Monthly Reflection', reflectionElements),
+  milestones: template('milestones', 'Milestones Tracker', milestonesElements),
 };

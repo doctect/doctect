@@ -214,6 +214,17 @@ addNode('blank_baseline', 'blank_workspace', 'baseline', 'My Starting Baseline',
   intention: '',
 });
 
+addNode('blank_milestones', 'blank_workspace', 'milestones', 'Strength Milestones', (() => {
+  const data = { subtitle: 'A quiet register of personal records and next honest targets.' };
+  for (let row = 1; row <= 8; row += 1) {
+    data[`movement_${row}`] = '';
+    data[`date_${row}`] = '';
+    data[`best_${row}`] = '';
+    data[`target_${row}`] = '';
+  }
+  return data;
+})());
+
 const monthNames = [
   'January', 'February', 'March', 'April', 'May', 'June',
   'July', 'August', 'September', 'October', 'November', 'December',
