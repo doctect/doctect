@@ -111,10 +111,6 @@ export const withTransaction = async (callback) => {
     });
 };
 
-export const makeUserAdmin = async (userId) => {
-    await query(`UPDATE "user" SET role = 'admin' WHERE id = $1`, [userId]);
-};
-
 export const logEvent = async (eventType, payload) => {
     await query('INSERT INTO events (type, payload) VALUES ($1, $2)', [eventType, JSON.stringify(payload)]);
 };

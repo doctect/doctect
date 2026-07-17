@@ -3,8 +3,9 @@ import { betterAuth } from "better-auth";
 import { admin, username } from "better-auth/plugins";
 import { createAuthMiddleware, APIError } from "better-auth/api";
 import { validatePassword } from "../shared/passwordPolicy.js";
-import db, { makeUserAdmin } from "./db.js";
+import db from "./db.js";
 import { sendEmail } from "./email.js";
+import { reconcileOwnerAuthority } from "./ownerAuthority.js";
 
 // Paths where a password is being SET. Sign-in is deliberately absent:
 // pre-existing weaker passwords must keep working until changed.
@@ -96,10 +97,10 @@ export const createAuth = (config = {}) => {
             user: {
                 create: {
                     after: async (user) => {
-                        const adminEmails = (process.env.ADMIN_EMAILS || "").split(",").map(e => e.trim());
-                        if (adminEmails.includes(user.email)) {
-                            await makeUserAdmin(user.id);
-                            console.log(`Auto-promoted ${user.email} to admin`);
+                        try {
+                            await reconcileOwnerAuthority({ userId: user.id });
+                        } catch (error) {
+                            console.error('Owner signup reconciliation failed:', error);
                         }
                     }
                 }
