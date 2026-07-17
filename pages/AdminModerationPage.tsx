@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { AppHeader } from '../components/AppHeader';
 import { ModerationConfirmationDialog, moderationDurations } from '../components/moderation/ModerationConfirmationDialog';
 import type { ModerationConfirmation, ModerationDuration } from '../components/moderation/ModerationConfirmationDialog';
+import { GlobalAuditPanel } from '../components/moderation/GlobalAuditPanel';
 import { OwnerRoleLifecyclePanel } from '../components/moderation/OwnerRoleLifecyclePanel';
 import { ApiError, cloudApi } from '../services/cloudApi';
 import type {
@@ -317,6 +318,8 @@ export function AdminModerationPage({ actorRole }: { actorRole: Extract<Platform
                         <p className="text-xs font-semibold uppercase tracking-widest text-amber-700">Administration</p>
                         <h1 className="text-3xl font-bold">Account moderation</h1>
                     </header>
+
+                    {actorRole === 'owner' && <GlobalAuditPanel actorRole={actorRole} />}
 
                     <form
                         onSubmit={event => { event.preventDefault(); void search(); }}

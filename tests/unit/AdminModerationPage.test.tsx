@@ -12,6 +12,7 @@ const api = vi.hoisted(() => ({
     restoreAccount: vi.fn(),
     promoteAdmin: vi.fn(),
     revokeAdmin: vi.fn(),
+    getGlobalAudit: vi.fn(),
 }));
 
 vi.mock('../../services/cloudApi', async importOriginal => ({
@@ -65,6 +66,31 @@ describe('AdminModerationPage', () => {
         api.revokeAdmin.mockResolvedValue({
             account: { ...account, role: 'user', moderationVersion: 4 }, actions: [],
         });
+        api.getGlobalAudit.mockResolvedValue({ items: [], nextCursor: null });
+    });
+
+    it('mounts global audit for owners but never for admins', async () => {
+        const admin = renderPage('admin');
+        expect(screen.queryByRole('heading', { name: 'Global audit' })).toBeNull();
+        expect(api.getGlobalAudit).not.toHaveBeenCalled();
+        await screen.findByRole('link', { name: 'Sign in' });
+        admin.unmount();
+
+        renderPage('owner');
+        expect(screen.getByRole('heading', { name: 'Global audit' })).toBeInTheDocument();
+        expect(api.getGlobalAudit).not.toHaveBeenCalled();
+        await screen.findByRole('link', { name: 'Sign in' });
+    });
+
+    it('keeps account moderation drafts when a global audit request fails', async () => {
+        api.getGlobalAudit.mockRejectedValueOnce(new Error('Audit unavailable'));
+        await searchAndOpen('owner');
+        fireEvent.change(screen.getByLabelText('Suspension reason'), { target: { value: 'Keep account draft' } });
+
+        fireEvent.click(screen.getByRole('button', { name: 'Search global audit' }));
+
+        expect(await screen.findByText('Audit unavailable')).toBeInTheDocument();
+        expect(screen.getByLabelText('Suspension reason')).toHaveValue('Keep account draft');
     });
 
     it('requires a query, searches, shows empty results, and appends the returned cursor page', async () => {
