@@ -412,14 +412,14 @@ const monthHabitElements = [
     fontSize: 8, fontWeight: 'bold', textColor: COLORS.sageDeep,
   }),
   (() => {
-    const navigator = grid('month_habits', 'navigator', 32, 543, 47, 14, 9, {
+    const navigator = grid('month_habits', 'navigator', 32, 546, 47, 14, 9, {
       gapX: 3, gapY: 3, dataSliceCount: 27,
     });
     navigator.fontSize = 6.5;
     navigator.borderRadius = 3;
     return navigator;
   })(),
-  text('month_habits', 'continue', 328, 524, 153, 26, 'BEGIN MONTH →', {
+  text('month_habits', 'continue', 328, 521, 153, 20, 'BEGIN MONTH →', {
     fontSize: 9, fontWeight: 'bold', textColor: COLORS.paper, fill: COLORS.sageDeep, align: 'center', borderRadius: 13,
     linkTarget: 'child_index', linkValue: '0',
   }),
