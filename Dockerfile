@@ -18,6 +18,7 @@ RUN npm run build
 FROM node:18-alpine
 
 WORKDIR /app
+ENV NODE_ENV=production
 
 # Install ONLY production dependencies
 COPY package.json package-lock.json ./

@@ -109,24 +109,29 @@ Two independent edits that happen to produce byte-identical results are *not* fl
 | `GET /api/merge-requests/:id` | author or target owner | Detail + live-recomputed diff |
 | `POST /api/merge-requests/:id/merge` | target owner | Merge (re-verifies conflict-free) |
 | `POST /api/merge-requests/:id/close` | author or target owner | Close without merging |
-| `GET /api/admin/reports` | admin | List reported projects |
-| `POST /api/admin/projects/:id/unpublish` | admin | Force-unpublish a project |
-| `GET /api/admin/users?q=&cursor=` | admin | Search accounts by email/username; safe bounded DTOs only |
-| `GET /api/admin/users/:id?historyCursor=` | admin | Account suspension state, published projects, and moderation history |
-| `POST /api/admin/users/:id/suspend` | admin | Suspend, revoke sessions, optionally unpublish selected projects, and audit atomically |
-| `POST /api/admin/users/:id/restore` | admin | Clear suspension, defensively revoke sessions, and audit atomically |
+| `GET /api/admin/reports` | admin or owner | List reported projects |
+| `POST /api/admin/projects/:id/unpublish` | admin or owner, hierarchy enforced | Force-unpublish a project with a reason and audit |
+| `DELETE /api/admin/reviews/:id` | admin or owner, hierarchy enforced | Delete a review with a reason and audit |
+| `GET /api/admin/users?q=&cursor=` | admin or owner | Search accounts by email/username; safe bounded DTOs only |
+| `GET /api/admin/users/:id?historyCursor=` | admin or owner | Account suspension state, published projects, and moderation history |
+| `POST /api/admin/users/:id/suspend` | admin or owner, hierarchy enforced | Suspend, revoke sessions, optionally unpublish selected projects, and audit atomically |
+| `POST /api/admin/users/:id/restore` | admin or owner, hierarchy enforced | Clear suspension, defensively revoke sessions, and audit atomically |
+| `POST /api/owner/users/:id/promote-admin` | owner | Promote a user to admin, revoke sessions, and audit atomically |
+| `POST /api/owner/users/:id/revoke-admin` | owner | Demote an admin, optionally suspend/unpublish, revoke sessions, and audit atomically |
+| `GET /api/owner/audit` | owner | Filter and page global immutable platform audit |
 
 ## Environment Variables
 
 | Variable | Purpose |
 |---|---|
 | `DATABASE_URL` | Postgres connection string. Required in production (Cloud Run's filesystem is ephemeral); unset in local dev falls back to `server/analytics.db` (SQLite). |
+| `OWNER_EMAILS` | Comma-separated, normalized owner addresses. This is the sole deployment-controlled owner root of trust; production startup fails when the normalized set is empty. Configure at least two addresses for recovery. |
 | `TRUSTED_ORIGINS` | Comma-separated origins allowed to call the API with credentials — feeds both better-auth's `trustedOrigins` and the `checkOrigin` CSRF guard. |
 | `ALLOWED_HOSTS` | Comma-separated `Host` header values the server will serve auth for. Unset means "allow all," which is fine in dev but should be set explicitly in production. |
 | `VITE_API_BASE` | API origin (no path suffix) used by `services/cloudApi.ts` for every gallery/cloud-project/fork/merge-request call. Leave empty in production (same origin as the client). |
 | `VITE_API_URL` | **Pre-existing quirk, unrelated to this feature set**: a *different*, older client-side variable used as-is (not origin-only) by `lib/auth-client.ts` and `services/analytics.ts`, each expecting its own path suffix already baked in. It is not interchangeable with `VITE_API_BASE`. See `.env.example` for the exact expected values of each. |
 
-(`BETTER_AUTH_URL`, `CLIENT_URL`, `ADMIN_EMAILS`, and the Google OAuth/GitHub token variables predate this feature set and are unchanged; see `.env.example` for the full list.)
+`BETTER_AUTH_URL`, `CLIENT_URL`, and Google OAuth/GitHub token variables are listed in `.env.example`.
 
 ## Storage limits and cost control
 
@@ -167,34 +172,36 @@ Cloud storage is real, billed infrastructure, so this layer adds a set of guardr
 - **CORP for public thumbnails**: `/api/thumbnails/:thumbId` explicitly sets `Cross-Origin-Resource-Policy: cross-origin` (overriding helmet's app-wide same-origin default) plus `X-Content-Type-Options: nosniff`, since these are unauthenticated, intentionally-public images that need to load as `<img>` tags across the client/API origin split (or a future CDN). This route reads no session/auth state, so relaxing CORP here crosses no privacy boundary.
 - **Content-Security-Policy** is disabled app-wide in helmet's config today (the SPA depends on Google Fonts and inline styles) — see [Known limitations](#known-limitations--follow-ups).
 
-## Account moderation operations
+## Owner and moderator operations
 
-Administrators use `/admin/moderation` to search by email or username; there is no unfiltered account directory. Search and history pages contain at most 25 rows and use opaque cursors. Search/detail responses contain identity, role, creation time, suspension state, published-project metadata, and moderation history only. They never include passwords, provider tokens, session tokens, or session IP addresses.
+Stored roles have one explicit authority order; null or unknown values behave as `user`:
 
-Suspension requires a trimmed reason of 1-1,000 characters and may be indefinite or expire at a future server-validated time. Non-null `expiresAt` must be a calendar-valid ISO-8601 timestamp with `T`, seconds, and explicit `Z` or numeric timezone; locale strings and timezone-less values are rejected. Server checks future status before transaction entry and again after target/project locks immediately before first write. If expiry elapses while locks are acquired, request returns `400` with no account, session, project, or audit change. Status is `active` when `banned = true` and either no expiry exists or expiry is later than current server time; it is `expired` when `banned = true` but expiry has passed, and `none` otherwise.
+| Capability | Owner | Admin (moderator) | User |
+|---|---:|---:|---:|
+| View reports, account search/detail, and moderation stats | Yes | Yes | No |
+| Suspend/restore users and moderate user content | Yes | Yes | No |
+| Promote users to admin | Yes | No | No |
+| Demote/suspend admins or moderate admin content | Yes | No | No |
+| Query global platform audit | Yes | No | No |
+| Act on an owner, owner content, or owner-authored review | No | No | No |
+| Add/remove owners | Deployment only | No | No |
 
-Every target session is deleted in suspension transaction, so existing cookies stop authorizing immediately. Migration `012_session_suspension_guard` adds a database `BEFORE INSERT` trigger: PostgreSQL locks referenced user row before evaluating current suspension state, and SQLite evaluates same active-state predicate under its serialized writer. Migration `013_session_suspension_wall_clock` leaves SQLite unchanged and replaces only PostgreSQL function so expiry after lock wait is compared with `(clock_timestamp() AT TIME ZONE 'UTC')`. `clock_timestamp()` advances during transaction/lock wait, unlike transaction-start `CURRENT_TIMESTAMP`; conversion to UTC yields `timestamp without time zone`, matching `banExpires` schema and UTC values written by application. Active suspension rejects session creation; unbanned and expired users remain allowed. Transaction-locked application guard check provides independent cleanup/denial if preexisting session is resolved. Better Auth still rejects ordinary fresh sign-in with `BANNED_USER` while suspension is active. After temporary expiry, next successful Better Auth sign-in clears `banned`, `banReason`, and `banExpires`, changing status from `expired` to `none`; immutable audit rows remain.
+`OWNER_EMAILS` is the only owner-membership source. Entries are trimmed, lowercased, deduplicated, and compared with normalized account emails. Production refuses to start with an empty normalized set; development and tests may use an empty set. Startup runs migrations, then reconciles authority in one transaction before listening: configured existing accounts become owners, stale stored owners become users, every changed account increments `moderationVersion`, all its sessions are revoked, and an immutable `owner_granted` or `owner_removed` system action is written. A configured address without an account creates no row; signup reconciliation grants authority only if its role/session/audit transaction succeeds. Configure at least two owners.
 
-Suspension form lists currently published projects owned by target account. Only checked projects become private and have `published_commit_id` cleared; unchecked projects remain public. Suspension never automatically removes all account content. Restoration clears `banned`, `banReason`, and `banExpires`, increments moderation version, and defensively revokes any sessions, but never republishes content. Republishing remains an explicit owner action.
+Every authenticated request resolves the session, locks and re-reads account email, role, suspension fields, and moderation version, and places those fresh values in `req.user`. `requireAdmin` accepts fresh `admin` or `owner`; `requireOwner` additionally requires fresh role `owner` and current configured-email membership. Role changes revoke sessions. Stored owner rows remain protected even during temporary configuration drift, and startup reconciliation repairs that drift before traffic.
 
-Application-owned `/api/admin/users/*` writes use optimistic moderation versions and one database transaction. `projectIdsToUnpublish` contains at most 20 unique non-empty IDs, matching supported default platform scale of 20 published projects per user. Invalid reasons, expiries, project lists, cursors, or versions return `400`; non-admin callers and attempts to suspend administrator accounts return `403`; missing target accounts return `404`; stale moderation state or selected projects that are no longer both owned and published return `409`. Unexpected failures return `500` and roll back account, session, publication, and audit changes together.
+Admins can target users and user-owned/authored content only. Owners can target users or admins and their content, never owners. Suspension and restoration use optimistic `moderationVersion`, revoke sessions, and commit account, selected-content, and audit changes atomically. Only explicitly selected published projects become private; restoration never republishes content or changes role. Demoting an admin always produces a user, so later restoration remains user. Reasons are trimmed, mandatory, and 1-1,000 characters. Expiries must be future calendar-valid ISO-8601 timestamps with seconds and an explicit `Z` or numeric timezone. Project selections contain 0-20 unique non-empty IDs.
 
-Every suspension and restoration through application-owned `/api/admin/users/*` creates a row in `moderation_actions`; each selected unpublish creates its own row with `project_id`. Rows snapshot actor/target IDs and emails, reason, expiry, and server timestamp. PostgreSQL and SQLite reject direct updates/deletes through database triggers. Operators can inspect one account's newest-first history in `/admin/moderation` or query `moderation_actions` by `target_user_id` or `target_email`, ordering by `created_at DESC, id DESC`; no application endpoint mutates audit history. Better Auth's administrator HTTP endpoints are intentionally blocked so they cannot bypass these transactions, audit rows, moderation versions, selected-content handling, or administrator-target protection; plugin-internal sign-in ban enforcement remains enabled.
+Migration `012_session_suspension_guard` rejects session insertion for active suspensions. PostgreSQL locks the referenced user and migration `013_session_suspension_wall_clock` evaluates expiry with `(clock_timestamp() AT TIME ZONE 'UTC')`; SQLite uses the same active predicate under its serialized writer. Expired suspensions permit sign-in, which clears persisted suspension fields; audit remains.
 
-Administrator accounts cannot be suspended through application-owned workflow. Account detail labels administrators as protected and suppresses suspension/restoration controls and confirmation; server `403` remains authoritative. Role changes remain an operator action. Application-level exact-IP and CIDR bans are intentionally absent: VPNs, shared networks, carrier NAT, IPv6 rotation, and incorrect proxy trust make such bans easy to evade or likely to block unrelated users. If evidence later requires IP controls, apply short-lived CDN, WAF, or load-balancer rules only after verifying ingress isolation and trusted proxy configuration. Horizontally scaled enforcement requires shared edge controls or a distributed store, not per-process application state.
-
-### Account moderation HTTP contract
-
-All four routes require an administrator session cookie. Anonymous requests receive `401 { "error": "Unauthorized" }`; authenticated non-administrators receive `403 { "error": "Forbidden: Admins only" }`. Request `expiresAt` values use calendar-valid ISO-8601 with explicit timezone; response dates are normalized ISO-8601 strings. Cursors are opaque strings returned by previous responses.
-
-Shared response objects used below have these exact fields:
+### Stable moderation DTOs
 
 ```ts
 type ModerationAccount = {
   id: string;
   email: string;
   username: string | null;
-  role: string | null;
+  role: 'owner' | 'admin' | 'user';
   createdAt: string;
   suspensionStatus: 'none' | 'active' | 'expired';
   banExpires: string | null;
@@ -202,103 +209,66 @@ type ModerationAccount = {
   banReason: string | null;
 };
 
-type ModerationAction = {
+type PlatformAuditAction = {
   id: string;
-  actorUserId: string;
+  actorKind: 'user' | 'system';
+  actorUserId: string | null;
   actorEmail: string;
-  targetUserId: string;
-  targetEmail: string;
-  action: 'account_suspended' | 'account_restored' | 'project_unpublished';
+  targetUserId: string | null;
+  targetEmail: string | null;
+  projectId: string | null;
+  reviewId: string | null;
+  action: 'owner_granted' | 'owner_removed' | 'admin_promoted' | 'admin_demoted'
+    | 'account_suspended' | 'account_restored' | 'project_unpublished' | 'review_deleted';
   reason: string;
   expiresAt: string | null;
-  projectId: string | null;
   createdAt: string;
+  metadata:
+    | { source: 'owner_emails_reconciliation'; previousRole: 'owner' | 'admin' | 'user'; newRole: 'owner' | 'admin' | 'user' }
+    | { source: 'owner_role_workflow'; previousRole: 'owner' | 'admin' | 'user'; newRole: 'owner' | 'admin' | 'user' }
+    | { source: 'account_workflow' | 'owner_role_workflow' }
+    | { source: 'account_workflow' | 'owner_role_workflow' | 'standalone_project'; previousProjectVisibility: 'public' }
+    | { source: 'standalone_review'; deletedReviewRating: 1 | 2 | 3 | 4 | 5 };
 };
 ```
 
-`GET /api/admin/users?q=<email-or-username>&cursor=<optional-cursor>` has no request body. Its `200` response is:
+Account search returns `{ users: Array<Omit<ModerationAccount, 'banReason'>>, nextCursor: string | null }`. Account detail returns `{ account: ModerationAccount, projects: Array<{ id: string; name: string; publishedAt: string | null }>, history: { items: PlatformAuditAction[], nextCursor: string | null } }`. Every list page contains at most 25 rows. Cursors are opaque and must be replayed unchanged.
 
-```ts
-{
-  users: Array<{
-    id: string;
-    email: string;
-    username: string | null;
-    role: string | null;
-    createdAt: string;
-    suspensionStatus: 'none' | 'active' | 'expired';
-    banExpires: string | null;
-    moderationVersion: number;
-  }>;
-  nextCursor: string | null;
-}
-```
+### Stable moderation HTTP contract
 
-Missing, blank, or over-100-character `q` receives `400 { "error": "q must be 1 to 100 characters" }`; malformed cursor receives `400 { "error": "cursor is invalid" }`.
+Anonymous protected requests receive `401 { "error": "Unauthorized" }`. A user at an admin route receives `403 { "error": "Forbidden: Admins only" }`; a non-owner at an owner route receives `403 { "error": "Forbidden: Owners only" }`.
 
-`GET /api/admin/users/:id?historyCursor=<optional-cursor>` has no request body. Its `200` response is:
+| Method and path | Authority | Request | `200` response |
+|---|---|---|---|
+| `GET /api/admin/users?q=&cursor=` | admin or owner | Query: required 1-100 character `q`, optional opaque `cursor` | Account search DTO |
+| `GET /api/admin/users/:id?historyCursor=` | admin or owner | Optional opaque `historyCursor` | Account detail DTO |
+| `POST /api/admin/users/:id/suspend` | admin or owner, hierarchy enforced | `{ reason, expiresAt: string \| null, projectIdsToUnpublish: string[], expectedModerationVersion }` | `{ account: ModerationAccount, actions: PlatformAuditAction[] }` |
+| `POST /api/admin/users/:id/restore` | admin or owner, hierarchy enforced | `{ reason, expectedModerationVersion }` | `{ account: ModerationAccount, actions: [PlatformAuditAction] }` |
+| `POST /api/owner/users/:id/promote-admin` | owner | `{ reason, expectedModerationVersion }` | `{ account: ModerationAccount, actions: [PlatformAuditAction] }` |
+| `POST /api/owner/users/:id/revoke-admin` | owner | `{ reason, expectedModerationVersion, suspension: { expiresAt: string \| null } \| null, projectIdsToUnpublish: string[] }` | `{ account: ModerationAccount, actions: PlatformAuditAction[] }` |
+| `POST /api/admin/projects/:id/unpublish` | admin or owner, hierarchy enforced | `{ reason }` | `{ success: true, action: PlatformAuditAction }` |
+| `DELETE /api/admin/reviews/:id` | admin or owner, hierarchy enforced | `{ reason }` | `{ success: true, action: PlatformAuditAction }` |
+| `GET /api/owner/audit` | owner | Query filters below | `{ items: PlatformAuditAction[], nextCursor: string \| null }` |
 
-```ts
-{
-  account: {
-    id: string;
-    email: string;
-    username: string | null;
-    role: string | null;
-    createdAt: string;
-    suspensionStatus: 'none' | 'active' | 'expired';
-    banExpires: string | null;
-    moderationVersion: number;
-    banReason: string | null;
-  };
-  projects: Array<{ id: string; name: string; publishedAt: string | null }>;
-  history: {
-    items: Array<{
-      id: string;
-      actorUserId: string;
-      actorEmail: string;
-      targetUserId: string;
-      targetEmail: string;
-      action: 'account_suspended' | 'account_restored' | 'project_unpublished';
-      reason: string;
-      expiresAt: string | null;
-      projectId: string | null;
-      createdAt: string;
-    }>;
-    nextCursor: string | null;
-  };
-}
-```
+Search errors are `400 { "error": "q must be 1 to 100 characters" }` and `400 { "error": "cursor is invalid" }`. Detail uses `400 { "error": "historyCursor is invalid" }` and `404 { "error": "User not found" }`. Suspend uses `400 "Invalid suspension request"`, `403 "Target is protected by role hierarchy"`, `404 "User not found"`, `409 "Moderation state changed; refresh and try again"`, and `500 "Account suspension failed"`. Restore uses the same hierarchy/missing/conflict errors with `400 "Invalid restoration request"` and `500 "Account restoration failed"`.
 
-Missing user receives `404 { "error": "User not found" }`; malformed history cursor receives `400 { "error": "historyCursor is invalid" }`.
+Promotion uses `400 "Invalid promotion request"`, `403 "Target is protected by role hierarchy"`, `404 "User not found"`, `409 "Role or moderation state changed; refresh and try again"`, and `500 "Admin promotion failed"`. Revocation uses the same hierarchy/missing/conflict errors with `400 "Invalid revocation request"` and `500 "Admin revocation failed"`. Standalone unpublish uses `400 "Invalid project unpublish request"`, `403 "Target is protected by role hierarchy"`, `404 "Project not found"`, `409 "Project state changed; refresh and try again"`, and `500 "Project unpublish failed"`. Review deletion uses equivalent messages: `400 "Invalid review deletion request"`, `403` hierarchy, `404 "Review not found"`, `409 "Review state changed; refresh and try again"`, and `500 "Review deletion failed"`. Quoted text is the value of the response `error` field.
 
-`POST /api/admin/users/:id/suspend` request envelope:
+Global audit accepts optional exact normalized `actorEmail` and `targetEmail` filters (1-320 characters), one supported `action`, inclusive `from`/`to` ISO timestamps, and an opaque `cursor`; `from` cannot be later than `to`. Invalid filters or cursor return `400 { "error": "Invalid audit query" }`. Results are global newest-first by `createdAt`, then ID, and cursor pagination preserves every active filter.
 
-```ts
-{
-  reason: string;
-  expiresAt: string | null;
-  projectIdsToUnpublish: string[];
-  expectedModerationVersion: number;
-}
-```
+### Audit storage and privacy
 
-Its `200` response is `{ account: ModerationAccount, actions: ModerationAction[] }`, using exact account/action fields shown in detail response above. First action is `account_suspended`; each selected project adds one `project_unpublished` action. `projectIdsToUnpublish` accepts 0-20 IDs. Invalid input, including an expiry that elapses while transaction locks are acquired, receives `400 { "error": "Invalid suspension request" }`; administrator target receives `403 { "error": "Administrator accounts cannot be suspended" }`; missing user receives `404 { "error": "User not found" }`; concurrency or project-state conflict receives `409 { "error": "Moderation state changed; refresh and try again" }`; unexpected failure receives `500 { "error": "Account suspension failed" }`.
+Migration `014_platform_audit_actions` creates `platform_audit_actions`, backfills every legacy `moderation_actions` row with the same ID, and installs PostgreSQL/SQLite triggers rejecting update or delete. `moderation_actions` remains immutable historical storage but receives no future writes; every current history read and moderation write uses `platform_audit_actions`. Actions cover owner reconciliation, role promotion/demotion, account suspension/restoration, selected or standalone project unpublishing, and review deletion. Audit insertion shares the state-change transaction.
 
-`POST /api/admin/users/:id/restore` request envelope:
+Rows snapshot actor kind/ID/email label, target ID/email, project/review IDs, reason, expiry, timestamp, action, and server-generated constrained metadata. Metadata contains only action source, old/new role, prior public visibility, or deleted rating. Audit never stores passwords, provider/session tokens, session IDs, IP addresses, arbitrary request payloads, or review text. Search, report views, account-detail reads, and moderation-page access are not audited. Target history exposes user-actor case events to moderators; only owners can inspect system events and global history.
 
-```ts
-{
-  reason: string;
-  expectedModerationVersion: number;
-}
-```
+### Emergency owner recovery
 
-Its `200` response is `{ account: ModerationAccount, actions: [ModerationAction] }`, using exact fields shown above; sole action is `account_restored`. Invalid input receives `400 { "error": "Invalid restoration request" }`; missing user receives `404 { "error": "User not found" }`; stale version or target without persisted suspension receives `409 { "error": "Moderation state changed; refresh and try again" }`; unexpected failure receives `500 { "error": "Account restoration failed" }`.
+Change `OWNER_EMAILS` and redeploy. Startup reconciliation grants owner to configured existing accounts, removes stale owners to user, increments versions, revokes all affected sessions, and writes system audit actions. Review every existing admin after rollout and demote any account that no longer needs moderator authority. Application rollback never restores removed owner configuration and never replaces this recovery procedure; follow [the PostgreSQL rollout and rollback runbook](9-owner-moderator-rollout.md).
 
 ## Known Limitations / Follow-ups
 
-- Session-suspension trigger behavior is executed against SQLite, and exact PostgreSQL statements for migrations `012` and `013`, wall-clock expression, and row-lock serialization are contract-tested. Repository has no live PostgreSQL test harness, so these trigger migrations have not been executed against a live PostgreSQL server in automated verification.
+- Session-suspension and platform-audit trigger behavior is executed against SQLite, and exact PostgreSQL statements for migrations `012`, `013`, and `014` are contract-tested. Repository has no live PostgreSQL test harness, so PostgreSQL trigger execution, audit backfill, and owner reconciliation require the staging runbook before production approval.
 
 - **Email verification** is not wired up — it needs an actual email provider chosen and configured first; better-auth supports `emailVerification` natively once one exists.
 - **Thumbnails are stored as database blobs** (Postgres `bytea` / SQLite `BLOB`), not object storage. Fine at launch scale; the `/api/thumbnails/:id` indirection means moving to something like GCS later requires no client-side changes.

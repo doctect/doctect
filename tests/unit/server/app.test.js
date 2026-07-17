@@ -1,6 +1,5 @@
 // @vitest-environment node
 import { afterEach, describe, it, expect, beforeAll, vi } from 'vitest';
-import { readFile } from 'node:fs/promises';
 import request from 'supertest';
 import { initTestApp, TEST_PASSWORD, markVerified } from './helpers.js';
 
@@ -15,14 +14,6 @@ afterEach(async () => {
 });
 
 describe('app factory', () => {
-    it('does not retain active ADMIN_EMAILS promotion code', async () => {
-        const authSource = await readFile(new URL('../../../server/auth.js', import.meta.url), 'utf8');
-        const dbSource = await readFile(new URL('../../../server/db.js', import.meta.url), 'utf8');
-        expect(authSource).not.toContain('ADMIN_EMAILS');
-        expect(authSource).not.toContain('makeUserAdmin');
-        expect(dbSource).not.toContain('makeUserAdmin');
-    });
-
     it('tracks events', async () => {
         const res = await request(app).post('/api/track').send({ type: 'unit', payload: {} });
         expect(res.status).toBe(201);

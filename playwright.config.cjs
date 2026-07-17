@@ -1,5 +1,8 @@
 const { defineConfig, devices } = require('@playwright/test');
 
+const e2eOwnerEmail = process.env.E2E_OWNER_EMAIL || `owner-${Date.now()}-${process.pid}@test.dev`;
+process.env.E2E_OWNER_EMAIL = e2eOwnerEmail;
+
 /**
  * @see https://playwright.dev/docs/test-configuration
  */
@@ -58,6 +61,6 @@ module.exports = defineConfig({
         command: 'npm run dev',
         url: 'http://localhost:3000',
         reuseExistingServer: false,
-        env: { ...process.env, RESEND_API_KEY: '' },
+        env: { ...process.env, RESEND_API_KEY: '', OWNER_EMAILS: e2eOwnerEmail },
     },
 });

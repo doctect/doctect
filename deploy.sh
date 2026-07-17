@@ -70,9 +70,33 @@ if [ -z "$GOOGLE_CLIENT_SECRET" ]; then
     read -p "Enter your Google Client Secret: " GOOGLE_CLIENT_SECRET
 fi
 
-if [ -z "$ADMIN_EMAILS" ]; then
-    read -p "Enter Admin Emails (comma separated) for Cloud Run: " ADMIN_EMAILS
+if [ -z "${OWNER_EMAILS:-}" ]; then
+    read -r -p "Enter Owner Emails (comma separated) for Cloud Run: " OWNER_EMAILS
 fi
+
+# Match application normalization so whitespace-only/comma-only input fails before deployment.
+OWNER_EMAILS_NORMALIZED=""
+declare -A SEEN_OWNER_EMAILS=()
+IFS=',' read -r -a OWNER_EMAIL_CANDIDATES <<< "$OWNER_EMAILS"
+for OWNER_EMAIL_CANDIDATE in "${OWNER_EMAIL_CANDIDATES[@]}"; do
+    OWNER_EMAIL_CANDIDATE="${OWNER_EMAIL_CANDIDATE#"${OWNER_EMAIL_CANDIDATE%%[![:space:]]*}"}"
+    OWNER_EMAIL_CANDIDATE="${OWNER_EMAIL_CANDIDATE%"${OWNER_EMAIL_CANDIDATE##*[![:space:]]}"}"
+    OWNER_EMAIL_CANDIDATE="${OWNER_EMAIL_CANDIDATE,,}"
+    if [ -n "$OWNER_EMAIL_CANDIDATE" ] && [ -z "${SEEN_OWNER_EMAILS[$OWNER_EMAIL_CANDIDATE]+set}" ]; then
+        SEEN_OWNER_EMAILS[$OWNER_EMAIL_CANDIDATE]=1
+        if [ -n "$OWNER_EMAILS_NORMALIZED" ]; then
+            OWNER_EMAILS_NORMALIZED="${OWNER_EMAILS_NORMALIZED},${OWNER_EMAIL_CANDIDATE}"
+        else
+            OWNER_EMAILS_NORMALIZED="$OWNER_EMAIL_CANDIDATE"
+        fi
+    fi
+done
+if [ -z "$OWNER_EMAILS_NORMALIZED" ]; then
+    echo "ERROR: OWNER_EMAILS must contain at least one email after normalization." >&2
+    exit 1
+fi
+OWNER_EMAILS="$OWNER_EMAILS_NORMALIZED"
+echo "Recommendation: configure at least two owner addresses for recovery."
 
 if [ -z "$DATABASE_URL" ]; then
     read -p "Enter Database URL (Postgres/Neon) [Leave empty for local SQLite]: " DATABASE_URL
@@ -85,10 +109,10 @@ gcloud run deploy $APP_NAME \
   --allow-unauthenticated \
   --set-env-vars GOOGLE_CLIENT_ID=$GOOGLE_CLIENT_ID \
   --set-env-vars GOOGLE_CLIENT_SECRET=$GOOGLE_CLIENT_SECRET \
-  --set-env-vars ADMIN_EMAILS="$ADMIN_EMAILS" \
+  --set-env-vars "^;^OWNER_EMAILS=${OWNER_EMAILS}" \
   --set-env-vars DATABASE_URL="$DATABASE_URL" \
   --set-env-vars RESEND_API_KEY="$RESEND_API_KEY" \
-  --set-env-vars EMAIL_FROM="$EMAIL_FROM" \
+  --set-env-vars EMAIL_FROM="$EMAIL_FROM"
 # Get the deployed URL
 SERVICE_URL=$(gcloud run services describe $APP_NAME --platform managed --region $REGION --format 'value(status.url)')
 
@@ -129,7 +153,7 @@ gcloud run services update $APP_NAME \
   --set-env-vars TRUSTED_ORIGINS="$SAFE_TRUSTED_ORIGINS" \
   --set-env-vars GOOGLE_CLIENT_ID="$GOOGLE_CLIENT_ID" \
   --set-env-vars GOOGLE_CLIENT_SECRET="$GOOGLE_CLIENT_SECRET" \
-  --set-env-vars ADMIN_EMAILS="$ADMIN_EMAILS" \
+  --set-env-vars "^;^OWNER_EMAILS=${OWNER_EMAILS}" \
   --set-env-vars DATABASE_URL="$DATABASE_URL" \
   --set-env-vars RESEND_API_KEY="$RESEND_API_KEY" \
   --set-env-vars EMAIL_FROM="$EMAIL_FROM"

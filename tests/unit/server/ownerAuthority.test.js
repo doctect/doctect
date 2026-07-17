@@ -1,6 +1,12 @@
 // @vitest-environment node
+import fs from 'node:fs';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { initTestApp } from './helpers.js';
+
+const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 
 let assertOwnerConfiguration;
 let canModerateRole;
@@ -51,6 +57,54 @@ const insertSession = async userId => {
         VALUES ($1, $2, $3, $4, $5, $6)`,
     [`session-${userId}`, new Date(Date.now() + 3600000).toISOString(), `token-${userId}`, now, now, userId]);
 };
+
+describe('repository configuration', () => {
+    it('uses owner authority as the production root of trust', () => {
+        const readRepositoryFile = relativePath => fs.readFileSync(path.join(repositoryRoot, relativePath), 'utf8');
+        const retiredAdminVariable = ['ADMIN', 'EMAILS'].join('_');
+        const retiredAdminHelper = ['makeUser', 'Admin'].join('');
+        const activeFiles = [
+            '.env.example',
+            'deploy.sh',
+            'Dockerfile',
+            'README.md',
+            'docs/8-cloud-and-gallery.md',
+            'playwright.config.cjs',
+            'server/auth.js',
+            'server/db.js',
+            'tests/unit/server/helpers.js',
+        ].map(readRepositoryFile).join('\n');
+        const dockerfile = readRepositoryFile('Dockerfile');
+        const envExample = readRepositoryFile('.env.example');
+        const deployScript = readRepositoryFile('deploy.sh');
+        const playwrightConfig = readRepositoryFile('playwright.config.cjs');
+        const unitHelpers = readRepositoryFile('tests/unit/server/helpers.js');
+        const readme = readRepositoryFile('README.md');
+
+        expect(activeFiles).not.toContain(retiredAdminVariable);
+        expect(activeFiles).not.toContain(retiredAdminHelper);
+        const retiredAdminScript = ['make', 'admin.js'].join('_');
+        const activeRepositorySearch = spawnSync('git', [
+            'grep', '-n', '-E', `${retiredAdminVariable}|${retiredAdminHelper}|${retiredAdminScript}`,
+            '--', '.', ':!docs/superpowers/plans/**', ':!docs/superpowers/specs/**',
+        ], { cwd: repositoryRoot, encoding: 'utf8' });
+        expect(activeRepositorySearch.stderr).toBe('');
+        expect(activeRepositorySearch.stdout).toBe('');
+        expect(activeRepositorySearch.status).toBe(1);
+        expect(fs.existsSync(path.join(repositoryRoot, 'server/scripts', retiredAdminScript))).toBe(false);
+        expect(fs.existsSync(path.join(repositoryRoot, 'server/scripts/setup_db.js'))).toBe(false);
+        expect(dockerfile).toContain('ENV NODE_ENV=production');
+        expect(envExample).toContain('OWNER_EMAILS=owner@example.com,backup-owner@example.com');
+        expect(envExample).toMatch(/sole deployment-controlled owner root of trust/i);
+        expect(deployScript.match(/--set-env-vars "\^;\^OWNER_EMAILS=\$\{OWNER_EMAILS\}"/g)).toHaveLength(2);
+        expect(deployScript).toContain('OWNER_EMAILS_NORMALIZED');
+        expect(playwrightConfig).toContain('OWNER_EMAILS: e2eOwnerEmail');
+        expect(unitHelpers).toContain("process.env.OWNER_EMAILS = ''");
+        expect(readme).toContain('npm run server');
+        expect(readme).toContain('npm run dev');
+        expect(readme).toMatch(/migrations at startup/i);
+    });
+});
 
 describe('owner authority policy', () => {
     it('normalizes and deduplicates configured owner emails', () => {
