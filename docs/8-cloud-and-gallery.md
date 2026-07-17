@@ -120,6 +120,8 @@ Two independent edits that happen to produce byte-identical results are *not* fl
 | `POST /api/owner/users/:id/revoke-admin` | owner | Demote an admin, optionally suspend/unpublish, revoke sessions, and audit atomically |
 | `GET /api/owner/audit` | owner | Filter and page global immutable platform audit |
 
+Shared moderation routes protected by `requireAdmin` accept an `admin` or a currently configured `owner`. A stale stored `owner` absent from current `OWNER_EMAILS` is denied as an actor but remains protected as a moderation target.
+
 ## Environment Variables
 
 | Variable | Purpose |

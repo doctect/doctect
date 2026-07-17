@@ -18,11 +18,24 @@ gcloud services enable run.googleapis.com artifactregistry.googleapis.com
 
 # 2b. Create Artifact Registry Repository (if not exists)
 echo "Ensuring Artifact Registry repository exists..."
-gcloud artifacts repositories create "$REPO_NAME" \
-    --repository-format=docker \
+EXISTING_REPOSITORIES=$(gcloud artifacts repositories list \
     --location="$REGION" \
-    --description="Docker repository for Doctect" \
-    || echo "Repository $REPO_NAME likely already exists, skipping creation."
+    --format='value(name.basename())')
+REPOSITORY_EXISTS=false
+while IFS= read -r repository; do
+    if [ "$repository" = "$REPO_NAME" ]; then
+        REPOSITORY_EXISTS=true
+        break
+    fi
+done <<< "$EXISTING_REPOSITORIES"
+if [ "$REPOSITORY_EXISTS" = false ]; then
+    gcloud artifacts repositories create "$REPO_NAME" \
+        --repository-format=docker \
+        --location="$REGION" \
+        --description="Docker repository for Doctect"
+else
+    echo "Artifact Registry repository already exists."
+fi
 
 # 3. Authenticate Docker (Explicit Login for sudo)
 echo "Configuring Docker authentication..."
@@ -150,11 +163,21 @@ else
 fi
 
 # Step 1: Explicitly remove BETTER_AUTH_URL if it exists
-echo "Removing BETTER_AUTH_URL to allow dynamic domain inference..."
-gcloud run services update "$APP_NAME" \
+SERVICE_ENV_NAMES=$(gcloud run services describe "$APP_NAME" \
   --platform managed \
   --region "$REGION" \
-  --remove-env-vars BETTER_AUTH_URL || echo "BETTER_AUTH_URL was not present or could not be removed (ignoring)."
+  --format='value[delimiter=";"](spec.template.spec.containers[].env[].name)')
+SERVICE_ENV_NAMES="${SERVICE_ENV_NAMES//$'\n'/;}"
+case ";$SERVICE_ENV_NAMES;" in
+  *';BETTER_AUTH_URL;'*)
+    echo "Removing BETTER_AUTH_URL to allow dynamic domain inference..."
+    gcloud run services update "$APP_NAME" \
+      --platform managed \
+      --region "$REGION" \
+      --remove-env-vars BETTER_AUTH_URL
+    ;;
+  *) echo "BETTER_AUTH_URL is already absent." ;;
+esac
 
 # Step 2: Update all other environment variables
 echo "Updating environment variables..."

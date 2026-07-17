@@ -107,7 +107,9 @@ describe('repository configuration', () => {
         ]) {
             expect(deployScript).toContain(`${variable}="\${${variable}:-}"`);
         }
-        expect(deployScript.match(/\|\| echo/g)).toHaveLength(2);
+        expect(deployScript).not.toContain('|| echo');
+        expect(deployScript).toContain('gcloud artifacts repositories list');
+        expect(deployScript).toContain('spec.template.spec.containers[].env[].name');
         expect(deployScript).toContain('gcloud config set project "$PROJECT_ID"');
         expect(deployScript).toContain('sudo docker build -t "${APP_NAME}:latest" .');
         expect(deployScript).toContain('sudo docker push "$IMAGE_URI"');
@@ -120,6 +122,7 @@ describe('repository configuration', () => {
         expect(readme).toContain('npm run dev');
         expect(readme).toMatch(/migrations at startup/i);
         expect(cloudDocs).toContain('actor kind `system`, null actor user ID, actor label `OWNER_EMAILS reconciliation`, and fixed reason `Synchronize account role with OWNER_EMAILS configuration`');
+        expect(cloudDocs).toContain('Shared moderation routes protected by `requireAdmin` accept an `admin` or a currently configured `owner`. A stale stored `owner` absent from current `OWNER_EMAILS` is denied as an actor but remains protected as a moderation target.');
         expect(rolloutRunbook).toContain('changed_sessions_zero');
         expect(rolloutRunbook).toContain('DISPOSABLE_ADMIN_EMAIL');
         expect(rolloutRunbook).toContain('Expected at least one matching `admin_demoted` action');
