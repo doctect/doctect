@@ -214,6 +214,32 @@ const titleBlock = (templateId, title = '{{title}}', subtitle = '{{subtitle}}') 
   }),
 ];
 
+const navChips = (templateId, { prev = true, next = true } = {}) => {
+  const chips = [];
+  if (prev) {
+    chips.push(text(templateId, 'nav_prev', 31, 44, 90, 24, '{{nav_prev_label}}', {
+      dataBinding: 'nav_prev_label',
+      fontSize: 9,
+      fontWeight: 'bold',
+      textColor: COLORS.brass,
+      linkTarget: 'sibling',
+      linkValue: '-1',
+    }));
+  }
+  if (next) {
+    chips.push(text(templateId, 'nav_next', 391, 44, 90, 24, '{{nav_next_label}}', {
+      dataBinding: 'nav_next_label',
+      fontSize: 9,
+      fontWeight: 'bold',
+      textColor: COLORS.brass,
+      align: 'right',
+      linkTarget: 'sibling',
+      linkValue: '1',
+    }));
+  }
+  return chips;
+};
+
 const coverElements = [
   rect('cover', 'paper', 0, 0, W, H, COLORS.cream),
   rect('cover', 'forest_field', 0, 0, 226, H, COLORS.forest),
@@ -457,6 +483,7 @@ const monthElements = [
     linkTarget: 'child_index',
     linkValue: '0',
   }),
+  ...navChips('month'),
 ];
 
 const transactionRows = Array.from({ length: 8 }, (_, index) => {
@@ -475,14 +502,15 @@ const transactionElements = [
   ...staticTable('transactions', 31, 190, [69, 190, 100, 91], 40,
     ['DATE', 'DESCRIPTION', 'CATEGORY', 'AMOUNT'], transactionRows,
     ['left', 'left', 'left', 'right']),
-  text('transactions', 'continue', 329, 574, 152, 34, 'NEXT LOG / REVIEW', {
+  text('transactions', 'continue', 329, 574, 152, 34, '{{continue_label}}', {
+    dataBinding: 'continue_label',
     fontSize: 9,
     fontWeight: 'bold',
     textColor: COLORS.cream,
     fill: COLORS.forest,
     align: 'center',
-    linkTarget: 'child_index',
-    linkValue: '0',
+    linkTarget: 'sibling',
+    linkValue: '1',
   }),
 ];
 
@@ -511,6 +539,7 @@ const categoryElements = [
     fontSize: 10,
     verticalAlign: 'top',
   }),
+  ...navChips('category_review', { next: false }),
 ];
 
 const sinkingRows = Array.from({ length: 6 }, (_, index) => {
@@ -540,6 +569,7 @@ const sinkingElements = [
     fill: COLORS.brassPale,
     align: 'center',
   }),
+  ...navChips('sinking_funds'),
 ];
 
 const goalRows = Array.from({ length: 5 }, (_, index) => {
@@ -589,6 +619,7 @@ const goalElements = [
     fontStyle: 'italic',
     fill: COLORS.paper,
   }),
+  ...navChips('goal'),
 ];
 
 const reviewRows = [
@@ -648,6 +679,7 @@ const yearReviewElements = [
     fontStyle: 'italic',
     fill: COLORS.brassPale,
   }),
+  ...navChips('year_review'),
 ];
 
 const template = (id, name, elements) => ({ id, name, width: W, height: H, elements });

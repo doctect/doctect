@@ -193,6 +193,7 @@ describe('Personal Finance Planner gallery sample', () => {
             'category_housing', 'category_food', 'category_transport',
             'category_leisure', 'category_savings', 'category_other',
             'review_lens_income', 'review_lens_spending', 'review_lens_savings', 'review_lens_debt',
+            'nav_prev_label', 'nav_next_label', 'continue_label',
         ]);
         const unboundSummaryFields = new Set(['housing', 'food', 'transport', 'leisure', 'savings']);
 
@@ -215,29 +216,52 @@ describe('Personal Finance Planner gallery sample', () => {
         });
     });
 
-    it('resolves month-to-transaction-to-review workflow and annual sections', () => {
+    it('resolves flat month workflow, annual sections, and sequence navigation', () => {
         const sample = loadGallerySample(contract.slug);
         const openLog = findRole(sample, 'month', 'open_log');
         const continueLink = findRole(sample, 'transactions', 'continue');
+        const reviewPrev = findRole(sample, 'category_review', 'nav_prev');
+        const monthPrev = findRole(sample, 'month', 'nav_prev');
+        const monthNext = findRole(sample, 'month', 'nav_next');
         const annualChildren = sample.nodes.blank_annual.children.map((id: string) => sample.nodes[id]);
 
         expect(openLog).toMatchObject({ linkTarget: 'child_index', linkValue: '0' });
-        expect(continueLink).toMatchObject({ linkTarget: 'child_index', linkValue: '0' });
+        expect(continueLink).toMatchObject({
+            linkTarget: 'sibling', linkValue: '1', dataBinding: 'continue_label',
+        });
+        expect(reviewPrev).toMatchObject({
+            linkTarget: 'sibling', linkValue: '-1', dataBinding: 'nav_prev_label',
+        });
+        expect(monthPrev).toMatchObject({ linkTarget: 'sibling', linkValue: '-1', dataBinding: 'nav_prev_label' });
+        expect(monthNext).toMatchObject({ linkTarget: 'sibling', linkValue: '1', dataBinding: 'nav_next_label' });
         expect(annualChildren.filter((node: any) => node.type === 'month')).toHaveLength(12);
         expect(annualChildren.filter((node: any) => node.type === 'sinking_funds')).toHaveLength(1);
         expect(annualChildren.filter((node: any) => node.type === 'goal')).toHaveLength(4);
         expect(annualChildren.filter((node: any) => node.type === 'year_review')).toHaveLength(1);
 
         annualChildren.filter((node: any) => node.type === 'month').forEach((month: any) => {
-            let current = sample.nodes[month.children[0]];
-            let transactionCount = 0;
-            while (current.type === 'transactions') {
-                transactionCount += 1;
-                current = sample.nodes[current.children[0]];
-            }
-            expect(transactionCount, month.id).toBe(2);
-            expect(current.type, month.id).toBe('category_review');
+            const children = month.children.map((id: string) => sample.nodes[id]);
+            expect(children.map((child: any) => child.type), month.id)
+                .toEqual(['transactions', 'transactions', 'category_review']);
+            expect(children[0].data.continue_label, month.id).toBe('LOG 02 »');
+            expect(children[1].data.continue_label, month.id).toBe('REVIEW »');
+            expect(children[2].data.nav_prev_label, month.id).toBe('« LOG 02');
         });
+
+        const months = annualChildren.filter((node: any) => node.type === 'month');
+        expect(months[0].data.nav_prev_label).toBe('');
+        expect(months[0].data.nav_next_label).toBe('FEB »');
+        expect(months[11].data.nav_prev_label).toBe('« NOV');
+        expect(months[11].data.nav_next_label).toBe('BILLS »');
+        expect(sample.nodes.blank_sinking_funds.data.nav_prev_label).toBe('« DEC');
+        expect(sample.nodes.blank_sinking_funds.data.nav_next_label).toBe('GOAL 01 »');
+        expect(sample.nodes.blank_goal_01.data.nav_prev_label).toBe('« FUNDS');
+        expect(sample.nodes.blank_goal_04.data.nav_next_label).toBe('YEAR REVIEW »');
+        expect(sample.nodes.blank_year_review.data.nav_prev_label).toBe('« GOAL 04');
+        expect(sample.nodes.blank_year_review.data.nav_next_label).toBe('');
+        expect(sample.nodes.example_january.data.nav_next_label).toBe('FUNDS »');
+        expect(sample.nodes.example_transactions.data.continue_label).toBe('REVIEW »');
+        expect(sample.nodes.example_category_review.data.nav_prev_label).toBe('« LOG 01');
     });
 
     it('uses abstract ring-and-path artwork without currency-brand imagery', () => {

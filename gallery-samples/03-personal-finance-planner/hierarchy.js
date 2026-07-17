@@ -151,6 +151,8 @@ addNode('example_january', 'example_annual', 'month', 'January Plan | Fictional 
   planned_leisure: '$240', actual_leisure: '$268', difference_leisure: '-$28',
   planned_savings: '$900', actual_savings: '$900', difference_savings: '$0',
   planned_other: '$530', actual_other: '$487', difference_other: '+$43',
+  nav_prev_label: '',
+  nav_next_label: 'FUNDS »',
 }, { example: true });
 addNode('example_transactions', 'example_january', 'transactions', 'January Transactions | Fictional', {
   subtitle: 'Fictional entries | January transaction sheet',
@@ -162,8 +164,9 @@ addNode('example_transactions', 'example_january', 'transactions', 'January Tran
   date_6: 'Jan 16', description_6: 'Dinner with friends', category_6: 'Leisure', amount_6: '$74.20',
   date_7: 'Jan 22', description_7: 'Grocer and market', category_7: 'Food', amount_7: '$118.72',
   date_8: 'Jan 28', description_8: 'Travel fund transfer', category_8: 'Savings', amount_8: '$400.00',
+  continue_label: 'REVIEW »',
 }, { example: true });
-addNode('example_category_review', 'example_transactions', 'category_review', 'January Category Review | Fictional', {
+addNode('example_category_review', 'example_january', 'category_review', 'January Category Review | Fictional', {
   subtitle: 'Fictional January | A calm comparison of plan and actual',
   ...categoryNames,
   planned_housing: '$1,650', actual_housing: '$1,650', difference_housing: '$0',
@@ -173,6 +176,7 @@ addNode('example_category_review', 'example_transactions', 'category_review', 'J
   planned_savings: '$900', actual_savings: '$900', difference_savings: '$0',
   planned_other: '$530', actual_other: '$487', difference_other: '+$43',
   reflection: 'Keep the automatic savings transfers. Add a little more room for social meals in February.',
+  nav_prev_label: '« LOG 01',
 }, { example: true });
 addNode('example_sinking_funds', 'example_annual', 'sinking_funds', 'Sinking Funds | Fictional', {
   subtitle: 'Fictional allocations for known future costs',
@@ -183,6 +187,8 @@ addNode('example_sinking_funds', 'example_annual', 'sinking_funds', 'Sinking Fun
   fund_5: 'Gifts', target_5: '$500', saved_5: '$90', next_5: '$40',
   fund_6: 'Technology', target_6: '$800', saved_6: '$180', next_6: '$50',
   next_check: 'Review transfers on the final Sunday of February.',
+  nav_prev_label: '« JAN',
+  nav_next_label: 'GOAL 01 »',
 }, { example: true });
 addNode('example_goal', 'example_annual', 'goal', 'Emergency Fund Goal | Fictional', {
   subtitle: 'Fictional savings goal | Steady progress over dramatic changes',
@@ -194,6 +200,8 @@ addNode('example_goal', 'example_annual', 'goal', 'Emergency Fund Goal | Fiction
   milestone_3: 'Two months', target_3: '$8,000', saved_3: '', next_3: '',
   milestone_4: 'Ten thousand', target_4: '$10,000', saved_4: '', next_4: '',
   milestone_5: 'Fully funded', target_5: '$12,000', saved_5: '', next_5: '',
+  nav_prev_label: '« FUNDS',
+  nav_next_label: 'YEAR REVIEW »',
 }, { example: true });
 addNode('example_year_review', 'example_annual', 'year_review', 'Year Review | Fictional Preview', {
   subtitle: 'Fictional preview | Revisit after twelve completed months',
@@ -204,6 +212,8 @@ addNode('example_year_review', 'example_annual', 'year_review', 'Year Review | F
   wins: 'Automatic transfers started before discretionary spending.',
   lesson: 'Category limits work better when they include realistic flexibility.',
   reflection: 'Keep savings automatic and review category assumptions quarterly.',
+  nav_prev_label: '« GOAL 01',
+  nav_next_label: '',
 }, { example: true });
 
 addNode('blank_workspace', 'start_here', 'workspace', 'Blank Money Workspace', {
@@ -221,26 +231,44 @@ const months = [
   'July', 'August', 'September', 'October', 'November', 'December',
 ];
 
+const monthShorts = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+
 months.forEach((month, monthIndex) => {
   const monthNumber = String(monthIndex + 1).padStart(2, '0');
   const monthId = `blank_month_${monthNumber}`;
-  addNode(monthId, 'blank_annual', 'month', month, blankMonthData(month));
+  addNode(monthId, 'blank_annual', 'month', month, {
+    ...blankMonthData(month),
+    nav_prev_label: monthIndex === 0 ? '' : `« ${monthShorts[monthIndex - 1]}`,
+    nav_next_label: monthIndex === 11 ? 'BILLS »' : `${monthShorts[monthIndex + 1]} »`,
+  });
 
-  let parentId = monthId;
-  for (let page = 1; page <= CONFIG.transactionPagesPerMonth; page += 1) {
+  const pages = CONFIG.transactionPagesPerMonth;
+  for (let page = 1; page <= pages; page += 1) {
     const pageNumber = String(page).padStart(2, '0');
-    const transactionId = `${monthId}_transactions_${pageNumber}`;
-    addNode(transactionId, parentId, 'transactions', `${month} Transactions ${pageNumber}`, blankTransactionData(month, page));
-    parentId = transactionId;
+    addNode(`${monthId}_transactions_${pageNumber}`, monthId, 'transactions', `${month} Transactions ${pageNumber}`, {
+      ...blankTransactionData(month, page),
+      continue_label: page < pages ? `LOG ${String(page + 1).padStart(2, '0')} »` : 'REVIEW »',
+    });
   }
-  addNode(`${monthId}_category_review`, parentId, 'category_review', `${month} Category Review`, blankCategoryData(month));
+  addNode(`${monthId}_category_review`, monthId, 'category_review', `${month} Category Review`, {
+    ...blankCategoryData(month),
+    nav_prev_label: `« LOG ${String(pages).padStart(2, '0')}`,
+  });
 });
 
-addNode('blank_sinking_funds', 'blank_annual', 'sinking_funds', 'My Sinking Funds', blankSinkingData());
+addNode('blank_sinking_funds', 'blank_annual', 'sinking_funds', 'My Sinking Funds', {
+  ...blankSinkingData(),
+  nav_prev_label: '« DEC',
+  nav_next_label: 'GOAL 01 »',
+});
 
 for (let goal = 1; goal <= CONFIG.goalCount; goal += 1) {
   const goalNumber = String(goal).padStart(2, '0');
-  addNode(`blank_goal_${goalNumber}`, 'blank_annual', 'goal', `Goal ${goalNumber}`, blankGoalData());
+  addNode(`blank_goal_${goalNumber}`, 'blank_annual', 'goal', `Goal ${goalNumber}`, {
+    ...blankGoalData(),
+    nav_prev_label: goal === 1 ? '« FUNDS' : `« GOAL ${String(goal - 1).padStart(2, '0')}`,
+    nav_next_label: goal === CONFIG.goalCount ? 'YEAR REVIEW »' : `GOAL ${String(goal + 1).padStart(2, '0')} »`,
+  });
 }
 
 addNode('blank_year_review', 'blank_annual', 'year_review', 'My Year Review', {
@@ -250,6 +278,8 @@ addNode('blank_year_review', 'blank_annual', 'year_review', 'My Year Review', {
   review_lens_savings: 'Savings', planned_savings: '', actual_savings: '',
   review_lens_debt: 'Debt reduction', planned_debt: '', actual_debt: '',
   wins: '', lesson: '', reflection: '',
+  nav_prev_label: `« GOAL ${String(CONFIG.goalCount).padStart(2, '0')}`,
+  nav_next_label: '',
 });
 
 return { nodes, rootId: 'root' };
