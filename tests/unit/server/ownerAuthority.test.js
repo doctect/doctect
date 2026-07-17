@@ -33,6 +33,7 @@ afterEach(async () => {
     if (originalOwnerEmails === undefined) delete process.env.OWNER_EMAILS;
     else process.env.OWNER_EMAILS = originalOwnerEmails;
     await query('DROP TRIGGER IF EXISTS fail_owner_reconciliation_audit');
+    await query('DROP TRIGGER IF EXISTS fail_second_owner_reconciliation_audit');
 });
 
 const insertUser = async ({ id, email, role, moderationVersion = 0 }) => {
@@ -192,5 +193,36 @@ describe('owner authority reconciliation', () => {
         expect(await query('SELECT id FROM session WHERE "userId" = $1', [user.id])).toEqual(beforeSessions);
         expect(await query('SELECT id FROM platform_audit_actions WHERE target_user_id = $1', [user.id]))
             .toEqual([]);
+    });
+
+    it('rolls back every user when the second full-reconciliation audit fails', async () => {
+        const users = [
+            { id: '00-reconcile-batch-a', email: 'batch-a@test.dev', role: 'user', moderationVersion: 10 },
+            { id: '00-reconcile-batch-b', email: 'batch-b@test.dev', role: 'admin', moderationVersion: 20 },
+        ];
+        for (const user of users) {
+            await insertUser(user);
+            await insertSession(user.id);
+        }
+        process.env.OWNER_EMAILS = users.map(user => user.email).join(',');
+        const beforeUsers = await query(`SELECT id, role, "moderationVersion", "updatedAt" FROM "user"
+            WHERE id IN ($1, $2) ORDER BY id`, users.map(user => user.id));
+        const beforeSessions = await query(`SELECT id, "userId" FROM session
+            WHERE "userId" IN ($1, $2) ORDER BY id`, users.map(user => user.id));
+        const beforeAudits = await query('SELECT * FROM platform_audit_actions ORDER BY id');
+        await query(`CREATE TRIGGER fail_second_owner_reconciliation_audit
+            BEFORE INSERT ON platform_audit_actions
+            WHEN NEW.target_user_id LIKE '00-reconcile-batch-%'
+                AND (SELECT COUNT(*) FROM platform_audit_actions
+                    WHERE target_user_id LIKE '00-reconcile-batch-%') = 1
+            BEGIN SELECT RAISE(ABORT, 'injected second owner audit failure'); END`);
+
+        await expect(reconcileOwnerAuthority()).rejects.toThrow('injected second owner audit failure');
+
+        expect(await query(`SELECT id, role, "moderationVersion", "updatedAt" FROM "user"
+            WHERE id IN ($1, $2) ORDER BY id`, users.map(user => user.id))).toEqual(beforeUsers);
+        expect(await query(`SELECT id, "userId" FROM session
+            WHERE "userId" IN ($1, $2) ORDER BY id`, users.map(user => user.id))).toEqual(beforeSessions);
+        expect(await query('SELECT * FROM platform_audit_actions ORDER BY id')).toEqual(beforeAudits);
     });
 });

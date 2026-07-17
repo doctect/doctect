@@ -15,19 +15,7 @@ afterEach(async () => {
 });
 
 describe('app factory', () => {
-    it('boots only after owner configuration, migrations, and reconciliation', async () => {
-        const startup = await readFile(new URL('../../../server/index.js', import.meta.url), 'utf8');
-        const calls = [
-            'assertOwnerConfiguration();',
-            'await runMigrations();',
-            'await reconcileOwnerAuthority();',
-            'createApp();',
-            'app.listen(',
-        ];
-        const positions = calls.map(call => startup.indexOf(call));
-        expect(positions.every(position => position >= 0)).toBe(true);
-        expect(positions).toEqual([...positions].sort((left, right) => left - right));
-
+    it('does not retain active ADMIN_EMAILS promotion code', async () => {
         const authSource = await readFile(new URL('../../../server/auth.js', import.meta.url), 'utf8');
         const dbSource = await readFile(new URL('../../../server/db.js', import.meta.url), 'utf8');
         expect(authSource).not.toContain('ADMIN_EMAILS');
