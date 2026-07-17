@@ -33,23 +33,41 @@ export const verifyUserByEmail = async (email) => {
     await query('UPDATE "user" SET "emailVerified" = $1 WHERE email = $2', [verified, email]);
 };
 
-export const promoteUserToAdmin = async (email) => {
-    const users = await query(
-        `UPDATE "user" SET role = 'admin' WHERE email = $1 RETURNING id, email, role`,
-        [email],
+export const platformAuditActionsForTargets = async emails => {
+    const placeholders = emails.map((_, index) => `$${index + 1}`).join(', ');
+    const rows = await query(
+        `SELECT actor_kind, actor_email, target_email, action, reason, project_id, metadata_json
+         FROM platform_audit_actions
+         WHERE target_email IN (${placeholders})
+         ORDER BY created_at,
+           CASE action
+             WHEN 'owner_granted' THEN 1
+             WHEN 'admin_promoted' THEN 2
+             WHEN 'admin_demoted' THEN 3
+             WHEN 'account_suspended' THEN 4
+             WHEN 'project_unpublished' THEN 5
+             WHEN 'account_restored' THEN 6
+             ELSE 7
+           END,
+           id`,
+        emails,
     );
-    if (users.length !== 1 || users[0].role !== 'admin') {
-        throw new Error(`admin promotion failed for ${email}`);
-    }
+    return rows.map(({ metadata_json: metadata, ...row }) => ({
+        ...row,
+        metadata: typeof metadata === 'string' ? JSON.parse(metadata) : metadata,
+    }));
 };
 
-export const moderationActionsForTarget = email => query(
-    `SELECT action, reason, project_id
-     FROM moderation_actions
-     WHERE target_email = $1
-     ORDER BY action`,
-    [email],
-);
+export const legacyModerationActionsForReasons = reasons => {
+    const placeholders = reasons.map((_, index) => `$${index + 1}`).join(', ');
+    return query(
+        `SELECT action, reason, project_id
+         FROM moderation_actions
+         WHERE reason IN (${placeholders})
+         ORDER BY created_at, id`,
+        reasons,
+    );
+};
 
 // Signs up through the real /login UI form, then completes verification out
 // of band (DB write above) and finishes by actually signing in through the
