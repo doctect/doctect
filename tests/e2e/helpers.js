@@ -69,6 +69,42 @@ export const legacyModerationActionsForReasons = reasons => {
     );
 };
 
+export const ensureConfiguredOwner = async (
+    requestContext,
+    apiBase,
+    { email, password = TEST_PASSWORD, name, username },
+) => {
+    const signUpRes = await requestContext.post(`${apiBase}/api/auth/sign-up/email`, {
+        data: { email, password, name, username },
+    });
+    const created = signUpRes.ok();
+    if (created) {
+        await verifyUserByEmail(email);
+    } else {
+        const errorText = await signUpRes.text();
+        let code;
+        try { code = JSON.parse(errorText).code; } catch { /* Preserve response in thrown error. */ }
+        if (signUpRes.status() !== 422 || code !== 'USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL') {
+            throw new Error(`owner sign-up failed: ${signUpRes.status()} ${errorText}`);
+        }
+    }
+
+    const signInRes = await requestContext.post(`${apiBase}/api/auth/sign-in/email`, {
+        data: { email, password },
+    });
+    if (!signInRes.ok()) {
+        throw new Error(`owner sign-in failed: ${signInRes.status()} ${await signInRes.text()}`);
+    }
+
+    const meRes = await requestContext.get(`${apiBase}/api/me`);
+    if (!meRes.ok()) throw new Error(`owner identity failed: ${meRes.status()} ${await meRes.text()}`);
+    const user = (await meRes.json()).user;
+    if (user?.email?.toLowerCase() !== email.toLowerCase() || user.role !== 'owner') {
+        throw new Error(`configured owner authority missing for ${email}`);
+    }
+    return { created, user };
+};
+
 // Signs up through the real /login UI form, then completes verification out
 // of band (DB write above) and finishes by actually signing in through the
 // same form -- email/password state survives the "Back" click and the

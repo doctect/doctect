@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import {
     apiSignUpAndVerify,
+    ensureConfiguredOwner,
     legacyModerationActionsForReasons,
     platformAuditActionsForTargets,
     TEST_PASSWORD,
@@ -47,21 +48,25 @@ test('configured owner manages the full moderator authority lifecycle', async ({
 
     try {
         const ownerSignupContext = await newContext();
-        await apiSignUpAndVerify(ownerSignupContext.request, API_BASE, {
+        const firstOwnerSetup = await ensureConfiguredOwner(ownerSignupContext.request, API_BASE, {
             email: ownerEmail,
             password: TEST_PASSWORD,
             name: 'Configured Owner',
             username: `owner_${unique}`,
         });
+        expect(firstOwnerSetup.user).toMatchObject({ email: ownerEmail, role: 'owner' });
         const reconciledOwner = await ownerSignupContext.request.get(`${API_BASE}/api/me`);
         expect(reconciledOwner.status(), await reconciledOwner.text()).toBe(200);
         expect((await reconciledOwner.json()).user).toMatchObject({ email: ownerEmail, role: 'owner' });
 
         const ownerContext = await newContext();
-        const ownerSignIn = await ownerContext.request.post(`${API_BASE}/api/auth/sign-in/email`, {
-            data: { email: ownerEmail, password: TEST_PASSWORD },
+        const retryOwnerSetup = await ensureConfiguredOwner(ownerContext.request, API_BASE, {
+            email: ownerEmail,
+            password: TEST_PASSWORD,
+            name: 'Configured Owner',
+            username: `owner_retry_${unique}`,
         });
-        expect(ownerSignIn.status(), await ownerSignIn.text()).toBe(200);
+        expect(retryOwnerSetup).toMatchObject({ created: false, user: { email: ownerEmail, role: 'owner' } });
         const ownerIdentity = await ownerContext.request.get(`${API_BASE}/api/me`);
         expect(ownerIdentity.status(), await ownerIdentity.text()).toBe(200);
         expect((await ownerIdentity.json()).user).toMatchObject({ email: ownerEmail, role: 'owner' });
