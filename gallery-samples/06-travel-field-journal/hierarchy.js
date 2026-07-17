@@ -103,6 +103,29 @@ const expenseData = (values = {}) => {
   return { ...data, ...values };
 };
 
+const tastesData = (values = {}) => {
+  const data = {
+    subtitle: 'Tastes, objects, and small finds worth remembering precisely.',
+    menu_label: 'TASTES',
+    best_bite: '',
+  };
+  for (let row = 1; row <= 6; row += 1) {
+    data[`where_${row}`] = '';
+    data[`dish_${row}`] = '';
+  }
+  return { ...data, ...values };
+};
+
+const sketchesData = (values = {}) => ({
+  subtitle: 'Four open frames for drawings, tickets, and glued-in scraps.',
+  menu_label: 'SKETCHES',
+  caption_1: '',
+  caption_2: '',
+  caption_3: '',
+  caption_4: '',
+  ...values,
+});
+
 const highlightsData = (values = {}) => ({
   subtitle: 'Close the route by choosing details worth carrying into ordinary days.',
   menu_label: 'HIGHLIGHTS',
@@ -230,6 +253,20 @@ addNode('example_expenses', 'example_trip_lisbon', 'expenses', 'Lisbon Expense S
   expense_note: 'Example categories only; amounts intentionally omitted rather than presenting invented prices as current guidance.',
 }), { example: true });
 
+addNode('example_tastes', 'example_trip_lisbon', 'tastes', 'Lisbon | Tastes & Finds', tastesData({
+  where_1: 'Bakery window, Alfama lane', dish_1: 'Warm custard pastry, extra cinnamon',
+  where_2: 'Market counter, Baixa', dish_2: 'Grilled sardines with lemon',
+  where_3: 'Corner kiosk by the river', dish_3: 'Bitter espresso, ceramic cup kept cool',
+  best_bite: 'The pastry — order two immediately, regret nothing.',
+}), { example: true });
+
+addNode('example_sketches', 'example_trip_lisbon', 'sketches', 'Lisbon | Tickets & Sketches', sketchesData({
+  caption_1: 'Tram ticket, morning ride west',
+  caption_2: 'Tile pattern from an Alfama doorway',
+  caption_3: 'Ferry deck rail at dusk',
+  caption_4: 'Bookshop shelf that leaned like the street',
+}), { example: true });
+
 addNode('example_highlights', 'example_trip_lisbon', 'highlights', 'Lisbon | What Remains', highlightsData({
   highlight_1: 'The ferry deck at the edge of evening.',
   highlight_2: 'Warm pastry, bitter coffee, salt in the river air.',
@@ -277,6 +314,8 @@ for (let tripNumber = 1; tripNumber <= CONFIG.tripCount; tripNumber += 1) {
 
   addNode(`${prefix}_packing`, prefix, 'packing', `Journey ${tripLabel} | Packing`, packingData());
   addNode(`${prefix}_expenses`, prefix, 'expenses', `Journey ${tripLabel} | Expenses`, expenseData());
+  addNode(`${prefix}_tastes`, prefix, 'tastes', `Journey ${tripLabel} | Tastes & Finds`, tastesData());
+  addNode(`${prefix}_sketches`, prefix, 'sketches', `Journey ${tripLabel} | Tickets & Sketches`, sketchesData());
   addNode(`${prefix}_highlights`, prefix, 'highlights', `Journey ${tripLabel} | Highlights`, highlightsData());
 }
 

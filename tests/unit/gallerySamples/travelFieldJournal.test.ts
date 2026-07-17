@@ -13,9 +13,9 @@ const contract: GallerySampleContract = {
     slug: '06-travel-field-journal',
     expectedTemplateIds: [
         'cover', 'start', 'workspace', 'trip', 'reservations', 'reservation',
-        'itinerary', 'day', 'packing', 'expenses', 'highlights',
+        'itinerary', 'day', 'packing', 'expenses', 'tastes', 'sketches', 'highlights',
     ],
-    pageCount: [45, 70],
+    pageCount: [50, 78],
     palette: ['#356f66', '#b46148', '#eadbc2'],
     requiredStableNodeIds: ['root', 'start_here', 'example_workspace', 'blank_workspace'],
 };
@@ -30,7 +30,7 @@ describe('Travel Field Journal gallery sample', () => {
     it('generates linked planning and field-note sections', () => {
         const sample = expectValidGallerySample(contract.slug, contract);
 
-        expect(exportedPageCount(sample)).toBe(55);
+        expect(exportedPageCount(sample)).toBe(63);
         expect(Object.values(sample.nodes).filter((node: any) =>
             node.id.startsWith('blank_trip_') && node.type === 'trip',
         )).toHaveLength(3);
@@ -43,8 +43,8 @@ describe('Travel Field Journal gallery sample', () => {
             reservationsPerTrip: 0,
         });
 
-        expect(validateGallerySample(sample, { ...contract, pageCount: [15, 30] })).toEqual([]);
-        expect(exportedPageCount(sample)).toBe(23);
+        expect(validateGallerySample(sample, { ...contract, pageCount: [20, 35] })).toEqual([]);
+        expect(exportedPageCount(sample)).toBe(27);
         expect(sample.nodes.blank_trip_01_reservations.children).toEqual([]);
         expect(sample.nodes.blank_trip_01.children).toContain('blank_trip_01_reservations');
         expect(sample.nodes.blank_trip_01_reservations.data.empty_state).toMatch(/no reservations yet/i);
@@ -57,8 +57,8 @@ describe('Travel Field Journal gallery sample', () => {
             reservationsPerTrip: 8,
         });
 
-        expect(validateGallerySample(sample, { ...contract, pageCount: [220, 235] })).toEqual([]);
-        expect(exportedPageCount(sample)).toBe(226);
+        expect(validateGallerySample(sample, { ...contract, pageCount: [235, 245] })).toEqual([]);
+        expect(exportedPageCount(sample)).toBe(240);
         expect(sample.nodes.blank_workspace.children).toHaveLength(6);
 
         const terminalTrip = sample.nodes.blank_trip_06;
@@ -73,6 +73,8 @@ describe('Travel Field Journal gallery sample', () => {
             'blank_trip_06_itinerary',
             'blank_trip_06_packing',
             'blank_trip_06_expenses',
+            'blank_trip_06_tastes',
+            'blank_trip_06_sketches',
             'blank_trip_06_highlights',
         ]);
 
@@ -168,6 +170,8 @@ describe('Travel Field Journal gallery sample', () => {
                 `${prefix}_itinerary`,
                 `${prefix}_packing`,
                 `${prefix}_expenses`,
+                `${prefix}_tastes`,
+                `${prefix}_sketches`,
                 `${prefix}_highlights`,
             ]);
             sample.nodes[prefix].children.forEach((destinationId: string) => {
@@ -191,12 +195,12 @@ describe('Travel Field Journal gallery sample', () => {
             expect(node.data.skip_label, id).toBe('Skip to blank workspace →');
             pending.push(...node.children);
         }
-        expect(visited.size).toBe(13);
+        expect(visited.size).toBe(15);
     });
 
     it('keeps blank writable data clean', () => {
         const sample = loadGallerySample(contract.slug);
-        const writable = /^(destination|dates|base|travel_note|kind|provider|address|arrival|departure|booking_reference|contact|notes|date_label|timeline|field_notes|weather|moment|pack_\d+|day_\d+|item_\d+|amount_\d+|category_\d+|expense_note|highlight_\d+|bring_home|next_time)$/;
+        const writable = /^(destination|dates|base|travel_note|kind|provider|address|arrival|departure|booking_reference|contact|notes|date_label|timeline|field_notes|weather|moment|pack_\d+|day_\d+|item_\d+|amount_\d+|category_\d+|expense_note|highlight_\d+|bring_home|next_time|where_\d+|dish_\d+|best_bite|caption_\d+)$/;
 
         Object.values(sample.nodes)
             .filter((node: any) => node.id.startsWith('blank_'))
@@ -232,7 +236,7 @@ describe('Travel Field Journal gallery sample', () => {
     it('provides PDF-visible writing regions and intentional non-doubled grids', () => {
         const sample = loadGallerySample(contract.slug);
 
-        ['day', 'packing', 'expenses', 'highlights'].forEach(templateId => {
+        ['day', 'packing', 'expenses', 'tastes', 'sketches', 'highlights'].forEach(templateId => {
             const writingRegions = sample.templates[templateId].elements.filter((element: any) =>
                 element.type === 'rect' && element.id.includes('_writing_'),
             );
@@ -344,5 +348,35 @@ describe('Travel Field Journal gallery sample', () => {
         ticks.forEach((tick: any) => {
             expect(tick).toMatchObject({ w: 13, h: 13, fill: '#fffaf1', stroke: '#356f66', strokeWidth: 0.8 });
         });
+    });
+
+    it('adds tastes and sketches pages to every trip', () => {
+        const sample = loadGallerySample(contract.slug);
+
+        expect(sample.nodes.blank_trip_01_tastes).toMatchObject({ type: 'tastes', parentId: 'blank_trip_01' });
+        expect(sample.nodes.blank_trip_01_sketches).toMatchObject({ type: 'sketches', parentId: 'blank_trip_01' });
+        expect(sample.nodes.example_tastes.data.where_1).toContain('Alfama');
+        expect(sample.nodes.example_sketches.data.caption_1.length).toBeGreaterThan(0);
+
+        const stars = sample.templates.tastes.elements.filter((element: any) =>
+            element.type === 'rect' && element.id.includes('_star_'),
+        );
+        expect(stars).toHaveLength(30);
+        stars.forEach((star: any) => {
+            expect(star).toMatchObject({ w: 13, h: 13, stroke: '#b46148', strokeWidth: 0.8 });
+        });
+
+        const frames = sample.templates.sketches.elements.filter((element: any) =>
+            element.type === 'rect' && element.id.includes('_frame_'),
+        );
+        expect(frames).toHaveLength(4);
+        frames.forEach((frame: any) => {
+            expect(frame).toMatchObject({ fill: '#fffaf1', stroke: '#9e988b', strokeWidth: 0.8 });
+            expect(frame.w).toBeGreaterThanOrEqual(200);
+            expect(frame.h).toBeGreaterThanOrEqual(140);
+        });
+
+        const navigator = role(sample, 'trip', 'navigator');
+        expect(navigator.h).toBe(44);
     });
 });
