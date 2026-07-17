@@ -121,6 +121,12 @@ describe('repository configuration', () => {
         expect(rolloutRunbook).toContain('read -r ROLLOUT_STARTED_AT < "$ROLLOUT_MARKER_FILE"');
         expect(rolloutRunbook).toContain('trap cleanup_rollout_server EXIT');
         expect(rolloutRunbook).toContain('inspect restricted log');
+        expect(rolloutRunbook).toContain('assert_rollout_port_free');
+        expect(rolloutRunbook).toContain('net.createServer()');
+        expect(rolloutRunbook).toContain('EADDRINUSE');
+        expect(rolloutRunbook).toContain('ROLLOUT_LISTEN_MARKER="Server running on http://localhost:${ROLLOUT_PORT}"');
+        expect(rolloutRunbook).toContain('log.split(/\\r?\\n/).includes(marker)');
+        expect(rolloutRunbook).toContain('managed_rollout_server_alive');
     });
 });
 

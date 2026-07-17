@@ -37,11 +37,51 @@ printf 'Restricted rollout state: %s\n' "$ROLLOUT_STATE_DIR"
 export PORT="$ROLLOUT_PORT"
 export BASE_URL="http://127.0.0.1:${ROLLOUT_PORT}"
 export ALLOWED_HOSTS="127.0.0.1:${ROLLOUT_PORT}${ALLOWED_HOSTS:+,${ALLOWED_HOSTS}}"
+ROLLOUT_LISTEN_MARKER="Server running on http://localhost:${ROLLOUT_PORT}"
 touch "$ROLLOUT_SERVER_LOG"
 chmod 600 "$ROLLOUT_SERVER_LOG"
 
+assert_rollout_port_free() {
+  node -e '
+const net = require("node:net");
+const port = Number(process.argv[1]);
+if (!Number.isInteger(port) || port < 1 || port > 65535) {
+  process.stderr.write("ROLLOUT_PORT must be an integer from 1 to 65535\n");
+  process.exit(2);
+}
+const server = net.createServer();
+server.once("error", error => {
+  if (error.code === "EADDRINUSE") {
+    process.stderr.write(`ERROR: ROLLOUT_PORT ${port} is already occupied\n`);
+  } else {
+    process.stderr.write(`${error.code || error.message}\n`);
+  }
+  process.exit(error.code === "EADDRINUSE" ? 1 : 2);
+});
+server.listen({ host: "127.0.0.1", port, exclusive: true }, () => {
+  server.close(error => {
+    if (error) process.stderr.write(`${error.code || error.message}\n`);
+    process.exit(error ? 2 : 0);
+  });
+});
+' "$ROLLOUT_PORT"
+}
+
+managed_rollout_server_alive() {
+  [ -n "${ROLLOUT_SERVER_PID:-}" ] && kill -0 "$ROLLOUT_SERVER_PID" 2>/dev/null
+}
+
+rollout_listen_marker_present() {
+  node -e '
+const fs = require("node:fs");
+const log = fs.readFileSync(process.argv[1], "utf8");
+const marker = process.argv[2];
+process.exit(log.split(/\r?\n/).includes(marker) ? 0 : 1);
+' "$ROLLOUT_SERVER_LOG" "$ROLLOUT_LISTEN_MARKER"
+}
+
 cleanup_rollout_server() {
-  if [ -n "${ROLLOUT_SERVER_PID:-}" ] && kill -0 "$ROLLOUT_SERVER_PID" 2>/dev/null; then
+  if managed_rollout_server_alive; then
     kill "$ROLLOUT_SERVER_PID" 2>/dev/null || true
     wait "$ROLLOUT_SERVER_PID" 2>/dev/null || true
   fi
@@ -49,6 +89,10 @@ cleanup_rollout_server() {
 }
 
 start_rollout_server() {
+  if ! assert_rollout_port_free; then
+    printf 'ERROR: ROLLOUT_PORT %s preflight failed; refusing to start\n' "$ROLLOUT_PORT" >&2
+    return 1
+  fi
   if ! psql "$DATABASE_URL" -XAtq -v ON_ERROR_STOP=1 \
     -c "SELECT CURRENT_TIMESTAMP AT TIME ZONE 'UTC'" > "$ROLLOUT_MARKER_FILE"; then
     printf '%s\n' 'ERROR: failed to capture rollout marker' >&2
@@ -71,16 +115,19 @@ start_rollout_server() {
   local ready='false'
   local server_status
   for _ in $(seq 1 60); do
-    if ! kill -0 "$ROLLOUT_SERVER_PID" 2>/dev/null; then
+    if ! managed_rollout_server_alive; then
       if wait "$ROLLOUT_SERVER_PID"; then server_status=0; else server_status=$?; fi
       printf 'ERROR: startup/reconciliation exited with status %s; inspect restricted log: %s\n' \
         "$server_status" "$ROLLOUT_SERVER_LOG" >&2
       ROLLOUT_SERVER_PID=''
       return 1
     fi
-    if curl -fsS "${BASE_URL}/api/me" >/dev/null 2>&1; then
-      ready='true'
-      break
+    if rollout_listen_marker_present && managed_rollout_server_alive; then
+      if curl -fsS "${BASE_URL}/api/me" >/dev/null 2>&1 \
+        && managed_rollout_server_alive; then
+        ready='true'
+        break
+      fi
     fi
     sleep 1
   done
@@ -109,7 +156,7 @@ trap 'cleanup_rollout_server; exit 143' TERM
 if ! start_rollout_server; then exit 1; fi
 ```
 
-`/api/me` can return only after `server/index.js` finishes migrations and owner reconciliation and begins listening. A failed migration/reconciliation exits the process, fails this block, and prints process status plus restricted log path without printing log contents. Keep this shell open for steps 3-8. Empty, whitespace-only, or comma-only `OWNER_EMAILS` must stop production startup.
+The Node bind preflight aborts before launch when `ROLLOUT_PORT` is occupied. Readiness requires this managed child to remain alive, write its exact `Server running on http://localhost:$ROLLOUT_PORT` marker to its freshly truncated restricted log, answer `/api/me`, and remain alive afterward. An unrelated process can never satisfy those ownership checks. A failed migration/reconciliation exits the child, fails this block, and prints process status plus restricted log path without printing log contents. `restart_rollout_server` performs the same cleanup, occupied-port preflight, owned-marker, liveness, and API checks for owner-recovery restarts. Keep this shell open for steps 3-8. Empty, whitespace-only, or comma-only `OWNER_EMAILS` must stop production startup.
 
 ## 3. Verify migration, backfill, and owners
 
@@ -653,8 +700,10 @@ trap - EXIT INT TERM
 rm -f "$ROLLOUT_PID_FILE" "$ROLLOUT_MARKER_FILE" "$ROLLOUT_SERVER_LOG"
 rmdir "$ROLLOUT_STATE_DIR"
 unset ROLLOUT_SERVER_PID ROLLOUT_STARTED_AT ROLLOUT_PID_FILE ROLLOUT_MARKER_FILE
-unset ROLLOUT_SERVER_LOG ROLLOUT_STATE_DIR ROLLOUT_PORT BASE_URL DATABASE_URL OWNER_EMAILS
+unset ROLLOUT_SERVER_LOG ROLLOUT_STATE_DIR ROLLOUT_PORT ROLLOUT_LISTEN_MARKER
+unset BASE_URL DATABASE_URL OWNER_EMAILS
 unset ALLOWED_HOSTS PORT
+unset -f assert_rollout_port_free managed_rollout_server_alive rollout_listen_marker_present
 unset -f cleanup_rollout_server start_rollout_server restart_rollout_server
 ```
 
