@@ -1,19 +1,75 @@
 import { Router } from 'express';
-import { dbType, withTransaction } from '../db.js';
+import { dbType, query, withTransaction } from '../db.js';
 import { requireOwner } from '../middleware/guards.js';
 import {
     accountDto,
     lockUser,
     suspensionStatus,
     validateExpiry,
+    validateIsoTimestamp,
     validateProjectIds,
     validateVersion,
 } from '../moderationSupport.js';
-import { effectiveRole } from '../ownerAuthority.js';
-import { insertPlatformAudit, validateReason } from '../platformAudit.js';
+import { effectiveRole, normalizeEmail } from '../ownerAuthority.js';
+import { insertPlatformAudit, platformAuditActionDto, validateReason } from '../platformAudit.js';
 import { lockProjectRows } from '../projectLocks.js';
 
 const router = Router();
+const PAGE_SIZE = 25;
+const MAX_CURSOR_LENGTH = 512;
+const MAX_EMAIL_LENGTH = 320;
+const BASE64URL_PATTERN = /^[A-Za-z0-9_-]+$/;
+const TIMESTAMP_PATTERN = /^(\d{4})-(\d{2})-(\d{2})([ T])(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,6}))?(Z)?$/;
+const AUDIT_ACTIONS = new Set([
+    'owner_granted',
+    'owner_removed',
+    'admin_promoted',
+    'admin_demoted',
+    'account_suspended',
+    'account_restored',
+    'project_unpublished',
+    'review_deleted',
+]);
+
+const encodeCursor = values => Buffer.from(JSON.stringify(values)).toString('base64url');
+const isCursorPart = value => typeof value === 'string' && value.length > 0 && value.length <= MAX_EMAIL_LENGTH;
+const isTimestampCursor = value => {
+    if (!isCursorPart(value)) return false;
+    const match = TIMESTAMP_PATTERN.exec(value);
+    if (!match) return false;
+    const [, yearText, monthText, dayText, separator, hourText, minuteText, secondText, , zone] = match;
+    const year = Number(yearText);
+    const month = Number(monthText);
+    const day = Number(dayText);
+    const hour = Number(hourText);
+    const minute = Number(minuteText);
+    const second = Number(secondText);
+    if ((separator === 'T') !== (zone === 'Z')) return false;
+    if (year < 1 || month < 1 || month > 12 || hour > 23 || minute > 59 || second > 59) return false;
+    const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+    const daysInMonth = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    return day >= 1 && day <= daysInMonth[month - 1];
+};
+const decodeCursor = raw => {
+    if (typeof raw !== 'string' || raw.length > MAX_CURSOR_LENGTH || !BASE64URL_PATTERN.test(raw)) return null;
+    try {
+        const decoded = Buffer.from(raw, 'base64url');
+        if (decoded.toString('base64url') !== raw) return null;
+        const values = JSON.parse(decoded.toString('utf8'));
+        if (!Array.isArray(values) || values.length !== 2
+            || !isTimestampCursor(values[0]) || !isCursorPart(values[1])
+            || encodeCursor(values) !== raw) return null;
+        return values;
+    } catch {
+        return null;
+    }
+};
+const emailFilter = raw => {
+    if (raw === undefined) return { ok: true, value: null };
+    if (typeof raw !== 'string') return { ok: false };
+    const value = normalizeEmail(raw);
+    return value && value.length <= MAX_EMAIL_LENGTH ? { ok: true, value } : { ok: false };
+};
 
 const isSuspensionInput = value => {
     if (value === null) return true;
@@ -32,6 +88,64 @@ const lifecycleResult = (result, res) => {
 };
 
 router.use('/api/owner', requireOwner);
+
+router.get('/api/owner/audit', async (req, res) => {
+    const actorEmail = emailFilter(req.query.actorEmail);
+    const targetEmail = emailFilter(req.query.targetEmail);
+    const action = req.query.action;
+    const from = req.query.from === undefined ? { ok: true, value: null } : validateIsoTimestamp(req.query.from);
+    const to = req.query.to === undefined ? { ok: true, value: null } : validateIsoTimestamp(req.query.to);
+    const cursor = req.query.cursor === undefined ? [] : decodeCursor(req.query.cursor);
+    if (!actorEmail.ok || !targetEmail.ok
+        || (action !== undefined && (typeof action !== 'string' || !AUDIT_ACTIONS.has(action)))
+        || !from.ok || !to.ok || cursor === null
+        || (from.value !== null && to.value !== null && Date.parse(from.value) > Date.parse(to.value))) {
+        return res.status(400).json({ error: 'Invalid audit query' });
+    }
+
+    const predicates = [];
+    const params = [];
+    const bind = value => {
+        params.push(value);
+        return `$${params.length}`;
+    };
+    if (actorEmail.value !== null) predicates.push(`LOWER(actor_email) = ${bind(actorEmail.value)}`);
+    if (targetEmail.value !== null) predicates.push(`LOWER(target_email) = ${bind(targetEmail.value)}`);
+    if (action !== undefined) predicates.push(`action = ${bind(action)}`);
+    if (from.value !== null) {
+        const placeholder = bind(from.value);
+        predicates.push(`created_at >= ${dbType === 'postgres' ? `CAST(${placeholder} AS TIMESTAMP)` : placeholder}`);
+    }
+    if (to.value !== null) {
+        const placeholder = bind(to.value);
+        predicates.push(`created_at <= ${dbType === 'postgres' ? `CAST(${placeholder} AS TIMESTAMP)` : placeholder}`);
+    }
+    if (cursor.length) {
+        const before = bind(cursor[0]);
+        const equal = bind(cursor[0]);
+        const id = bind(cursor[1]);
+        predicates.push(dbType === 'postgres'
+            ? `(created_at < CAST(${before} AS TIMESTAMP) OR (created_at = CAST(${equal} AS TIMESTAMP) AND id < ${id}))`
+            : `(created_at < ${before} OR (created_at = ${equal} AND id < ${id}))`);
+    }
+
+    const rows = await query(
+        `SELECT id, actor_kind, actor_user_id, actor_email, target_user_id, target_email,
+                project_id, review_id, action, reason, expires_at, created_at, metadata_json,
+                CAST(created_at AS TEXT) AS created_at_cursor
+         FROM platform_audit_actions
+         ${predicates.length ? `WHERE ${predicates.join(' AND ')}` : ''}
+         ORDER BY created_at DESC, id DESC
+         LIMIT ${PAGE_SIZE + 1}`,
+        params,
+    );
+    const page = rows.slice(0, PAGE_SIZE);
+    const last = page[page.length - 1];
+    return res.json({
+        items: page.map(platformAuditActionDto),
+        nextCursor: rows.length > PAGE_SIZE ? encodeCursor([last.created_at_cursor, last.id]) : null,
+    });
+});
 
 router.post('/api/owner/users/:id/promote-admin', async (req, res) => {
     const reason = validateReason(req.body?.reason);

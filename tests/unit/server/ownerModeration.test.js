@@ -43,6 +43,20 @@ const PROMOTION_EMAIL = 'lifecycle-promotion@test.dev';
 const REVOCATION_EMAIL = 'lifecycle-revocation@test.dev';
 const OWNER_TARGET_ID = 'lifecycle-protected-owner';
 const PROJECT_PREFIX = 'lifecycle-project-';
+const GLOBAL_ACTOR_EMAIL = 'global.actor@test.dev';
+const GLOBAL_TARGET_EMAIL = 'global.target@test.dev';
+const GLOBAL_PAGE_TIME = '2099-01-02T00:00:00.123Z';
+const GLOBAL_ACTION_TIME = '2099-01-01T12:00:00.000Z';
+const GLOBAL_ACTIONS = [
+    'owner_granted',
+    'owner_removed',
+    'admin_promoted',
+    'admin_demoted',
+    'account_suspended',
+    'account_restored',
+    'project_unpublished',
+    'review_deleted',
+];
 const originalOwnerEmails = process.env.OWNER_EMAILS;
 
 let app;
@@ -63,6 +77,10 @@ const revoke = (targetId, body, cookie = ownerCookie) => request(app)
     .post(`/api/owner/users/${targetId}/revoke-admin`)
     .set('Cookie', cookie)
     .send(body);
+const globalAudit = (filters = {}, cookie = ownerCookie) => request(app)
+    .get('/api/owner/audit')
+    .query(filters)
+    .set('Cookie', cookie);
 const promotionBody = (overrides = {}) => ({
     reason: 'Moderator coverage',
     expectedModerationVersion: 0,
@@ -91,6 +109,19 @@ const insertProject = async (id, ownerIdToUse, visibility = 'public', publishedC
         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
     [id, ownerIdToUse, id, visibility, publishedCommitId, id, '2026-07-17T00:00:00.000Z']);
 };
+
+const insertGlobalAudit = async ({
+    id, actorKind = 'user', actorUserId = 'global-actor', actorEmail = GLOBAL_ACTOR_EMAIL,
+    targetUserId = promotionTargetId, targetEmail = GLOBAL_TARGET_EMAIL, action,
+    reason = `Global audit ${action}`, createdAt, metadata,
+}) => query(`INSERT INTO platform_audit_actions
+    (id, actor_kind, actor_user_id, actor_email, target_user_id, target_email, project_id,
+     review_id, action, reason, expires_at, created_at, metadata_json)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULL, $11, $12)`,
+[id, actorKind, actorUserId, actorEmail, targetUserId, targetEmail,
+    action === 'project_unpublished' || action === 'review_deleted' ? 'global-project' : null,
+    action === 'review_deleted' ? 'global-private-review' : null, action, reason, createdAt,
+    JSON.stringify(metadata)]);
 
 const snapshotLifecycleState = async (targetId, projectPrefix = null) => ({
     user: await query('SELECT * FROM "user" WHERE id = $1', [targetId]),
@@ -163,6 +194,7 @@ afterAll(() => {
 });
 
 beforeEach(async () => {
+    dbHarness.postgresMode = true;
     dbHarness.failPattern = null;
     dbHarness.failAt = 1;
     dbHarness.matchCount = 0;
@@ -183,6 +215,182 @@ beforeEach(async () => {
     await query('DELETE FROM session WHERE "userId" = $1', [revocationTargetId]);
     await query(`DELETE FROM projects WHERE id LIKE '${PROJECT_PREFIX}%'`);
     dbHarness.queries = [];
+});
+
+describe('owner global audit', () => {
+    beforeAll(async () => {
+        const metadataByAction = {
+            owner_granted: { source: 'owner_emails_reconciliation', previousRole: 'user', newRole: 'owner' },
+            owner_removed: { source: 'owner_emails_reconciliation', previousRole: 'owner', newRole: 'user' },
+            admin_promoted: { source: 'owner_role_workflow', previousRole: 'user', newRole: 'admin' },
+            admin_demoted: { source: 'owner_role_workflow', previousRole: 'admin', newRole: 'user' },
+            account_suspended: { source: 'account_workflow' },
+            account_restored: { source: 'account_workflow' },
+            project_unpublished: { source: 'standalone_project', previousProjectVisibility: 'public' },
+            review_deleted: { source: 'standalone_review', deletedReviewRating: 4 },
+        };
+        for (const [index, action] of GLOBAL_ACTIONS.entries()) {
+            await insertGlobalAudit({
+                id: `global-action-${action}`,
+                actorKind: action.startsWith('owner_') ? 'system' : 'user',
+                actorUserId: action.startsWith('owner_') ? null : 'global-actor',
+                actorEmail: action.startsWith('owner_') ? 'OWNER_EMAILS reconciliation' : GLOBAL_ACTOR_EMAIL,
+                targetUserId: action === 'owner_granted' ? OWNER_TARGET_ID : promotionTargetId,
+                action,
+                createdAt: new Date(Date.parse(GLOBAL_ACTION_TIME) + index * 1000).toISOString(),
+                metadata: metadataByAction[action],
+            });
+        }
+        for (let index = 0; index < 26; index += 1) {
+            await insertGlobalAudit({
+                id: `global-page-${String(index).padStart(2, '0')}`,
+                actorEmail: 'Page.Actor@Test.Dev',
+                targetEmail: 'Page.Target@Test.Dev',
+                action: 'account_restored',
+                reason: `Global page ${index}`,
+                createdAt: GLOBAL_PAGE_TIME,
+                metadata: { source: 'account_workflow' },
+            });
+        }
+        await query(`INSERT INTO reviews
+            (id, project_id, user_id, rating, body, created_at, updated_at)
+            VALUES ($1, $2, $3, 4, $4, $5, $6)`,
+        ['global-private-review', 'global-project', promotionTargetId,
+            'GLOBAL_PRIVATE_REVIEW_BODY', GLOBAL_ACTION_TIME, GLOBAL_ACTION_TIME]);
+    });
+
+    beforeEach(() => {
+        dbHarness.postgresMode = false;
+        dbHarness.queries = [];
+    });
+
+    it('keeps global audit owner-only with exact authorization envelopes', async () => {
+        const anonymous = await request(app).get('/api/owner/audit');
+        expect({ status: anonymous.status, body: anonymous.body }).toEqual({
+            status: 401, body: { error: 'Unauthorized' },
+        });
+        for (const cookie of [adminCookie, userCookie]) {
+            const denied = await globalAudit({}, cookie);
+            expect({ status: denied.status, body: denied.body }).toEqual({
+                status: 403, body: { error: 'Forbidden: Owners only' },
+            });
+        }
+        expect((await globalAudit({ actorEmail: GLOBAL_ACTOR_EMAIL })).status).toBe(200);
+    });
+
+    it('applies normalized exact global audit filters, all actions, and inclusive dates', async () => {
+        for (const action of GLOBAL_ACTIONS) {
+            const response = await globalAudit({ action });
+            expect(response.status).toBe(200);
+            expect(response.body.items.length).toBeGreaterThan(0);
+            expect(response.body.items.every(item => item.action === action)).toBe(true);
+        }
+
+        dbHarness.queries = [];
+        const response = await globalAudit({
+            actorEmail: `  ${GLOBAL_ACTOR_EMAIL.toUpperCase()}  `,
+            targetEmail: `  ${GLOBAL_TARGET_EMAIL.toUpperCase()}  `,
+            action: 'admin_promoted',
+            from: '2099-01-01T12:00:02.000Z',
+            to: '2099-01-01T12:00:02.000Z',
+        });
+
+        expect(response.status).toBe(200);
+        expect(response.body).toEqual({
+            items: [expect.objectContaining({
+                id: 'global-action-admin_promoted',
+                actorEmail: GLOBAL_ACTOR_EMAIL,
+                targetEmail: GLOBAL_TARGET_EMAIL,
+                action: 'admin_promoted',
+                createdAt: '2099-01-01T12:00:02.000Z',
+            })],
+            nextCursor: null,
+        });
+        const sql = dbHarness.queries.find(item => /FROM platform_audit_actions/.test(item.text));
+        expect(sql.params).toEqual([
+            GLOBAL_ACTOR_EMAIL, GLOBAL_TARGET_EMAIL, 'admin_promoted',
+            '2099-01-01T12:00:02.000Z', '2099-01-01T12:00:02.000Z',
+        ]);
+        expect(sql.text).not.toMatch(/CAST\(\$\d+ AS TIMESTAMP\)/);
+        expect(sql.text.match(/\$\d+/g)).toEqual(['$1', '$2', '$3', '$4', '$5']);
+    });
+
+    it('rejects every malformed global audit filter before audit SQL', async () => {
+        const invalidQueries = [
+            { actorEmail: ' ' },
+            { targetEmail: 'x'.repeat(321) },
+            { actorEmail: [GLOBAL_ACTOR_EMAIL, 'other@test.dev'] },
+            { action: 'account_deleted' },
+            { action: ' admin_promoted' },
+            { from: '2099-01-01' },
+            { from: '2099-02-30T00:00:00.000Z' },
+            { to: '2099-01-01T00:00:00+1500' },
+            { from: '2099-01-02T00:00:00.000Z', to: '2099-01-01T00:00:00.000Z' },
+            { cursor: 'broken' },
+            { cursor: 'x'.repeat(513) },
+            { cursor: Buffer.from(JSON.stringify([GLOBAL_PAGE_TIME, 'global-page-01'])).toString('base64url') + '=' },
+        ];
+
+        for (const filters of invalidQueries) {
+            dbHarness.queries = [];
+            const response = await globalAudit(filters);
+            expect({ filters, status: response.status }).toEqual({ filters, status: 400 });
+            expect(dbHarness.queries.some(item => /FROM platform_audit_actions/.test(item.text))).toBe(false);
+        }
+    });
+
+    it('paginates same-timestamp global audit rows with a canonical stable cursor', async () => {
+        const first = await globalAudit({ actorEmail: '  PAGE.ACTOR@TEST.DEV ' });
+        expect(first.status).toBe(200);
+        expect(Object.keys(first.body).sort()).toEqual(['items', 'nextCursor']);
+        expect(first.body.items.map(item => item.id)).toEqual(
+            Array.from({ length: 25 }, (_, index) => `global-page-${String(25 - index).padStart(2, '0')}`),
+        );
+        const decoded = JSON.parse(Buffer.from(first.body.nextCursor, 'base64url').toString('utf8'));
+        expect(decoded).toEqual([GLOBAL_PAGE_TIME, 'global-page-01']);
+        expect(Buffer.from(JSON.stringify(decoded)).toString('base64url')).toBe(first.body.nextCursor);
+
+        dbHarness.queries = [];
+        const second = await globalAudit({ actorEmail: 'page.actor@test.dev', cursor: first.body.nextCursor });
+        expect(second.body).toEqual({
+            items: [expect.objectContaining({ id: 'global-page-00' })],
+            nextCursor: null,
+        });
+        const sql = dbHarness.queries.find(item => /FROM platform_audit_actions/.test(item.text));
+        expect(sql.params).toEqual([
+            'page.actor@test.dev', GLOBAL_PAGE_TIME, GLOBAL_PAGE_TIME, 'global-page-01',
+        ]);
+        const placeholders = sql.text.match(/\$\d+/g);
+        expect(placeholders).toEqual(['$1', '$2', '$3', '$4']);
+        expect(new Set(placeholders).size).toBe(placeholders.length);
+
+        dbHarness.postgresMode = true;
+        dbHarness.queries = [];
+        const postgres = await globalAudit({ from: GLOBAL_ACTION_TIME, to: GLOBAL_PAGE_TIME, cursor: first.body.nextCursor });
+        expect(postgres.status).toBe(200);
+        const postgresSql = dbHarness.queries.find(item => /FROM platform_audit_actions/.test(item.text));
+        expect(postgresSql.text.match(/CAST\(\$\d+ AS TIMESTAMP\)/g)).toEqual([
+            'CAST($1 AS TIMESTAMP)', 'CAST($2 AS TIMESTAMP)',
+            'CAST($3 AS TIMESTAMP)', 'CAST($4 AS TIMESTAMP)',
+        ]);
+        const postgresPlaceholders = postgresSql.text.match(/\$\d+/g);
+        expect(new Set(postgresPlaceholders).size).toBe(postgresPlaceholders.length);
+    });
+
+    it('returns only safe global audit DTOs and keeps system rows out of target history', async () => {
+        const response = await globalAudit({ action: 'owner_granted' });
+        expect(response.status).toBe(200);
+        expect(response.body.items.map(item => item.id)).toContain('global-action-owner_granted');
+        expect(Object.keys(response.body.items[0]).sort()).toEqual([
+            'action', 'actorEmail', 'actorKind', 'actorUserId', 'createdAt', 'expiresAt', 'id',
+            'metadata', 'projectId', 'reason', 'reviewId', 'targetEmail', 'targetUserId',
+        ]);
+        expect(JSON.stringify(response.body)).not.toMatch(/password|token|session|ipAddress|GLOBAL_PRIVATE_REVIEW_BODY/i);
+
+        const detail = await request(app).get(`/api/admin/users/${OWNER_TARGET_ID}`).set('Cookie', ownerCookie);
+        expect(detail.status).toBe(200);
+        expect(detail.body.history.items.map(item => item.id)).not.toContain('global-action-owner_granted');
+    });
 });
 
 describe('owner lifecycle authorization and status contracts', () => {
