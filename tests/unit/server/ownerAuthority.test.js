@@ -80,6 +80,8 @@ describe('repository configuration', () => {
         const playwrightConfig = readRepositoryFile('playwright.config.cjs');
         const unitHelpers = readRepositoryFile('tests/unit/server/helpers.js');
         const readme = readRepositoryFile('README.md');
+        const cloudDocs = readRepositoryFile('docs/8-cloud-and-gallery.md');
+        const rolloutRunbook = readRepositoryFile('docs/9-owner-moderator-rollout.md');
 
         expect(activeFiles).not.toContain(retiredAdminVariable);
         expect(activeFiles).not.toContain(retiredAdminHelper);
@@ -103,6 +105,15 @@ describe('repository configuration', () => {
         expect(readme).toContain('npm run server');
         expect(readme).toContain('npm run dev');
         expect(readme).toMatch(/migrations at startup/i);
+        expect(cloudDocs).toContain('actor kind `system`, null actor user ID, actor label `OWNER_EMAILS reconciliation`, and fixed reason `Synchronize account role with OWNER_EMAILS configuration`');
+        expect(rolloutRunbook).toContain('changed_sessions_zero');
+        expect(rolloutRunbook).toContain('DISPOSABLE_ADMIN_EMAIL');
+        expect(rolloutRunbook).toContain('Expected at least one matching `admin_demoted` action');
+        expect(rolloutRunbook).toContain('seq 1 26');
+        expect(rolloutRunbook).toContain('page1Ids.some(id => page2Ids.has(id))');
+        expect(rolloutRunbook).toContain('CREATE TRIGGER :"trigger_name"');
+        expect(rolloutRunbook).toContain('trap cleanup_audit_failure_probe EXIT INT TERM');
+        expect(rolloutRunbook.match(/--path-as-is/g)).toHaveLength(3);
     });
 });
 

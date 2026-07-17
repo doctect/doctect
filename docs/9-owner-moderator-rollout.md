@@ -23,6 +23,8 @@ In a staging server terminal, set the disposable branch connection and two non-p
 ```bash
 export DATABASE_URL='postgresql://staging-branch-url'
 export OWNER_EMAILS='owner1@example.com,owner2@example.com'
+export ROLLOUT_STARTED_AT
+ROLLOUT_STARTED_AT=$(psql "$DATABASE_URL" -XAtqc "SELECT CURRENT_TIMESTAMP AT TIME ZONE 'UTC'")
 NODE_ENV=production node server/index.js
 ```
 
@@ -41,7 +43,7 @@ SELECT tgname FROM pg_trigger
 WHERE tgrelid = 'platform_audit_actions'::regclass AND NOT tgisinternal ORDER BY tgname;
 SELECT email, role, "moderationVersion" FROM "user"
 WHERE LOWER(TRIM(email)) IN ('owner1@example.com', 'owner2@example.com') ORDER BY email;
-SELECT actor_kind, actor_user_id, actor_email, target_email, action, metadata_json
+SELECT actor_kind, actor_user_id, actor_email, target_email, action, reason, metadata_json
 FROM platform_audit_actions WHERE action IN ('owner_granted', 'owner_removed')
 ORDER BY created_at DESC, id DESC;
 ```
@@ -52,17 +54,69 @@ ORDER BY created_at DESC, id DESC;
 - [ ] Existing configured accounts have role `owner`; any former owner absent from configuration has role `user`.
 - [ ] Each changed account has exactly one matching system action with null actor user ID and constrained reconciliation metadata.
 
-Confirm reconciliation revoked affected sessions:
+Confirm reconciliation revoked sessions for **every changed account**, including stale owners removed from configuration. This query derives the changed set from exact system actions created after the pre-start marker, lists every changed account, and exits nonzero if the set is empty or any session remains:
 
-```sql
-SELECT u.email, s.id AS session_id
-FROM "user" u
+```bash
+psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+  -v rollout_started_at="$ROLLOUT_STARTED_AT" <<'SQL'
+WITH changed AS (
+  SELECT DISTINCT target_user_id
+  FROM platform_audit_actions
+  WHERE created_at >= CAST(:'rollout_started_at' AS TIMESTAMP)
+    AND actor_kind = 'system'
+    AND actor_user_id IS NULL
+    AND actor_email = 'OWNER_EMAILS reconciliation'
+    AND reason = 'Synchronize account role with OWNER_EMAILS configuration'
+    AND action IN ('owner_granted', 'owner_removed')
+)
+SELECT u.id, u.email, u.role, u."moderationVersion", COUNT(s.id) AS session_count
+FROM changed c
+JOIN "user" u ON u.id = c.target_user_id
 LEFT JOIN session s ON s."userId" = u.id
-WHERE LOWER(TRIM(u.email)) IN ('owner1@example.com', 'owner2@example.com')
-ORDER BY u.email, s.id;
+GROUP BY u.id, u.email, u.role, u."moderationVersion"
+ORDER BY LOWER(u.email), u.id;
+
+WITH changed AS (
+  SELECT DISTINCT target_user_id
+  FROM platform_audit_actions
+  WHERE created_at >= CAST(:'rollout_started_at' AS TIMESTAMP)
+    AND actor_kind = 'system'
+    AND actor_user_id IS NULL
+    AND actor_email = 'OWNER_EMAILS reconciliation'
+    AND reason = 'Synchronize account role with OWNER_EMAILS configuration'
+    AND action IN ('owner_granted', 'owner_removed')
+)
+SELECT COUNT(*) > 0 AS changed_accounts_found FROM changed
+\gset
+\if :changed_accounts_found
+\else
+  \echo 'ERROR: no reconciliation-changed accounts found'
+  \quit 1
+\endif
+
+WITH changed AS (
+  SELECT DISTINCT target_user_id
+  FROM platform_audit_actions
+  WHERE created_at >= CAST(:'rollout_started_at' AS TIMESTAMP)
+    AND actor_kind = 'system'
+    AND actor_user_id IS NULL
+    AND actor_email = 'OWNER_EMAILS reconciliation'
+    AND reason = 'Synchronize account role with OWNER_EMAILS configuration'
+    AND action IN ('owner_granted', 'owner_removed')
+)
+SELECT NOT EXISTS (
+  SELECT 1 FROM changed c JOIN session s ON s."userId" = c.target_user_id
+) AS changed_sessions_zero
+\gset
+\if :changed_sessions_zero
+\else
+  \echo 'ERROR: reconciliation left sessions on a changed account'
+  \quit 1
+\endif
+SQL
 ```
 
-Every reconciled account must have `session_id` null. Unchanged owners may retain sessions.
+Output must include both newly granted owners and stale removed owners. Every row must show `session_count = 0`.
 
 ## 4. Prove both audit tables are append-only
 
@@ -118,7 +172,9 @@ Create disposable owner, admin, and user sessions through normal sign-in. Enter 
 ```bash
 read -rsp 'Owner Cookie header: ' OWNER_COOKIE; printf '\n'
 read -rsp 'Admin Cookie header: ' ADMIN_COOKIE; printf '\n'
+read -rp 'Owner actor email: ' OWNER_ACTOR_EMAIL
 read -rp 'Admin target user ID: ' ADMIN_ID
+read -rp 'Disposable admin target email: ' DISPOSABLE_ADMIN_EMAIL
 read -rp 'User target user ID: ' USER_ID
 read -rp 'Current user moderationVersion: ' USER_VERSION
 read -rp 'Current admin moderationVersion: ' ADMIN_VERSION
@@ -144,6 +200,12 @@ curl -sS -o /dev/null -w '%{http_code}\n' -H "Cookie: ${OWNER_COOKIE}" \
   "${BASE_URL}/api/owner/users/${USER_ID}/promote-admin" \
   --data "{\"reason\":\"Staging promotion probe\",\"expectedModerationVersion\":${USER_VERSION}}"
 # 200
+
+curl -sS -o /dev/null -w '%{http_code}\n' -H "Cookie: ${OWNER_COOKIE}" \
+  -H 'Content-Type: application/json' -X POST \
+  "${BASE_URL}/api/owner/users/${ADMIN_ID}/revoke-admin" \
+  --data "{\"reason\":\"Staging disposable admin demotion\",\"expectedModerationVersion\":${ADMIN_VERSION},\"suspension\":null,\"projectIdsToUnpublish\":[]}"
+# 200; response action is admin_demoted and target is DISPOSABLE_ADMIN_EMAIL
 ```
 
 - [ ] Promoted account's old session now receives `401` from a protected API.
@@ -152,31 +214,317 @@ curl -sS -o /dev/null -w '%{http_code}\n' -H "Cookie: ${OWNER_COOKIE}" \
 - [ ] Demoted account has role `user`, incremented version, and no session; later restoration leaves role `user`.
 - [ ] Select one of two public target projects during suspension/demotion. Selected project becomes private with null published pointer; untouched project remains public. Restoration does not republish either project.
 - [ ] Standalone project unpublish and review deletion reject missing/blank/overlong reasons with `400`, reject protected target content with `403`, and return one matching audit DTO on success.
-- [ ] Force one audit insertion failure on a disposable transaction and confirm role, suspension, sessions, content, version, and audit rows all roll back.
+- [ ] Run the executable audit-failure rollback probe below and retain its successful comparison output.
+
+### Exact audit-failure rollback probe
+
+Prepare a separate disposable admin account with at least one live session and one disposable published project. No other test may use this account or project while the probe runs. This procedure never updates or deletes an audit row: it installs a uniquely named `BEFORE INSERT` trigger scoped to the disposable target, `admin_demoted` action, and unique reason.
+
+```bash
+(
+set -euo pipefail
+
+read -rp 'Audit-failure disposable admin user ID: ' AUDIT_FAILURE_ADMIN_ID
+read -rp 'Audit-failure admin moderationVersion: ' AUDIT_FAILURE_ADMIN_VERSION
+read -rp 'Audit-failure disposable published project ID: ' AUDIT_FAILURE_PROJECT_ID
+
+AUDIT_FAILURE_REASON="Staging audit rollback probe $(date +%s)-$$"
+AUDIT_FAILURE_TRIGGER="staging_audit_probe_trigger_$(date +%s)_$$"
+AUDIT_FAILURE_FUNCTION="staging_audit_probe_function_$(date +%s)_$$"
+AUDIT_FAILURE_RESPONSE=$(mktemp)
+
+snapshot_audit_failure_user() {
+  psql "$DATABASE_URL" -XAtq -v ON_ERROR_STOP=1 -v probe_id="$AUDIT_FAILURE_ADMIN_ID" <<'SQL'
+SELECT json_build_object(
+  'role', role,
+  'banned', banned,
+  'banReason', "banReason",
+  'banExpires', "banExpires",
+  'moderationVersion', "moderationVersion",
+  'updatedAt', "updatedAt"
+)::text
+FROM "user" WHERE id = :'probe_id';
+SQL
+}
+
+snapshot_audit_failure_sessions() {
+  psql "$DATABASE_URL" -XAtq -v ON_ERROR_STOP=1 -v probe_id="$AUDIT_FAILURE_ADMIN_ID" <<'SQL'
+SELECT json_build_object(
+  'count', COUNT(*),
+  'idHash', md5(COALESCE(string_agg(id, ',' ORDER BY id), ''))
+)::text
+FROM session WHERE "userId" = :'probe_id';
+SQL
+}
+
+snapshot_audit_failure_project() {
+  psql "$DATABASE_URL" -XAtq -v ON_ERROR_STOP=1 -v project_id="$AUDIT_FAILURE_PROJECT_ID" <<'SQL'
+SELECT json_build_object(
+  'ownerId', owner_id,
+  'visibility', visibility,
+  'publishedCommitId', published_commit_id
+)::text
+FROM projects WHERE id = :'project_id';
+SQL
+}
+
+snapshot_audit_failure_actions() {
+  psql "$DATABASE_URL" -XAtq -v ON_ERROR_STOP=1 -v probe_id="$AUDIT_FAILURE_ADMIN_ID" <<'SQL'
+SELECT json_build_object(
+  'count', COUNT(*),
+  'idHash', md5(COALESCE(string_agg(id, ',' ORDER BY id), ''))
+)::text
+FROM platform_audit_actions WHERE target_user_id = :'probe_id';
+SQL
+}
+
+cleanup_audit_failure_probe() {
+  psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+    -v trigger_name="$AUDIT_FAILURE_TRIGGER" \
+    -v function_name="$AUDIT_FAILURE_FUNCTION" <<'SQL'
+DROP TRIGGER IF EXISTS :"trigger_name" ON platform_audit_actions;
+DROP FUNCTION IF EXISTS :"function_name"();
+SQL
+  rm -f "$AUDIT_FAILURE_RESPONSE"
+}
+trap cleanup_audit_failure_probe EXIT INT TERM
+
+BEFORE_USER=$(snapshot_audit_failure_user)
+BEFORE_SESSIONS=$(snapshot_audit_failure_sessions)
+BEFORE_PROJECT=$(snapshot_audit_failure_project)
+BEFORE_ACTIONS=$(snapshot_audit_failure_actions)
+
+node -e '
+const user = JSON.parse(process.argv[1]);
+const sessions = JSON.parse(process.argv[2]);
+const project = JSON.parse(process.argv[3]);
+if (user.role !== "admin") throw new Error("probe target must start as admin");
+if (sessions.count < 1) throw new Error("probe target must have a live session");
+if (project.ownerId !== process.argv[4] || project.visibility !== "public" || !project.publishedCommitId) {
+  throw new Error("probe project must be published and owned by target");
+}
+' "$BEFORE_USER" "$BEFORE_SESSIONS" "$BEFORE_PROJECT" "$AUDIT_FAILURE_ADMIN_ID"
+
+psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+  -v trigger_name="$AUDIT_FAILURE_TRIGGER" \
+  -v function_name="$AUDIT_FAILURE_FUNCTION" \
+  -v probe_id="$AUDIT_FAILURE_ADMIN_ID" \
+  -v probe_reason="$AUDIT_FAILURE_REASON" <<'SQL'
+CREATE FUNCTION :"function_name"()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $probe$
+BEGIN
+  RAISE EXCEPTION 'staging injected platform audit failure';
+END;
+$probe$;
+
+CREATE TRIGGER :"trigger_name"
+BEFORE INSERT ON platform_audit_actions
+FOR EACH ROW
+WHEN (
+  NEW.target_user_id = :'probe_id'
+  AND NEW.action = 'admin_demoted'
+  AND NEW.reason = :'probe_reason'
+)
+EXECUTE FUNCTION :"function_name"();
+SQL
+
+AUDIT_FAILURE_BODY=$(node -e '
+process.stdout.write(JSON.stringify({
+  reason: process.argv[1],
+  expectedModerationVersion: Number(process.argv[2]),
+  suspension: { expiresAt: null },
+  projectIdsToUnpublish: [process.argv[3]],
+}));
+' "$AUDIT_FAILURE_REASON" "$AUDIT_FAILURE_ADMIN_VERSION" "$AUDIT_FAILURE_PROJECT_ID")
+HTTP_STATUS=$(curl -sS -o "$AUDIT_FAILURE_RESPONSE" -w '%{http_code}' \
+  -H "Cookie: ${OWNER_COOKIE}" \
+  -H 'Content-Type: application/json' -X POST \
+  "${BASE_URL}/api/owner/users/${AUDIT_FAILURE_ADMIN_ID}/revoke-admin" \
+  --data "$AUDIT_FAILURE_BODY")
+test "$HTTP_STATUS" = '500'
+node -e '
+const body = require("fs").readFileSync(process.argv[1], "utf8");
+if (JSON.parse(body).error !== "Admin revocation failed") throw new Error("unexpected failure response");
+' "$AUDIT_FAILURE_RESPONSE"
+
+AFTER_USER=$(snapshot_audit_failure_user)
+AFTER_SESSIONS=$(snapshot_audit_failure_sessions)
+AFTER_PROJECT=$(snapshot_audit_failure_project)
+AFTER_ACTIONS=$(snapshot_audit_failure_actions)
+
+test "$AFTER_USER" = "$BEFORE_USER"
+test "$AFTER_SESSIONS" = "$BEFORE_SESSIONS"
+test "$AFTER_PROJECT" = "$BEFORE_PROJECT"
+test "$AFTER_ACTIONS" = "$BEFORE_ACTIONS"
+printf '%s\n' 'PASS: role, suspension, version, sessions, project publication, and audit rows rolled back'
+
+cleanup_audit_failure_probe
+trap - EXIT INT TERM
+)
+```
+
+Any nonzero exit fails the gate. The trap drops the temporary trigger and function and removes the response file whether setup, request, or comparison fails. Confirm the named trigger/function no longer exist before reusing the disposable account.
 
 Confirm Better Auth role mutation remains unavailable, including normalized path forms:
 
 ```bash
-curl -sS -o /dev/null -w '%{http_code}\n' -H "Cookie: ${OWNER_COOKIE}" "${BASE_URL}/api/auth/admin"
-curl -sS -o /dev/null -w '%{http_code}\n' -H "Cookie: ${OWNER_COOKIE}" "${BASE_URL}/api/auth/x/../admin"
-curl -sS -o /dev/null -w '%{http_code}\n' -H "Cookie: ${OWNER_COOKIE}" "${BASE_URL}/api/auth/x/%2e%2e/admin"
+curl --path-as-is -sS -o /dev/null -w '%{http_code}\n' -H "Cookie: ${OWNER_COOKIE}" "${BASE_URL}/api/auth/admin"
+curl --path-as-is -sS -o /dev/null -w '%{http_code}\n' -H "Cookie: ${OWNER_COOKIE}" "${BASE_URL}/api/auth/x/../admin"
+curl --path-as-is -sS -o /dev/null -w '%{http_code}\n' -H "Cookie: ${OWNER_COOKIE}" "${BASE_URL}/api/auth/x/%2e%2e/admin"
 # 404 for each
 ```
 
 ## 6. Verify global filters and cursors
 
-Use unique probe values from step 5:
+First prove the step 5 owner-authored demotion is queryable for the disposable admin target. An owner cannot be an `admin_demoted` target, so do not use either configured owner as `targetEmail`:
 
 ```bash
-curl -sS -H "Cookie: ${OWNER_COOKIE}" \
-  "${BASE_URL}/api/owner/audit?actorEmail=owner1%40example.com&targetEmail=owner2%40example.com&action=admin_demoted"
-curl -sS -H "Cookie: ${OWNER_COOKIE}" \
-  "${BASE_URL}/api/owner/audit?from=2026-01-01T00%3A00%3A00Z&to=2026-12-31T23%3A59%3A59Z"
+(
+set -euo pipefail
+AUDIT_FILTER_RESPONSE=$(mktemp)
+trap 'rm -f "$AUDIT_FILTER_RESPONSE"' EXIT
+
+curl -sS --fail-with-body --get -o "$AUDIT_FILTER_RESPONSE" \
+  -H "Cookie: ${OWNER_COOKIE}" \
+  --data-urlencode "actorEmail=${OWNER_ACTOR_EMAIL}" \
+  --data-urlencode "targetEmail=${DISPOSABLE_ADMIN_EMAIL}" \
+  --data-urlencode 'action=admin_demoted' \
+  "${BASE_URL}/api/owner/audit"
+
+node -e '
+const body = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+const actor = process.argv[2].trim().toLowerCase();
+const target = process.argv[3].trim().toLowerCase();
+if (!Array.isArray(body.items) || body.items.length === 0) {
+  throw new Error("Expected at least one matching admin_demoted action");
+}
+if (body.items.some(item => item.actorEmail.toLowerCase() !== actor
+  || item.targetEmail?.toLowerCase() !== target || item.action !== "admin_demoted")) {
+  throw new Error("global audit returned an item outside active filters");
+}
+const summary = `${body.items.length} matching admin_demoted action(s)\n`;
+process.stdout.write(summary);
+' "$AUDIT_FILTER_RESPONSE" "$OWNER_ACTOR_EMAIL" "$DISPOSABLE_ADMIN_EMAIL"
+)
 ```
 
-- [ ] Each returned item satisfies every active filter and includes no password, token, session, IP, arbitrary request body, or review text.
-- [ ] Request `nextCursor` with the same filters; pages have no duplicates or omissions and remain ordered by `createdAt DESC, id DESC`.
-- [ ] Reusing a cursor with changed filters is not treated as evidence; rerun pagination from page one.
+Expected at least one matching `admin_demoted` action; zero items fails the gate.
+
+Next use a separate disposable user to generate 26 matching `admin_promoted` rows through owner APIs. This stays below the 200-write global limit, touches no production-like account/content, leaves the target as `user`, and does not directly insert or mutate audit rows:
+
+```bash
+(
+set -euo pipefail
+read -rp 'Cursor-probe disposable user ID: ' CURSOR_TARGET_ID
+read -rp 'Cursor-probe disposable user email: ' CURSOR_TARGET_EMAIL
+read -rp 'Cursor-probe current moderationVersion: ' CURSOR_VERSION
+
+CURSOR_REASON="Staging cursor probe $(date +%s)-$$"
+ROLE_RESPONSE=$(mktemp)
+PAGE_ONE=$(mktemp)
+PAGE_TWO=$(mktemp)
+trap 'rm -f "$ROLE_RESPONSE" "$PAGE_ONE" "$PAGE_TWO"' EXIT
+
+role_request() {
+  local endpoint=$1
+  local payload=$2
+  local status
+  status=$(curl -sS -o "$ROLE_RESPONSE" -w '%{http_code}' \
+    -H "Cookie: ${OWNER_COOKIE}" \
+    -H 'Content-Type: application/json' -X POST \
+    "${BASE_URL}${endpoint}" --data "$payload")
+  if [ "$status" != '200' ]; then
+    node -e 'process.stderr.write(require("fs").readFileSync(process.argv[1], "utf8"))' "$ROLE_RESPONSE"
+    return 1
+  fi
+  node -e '
+const body = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+if (!Number.isInteger(body.account?.moderationVersion)) throw new Error("missing moderationVersion");
+process.stdout.write(String(body.account.moderationVersion));
+' "$ROLE_RESPONSE"
+}
+
+for _ in $(seq 1 26); do
+  PROMOTE_BODY=$(node -e '
+process.stdout.write(JSON.stringify({
+  reason: process.argv[1],
+  expectedModerationVersion: Number(process.argv[2]),
+}));
+' "$CURSOR_REASON" "$CURSOR_VERSION")
+  CURSOR_VERSION=$(role_request "/api/owner/users/${CURSOR_TARGET_ID}/promote-admin" "$PROMOTE_BODY")
+
+  DEMOTE_BODY=$(node -e '
+process.stdout.write(JSON.stringify({
+  reason: process.argv[1],
+  expectedModerationVersion: Number(process.argv[2]),
+  suspension: null,
+  projectIdsToUnpublish: [],
+}));
+' "$CURSOR_REASON" "$CURSOR_VERSION")
+  CURSOR_VERSION=$(role_request "/api/owner/users/${CURSOR_TARGET_ID}/revoke-admin" "$DEMOTE_BODY")
+done
+
+curl -sS --fail-with-body --get -o "$PAGE_ONE" \
+  -H "Cookie: ${OWNER_COOKIE}" \
+  --data-urlencode "actorEmail=${OWNER_ACTOR_EMAIL}" \
+  --data-urlencode "targetEmail=${CURSOR_TARGET_EMAIL}" \
+  --data-urlencode 'action=admin_promoted' \
+  "${BASE_URL}/api/owner/audit"
+
+NEXT_CURSOR=$(node -e '
+const body = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+if (body.items?.length !== 25 || typeof body.nextCursor !== "string" || !body.nextCursor) {
+  throw new Error("first page must contain 25 items and a nextCursor");
+}
+process.stdout.write(body.nextCursor);
+' "$PAGE_ONE")
+
+curl -sS --fail-with-body --get -o "$PAGE_TWO" \
+  -H "Cookie: ${OWNER_COOKIE}" \
+  --data-urlencode "actorEmail=${OWNER_ACTOR_EMAIL}" \
+  --data-urlencode "targetEmail=${CURSOR_TARGET_EMAIL}" \
+  --data-urlencode 'action=admin_promoted' \
+  --data-urlencode "cursor=${NEXT_CURSOR}" \
+  "${BASE_URL}/api/owner/audit"
+
+node -e '
+const fs = require("fs");
+const page1 = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+const page2 = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+const actor = process.argv[3].trim().toLowerCase();
+const target = process.argv[4].trim().toLowerCase();
+if (page1.items.length !== 25 || !page1.nextCursor) throw new Error("invalid first page");
+if (!Array.isArray(page2.items) || page2.items.length < 1) throw new Error("second page must be nonempty");
+const combined = [...page1.items, ...page2.items];
+if (combined.length < 26) throw new Error("fewer than 26 matching audit rows");
+if (combined.some(item => item.actorEmail.toLowerCase() !== actor
+  || item.targetEmail?.toLowerCase() !== target || item.action !== "admin_promoted")) {
+  throw new Error("cursor page violated frozen filters");
+}
+const page1Ids = page1.items.map(item => item.id);
+const page2Ids = new Set(page2.items.map(item => item.id));
+if (new Set(page1Ids).size !== page1Ids.length || page2Ids.size !== page2.items.length) {
+  throw new Error("duplicate ID within a page");
+}
+if (page1Ids.some(id => page2Ids.has(id))) throw new Error("cursor pages overlap");
+for (let index = 1; index < combined.length; index += 1) {
+  const previous = combined[index - 1];
+  const current = combined[index];
+  if (previous.createdAt < current.createdAt
+    || (previous.createdAt === current.createdAt && previous.id <= current.id)) {
+    throw new Error("combined IDs are not in createdAt DESC, id DESC order");
+  }
+}
+process.stdout.write(combined.map(item => item.id).join("\n") + "\n");
+' "$PAGE_ONE" "$PAGE_TWO" "$OWNER_ACTOR_EMAIL" "$CURSOR_TARGET_EMAIL"
+)
+```
+
+The printed IDs are ordered evidence. Keep both response files only if copied to approved evidence storage before the subshell exits; they are deleted automatically. Replay `nextCursor` only with identical actor, target, and action filters.
+
+- [ ] Each returned item includes no password, token, session, IP, arbitrary request body, or review text.
 - [ ] Admin receives `403` and anonymous request receives `401` for global audit.
 - [ ] Invalid email/action/date/range/cursor returns `400 { "error": "Invalid audit query" }`.
 
