@@ -289,12 +289,12 @@ export const cloudApi = {
             { method: 'POST', body: JSON.stringify(input) },
         ),
     moderatorUnpublishProject: (id: string, reason: string) =>
-        api<{ action: PlatformAuditAction }>(
+        api<{ success: true; action: PlatformAuditAction }>(
             `/api/admin/projects/${encodeURIComponent(id)}/unpublish`,
             { method: 'POST', body: JSON.stringify({ reason }) },
         ),
     moderatorDeleteReview: (id: string, reason: string) =>
-        api<{ action: PlatformAuditAction }>(
+        api<{ success: true; action: PlatformAuditAction }>(
             `/api/admin/reviews/${encodeURIComponent(id)}`,
             { method: 'DELETE', body: JSON.stringify({ reason }) },
         ),

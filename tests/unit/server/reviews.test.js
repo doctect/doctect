@@ -303,6 +303,7 @@ describe('review reporting and moderation', () => {
 
         expect(res.status).toBe(200);
         expect(res.body).toEqual({
+            success: true,
             action: {
                 id: expect.any(String),
                 actorKind: 'user',

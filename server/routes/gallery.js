@@ -234,7 +234,7 @@ router.post('/api/admin/projects/:id/unpublish', requireAdmin, async (req, res) 
         if (result.status === 409) {
             return res.status(409).json({ error: 'Project state changed; refresh and try again' });
         }
-        return res.json({ action: result.action });
+        return res.json({ success: true, action: result.action });
     } catch (error) {
         console.error('Project unpublish failed:', error);
         return res.status(500).json({ error: 'Project unpublish failed' });
@@ -374,7 +374,7 @@ router.delete('/api/admin/reviews/:id', requireAdmin, async (req, res) => {
         if (result.status === 409) {
             return res.status(409).json({ error: 'Review state changed; refresh and try again' });
         }
-        return res.json({ action: result.action });
+        return res.json({ success: true, action: result.action });
     } catch (error) {
         console.error('Review deletion failed:', error);
         return res.status(500).json({ error: 'Review deletion failed' });
