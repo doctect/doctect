@@ -9,6 +9,12 @@ const text: TemplateElement = {
     fill: '', stroke: '', strokeWidth: 0, opacity: 1, text: 'Text',
     autoWidth: false, fontSize: 12,
 };
+const autoWidthText: TemplateElement = {
+    ...text, id: 'auto-width-text', autoWidth: true,
+};
+const emptyText: TemplateElement = {
+    ...text, id: 'empty-text', text: '',
+};
 const grid: TemplateElement = {
     ...text, id: 'grid', type: 'grid', text: undefined,
     gridConfig: { cols: 1, gapX: 0, gapY: 0, sourceType: 'current' },
@@ -21,7 +27,10 @@ const svg: TemplateElement = {
 const stateFor = (selectedElementIds: string[]): AppState => ({
     nodes: { root: { id: 'root', parentId: null, type: 'page', title: 'Root', data: {}, children: [] } },
     rootId: 'root', variants: { default: { id: 'default', name: 'Default', templates: {
-        page: { id: 'page', name: 'Page', width: 500, height: 700, elements: [text, grid, svg] },
+        page: {
+            id: 'page', name: 'Page', width: 500, height: 700,
+            elements: [text, autoWidthText, emptyText, grid, svg],
+        },
     } } },
     activeVariantId: 'default', viewMode: 'hierarchy', selectedNodeId: 'root',
     selectedNodeIds: ['root'], selectedTemplateId: '', selectedTemplateIds: [],
@@ -81,6 +90,39 @@ describe('PropertiesPanel element section disclosure', () => {
         expect(screen.queryByRole('button', { name: 'SVG Source' })).toBeNull();
         view.rerender(<PropertiesPanel state={stateFor(['svg'])} {...props} />);
         expect(screen.getByRole('button', { name: 'SVG Source' })).toHaveAttribute('aria-expanded', 'false');
+    });
+
+    it('restores the native mixed auto-width state after Typography reopens', () => {
+        const props = callbacks();
+        render(<PropertiesPanel state={stateFor(['text', 'auto-width-text'])} {...props} />);
+        expect(screen.getByLabelText('Auto width')).toHaveProperty('indeterminate', true);
+
+        const typography = screen.getByRole('button', { name: 'Typography' });
+        fireEvent.click(typography);
+        fireEvent.click(typography);
+
+        const checkbox = screen.getByLabelText('Auto width') as HTMLInputElement;
+        expect(checkbox.indeterminate).toBe(true);
+        expect(checkbox).toHaveAttribute('aria-checked', 'mixed');
+        expect(props.onUpdateElements).not.toHaveBeenCalled();
+    });
+
+    it('autofocuses newly selected empty text once and keeps focus on Typography when reopened', () => {
+        const props = callbacks();
+        const view = render(<PropertiesPanel state={stateFor([])} {...props} />);
+        expect(screen.queryByPlaceholderText('Text content or {{field}}')).toBeNull();
+
+        view.rerender(<PropertiesPanel state={stateFor(['empty-text'])} {...props} />);
+        expect(screen.getByPlaceholderText('Text content or {{field}}')).toHaveFocus();
+
+        const typography = screen.getByRole('button', { name: 'Typography' });
+        typography.focus();
+        fireEvent.click(typography);
+        fireEvent.click(typography);
+
+        expect(screen.getByPlaceholderText('Text content or {{field}}')).not.toHaveFocus();
+        expect(typography).toHaveFocus();
+        expect(props.onUpdateElements).not.toHaveBeenCalled();
     });
 
     it('resets all choices when PropertiesPanel remounts', () => {

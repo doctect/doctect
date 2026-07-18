@@ -272,12 +272,16 @@ export const SingleElementEditor: React.FC<SingleElementEditorProps> = ({
     const [showFontPicker, setShowFontPicker] = useState(false);
     const [fontSearch, setFontSearch] = useState('');
     const textOverflowControlId = React.useId();
-    const autoWidthCheckboxRef = React.useRef<HTMLInputElement>(null);
-    React.useEffect(() => {
-        if (autoWidthCheckboxRef.current) {
-            autoWidthCheckboxRef.current.indeterminate = autoWidthSelection === 'mixed';
-        }
+    const setAutoWidthCheckboxRef = React.useCallback((checkbox: HTMLInputElement | null) => {
+        if (checkbox) checkbox.indeterminate = autoWidthSelection === 'mixed';
     }, [autoWidthSelection]);
+    const shouldAutoFocusTextRef = React.useRef(element.type === 'text' && !element.text);
+    const setTextAreaRef = React.useCallback((textarea: HTMLTextAreaElement | null) => {
+        if (textarea && shouldAutoFocusTextRef.current) {
+            shouldAutoFocusTextRef.current = false;
+            textarea.focus();
+        }
+    }, []);
     const textOverflowSettings = resolveTextOverflowSettings(element);
     const textOverflowControlsDisabled = element.type === 'text' && !!element.autoWidth;
 
@@ -1089,7 +1093,7 @@ export const SingleElementEditor: React.FC<SingleElementEditorProps> = ({
                     {selectionIsTextOnly && (
                         <div className="flex items-center gap-2 rounded border border-slate-200 px-2 py-1.5">
                             <input
-                                ref={autoWidthCheckboxRef}
+                                ref={setAutoWidthCheckboxRef}
                                 id={`${textOverflowControlId}-auto-width`}
                                 type="checkbox"
                                 checked={autoWidthSelection === true}
@@ -1108,10 +1112,10 @@ export const SingleElementEditor: React.FC<SingleElementEditorProps> = ({
                     {element.type !== 'grid' && (
                         <div>
                             <textarea
+                                ref={setTextAreaRef}
                                 className="w-full border rounded px-2 py-1 text-sm min-h-[60px]"
                                 placeholder="Text content or {{field}}"
                                 value={element.text || (element.dataBinding ? `{{${element.dataBinding}}}` : '')}
-                                autoFocus={element.type === 'text' && !element.text}
                                 onChange={e => {
                                     const val = e.target.value;
                                     let updates: any = {};
