@@ -1,5 +1,14 @@
 const { defineConfig, devices } = require('@playwright/test');
 
+const webPort = Number(process.env.E2E_WEB_PORT || 3000);
+const apiPort = Number(process.env.E2E_API_PORT || 3001);
+if (!Number.isInteger(webPort) || webPort <= 0 || !Number.isInteger(apiPort) || apiPort <= 0) {
+    throw new Error('E2E_WEB_PORT and E2E_API_PORT must be positive integers');
+}
+const webOrigin = `http://localhost:${webPort}`;
+const apiOrigin = `http://localhost:${apiPort}`;
+process.env.E2E_API_BASE ||= apiOrigin;
+
 const e2eOwnerEmail = process.env.E2E_OWNER_EMAIL || `owner-${Date.now()}-${process.pid}@test.dev`;
 process.env.E2E_OWNER_EMAIL = e2eOwnerEmail;
 
@@ -21,7 +30,7 @@ module.exports = defineConfig({
     /* Shared settings for all the projects below. See https://playwright.dev/docs/api/class-testoptions. */
     use: {
         /* Base URL to use in actions like `await page.goto('/')`. */
-        baseURL: 'http://localhost:3000',
+        baseURL: webOrigin,
 
         /* Collect trace when retrying the failed test. See https://playwright.dev/docs/trace-viewer */
         trace: 'on-first-retry',
@@ -52,15 +61,25 @@ module.exports = defineConfig({
      * key there once made every e2e signup send a REAL email (each full run
      * burns 10-15 sends of Resend quota on @test.dev addresses). Empty means
      * server/email.js uses its console fallback — same fail-safe as the unit
-     * suite. reuseExistingServer is intentionally OFF: reusing an already
-     * -running dev server would bypass this env and use whatever key that
-     * server loaded. If port 3000 is busy, stop your dev server before
-     * running e2e — an explicit failure beats silently sending real email.
+     * suite. reuseExistingServer remains OFF: reusing an already-running dev
+     * server would bypass this env and use whatever key that server loaded.
+     * Alternate E2E_WEB_PORT / E2E_API_PORT values avoid disturbing existing
+     * 3000 / 3001 processes while preserving explicit server ownership.
      */
     webServer: {
-        command: 'npm run dev',
-        url: 'http://localhost:3000',
+        command: `npx concurrently --kill-others-on-fail "vite --host 127.0.0.1 --port ${webPort} --strictPort" "node server/index.js"`,
+        url: webOrigin,
         reuseExistingServer: false,
-        env: { ...process.env, RESEND_API_KEY: '', OWNER_EMAILS: e2eOwnerEmail },
+        env: {
+            ...process.env,
+            PORT: String(apiPort),
+            RESEND_API_KEY: '',
+            OWNER_EMAILS: e2eOwnerEmail,
+            CLIENT_URL: webOrigin,
+            BETTER_AUTH_URL: `${apiOrigin}/api/auth`,
+            TRUSTED_ORIGINS: `${webOrigin},${apiOrigin}`,
+            VITE_API_URL: `${apiOrigin}/api/auth`,
+            VITE_API_BASE: apiOrigin,
+        },
     },
 });
