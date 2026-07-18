@@ -157,6 +157,46 @@ describe('PDF export link annotations', () => {
         expect(pdf).toContain('/Dest');
     });
 
+    it('keeps an unrotated grid link on the full cell instead of its inset text box', async () => {
+        const pdf = await exportBytes(makeState([{
+            ...baseEl('linked-grid', 0),
+            type: 'grid',
+            fontFamily: '__builtin_fallback__',
+            fontSize: 18,
+            textColor: '#000000',
+            textOverflow: 'shrink',
+            textWrap: false,
+            gridConfig: {
+                cols: 1, gapX: 0, gapY: 0, sourceType: 'current', displayField: 'title',
+                gridBorderMode: 'none', gridBorderWidth: 0, gridBorderColor: '', gridBorderStyle: 'none',
+            },
+        }], true));
+        const linkedRects = [...pdf.matchAll(/\/Rect \[([^\]]+)\][\s\S]*?\/Dest/g)]
+            .map(match => match[1].trim().split(/\s+/).map(Number));
+
+        expect(pdf).toContain('/Dest');
+        expect(linkedRects).toContainEqual([20, 680, 120, 640]);
+    });
+
+    it('retains existing zero-angle eligibility for grid cell links', async () => {
+        const pdf = await exportBytes(makeState([{
+            ...baseEl('rotated-grid', 0),
+            type: 'grid',
+            rotation: 10,
+            fontFamily: '__builtin_fallback__',
+            fontSize: 12,
+            textColor: '#000000',
+            textOverflow: 'clip',
+            textWrap: false,
+            gridConfig: {
+                cols: 1, gapX: 0, gapY: 0, sourceType: 'current', displayField: 'title',
+                gridBorderMode: 'none', gridBorderWidth: 0, gridBorderColor: '', gridBorderStyle: 'none',
+            },
+        }], true));
+
+        expect(pdf).not.toContain('/Dest');
+    });
+
     it('omits text glyphs and links for whitespace-only resolved text', async () => {
         const pdf = await exportBytes(makeState([
             {

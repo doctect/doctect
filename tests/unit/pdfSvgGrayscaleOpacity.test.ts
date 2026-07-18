@@ -123,6 +123,20 @@ describe('greyscale export of grid elements', () => {
         expect(pdf).not.toContain('0. 0. 1. RG');
     });
 
+    it('desaturates first-column text overrides and underline decoration', async () => {
+        const pdf = await exportBytes(gridState({
+            fontFamily: 'courier', textOverflow: 'clip', textWrap: false,
+            textDecoration: 'underline',
+        }, {
+            firstColumn: true, firstColumnTextColor: '#00ff00', firstColumnFontWeight: 'bold',
+        }), { isGreyscale: true });
+
+        expect(pdf).toMatch(/\b0\.588 g\b/);
+        expect(pdf).toMatch(/\b0\.59 G\b/);
+        expect(pdf).not.toContain('0. 1. 0. rg');
+        expect(pdf).not.toContain('0. 1. 0. RG');
+    });
+
     it('desaturates patterned cell strokes and rounded borders under element opacity', async () => {
         const pdf = await exportBytes(gridState({
             fillType: 'pattern', patternType: 'lines-h', patternSpacing: 5, patternWeight: 1,

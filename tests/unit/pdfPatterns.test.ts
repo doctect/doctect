@@ -21,6 +21,8 @@ const gridPatternElement = (): TemplateElement => ({
   ...patternElement('lines-d'),
   id: 'grid-pattern-lines-d',
   type: 'grid',
+  fontFamily: '__builtin_fallback__', fontSize: 12, textColor: '#000000',
+  textOverflow: 'clip', textWrap: false,
   gridConfig: {
     cols: 1, gapX: 0, gapY: 0, sourceType: 'current', displayField: 'title',
     gridBorderMode: 'none', gridBorderWidth: 0, gridBorderStyle: 'solid',
@@ -125,6 +127,10 @@ describe('PDF pattern fills', () => {
   it('draws clipped diagonal strokes in grid cells', async () => {
     const pdf = await gridPdfText();
     expectDiagonalPattern(pdf, { x: 40, y: 50, w: 180, h: 120 });
+    const stream = patternContentStream(pdf);
+    expect(stream.indexOf('1. 0. 0. RG')).toBeLessThan(stream.indexOf('(Cell) Tj'));
+    expect(stream.match(/(?:^|\s)W(?=\s|$)/g)?.length).toBeGreaterThanOrEqual(2);
+    expect(stream.match(/^q$/gm) || []).toHaveLength((stream.match(/^Q$/gm) || []).length);
   });
 
   it.each(['lines-h', 'lines-v'] as const)('keeps %s line patterns rendering', async patternType => {

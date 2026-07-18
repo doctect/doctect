@@ -1485,30 +1485,42 @@ export const generatePDF = async (state: AppState, options: GeneratePDFOptions =
                     }
 
                     if (isVisibleText(txt, el.fontSize)) {
-                        // Apply font with cell-specific overrides
-                        const cellEl = { ...el, textColor: cellTextColorHex, fontWeight: cellFontWeight } as any;
-                        applyFont(doc, cellEl, options.isGreyscale);
-                        // Vertical Alignment Logic
-                        let textY = cellY + cellH / 2;
-                        let baseline: any = 'middle';
+                        const cellEl: TemplateElement = { ...el, textColor: cellTextColorHex, fontWeight: cellFontWeight };
+                        const settings = resolveTextOverflowSettings(el)!;
+                        const contentWidth = Math.max(0, cellW - 2);
+                        const metricIdentity = [
+                            pdfTextSession.identity,
+                            el.fontFamily || 'helvetica',
+                            cellFontWeight || 'normal',
+                            el.fontStyle || 'normal',
+                        ].join(':');
+                        const selectFont = (size: number) => applyFont(doc, cellEl, options.isGreyscale, size);
+                        const context = `grid ${el.id} cell ${childId}`;
+                        const layout = pdfTextSession.layout({
+                            text: String(txt),
+                            contentWidth,
+                            contentHeight: cellH,
+                            fontSize: resolveTextFontSize(el.fontSize),
+                            fontFamily: el.fontFamily || 'helvetica',
+                            fontWeight: cellFontWeight || 'normal',
+                            fontStyle: el.fontStyle || 'normal',
+                            textOverflow: settings.textOverflow,
+                            textWrap: settings.textWrap,
+                            align: el.align || 'center',
+                            verticalAlign: el.verticalAlign || 'middle',
+                        }, metricIdentity, selectFont, context);
 
-                        if (el.verticalAlign === 'top') {
-                            textY = cellY + 4;
-                            baseline = 'top';
-                        } else if (el.verticalAlign === 'bottom') {
-                            textY = cellY + cellH - 4;
-                            baseline = 'bottom';
-                        }
-
-                        let textX = cellX + cellW / 2;
-                        if (el.align === 'left') textX = cellX + 4;
-                        if (el.align === 'right') textX = cellX + cellW - 4;
-
-                        try {
-                            doc.text(String(txt), textX, textY + yOffset, { align: el.align || 'center', baseline: baseline });
-                        } catch (err) {
-                            console.error(`[PDFService] Grid doc.text CRASH args:`, { txt, textX, textY, align: el.align || 'center', baseline });
-                            throw err;
+                        if (layout) {
+                            const decorationColor = el.textDecoration === 'underline'
+                                ? options.isGreyscale
+                                    ? hexToGreyscale(cellTextColorHex)
+                                    : hexToRgb(cellTextColorHex)
+                                : null;
+                            pdfTextSession.draw(
+                                layout,
+                                { x: cellX + 1, y: cellY, width: contentWidth, height: cellH, yOffset },
+                                { selectFont, textDecoration: el.textDecoration, decorationColor, context },
+                            );
                         }
                     }
 
