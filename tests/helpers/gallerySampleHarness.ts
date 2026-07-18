@@ -562,6 +562,48 @@ const validateExampleChrome = (sample: LoadedGallerySample, errors: string[]) =>
     }
 };
 
+// Mirror the deployed generator sandbox's jsonIssue() walk (services/generatorSandbox.ts):
+// the sandbox rejects any output value that is not JSON-clonable (undefined, function,
+// symbol, bigint, non-finite number, cycle) with "Output contains a non-JSON value". The
+// permissive test executor (new Function) and generatePDF tolerate such values, so without
+// this check a sample can pass every test yet fail the real editor on import.
+const findNonJsonValue = (root: unknown): string | undefined => {
+    const seen = new Set<object>();
+    const walk = (value: unknown, path: string): string | undefined => {
+        if (value === null) return undefined;
+        const type = typeof value;
+        if (type === 'string' || type === 'boolean') return undefined;
+        if (type === 'number') {
+            return Number.isFinite(value as number) ? undefined : `${path} is a non-finite number (${String(value)})`;
+        }
+        if (type !== 'object') return `${path} is a non-JSON ${type} value`;
+        const object = value as Record<string, unknown>;
+        if (seen.has(object)) return `${path} is part of a cycle`;
+        seen.add(object);
+        if (Array.isArray(object)) {
+            for (let index = 0; index < object.length; index += 1) {
+                const issue = walk(object[index], `${path}[${index}]`);
+                if (issue) return issue;
+            }
+        } else {
+            for (const key of Object.keys(object)) {
+                const issue = walk(object[key], `${path}.${key}`);
+                if (issue) return issue;
+            }
+        }
+        seen.delete(object);
+        return undefined;
+    };
+    return walk(root, 'output');
+};
+
+const validateJsonClonable = (sample: LoadedGallerySample, errors: string[]) => {
+    const templateIssue = findNonJsonValue(sample.templates);
+    if (templateIssue) errors.push(`templates: ${templateIssue} — sandbox rejects non-JSON output`);
+    const nodeIssue = findNonJsonValue(sample.nodes);
+    if (nodeIssue) errors.push(`nodes: ${nodeIssue} — sandbox rejects non-JSON output`);
+};
+
 export function validateSharedGalleryInvariants(sample: LoadedGallerySample): string[] {
     const errors: string[] = [];
     const templatesValid = isRecord(sample?.templates);
@@ -575,6 +617,7 @@ export function validateSharedGalleryInvariants(sample: LoadedGallerySample): st
         validateStructure(sample, errors);
         validateTemplates(sample, errors);
         validateExampleChrome(sample, errors);
+        validateJsonClonable(sample, errors);
         if (typeof sample.templateSource === 'string' && typeof sample.hierarchySource === 'string') {
             validateDeterministicIds(sample, errors);
         }

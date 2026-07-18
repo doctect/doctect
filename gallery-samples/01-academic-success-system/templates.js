@@ -16,20 +16,28 @@ const COLORS = {
 let elementSequence = 0;
 const elementId = (templateId, role) => `${templateId}_${role}_${String(++elementSequence).padStart(3, '0')}`;
 
-const base = (templateId, role, type, x, y, w, h, extra = {}) => ({
-  id: elementId(templateId, role),
-  type,
-  x,
-  y,
-  w,
-  h,
-  rotation: 0,
-  fill: '',
-  stroke: '',
-  strokeWidth: 0,
-  opacity: 1,
-  ...extra,
-});
+const base = (templateId, role, type, x, y, w, h, extra = {}) => {
+  const element = {
+    id: elementId(templateId, role),
+    type,
+    x,
+    y,
+    w,
+    h,
+    rotation: 0,
+    fill: '',
+    stroke: '',
+    strokeWidth: 0,
+    opacity: 1,
+    ...extra,
+  };
+  // Drop explicitly-undefined props: the deployed generator sandbox rejects
+  // non-JSON values with "Output contains a non-JSON value".
+  Object.keys(element).forEach((key) => {
+    if (element[key] === undefined) delete element[key];
+  });
+  return element;
+};
 
 const rect = (templateId, role, x, y, w, h, fill, extra = {}) =>
   base(templateId, role, 'rect', x, y, w, h, { fill, ...extra });
