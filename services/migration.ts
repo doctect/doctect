@@ -13,12 +13,13 @@
 
 import { AppState } from '../types';
 import { ensureTemplateLayers } from './layers';
+import { normalizeProjectTextPadding, ZERO_TEXT_PADDING } from './textPadding';
 import { normalizeTextOverflow } from './textOverflow';
 
 /**
  * Current schema version. Increment this when making breaking changes.
  */
-export const CURRENT_SCHEMA_VERSION = 10;
+export const CURRENT_SCHEMA_VERSION = 11;
 
 /**
  * Migration v0 → v1
@@ -149,9 +150,16 @@ export function migrateState(state: any): AppState {
         version = 10;
     }
 
+    if (version < 11) {
+        migratedState = migrateV10ToV11(migratedState);
+        version = 11;
+    }
+
     console.log(`[Migration] Migration complete. Now at v${CURRENT_SCHEMA_VERSION}`);
 
-    return normalizeTextOverflow(migratedState as Record<string, any>) as AppState;
+    return normalizeProjectTextPadding(
+        normalizeTextOverflow(migratedState as Record<string, any>),
+    ) as AppState;
 }
 
 /**
@@ -369,6 +377,31 @@ function migrateV9ToV10(state: any): any {
     migrateTemplates(migrated.templates);
 
     migrated.schemaVersion = 10;
+    return migrated;
+}
+
+function migrateV10ToV11(state: any): any {
+    console.log('[Migration] Applying v10 → v11: Adding text padding');
+    const migrated = JSON.parse(JSON.stringify(state));
+
+    const migrateTemplates = (templates: any) => {
+        if (!templates || typeof templates !== 'object') return;
+        Object.values(templates).forEach((template: any) => {
+            if (!Array.isArray(template?.elements)) return;
+            template.elements.forEach((element: any) => {
+                if (element.type === 'text') {
+                    element.textPadding = { ...ZERO_TEXT_PADDING };
+                }
+            });
+        });
+    };
+
+    if (migrated.variants && typeof migrated.variants === 'object') {
+        Object.values(migrated.variants).forEach((variant: any) => migrateTemplates(variant?.templates));
+    }
+    migrateTemplates(migrated.templates);
+
+    migrated.schemaVersion = 11;
     return migrated;
 }
 

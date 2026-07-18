@@ -43,12 +43,12 @@ const source = {
 
 describe('migrateV7ToV8', () => {
     it('continues to the current schema version', () => {
-        expect(CURRENT_SCHEMA_VERSION).toBe(10);
+        expect(CURRENT_SCHEMA_VERSION).toBe(11);
     });
 
     it('creates exactly one default "Layer 1" per template across all variants and tags every element', () => {
         const out: any = migrateState(v7State());
-        expect(out.schemaVersion).toBe(10);
+        expect(out.schemaVersion).toBe(11);
         for (const variant of Object.values<any>(out.variants)) {
             for (const tpl of Object.values<any>(variant.templates)) {
                 expect(tpl.layers).toHaveLength(1);
@@ -73,7 +73,7 @@ describe('migrateV7ToV8', () => {
             templates: { page: { id: 'page', name: 'Page', width: 500, height: 700, elements: [el('a', 1)] } },
         };
         const out: any = migrateState(legacy);
-        expect(out.schemaVersion).toBe(10);
+        expect(out.schemaVersion).toBe(11);
         const tpl = out.variants.default.templates.page;
         expect(tpl.layers).toHaveLength(1);
         expect(tpl.elements[0].layerId).toBe(tpl.layers[0].id);
@@ -99,13 +99,13 @@ describe('migrateV8ToV9', () => {
         const before = structuredClone(input);
         const output = migrateState(input);
 
-        expect(CURRENT_SCHEMA_VERSION).toBe(10);
-        expect(output.schemaVersion).toBe(10);
+        expect(CURRENT_SCHEMA_VERSION).toBe(11);
+        expect(output.schemaVersion).toBe(11);
         expect(output.generator).toEqual(source);
         expect(input).toEqual(before);
         expect(migrateState(structuredClone(output))).toEqual(output);
         expect(migrateState(validV8State()).generator).toBeUndefined();
-        expect(migrateState(validLegacyV0State()).schemaVersion).toBe(10);
+        expect(migrateState(validLegacyV0State()).schemaVersion).toBe(11);
     });
 });
 
@@ -150,7 +150,7 @@ describe('migrateV9ToV10', () => {
             before.templates.legacy,
         ];
 
-        expect(output.schemaVersion).toBe(10);
+        expect(output.schemaVersion).toBe(11);
         templates.forEach((template, index) => {
             expect(template.elements[0]).toMatchObject({ textOverflow: 'visible', textWrap: true });
             expect(template.elements[1]).toMatchObject({ textOverflow: 'visible', textWrap: true });
@@ -179,16 +179,21 @@ describe('migrateV9ToV10', () => {
         const output: any = migrateState(input);
 
         expect(output.variants.default.templates.page.elements).toEqual([
-            { type: 'text', textOverflow: 'clip', textWrap: true },
+            {
+                type: 'text',
+                textOverflow: 'clip',
+                textWrap: true,
+                textPadding: { top: 0, right: 0, bottom: 0, left: 0 },
+            },
             { type: 'grid', textOverflow: 'visible', textWrap: true },
         ]);
         expect(input).toEqual(before);
-        expect(needsMigration(input)).toBe(false);
+        expect(needsMigration(input)).toBe(true);
     });
 
     it('returns future-version state untouched by reference', () => {
         const future: any = {
-            schemaVersion: 11,
+            schemaVersion: 12,
             variants: { default: { templates: { page: { elements: [
                 { type: 'text', textOverflow: null, textWrap: 'future' },
             ] } } } },
@@ -196,6 +201,55 @@ describe('migrateV9ToV10', () => {
 
         expect(migrateState(future)).toBe(future);
         expect(migrateState(future)).toEqual(future);
+    });
+});
+
+describe('migrateV10ToV11', () => {
+    const zeroPadding = { top: 0, right: 0, bottom: 0, left: 0 };
+
+    it('adds zero padding across variants and flat templates and overwrites experimental v10 data', () => {
+        const input: any = {
+            schemaVersion: 10,
+            variants: { default: { templates: { page: { elements: [
+                { id: 'fixed', type: 'text', autoWidth: false, textPadding: { top: 9, right: 8, bottom: 7, left: 6 } },
+                { id: 'auto', type: 'text', autoWidth: true },
+                { id: 'grid', type: 'grid', textPadding: { top: 4 } },
+            ] } } } },
+            templates: { legacy: { elements: [
+                { id: 'legacy-text', type: 'text', textPadding: 'experimental' },
+            ] } },
+        };
+        const before = structuredClone(input);
+
+        const output: any = migrateState(input);
+
+        expect(output.schemaVersion).toBe(11);
+        expect(output.variants.default.templates.page.elements[0].textPadding).toEqual(zeroPadding);
+        expect(output.variants.default.templates.page.elements[1].textPadding).toEqual(zeroPadding);
+        expect(output.variants.default.templates.page.elements[2].textPadding).toEqual({ top: 4 });
+        expect(output.templates.legacy.elements[0].textPadding).toEqual(zeroPadding);
+        expect(input).toEqual(before);
+        expect(needsMigration(input)).toBe(true);
+        expect(needsMigration(output)).toBe(false);
+    });
+
+    it('normalizes current-v11 sides while preserving valid decimals', () => {
+        const input: any = {
+            schemaVersion: 11,
+            variants: { default: { templates: { page: { elements: [
+                { type: 'text', textPadding: { top: 1.25, right: -1, bottom: '2', left: 3.75 } },
+            ] } } } },
+        };
+        const output: any = migrateState(input);
+        expect(output.variants.default.templates.page.elements[0].textPadding).toEqual({
+            top: 1.25, right: 0, bottom: 0, left: 3.75,
+        });
+        expect(input.variants.default.templates.page.elements[0].textPadding.right).toBe(-1);
+    });
+
+    it('returns schema-v12 state untouched by reference', () => {
+        const future: any = { schemaVersion: 12, variants: {} };
+        expect(migrateState(future)).toBe(future);
     });
 });
 
