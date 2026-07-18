@@ -22,6 +22,7 @@ const fixture = {
                             text: 'Short', dataBinding: '', autoWidth: false,
                             fontSize: 16, fontFamily: 'helvetica', fontWeight: 'normal', fontStyle: 'normal',
                             textColor: '#000000', textOverflow: 'clip', textWrap: true,
+                            textPadding: { top: 0, right: 0, bottom: 0, left: 0 },
                         },
                         {
                             id: 'bound', type: 'text', layerId: 'base',
@@ -30,6 +31,7 @@ const fixture = {
                             text: '', dataBinding: 'label', autoWidth: true,
                             fontSize: 16, fontFamily: 'helvetica', fontWeight: 'bold', fontStyle: 'normal',
                             textColor: '#000000', textOverflow: 'ellipsis', textWrap: false,
+                            textPadding: { top: 0, right: 0, bottom: 0, left: 0 },
                         },
                         {
                             id: 'grid', type: 'grid', layerId: 'base',
@@ -55,7 +57,7 @@ const fixture = {
     templatePreviewNodeId: 'root', scale: 0.8, tool: 'select', showJsonModal: false,
     showNodeSelector: false, nodeSelectorMode: 'grid_source', editingElementId: null,
     sidebarWidth: 288, propertiesPanelWidth: 340, snapToGrid: false, showGrid: false,
-    clipboard: [], schemaVersion: 10,
+    clipboard: [], schemaVersion: 11,
 };
 
 const activePane = page => page.locator('[data-testid="project-pane"][data-active="true"]');
@@ -149,5 +151,49 @@ test.describe('Element Properties auto width and disclosure', () => {
 
         await page.reload();
         await expect(activePane(page).getByRole('button', { name: 'Geometry', exact: true })).toHaveAttribute('aria-expanded', 'true');
+    });
+
+    test('edits linked and independent padding and restores it after auto width', async ({ page }) => {
+        const pane = activePane(page);
+        await pane.getByTestId('editor-canvas').click({ position: { x: 450, y: 650 } });
+        await canvasElement(page, 'literal').click();
+
+        const top = pane.getByLabel('Padding top');
+        const right = pane.getByLabel('Padding right');
+        const link = pane.getByLabel('Link padding sides');
+        await expect(link).toBeChecked();
+        await top.fill('8');
+
+        const textBox = canvasElement(page, 'literal').locator('[data-text-layout-line]').first().locator('..');
+        await expect(textBox).toHaveCSS('left', '8px');
+        await expect(textBox).toHaveCSS('top', '8px');
+        await expect(textBox).toHaveCSS('width', '164px');
+        await expect(textBox).toHaveCSS('height', '24px');
+
+        await link.uncheck();
+        await right.fill('12');
+        await expect(textBox).toHaveCSS('left', '8px');
+        await expect(textBox).toHaveCSS('top', '8px');
+        await expect(textBox).toHaveCSS('width', '160px');
+        await expect(textBox).toHaveCSS('height', '24px');
+
+        await canvasElement(page, 'literal').dblclick({ position: { x: 40, y: 20 } });
+        const editorBox = pane.getByTestId('overlay-text-editor-box');
+        await expect(editorBox).toHaveCSS('left', '8px');
+        await expect(editorBox).toHaveCSS('top', '8px');
+        await expect(editorBox).toHaveCSS('width', '160px');
+        await expect(editorBox).toHaveCSS('height', '24px');
+        await expect(pane.getByTestId('overlay-text-editor')).toContainText('Short');
+        await page.keyboard.press('Escape');
+
+        const autoWidth = pane.getByLabel('Auto width', { exact: true });
+        await autoWidth.check();
+        await expect(top).toBeDisabled();
+        await expect(canvasElement(page, 'literal').locator('[data-text-layout-line]')).toHaveCount(0);
+
+        await autoWidth.uncheck();
+        await expect(top).toBeEnabled();
+        await expect(textBox).toHaveCSS('left', '8px');
+        await expect(textBox).toHaveCSS('top', '8px');
     });
 });
