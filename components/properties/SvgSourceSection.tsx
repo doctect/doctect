@@ -21,6 +21,7 @@ export const SvgSourceSection: React.FC<SvgSourceSectionProps> = ({ svgContent, 
     const [error, setError] = useState<string | null>(null);
     const lastCommittedRef = useRef(svgContent);
     const historySavedRef = useRef(false);
+    const focusSessionRef = useRef(0);
     const timerRef = useRef<number | null>(null);
     // Always call the latest onCommit from inside the debounce timer — the
     // timer closure is set up on the render that scheduled it, but an
@@ -54,6 +55,8 @@ export const SvgSourceSection: React.FC<SvgSourceSectionProps> = ({ svgContent, 
     const handleChange = (text: string) => {
         setDraft(text);
         if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+        const saveHistory = !historySavedRef.current;
+        const focusSession = focusSessionRef.current;
         timerRef.current = window.setTimeout(() => {
             const result = validateSvgMarkup(text);
             if (!result.ok) {
@@ -63,8 +66,8 @@ export const SvgSourceSection: React.FC<SvgSourceSectionProps> = ({ svgContent, 
             setError(null);
             if (text === lastCommittedRef.current) return;
             lastCommittedRef.current = text;
-            onCommitRef.current(text, !historySavedRef.current);
-            historySavedRef.current = true;
+            onCommitRef.current(text, saveHistory);
+            if (focusSessionRef.current === focusSession) historySavedRef.current = true;
         }, DEBOUNCE_MS);
     };
 
@@ -88,7 +91,10 @@ export const SvgSourceSection: React.FC<SvgSourceSectionProps> = ({ svgContent, 
                     value={draft}
                     // Burst flag resets only on focus: a commit that lands after
                     // blur still belongs to the old session (saveHistory=false).
-                    onFocus={() => { historySavedRef.current = false; }}
+                    onFocus={() => {
+                        focusSessionRef.current += 1;
+                        historySavedRef.current = false;
+                    }}
                     onChange={e => handleChange(e.target.value)}
                 />
                 {error && <div className="text-[11px] text-red-600">{error}</div>}

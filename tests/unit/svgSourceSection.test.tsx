@@ -70,6 +70,37 @@ describe('SvgSourceSection', () => {
         expect(onCommit).toHaveBeenNthCalledWith(2, VALID_A, false);
     });
 
+    it('keeps the scheduled history decision when collapse and refocus start a new session', () => {
+        const onCommit = vi.fn();
+        const Controlled = () => {
+            const [expanded, setExpanded] = React.useState(true);
+            return <SvgSourceSection
+                svgContent={VALID_A}
+                onCommit={onCommit}
+                expanded={expanded}
+                onToggle={() => setExpanded(value => !value)}
+            />;
+        };
+        render(<Controlled />);
+        fireEvent.focus(getTextarea());
+        fireEvent.change(getTextarea(), { target: { value: VALID_B } });
+        act(() => { vi.advanceTimersByTime(400); });
+        expect(onCommit).toHaveBeenNthCalledWith(1, VALID_B, true);
+
+        fireEvent.change(getTextarea(), { target: { value: VALID_C } });
+        fireEvent.click(screen.getByRole('button', { name: 'SVG Source' }));
+        fireEvent.click(screen.getByRole('button', { name: 'SVG Source' }));
+        fireEvent.focus(getTextarea());
+        act(() => { vi.advanceTimersByTime(400); });
+
+        expect(onCommit).toHaveBeenCalledTimes(2);
+        expect(onCommit).toHaveBeenNthCalledWith(2, VALID_C, false);
+
+        fireEvent.change(getTextarea(), { target: { value: VALID_A } });
+        act(() => { vi.advanceTimersByTime(400); });
+        expect(onCommit).toHaveBeenNthCalledWith(3, VALID_A, true);
+    });
+
     it('shows an error and does not commit invalid SVG', () => {
         const onCommit = vi.fn();
         render(<SvgSourceSection svgContent={VALID_A} expanded={true} onToggle={vi.fn()} onCommit={onCommit} />);
