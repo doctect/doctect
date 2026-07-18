@@ -18,6 +18,21 @@ describe('text overflow settings', () => {
       .toEqual({ type: 'text', textOverflow: 'clip', textWrap: true });
   });
 
+  it.each(['true', 1])('rejects malformed grid wrap %j', value => {
+    expect(normalizeTextOverflowElement({ type: 'grid', textWrap: value }))
+      .toEqual({ type: 'grid', textOverflow: 'clip', textWrap: false });
+  });
+
+  it.each([
+    ['text', true],
+    ['text', false],
+    ['grid', true],
+    ['grid', false],
+  ] as const)('preserves valid %s wrap %s', (type, textWrap) => {
+    expect(normalizeTextOverflowElement({ type, textWrap }))
+      .toEqual({ type, textOverflow: 'clip', textWrap });
+  });
+
   it('preserves valid values and leaves non-applicable elements field-for-field unchanged', () => {
     const rect = { type: 'rect', textOverflow: 'future', textWrap: 'false', custom: null };
     expect(normalizeTextOverflowElement({ type: 'grid', textOverflow: 'visible', textWrap: true }))

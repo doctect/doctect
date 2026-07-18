@@ -218,12 +218,13 @@ describe('presets are layer-tagged (belt-and-suspenders)', () => {
 
 // The three shipped presets are flat-`templates`-shaped, so their create*Project tests above
 // never exercise the variants-shaped trap: loadPreset stamps variants presets at
-// CURRENT_SCHEMA_VERSION, so migrateState early-returns WITHOUT running migrateV7ToV8, and the
-// belt-and-suspenders forEach in loadPreset is the ONLY thing that tags their layers. This
-// block drives that exact path directly (and guards Fix 1's deep-clone independence).
+// CURRENT_SCHEMA_VERSION, so migrateState skips versioned steps including migrateV7ToV8 while
+// current-v10 normalization still runs. The belt-and-suspenders forEach in loadPreset is the ONLY
+// thing that tags their layers. This block drives that path directly (and guards Fix 1's deep-clone
+// independence).
 describe('loadPreset: variants-shaped preset (belt-and-suspenders path)', () => {
     // Variants-shaped, untagged (no layers / no layerId). loadPreset stamps it at
-    // CURRENT_SCHEMA_VERSION, mirroring the real trap that skips migrateV7ToV8.
+    // CURRENT_SCHEMA_VERSION, skipping migrateV7ToV8 while current-v10 normalization still runs.
     const variantsPresetData = () => ({
         nodes: { root: { id: 'root', parentId: null, type: 'page', title: 'Root', data: {}, children: [] } },
         rootId: 'root',
