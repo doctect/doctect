@@ -11,6 +11,8 @@ import { measureAutoWidthText } from '../../services/autoWidthText';
 import { resolveElementPreviewText } from '../../services/previewText';
 import { DEFAULT_TEXT_FONT_SIZE, resolveTextFontSize } from '../../services/textVisibility';
 import { CollapsibleSection } from '../CollapsibleSection';
+import { resolveTextPadding, type TextPaddingSide } from '../../services/textPadding';
+import { TextPaddingControls, type TextPaddingSelection } from './TextPaddingControls';
 
 // Font family mapping for CSS (used for font dropdown preview)
 const getFontFamily = (fontValue: string): string => {
@@ -87,6 +89,8 @@ interface SingleElementEditorProps {
     state: AppState;
     selectionIsTextOnly: boolean;
     autoWidthSelection: AutoWidthSelection;
+    textPaddingSelection: TextPaddingSelection | null;
+    textPaddingSelectionKey: string;
     sectionExpanded: ElementPropertySectionState;
     onToggleSection: (section: ElementPropertySectionKey) => void;
     activeNode?: AppNode;
@@ -263,6 +267,8 @@ export const SingleElementEditor: React.FC<SingleElementEditorProps> = ({
     state,
     selectionIsTextOnly,
     autoWidthSelection,
+    textPaddingSelection,
+    textPaddingSelectionKey,
     sectionExpanded,
     onToggleSection,
     activeNode,
@@ -488,6 +494,16 @@ export const SingleElementEditor: React.FC<SingleElementEditorProps> = ({
                     ? previous.h
                     : Math.max(20, fontSize * 1.5),
             };
+        });
+    };
+
+    const handleTextPaddingCommit = (side: TextPaddingSide, value: number, linked: boolean) => {
+        onUpdate(previous => {
+            const current = resolveTextPadding(previous);
+            const textPadding = linked
+                ? { top: value, right: value, bottom: value, left: value }
+                : { ...current, [side]: value };
+            return { textPadding };
         });
     };
 
@@ -1109,6 +1125,15 @@ export const SingleElementEditor: React.FC<SingleElementEditorProps> = ({
                                 Auto width
                             </label>
                         </div>
+                    )}
+
+                    {textPaddingSelection && (
+                        <TextPaddingControls
+                            values={textPaddingSelection}
+                            disabled={autoWidthSelection !== false}
+                            selectionKey={textPaddingSelectionKey}
+                            onCommit={handleTextPaddingCommit}
+                        />
                     )}
 
                     {element.type !== 'grid' && (

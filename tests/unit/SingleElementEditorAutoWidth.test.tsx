@@ -3,6 +3,7 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SingleElementEditor } from '../../components/properties/SingleElementEditor';
 import * as autoWidthText from '../../services/autoWidthText';
+import { resolveTextPadding } from '../../services/textPadding';
 import type { AppNode, AppState, TemplateElement } from '../../types';
 
 const activeNode: AppNode = {
@@ -49,6 +50,8 @@ describe('SingleElementEditor auto-width text edits', () => {
             state={state}
             selectionIsTextOnly={element.type === 'text'}
             autoWidthSelection={element.autoWidth === true}
+            textPaddingSelection={resolveTextPadding(element)}
+            textPaddingSelectionKey={element.id}
             sectionExpanded={sectionExpanded}
             onToggleSection={vi.fn()}
             activeNode={activeNode}

@@ -2,6 +2,7 @@ import React from 'react';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SingleElementEditor } from '../../components/properties/SingleElementEditor';
+import { resolveTextPadding } from '../../services/textPadding';
 import type { AppState, TemplateElement } from '../../types';
 
 const baseElement = (overrides: Partial<TemplateElement> = {}): TemplateElement => ({
@@ -40,6 +41,8 @@ function renderEditor(element: TemplateElement) {
             state={state}
             selectionIsTextOnly={element.type === 'text'}
             autoWidthSelection={element.autoWidth === true}
+            textPaddingSelection={element.type === 'text' ? resolveTextPadding(element) : null}
+            textPaddingSelectionKey={element.id}
             sectionExpanded={sectionExpanded}
             onToggleSection={vi.fn()}
         />,

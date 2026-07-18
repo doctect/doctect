@@ -42,7 +42,10 @@ afterEach(() => {
 
 describe('PropertiesPanel Auto width', () => {
     it('disables auto-width without changing geometry or unrelated fields', () => {
-        const element = text('auto', { autoWidth: true, w: 187.5, h: 32.25 });
+        const element = text('auto', {
+            autoWidth: true, w: 187.5, h: 32.25,
+            textPadding: { top: 1, right: 2, bottom: 3, left: 4 },
+        });
         const props = callbacks();
         render(<PropertiesPanel state={stateFor([element], ['auto'])} activePreviewNode={activeNode} {...props} />);
 

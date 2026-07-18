@@ -13,6 +13,8 @@ import {
 import { NodeProperties } from './properties/NodeProperties';
 import { CollapsibleSection } from './CollapsibleSection';
 import clsx from 'clsx';
+import { resolveTextPadding, TEXT_PADDING_SIDES } from '../services/textPadding';
+import type { TextPaddingSelection } from './properties/TextPaddingControls';
 
 interface PropertiesPanelProps {
     state: AppState;
@@ -68,6 +70,18 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({ state, activeP
         : enabledAutoWidthCount === selectedElements.length
             ? true
             : 'mixed';
+    const textPaddingSelection = React.useMemo<TextPaddingSelection | null>(() => {
+        if (!selectionIsTextOnly) return null;
+        const paddings = selectedElements.map(resolveTextPadding);
+        return Object.fromEntries(TEXT_PADDING_SIDES.map(side => {
+            const first = paddings[0][side];
+            return [side, paddings.every(padding => padding[side] === first) ? first : 'mixed'];
+        })) as TextPaddingSelection;
+    }, [selectedElements, selectionIsTextOnly]);
+    const textPaddingSelectionKey = React.useMemo(
+        () => [...selectedElementIds].sort().join('\u0000'),
+        [selectedElementIds],
+    );
 
     // Generate a "Synthetic" element for Multi-Edit
     // If values match across all selected, show key. If not, show "Mixed" or special value.
@@ -339,6 +353,8 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({ state, activeP
                             state={state}
                             selectionIsTextOnly={selectionIsTextOnly}
                             autoWidthSelection={autoWidthSelection}
+                            textPaddingSelection={textPaddingSelection}
+                            textPaddingSelectionKey={textPaddingSelectionKey}
                             sectionExpanded={elementPropertySections}
                             onToggleSection={toggleElementPropertySection}
                             activeNode={activePreviewNode}
