@@ -1646,7 +1646,7 @@ git commit -m "test: cover static text padding workflow"
 - [ ] **Step 5: Run all focused unit suites serially**
 
 ```bash
-npx vitest run --maxWorkers=1 --minWorkers=1 tests/unit/textPadding.test.ts tests/unit/migration.test.ts tests/unit/canvasElementCreationTextOverflow.test.tsx tests/unit/presets.test.ts tests/unit/validateGeneratedProject.test.ts tests/unit/generatedProjectState.test.ts tests/unit/projectDocumentSnapshot.test.ts tests/unit/server/validateAppState.test.js tests/unit/canvasFixedTextLayout.test.tsx tests/unit/pdfFixedTextOverflow.test.ts tests/unit/textLayoutParity.test.ts tests/unit/canvasGridTextLayout.test.tsx tests/unit/pdfGridTextOverflow.test.ts tests/unit/pdfLinks.test.ts tests/unit/OverlayTextEditorPadding.test.tsx tests/unit/PropertiesPanelTextPadding.test.tsx tests/unit/PropertiesPanelAutoWidth.test.tsx tests/unit/PropertiesPanelTextOverflow.test.tsx tests/unit/SingleElementEditorAutoWidth.test.tsx tests/unit/SingleElementEditorTextOverflow.test.tsx tests/unit/PropertiesPanelSections.test.tsx
+npx vitest run --maxWorkers=1 tests/unit/textPadding.test.ts tests/unit/migration.test.ts tests/unit/canvasElementCreationTextOverflow.test.tsx tests/unit/presets.test.ts tests/unit/validateGeneratedProject.test.ts tests/unit/generatedProjectState.test.ts tests/unit/projectDocumentSnapshot.test.ts tests/unit/server/validateAppState.test.js tests/unit/canvasFixedTextLayout.test.tsx tests/unit/pdfFixedTextOverflow.test.ts tests/unit/textLayoutParity.test.ts tests/unit/canvasGridTextLayout.test.tsx tests/unit/pdfGridTextOverflow.test.ts tests/unit/pdfLinks.test.ts tests/unit/OverlayTextEditorPadding.test.tsx tests/unit/PropertiesPanelTextPadding.test.tsx tests/unit/PropertiesPanelAutoWidth.test.tsx tests/unit/PropertiesPanelTextOverflow.test.tsx tests/unit/SingleElementEditorAutoWidth.test.tsx tests/unit/SingleElementEditorTextOverflow.test.tsx tests/unit/PropertiesPanelSections.test.tsx
 ```
 
 Expected: all focused tests PASS.
@@ -1654,7 +1654,7 @@ Expected: all focused tests PASS.
 - [ ] **Step 6: Run full unit/component suite**
 
 ```bash
-npx vitest run --maxWorkers=1 --minWorkers=1
+npx vitest run --maxWorkers=1
 ```
 
 Expected: all tests PASS with no unhandled rejection.
@@ -1683,7 +1683,7 @@ Invoke `superpowers:requesting-code-review`. Require separate spec-compliance an
 - [ ] **Step 9: Re-run final verification after review fixes**
 
 ```bash
-npx vitest run --maxWorkers=1 --minWorkers=1
+npx vitest run --maxWorkers=1
 npm run build
 E2E_WEB_PORT=4327 E2E_API_PORT=4328 npx playwright test tests/e2e/element_properties.spec.js tests/e2e/text_overflow.spec.js --project=chromium
 git status --short
