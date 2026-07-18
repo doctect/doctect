@@ -7,6 +7,8 @@ import { SvgSourceSection } from './SvgSourceSection';
 import { BORDER_STYLES, FONTS } from '../../constants/editor';
 import clsx from 'clsx';
 import { resolveTextOverflowSettings } from '../../services/textOverflow';
+import { measureAutoWidthText } from '../../services/autoWidthText';
+import { resolveElementPreviewText } from '../../services/previewText';
 
 // Font family mapping for CSS (used for font dropdown preview)
 const getFontFamily = (fontValue: string): string => {
@@ -1014,34 +1016,11 @@ export const SingleElementEditor: React.FC<SingleElementEditorProps> = ({ elemen
                                         updates = { text: val, dataBinding: '' };
                                     }
 
-                                    // Auto-size calculation
                                     if (element.type === 'text' && element.autoWidth) {
-                                        const fontSize = element.fontSize || 16;
-                                        const fontFamily = getFontFamily(element.fontFamily || 'helvetica');
-                                        const fontWeight = element.fontWeight || 'normal';
-                                        const fontStyle = element.fontStyle || 'normal';
-
-                                        const div = document.createElement('div');
-                                        div.style.position = 'absolute';
-                                        div.style.visibility = 'hidden';
-                                        div.style.whiteSpace = 'pre';
-                                        // Use explicit styles to ensure correct font rendering
-                                        div.style.fontSize = `${fontSize}px`;
-                                        div.style.fontFamily = fontFamily;
-                                        div.style.fontWeight = fontWeight;
-                                        div.style.fontStyle = fontStyle;
-                                        div.style.lineHeight = '1.2';
-                                        div.style.padding = '0';
-                                        div.style.display = 'inline-block';
-                                        div.innerText = val || ' ';
-
-                                        document.body.appendChild(div);
-                                        const w = div.offsetWidth;
-                                        const h = div.offsetHeight;
-                                        document.body.removeChild(div);
-
-                                        updates.w = Math.ceil(w + 25); // 25px buffer
-                                        updates.h = Math.max(20, Math.ceil(h));
+                                        const nextElement = { ...element, ...updates } as TemplateElement;
+                                        const previewText = resolveElementPreviewText(nextElement, activeNode, state.nodes);
+                                        const measurement = measureAutoWidthText(previewText, nextElement);
+                                        if (measurement) Object.assign(updates, measurement);
                                     }
                                     onUpdate(updates);
                                 }}

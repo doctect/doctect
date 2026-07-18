@@ -5,6 +5,7 @@ import { TemplateElement, AppNode } from '../../types';
 import { hasVisibleTextFontSize, isVisibleText, resolveTextFontSize } from '../../services/textVisibility';
 import { resolveTextOverflowSettings } from '../../services/textOverflow';
 import { resolveCanvasFontFamily, type CanvasTextLayoutSession } from '../../services/canvasTextLayout';
+import { resolveElementPreviewText } from '../../services/previewText';
 import { getElementBounds, traverseGridData } from './elementBounds';
 import { buildPatternBackgroundStyle } from './patternStyle';
 
@@ -22,185 +23,13 @@ interface CanvasElementProps {
     textLayoutSession: CanvasTextLayoutSession;
 }
 
-// Helper: Evaluate simple arithmetic expression or look up field
-const evaluateMath = (expr: string | number, data: Record<string, string>): number => {
-    const str = String(expr).trim();
-    if (!str) return 0;
-
-    // Simple integer
-    if (/^-?\d+$/.test(str)) return parseInt(str, 10);
-
-    // Addition
-    const plusIdx = str.indexOf('+');
-    if (plusIdx > -1) {
-        const l = str.substring(0, plusIdx).trim();
-        const r = str.substring(plusIdx + 1).trim();
-        return evaluateMath(l, data) + evaluateMath(r, data);
-    }
-
-    // Subtraction (Right-most minus that isn't start)
-    const minusIdx = str.lastIndexOf('-');
-    if (minusIdx > 0) {
-        const prevChar = str.charAt(minusIdx - 1);
-        if (prevChar !== '+' && prevChar !== '-') {
-            const l = str.substring(0, minusIdx).trim();
-            const r = str.substring(minusIdx + 1).trim();
-            return evaluateMath(l, data) - evaluateMath(r, data);
-        }
-    }
-
-    // Variable lookup
-    const val = data[str];
-    if (val !== undefined && val !== "") return parseInt(val, 10);
-
-    return 0;
-};
-
-// Helper: Find a node that refers to a specific child of the current node
-const findChildReferrerNode = (
-    currentNode: AppNode,
-    allNodes: Record<string, AppNode>,
-    startIndexVal: string | number,
-    countVal: string | number,
-    typeFilter?: string
-): AppNode | undefined => {
-    // 1. Resolve Start Index & Count with arithmetic
-    const start = evaluateMath(startIndexVal, currentNode.data || {});
-    const count = evaluateMath(countVal, currentNode.data || {});
-
-    // 2. Iterate
-    const direction = count >= 0 ? 1 : -1;
-    const absCount = Math.abs(count);
-
-    for (let i = 0; i < absCount; i++) {
-        const idx = start + (i * direction);
-        if (idx < 0) continue;
-
-        let targetChildId = (currentNode.children && currentNode.children[idx]) ? currentNode.children[idx] : undefined;
-        if (!targetChildId) continue;
-
-        const allReferrers = Object.values(allNodes).filter(n => n.referenceId === targetChildId);
-        let bestReferrer: AppNode | undefined;
-
-        if (typeFilter && typeFilter.trim() !== '') {
-            bestReferrer = allReferrers.find(ref => {
-                const parent = ref.parentId ? allNodes[ref.parentId] : null;
-                return parent && parent.type === typeFilter;
-            });
-        }
-
-        if (!bestReferrer && allReferrers.length > 0) {
-            bestReferrer = allReferrers[0];
-        }
-
-        if (bestReferrer && bestReferrer.parentId) {
-            return allNodes[bestReferrer.parentId];
-        }
-    }
-    return undefined;
-};
-
-// Helper: Get all nodes that provide context to the current node
-const getContextNodes = (startNode: AppNode, nodes: Record<string, AppNode>): AppNode[] => {
-    const result: AppNode[] = [];
-    const seen = new Set<string>();
-
-    const add = (n: AppNode) => {
-        if (n && !seen.has(n.id)) {
-            seen.add(n.id);
-            result.push(n);
-        }
-    };
-
-    // 1. Self & Ancestors
-    let curr: AppNode | undefined = startNode;
-    while (curr) {
-        add(curr);
-        curr = curr.parentId ? nodes[curr.parentId] : undefined;
-    }
-
-    // 2. Reference Target & its Ancestors
-    if (startNode.referenceId && nodes[startNode.referenceId]) {
-        let target: AppNode | undefined = nodes[startNode.referenceId];
-        while (target) {
-            add(target);
-            target = target.parentId ? nodes[target.parentId] : undefined;
-        }
-    }
-
-    // 3. Referrers & their Ancestors
-    const potentialTargets = [startNode.id];
-    if (startNode.referenceId) potentialTargets.push(startNode.referenceId);
-
-    const referrers = Object.values(nodes).filter(n =>
-        n.referenceId && potentialTargets.includes(n.referenceId)
-    );
-
-    referrers.forEach(ref => {
-        let r: AppNode | undefined = ref;
-        while (r) {
-            add(r);
-            r = r.parentId ? nodes[r.parentId] : undefined;
-        }
-    });
-
-    // 4. Children (Immediate only)
-    startNode.children.forEach(childId => {
-        if (nodes[childId]) add(nodes[childId]);
-    });
-    if (startNode.referenceId && nodes[startNode.referenceId]) {
-        nodes[startNode.referenceId].children.forEach(childId => {
-            if (nodes[childId]) add(nodes[childId]);
-        });
-    }
-
-    return result;
-};
-
-// Helper to resolve text content with data binding
-const resolveText = (text: string | undefined, node: AppNode | undefined, nodes: Record<string, AppNode>): string => {
-    let content = text || "";
-    if (!content.includes('{{')) return content;
-    if (!node) return content;
-
-    // 1. Handle explicit Child Referrer lookups first
-    content = content.replace(/\{\{child_referrer:([^:]+):([^:]+):([^:]*):([^}]+)\}\}/g, (_, startStr, countStr, typeFilter, field) => {
-        const referrerParent = findChildReferrerNode(node, nodes, startStr, countStr, typeFilter);
-
-        if (referrerParent) {
-            if (field === 'title') return referrerParent.title;
-            if (referrerParent.data && referrerParent.data[field] !== undefined) return referrerParent.data[field];
-        }
-        return "";
-    });
-
-    // 2. Build the context chain
-    const contextNodes = getContextNodes(node, nodes);
-
-    return content.replace(/\{\{([^}]+)\}\}/g, (_, key) => {
-        const trimmedKey = key.trim();
-
-        for (const ctxNode of contextNodes) {
-            if (trimmedKey === 'title') return ctxNode.title;
-            if (ctxNode.data && ctxNode.data[trimmedKey] !== undefined) {
-                return ctxNode.data[trimmedKey];
-            }
-        }
-        return "";
-    });
-};
-
 export const CanvasElement: React.FC<CanvasElementProps> = (props) => {
     const { element, selected, nodes, currentNodeId, tool, showHandles, onDoubleClick, isEditing, renderScale = 1, textLayoutSession } = props;
 
     const contextNode = nodes[currentNodeId];
     const effectiveFontSize = resolveTextFontSize(element.fontSize);
     const renderedFontSize = hasVisibleTextFontSize(element.fontSize) ? effectiveFontSize : undefined;
-    const resolvedElementText = resolveText(
-        element.dataBinding ? `{{${element.dataBinding}}}` : (element.text || ""),
-        contextNode,
-        nodes,
-    );
+    const resolvedElementText = resolveElementPreviewText(element, contextNode, nodes);
     const renderElementText = isVisibleText(resolvedElementText, element.fontSize);
 
     const getBackgroundStyle = (el: TemplateElement): React.CSSProperties => {
@@ -460,7 +289,7 @@ export const CanvasElement: React.FC<CanvasElementProps> = (props) => {
                     if (!isMock && nodes[childId]) {
                         let n = nodes[childId];
                         if (n.referenceId && nodes[n.referenceId]) n = nodes[n.referenceId];
-                        label = resolveText(templatePattern, n, nodes);
+                        label = resolveElementPreviewText({ text: templatePattern }, n, nodes);
                     }
 
                     // Compute cell-specific fill and text overrides
