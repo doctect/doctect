@@ -8,7 +8,7 @@ const trackEvent = vi.hoisted(() => vi.fn());
 const lastCreateResult = vi.hoisted(() => ({ current: undefined as boolean | undefined }));
 
 const generatedProject = {
-    schemaVersion: 9 as const,
+    schemaVersion: 10 as const,
     rootId: 'generated-root',
     activeVariantId: 'generated-variant',
     nodes: {

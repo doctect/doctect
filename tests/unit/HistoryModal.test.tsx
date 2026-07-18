@@ -30,6 +30,34 @@ const rawCloneState = {
     generator: { ...generator, formatVersion: 2, legacyNote: 'keep raw until EditorPage' },
 };
 
+const malformedOverflowState = {
+    ...commitState,
+    variants: {
+        default: {
+            id: 'default',
+            name: 'Default',
+            templates: {
+                page: {
+                    id: 'page',
+                    name: 'Page',
+                    width: 500,
+                    height: 700,
+                    elements: [
+                        { id: 'valid-text', type: 'text', textOverflow: 'visible', textWrap: false },
+                        { id: 'malformed-text', type: 'text', textOverflow: 'truncate', textWrap: 'true' },
+                        { id: 'valid-grid', type: 'grid', textOverflow: 'shrink', textWrap: true },
+                        { id: 'malformed-grid', type: 'grid', textOverflow: null, textWrap: 0 },
+                    ],
+                },
+            },
+        },
+    },
+};
+
+const overflowElement = (state: any, id: string) => (
+    state.variants.default.templates.page.elements.find((item: any) => item.id === id)
+);
+
 describe('HistoryModal', () => {
     beforeEach(() => {
         vi.restoreAllMocks();
@@ -87,6 +115,25 @@ describe('HistoryModal', () => {
             expect(onRestore.mock.invocationCallOrder[0]).toBeLessThan(alert.mock.invocationCallOrder[0]);
         });
 
+        it('normalizes current-v10 overflow settings before restoring into the editor', async () => {
+            vi.spyOn(window, 'confirm').mockReturnValue(true);
+            vi.spyOn(cloudApi, 'getCommit').mockResolvedValue({
+                id: 'c2', message: 'Second save', createdAt: '2026-02-01T00:00:00.000Z',
+                state: malformedOverflowState as any,
+            });
+            const onRestore = vi.fn();
+            render(<HistoryModal cloudProjectId="proj-1" onRestore={onRestore} onClose={vi.fn()} />);
+
+            fireEvent.click((await screen.findAllByRole('button', { name: 'Restore' }))[0]);
+
+            await waitFor(() => expect(onRestore).toHaveBeenCalledOnce());
+            const restored = onRestore.mock.calls[0][0];
+            expect(overflowElement(restored, 'valid-text')).toMatchObject({ textOverflow: 'visible', textWrap: false });
+            expect(overflowElement(restored, 'malformed-text')).toMatchObject({ textOverflow: 'clip', textWrap: true });
+            expect(overflowElement(restored, 'valid-grid')).toMatchObject({ textOverflow: 'shrink', textWrap: true });
+            expect(overflowElement(restored, 'malformed-grid')).toMatchObject({ textOverflow: 'clip', textWrap: false });
+        });
+
         it('shows a fallback error message when restoring fails', async () => {
             vi.spyOn(window, 'confirm').mockReturnValue(true);
             vi.spyOn(cloudApi, 'getCommit').mockRejectedValue(new Error('boom'));
@@ -122,6 +169,25 @@ describe('HistoryModal', () => {
             await waitFor(() => expect(onClone).toHaveBeenCalledWith({ state: rawCloneState }));
             expect(onClone.mock.calls[0][0].state.schemaVersion).toBe(8);
             expect(onClone.mock.calls[0][0].state.generator).toEqual(rawCloneState.generator);
+        });
+
+        it('keeps malformed current-v10 overflow raw for the staged EditorPage load boundary', async () => {
+            vi.spyOn(cloudApi, 'getCommit').mockResolvedValue({
+                id: 'c2', message: 'Second save', createdAt: '2026-02-01T00:00:00.000Z',
+                state: malformedOverflowState as any,
+            });
+            const onClone = vi.fn();
+            render(<HistoryModal cloudProjectId="proj-1" mode="clone" onClone={onClone} onClose={vi.fn()} />);
+
+            fireEvent.click((await screen.findAllByRole('button', { name: 'Open in editor' }))[0]);
+
+            await waitFor(() => expect(onClone).toHaveBeenCalledWith({ state: malformedOverflowState }));
+            expect(overflowElement(onClone.mock.calls[0][0].state, 'malformed-text')).toMatchObject({
+                textOverflow: 'truncate', textWrap: 'true',
+            });
+            expect(overflowElement(onClone.mock.calls[0][0].state, 'malformed-grid')).toMatchObject({
+                textOverflow: null, textWrap: 0,
+            });
         });
 
         it('shows a fallback error message when opening a version fails', async () => {

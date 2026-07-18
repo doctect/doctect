@@ -12,7 +12,17 @@ const makeState = (): AppState => ({
             id: 'original',
             name: 'Original',
             templates: {
-                page: { id: 'page', name: 'Page', width: 509, height: 679, elements: [] },
+                page: {
+                    id: 'page',
+                    name: 'Page',
+                    width: 509,
+                    height: 679,
+                    elements: [{
+                        id: 'fixed-text', type: 'text', x: 10, y: 10, w: 80, h: 20,
+                        rotation: 0, fill: '', stroke: '', strokeWidth: 0, opacity: 1,
+                        textOverflow: 'shrink', textWrap: false,
+                    }],
+                },
             },
         },
     },
@@ -34,7 +44,7 @@ const makeState = (): AppState => ({
     nodeSelectorMode: 'grid_source',
     editingElementId: null,
     clipboard: [],
-    schemaVersion: 9,
+    schemaVersion: 10,
     generator: {
         formatVersion: 1,
         templateScript: 'return originalTemplates;',
@@ -50,10 +60,14 @@ describe('project document snapshots', () => {
 
         state.nodes.root.title = 'Mutated';
         state.variants.original.name = 'Mutated';
+        state.variants.original.templates.page.elements[0].textOverflow = 'visible';
         state.generator!.templateScript = 'mutated';
 
         expect(snapshot.nodes.root.title).toBe('Before');
         expect(snapshot.variants.original.name).toBe('Original');
+        expect(snapshot.variants.original.templates.page.elements[0]).toMatchObject({
+            textOverflow: 'shrink', textWrap: false,
+        });
         expect(snapshot.generator?.templateScript).toBe('return originalTemplates;');
     });
 
@@ -76,7 +90,7 @@ describe('project document snapshots', () => {
                 },
             },
             activeVariantId: 'generated',
-            schemaVersion: 10,
+            schemaVersion: 11,
             generator: {
                 formatVersion: 1,
                 templateScript: 'new templates',
@@ -103,7 +117,7 @@ describe('project document snapshots', () => {
             rootId: 'root',
             variants: snapshot.variants,
             activeVariantId: 'original',
-            schemaVersion: 9,
+            schemaVersion: 10,
             generator: before.generator,
             selectedNodeId: 'root',
             selectedNodeIds: ['root'],

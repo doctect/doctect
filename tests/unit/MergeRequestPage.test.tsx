@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { MergeRequestPage } from '../../pages/MergeRequestPage';
 import { cloudApi, MrDetail } from '../../services/cloudApi';
@@ -13,8 +13,9 @@ vi.mock('../../lib/auth-client', () => ({
 // render), which statically imports pdfjs-dist -- pdfjs-dist touches DOMMatrix (a real-browser
 // API) at module-evaluation time, which jsdom doesn't provide. Same gap already documented and
 // worked around in tests/unit/CloudMenu.test.tsx (CloudMenu -> PublishModal -> thumbnailService).
-// None of these tests trigger the preview render, so stubbing the module's sole export is safe.
-vi.mock('../../services/thumbnailService', () => ({ generateThumbnails: vi.fn() }));
+// Preview tests assert this boundary's arguments; thumbnail rasterization remains covered by its own suite.
+const generateThumbnails = vi.hoisted(() => vi.fn());
+vi.mock('../../services/thumbnailService', () => ({ generateThumbnails }));
 
 const emptyChangeSet = {
     variantsAdded: [], variantsRemoved: [], variantsRenamed: {},
@@ -42,6 +43,42 @@ const renderAt = () => render(
             <Route path="/mr/:id" element={<MergeRequestPage />} />
         </Routes>
     </MemoryRouter>
+);
+
+const previewState = (kind: 'source' | 'target') => ({
+    schemaVersion: 10,
+    nodes: {
+        root: { id: 'root', parentId: null, type: 'page', title: 'Root', data: {}, children: [] },
+    },
+    rootId: 'root',
+    variants: {
+        default: {
+            id: 'default',
+            name: 'Default',
+            templates: {
+                page: {
+                    id: 'page',
+                    name: 'Page',
+                    width: 500,
+                    height: 700,
+                    elements: kind === 'source'
+                        ? [
+                            { id: 'source-text', type: 'text', textOverflow: 'truncate', textWrap: 'true' },
+                            { id: 'source-grid', type: 'grid', textOverflow: 'visible', textWrap: true },
+                        ]
+                        : [
+                            { id: 'target-text', type: 'text', textOverflow: 'shrink', textWrap: false },
+                            { id: 'target-grid', type: 'grid', textOverflow: null, textWrap: 1 },
+                        ],
+                },
+            },
+        },
+    },
+    activeVariantId: 'default',
+});
+
+const previewElement = (state: any, id: string) => (
+    state.variants.default.templates.page.elements.find((item: any) => item.id === id)
 );
 
 describe('MergeRequestPage merge-button visibility', () => {
@@ -104,5 +141,46 @@ describe('MergeRequestPage change summary', () => {
         renderAt();
 
         expect(await screen.findAllByText('~ Generator source changed')).toHaveLength(1);
+    });
+});
+
+describe('MergeRequestPage preview state loading', () => {
+    beforeEach(() => {
+        vi.restoreAllMocks();
+        generateThumbnails.mockReset();
+        generateThumbnails.mockResolvedValue(['data:image/png;base64,preview']);
+        mockUseSession.mockReturnValue({ data: { user: { id: 'owner-id' } } });
+    });
+
+    it('normalizes current-v10 source and target through migrateState before thumbnail rendering', async () => {
+        const sourceState = previewState('source');
+        const targetState = previewState('target');
+        const sourceBefore = structuredClone(sourceState);
+        const targetBefore = structuredClone(targetState);
+        vi.spyOn(cloudApi, 'getMr').mockResolvedValue({
+            ...makeDetail(),
+            sourceState,
+            targetState,
+            diff: {
+                source: { ...emptyChangeSet, templatesModified: { default: ['page'] } },
+                target: emptyChangeSet,
+                conflicts: [],
+            },
+        } as any);
+        renderAt();
+
+        fireEvent.click(await screen.findByRole('button', { name: 'Render before/after preview' }));
+
+        await waitFor(() => expect(generateThumbnails).toHaveBeenCalledTimes(2));
+        const [normalizedSource] = generateThumbnails.mock.calls[0];
+        const [normalizedTarget] = generateThumbnails.mock.calls[1];
+        expect(normalizedSource.schemaVersion).toBe(10);
+        expect(previewElement(normalizedSource, 'source-text')).toMatchObject({ textOverflow: 'clip', textWrap: true });
+        expect(previewElement(normalizedSource, 'source-grid')).toMatchObject({ textOverflow: 'visible', textWrap: true });
+        expect(normalizedTarget.schemaVersion).toBe(10);
+        expect(previewElement(normalizedTarget, 'target-text')).toMatchObject({ textOverflow: 'shrink', textWrap: false });
+        expect(previewElement(normalizedTarget, 'target-grid')).toMatchObject({ textOverflow: 'clip', textWrap: false });
+        expect(sourceState).toEqual(sourceBefore);
+        expect(targetState).toEqual(targetBefore);
     });
 });

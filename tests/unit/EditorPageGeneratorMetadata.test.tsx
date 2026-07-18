@@ -42,6 +42,30 @@ const state = {
     schemaVersion: 10,
 };
 
+const stateWithOverflow = () => ({
+    ...state,
+    variants: {
+        default: {
+            ...state.variants.default,
+            templates: {
+                page: {
+                    ...state.variants.default.templates.page,
+                    elements: [
+                        { id: 'valid-text', type: 'text', textOverflow: 'shrink', textWrap: false },
+                        { id: 'malformed-text', type: 'text', textOverflow: 'truncate', textWrap: 'true' },
+                        { id: 'valid-grid', type: 'grid', textOverflow: 'visible', textWrap: true },
+                        { id: 'malformed-grid', type: 'grid', textOverflow: null, textWrap: 0 },
+                    ],
+                },
+            },
+        },
+    },
+});
+
+const projectElement = (projectState: any, id: string) => (
+    projectState.variants.default.templates.page.elements.find((item: any) => item.id === id)
+);
+
 const renderEditor = () => render(<MemoryRouter><EditorPage /></MemoryRouter>);
 
 describe('EditorPage generator metadata loads', () => {
@@ -52,14 +76,36 @@ describe('EditorPage generator metadata loads', () => {
 
     it('opens a local project with malformed metadata detached and one dismissible warning', async () => {
         localStorage.setItem('hype_projects', JSON.stringify([
-            { id: 'local-1', name: 'Local Project', initialState: { ...state, generator: { ...generator, formatVersion: 2 } } },
+            { id: 'local-1', name: 'Local Project', initialState: { ...stateWithOverflow(), generator: { ...generator, formatVersion: 2 } } },
         ]));
         renderEditor();
 
         expect(await screen.findByRole('alert')).toHaveTextContent('Saved generator was detached');
-        expect(JSON.parse(screen.getByTestId('project-state').textContent || '{}').generator).toBeUndefined();
+        const loaded = JSON.parse(screen.getByTestId('project-state').textContent || '{}');
+        expect(loaded.generator).toBeUndefined();
+        expect(projectElement(loaded, 'valid-text')).toMatchObject({ textOverflow: 'shrink', textWrap: false });
+        expect(projectElement(loaded, 'malformed-text')).toMatchObject({ textOverflow: 'clip', textWrap: true });
+        expect(projectElement(loaded, 'valid-grid')).toMatchObject({ textOverflow: 'visible', textWrap: true });
+        expect(projectElement(loaded, 'malformed-grid')).toMatchObject({ textOverflow: 'clip', textWrap: false });
         fireEvent.click(screen.getByRole('button', { name: 'Dismiss project load warnings' }));
         expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+
+    it.each([
+        ['gallery open', undefined],
+        ['gallery fork', { projectId: 'fork-1', lastSyncedCommitId: 'commit-1' }],
+    ])('normalizes a malformed current-v10 staged %s before ProjectEditor receives it', async (_label, cloud) => {
+        stageImport({ name: 'Current Gallery Project', state: stateWithOverflow() as any, ...(cloud ? { cloud } : {}) });
+
+        renderEditor();
+
+        await screen.findByText('Current Gallery Project');
+        const imported = JSON.parse(screen.getAllByTestId('project-state').at(-1)?.textContent || '{}');
+        expect(imported.schemaVersion).toBe(10);
+        expect(projectElement(imported, 'valid-text')).toMatchObject({ textOverflow: 'shrink', textWrap: false });
+        expect(projectElement(imported, 'malformed-text')).toMatchObject({ textOverflow: 'clip', textWrap: true });
+        expect(projectElement(imported, 'valid-grid')).toMatchObject({ textOverflow: 'visible', textWrap: true });
+        expect(projectElement(imported, 'malformed-grid')).toMatchObject({ textOverflow: 'clip', textWrap: false });
     });
 
     it('normalizes a staged gallery import exactly once and appends its warning banner', async () => {

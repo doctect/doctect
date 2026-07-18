@@ -19,7 +19,7 @@ const link = (target: string) => ({
 });
 
 const state = (nodes: Record<string, any>, elements: any[]): AppState => ({
-    schemaVersion: 9,
+    schemaVersion: 10,
     nodes,
     rootId: 'root',
     activeVariantId: 'default',

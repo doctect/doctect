@@ -14,13 +14,37 @@ const state = {
     rootId: 'root',
     variants: { default: { id: 'default', name: 'Default', templates: { page: { id: 'page', name: 'Page', width: 500, height: 700, elements: [] } } } },
     activeVariantId: 'default',
-    schemaVersion: 9,
+    schemaVersion: 10,
 };
 
-const renderModal = (currentState: any) => {
+const stateWithOverflow = () => ({
+    ...state,
+    variants: {
+        default: {
+            ...state.variants.default,
+            templates: {
+                page: {
+                    ...state.variants.default.templates.page,
+                    elements: [
+                        { id: 'valid-text', type: 'text', textOverflow: 'ellipsis', textWrap: false },
+                        { id: 'malformed-text', type: 'text', textOverflow: 'truncate', textWrap: 'false' },
+                        { id: 'valid-grid', type: 'grid', textOverflow: 'shrink', textWrap: true },
+                        { id: 'malformed-grid', type: 'grid', textOverflow: null, textWrap: 1 },
+                    ],
+                },
+            },
+        },
+    },
+});
+
+const savedElement = (saved: any, id: string) => (
+    saved.variants.default.templates.page.elements.find((item: any) => item.id === id)
+);
+
+const renderModal = (currentState: any, mode: 'visual' | 'text' = 'text') => {
     const props = { isOpen: true, currentState, onSave: vi.fn(), onClose: vi.fn() };
     render(<JsonModal {...props} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Text' }));
+    if (mode === 'text') fireEvent.click(screen.getByRole('button', { name: 'Text' }));
     return props;
 };
 
@@ -52,5 +76,20 @@ describe('JsonModal generator metadata imports', () => {
         expect(alert).toHaveBeenCalledWith(expect.stringContaining('Saved generator was detached'));
         expect(props.onSave.mock.invocationCallOrder[0]).toBeLessThan(props.onClose.mock.invocationCallOrder[0]);
         expect(props.onClose.mock.invocationCallOrder[0]).toBeLessThan(alert.mock.invocationCallOrder[0]);
+    });
+
+    it.each(['text', 'visual'] as const)('%s Apply preserves valid v10 settings and defaults malformed values', mode => {
+        const props = renderModal(stateWithOverflow(), mode);
+
+        fireEvent.click(screen.getByRole('button', { name: 'Apply Changes' }));
+
+        expect(props.onSave).toHaveBeenCalledOnce();
+        const saved = props.onSave.mock.calls[0][0];
+        expect(saved.schemaVersion).toBe(10);
+        expect(savedElement(saved, 'valid-text')).toMatchObject({ textOverflow: 'ellipsis', textWrap: false });
+        expect(savedElement(saved, 'malformed-text')).toMatchObject({ textOverflow: 'clip', textWrap: true });
+        expect(savedElement(saved, 'valid-grid')).toMatchObject({ textOverflow: 'shrink', textWrap: true });
+        expect(savedElement(saved, 'malformed-grid')).toMatchObject({ textOverflow: 'clip', textWrap: false });
+        expect(props.onClose).toHaveBeenCalledOnce();
     });
 });

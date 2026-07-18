@@ -17,6 +17,26 @@ const generator = {
     generatedAt: '2026-07-14T12:34:56.000Z',
 };
 
+const overflowState = {
+    ...state,
+    schemaVersion: 10,
+    variants: {
+        default: {
+            id: 'default',
+            name: 'Default',
+            templates: {
+                page: {
+                    id: 'page', name: 'Page', width: 595.28, height: 841.89,
+                    elements: [
+                        { id: 'text', type: 'text', textOverflow: 'shrink', textWrap: true },
+                        { id: 'grid', type: 'grid', textOverflow: 'visible', textWrap: false },
+                    ],
+                },
+            },
+        },
+    },
+};
+
 describe('stateCodec', () => {
     it('round-trips a state through gzip', () => {
         const enc = encodeState(state);
@@ -54,5 +74,18 @@ describe('stateCodec', () => {
         const sourceState = { ...state, generator };
         const encoded = encodeState(sourceState);
         expect(decodeStateRow({ state_gzip: encoded.gzip, state_json: '' }).generator).toEqual(generator);
+    });
+
+    it('round-trips current-v10 text overflow settings through cloud gzip without aliasing', () => {
+        const encoded = encodeState(overflowState);
+
+        const decoded = decodeStateRow({ state_gzip: encoded.gzip, state_json: '' });
+
+        expect(decoded.variants.default.templates.page.elements).toEqual(
+            overflowState.variants.default.templates.page.elements,
+        );
+        expect(decoded.variants).not.toBe(overflowState.variants);
+        decoded.variants.default.templates.page.elements[0].textOverflow = 'clip';
+        expect(overflowState.variants.default.templates.page.elements[0].textOverflow).toBe('shrink');
     });
 });

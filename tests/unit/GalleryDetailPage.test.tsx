@@ -29,7 +29,7 @@ const galleryState = {
     rootId: 'root',
     variants: { default: { id: 'default', name: 'Default', templates: {} } },
     activeVariantId: 'default',
-    schemaVersion: 9,
+    schemaVersion: 10,
     generator,
 };
 

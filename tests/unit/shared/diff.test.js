@@ -242,6 +242,31 @@ describe('applyChangeSet', () => {
         expect(merged.generator).not.toBe(source.generator);
     });
 
+    it('detects and independently clones changes containing only text overflow settings', () => {
+        const base = mkState();
+        base.variants.rm.templates.day.elements = [
+            { id: 'text', type: 'text', textOverflow: 'clip', textWrap: true },
+            { id: 'grid', type: 'grid', textOverflow: 'clip', textWrap: false },
+        ];
+        const source = clone(base);
+        source.variants.rm.templates.day.elements[0].textOverflow = 'shrink';
+        source.variants.rm.templates.day.elements[0].textWrap = false;
+        source.variants.rm.templates.day.elements[1].textOverflow = 'visible';
+        source.variants.rm.templates.day.elements[1].textWrap = true;
+        const target = clone(base);
+
+        expect(computeChangeSet(base, source).templatesModified).toEqual({ rm: ['day'] });
+        const merged = applyChangeSet(base, source, target);
+
+        expect(merged.variants.rm.templates.day.elements).toEqual(source.variants.rm.templates.day.elements);
+        expect(merged.variants.rm.templates.day).not.toBe(source.variants.rm.templates.day);
+        expect(merged.variants.rm.templates.day.elements[0]).not.toBe(source.variants.rm.templates.day.elements[0]);
+        expect(merged.variants.rm.templates.day).not.toBe(target.variants.rm.templates.day);
+        expect(target).toEqual(base);
+        source.variants.rm.templates.day.elements[0].textOverflow = 'ellipsis';
+        expect(merged.variants.rm.templates.day.elements[0].textOverflow).toBe('shrink');
+    });
+
     it('preserves target generator provenance when source is unchanged', () => {
         const base = { ...mkState(), generator: generator() };
         const target = {

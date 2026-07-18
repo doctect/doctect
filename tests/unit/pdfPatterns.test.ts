@@ -30,7 +30,7 @@ const gridPatternElement = (): TemplateElement => ({
 });
 
 const stateWith = (element: TemplateElement, rootChildren: string[] = []): AppState => ({
-  schemaVersion: 9,
+  schemaVersion: 10,
   nodes: {
     root: { id: 'root', parentId: null, type: 'page', title: 'Root', data: {}, children: rootChildren },
     cell: { id: 'cell', parentId: 'root', type: 'page', title: 'Cell', data: {}, children: [] },

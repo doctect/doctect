@@ -20,7 +20,7 @@ const state = {
     rootId: 'root',
     variants: { default: { id: 'default', name: 'Default', templates: { page: { id: 'page', name: 'Page', width: 500, height: 700, elements: [] } } } },
     activeVariantId: 'default',
-    schemaVersion: 9,
+    schemaVersion: 10,
 };
 
 const nextState = {
