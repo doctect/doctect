@@ -8,7 +8,7 @@ Destination-led travel planning and field journal for reMarkable Paper Pro. Sea-
 2. Gather lodging, transit, timed-entry, and arrival details in reservation records.
 3. Build an itinerary and open each day as a route timeline.
 4. Record field notes, weather, and one moment worth keeping.
-5. Prepare packing, maintain a simple expense ledger, and close with highlights.
+5. Prepare packing, keep a simple expense ledger, log tastes and finds, fill sketch frames, and close with highlights.
 
 Start Here offers a fictional guided Lisbon journey and a direct route to the clean blank workspace. Every guided page displays **EXAMPLE** and a visible **Skip to blank workspace** control. Example records contain no real person, contact, payment, ticket, or booking data.
 
@@ -20,6 +20,7 @@ The concise fictional branch includes:
 - Fictional lodging, transit, and timed cultural-entry records
 - Three neighborhood-led days: Baixa and Alfama; Belém and Ajuda; Estrela and the river
 - Daily timelines plus quiet field-note regions
+- A tastes log and captioned sketch frames
 - Packing notes, an amount-free expense sketch, and closing highlights
 
 All provider names and reservation records are invented teaching fiction. Lisbon neighborhood names and general travel context are real; verify current opening times, fares, routes, accessibility, and requirements independently.
@@ -44,22 +45,23 @@ Zero reservations remains useful: dashboard still opens a reservations page with
 
 ## Inventory
 
-Default configuration exports 55 pages:
+Default configuration exports 63 pages:
 
 - 1 cover and 1 Start Here guide
-- 13 guided Lisbon pages, including three reservation records and three daily pages
+- 15 guided Lisbon pages, including three reservation records and three daily pages
 - 1 blank journey shelf
-- 3 complete blank journeys, each with 5 days and 2 reservation records
+- 3 complete blank journeys, each with 5 days, 2 reservation records, a tastes log, and a sketch-frames page
 
-Minimum configuration exports 23 pages. Maximum configuration exports 226 pages without overflowing dashboard, reservation, or 21-day itinerary grids.
+Minimum configuration exports 27 pages. Maximum configuration exports 240 pages without overflowing dashboard, reservation, or 21-day itinerary grids.
 
 ## Navigation
 
 - Cover -> `start_here`
 - Start Here -> `example_workspace` or `blank_workspace`
 - Workspace cards -> stable journey IDs
-- Journey dashboard cards -> semantic reservation, itinerary, packing, expense, and highlight IDs
+- Journey dashboard cards (seven per journey) -> semantic reservation, itinerary, packing, expense, tastes, sketches, and highlight IDs
 - Reservation and itinerary cards -> their complete record/day banks
+- Day pages chain with « DAY / DAY » chips inside each journey
 - **Up** follows hierarchy parent; **Home** returns to `root`
 
 Dashboard navigation uses each node's stable semantic ID through hierarchy-backed cards. It does not depend on fragile long-bank child offsets or inactive previous/next controls. At zero reservations, no dead reservation-record control is shown.

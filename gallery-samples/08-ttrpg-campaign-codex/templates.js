@@ -116,6 +116,42 @@ const routeMark = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 340 55">
   </g>
 </svg>`;
 
+const BANK_TABS = [
+  ['SES', 'blank_session_bank'],
+  ['QST', 'blank_quest_bank'],
+  ['NPC', 'blank_npc_bank'],
+  ['LOC', 'blank_location_bank'],
+  ['FAC', 'blank_faction_bank'],
+  ['ENC', 'blank_encounter_bank'],
+  ['LOR', 'blank_lore_bank'],
+];
+
+// Labels stay horizontal: getElementBounds ignores rotation and reports the raw
+// unrotated box, so a rotated 48-wide label at x473 would flag 473 + 48 = 521 > 509
+// page-width overflow. An 18-wide box at x488 ends at 506, inside the page.
+const bankRail = (templateId, activeKey = '') => BANK_TABS.flatMap(([key, target], index) => {
+  const tabY = 92 + index * 54;
+  const active = key === activeKey;
+  const lowerKey = key.toLowerCase();
+  return [
+    rect(templateId, `rail_tab_${lowerKey}`, 487, tabY, 20, 48, active
+      ? COLORS.oxblood
+      : (index % 2 === 0 ? COLORS.mossPale : COLORS.oxbloodPale), { borderRadius: 4 }),
+    text(templateId, `rail_label_${lowerKey}`, 488, tabY, 18, 48, key, {
+      fontSize: 5.8,
+      fontWeight: 'bold',
+      textColor: active ? COLORS.writing : COLORS.oxbloodDeep,
+      align: 'center',
+      verticalAlign: 'middle',
+    }),
+    rect(templateId, `rail_link_${lowerKey}`, 487, tabY, 20, 48, '', {
+      linkTarget: 'specific_node',
+      linkValue: target,
+      zIndex: 30,
+    }),
+  ];
+});
+
 const pageBase = (templateId, section) => [
   rect(templateId, 'vellum', 0, 0, W, H, COLORS.vellum),
   rect(templateId, 'corner_top_left_h', 0, 0, 54, 5, COLORS.mossDeep),
@@ -316,6 +352,7 @@ const campaign = {
     ...field('campaign', 'arc', 'Active arc', 'arc', 40, 321, 441, 80),
     ...field('campaign', 'calendar', 'Campaign calendar / clocks', 'calendar', 40, 412, 212, 82),
     ...field('campaign', 'notes', 'Table agreements / notes', 'notes', 269, 412, 212, 82),
+    ...bankRail('campaign'),
   ],
 };
 
@@ -335,6 +372,7 @@ const bank = {
       verticalAlign: 'top',
     }),
     grid('bank', 'navigator', 40, 207, 104, 34, 4),
+    ...bankRail('bank'),
   ],
 };
 
@@ -356,6 +394,7 @@ const party = {
       characterSpacing: 0.8,
     }),
     grid('party', 'navigator', 40, 377, 104, 37, 4),
+    ...bankRail('party'),
   ],
 };
 
@@ -374,6 +413,7 @@ const character = {
     ...field('character', 'bonds', 'Bonds and debts', 'bonds', 40, 307, 212, 90),
     ...field('character', 'abilities', 'Useful abilities / gear', 'abilities', 269, 307, 212, 90),
     ...field('character', 'notes', 'Conditions, changes, and notes', 'notes', 40, 408, 441, 96),
+    ...bankRail('character'),
   ],
 };
 
@@ -400,6 +440,25 @@ const session = {
       characterSpacing: 0.7,
     }),
     grid('session', 'navigator', 40, 526, 137, 34, 3),
+    text('session', 'nav_prev', 336, 82, 66, 24, '{{nav_prev_label}}', {
+      dataBinding: 'nav_prev_label',
+      fontSize: 8,
+      fontWeight: 'bold',
+      textColor: COLORS.mossDeep,
+      align: 'right',
+      linkTarget: 'sibling',
+      linkValue: '-1',
+    }),
+    text('session', 'nav_next', 408, 82, 73, 24, '{{nav_next_label}}', {
+      dataBinding: 'nav_next_label',
+      fontSize: 8,
+      fontWeight: 'bold',
+      textColor: COLORS.oxblood,
+      align: 'right',
+      linkTarget: 'sibling',
+      linkValue: '1',
+    }),
+    ...bankRail('session', 'SES'),
   ],
 };
 
@@ -426,6 +485,7 @@ const quest = {
     ...field('quest', 'progress', 'Progress / clock events', 'progress', 269, 377, 212, 68, { fontSize: 8 }),
     ...field('quest', 'outcome', 'Outcome', 'outcome', 40, 454, 212, 57, { fontSize: 7.8 }),
     ...field('quest', 'notes', 'Notes', 'notes', 269, 454, 212, 57, { fontSize: 7.8 }),
+    ...bankRail('quest', 'QST'),
   ],
 };
 
@@ -445,6 +505,7 @@ const npc = {
     ...field('npc', 'relationship', 'Relationships / standing', 'relationship', 269, 305, 212, 72),
     ...field('npc', 'secrets', 'Secrets / pressure', 'secrets', 40, 388, 441, 70),
     ...field('npc', 'notes', 'Changes and notes', 'notes', 40, 469, 441, 65),
+    ...bankRail('npc', 'NPC'),
   ],
 };
 
@@ -463,6 +524,7 @@ const location = {
     ...field('location', 'routes', 'Routes / access', 'routes', 40, 393, 212, 77),
     ...field('location', 'discoveries', 'Discoveries', 'discoveries', 269, 393, 212, 77),
     ...field('location', 'notes', 'Changes and notes', 'notes', 40, 481, 441, 60),
+    ...bankRail('location', 'LOC'),
   ],
 };
 
@@ -508,6 +570,7 @@ const faction = {
     ...field('faction', 'pressure', 'Current pressure / clock', 'pressure', 40, 368, 212, 72),
     ...field('faction', 'consequence', 'Standing consequences', 'consequence', 269, 368, 212, 72),
     ...field('faction', 'notes', 'Members, changes, and notes', 'notes', 40, 451, 441, 79),
+    ...bankRail('faction', 'FAC'),
   ],
 };
 
@@ -525,7 +588,31 @@ const encounter = {
     ...field('encounter', 'environment', 'Environment / terrain actions', 'environment', 40, 310, 212, 87, { fontSize: 8.2 }),
     ...field('encounter', 'adversaries', 'Adversaries / behavior', 'adversaries', 269, 310, 212, 87, { fontSize: 8.2 }),
     ...field('encounter', 'aftermath', 'Aftermath / changed state', 'aftermath', 40, 408, 441, 72, { fontSize: 8.2 }),
-    ...field('encounter', 'notes', 'Rules notes / adjustments', 'notes', 40, 491, 441, 51, { fontSize: 7.8 }),
+    text('encounter', 'round_label', 40, 482, 50, 14, 'ROUND', {
+      fontSize: 7, fontWeight: 'bold', textColor: COLORS.oxblood,
+    }),
+    ...Array.from({ length: 6 }, (_, index) =>
+      rect('encounter', 'round_seg', 96 + index * 22, 482, 14, 14, COLORS.writing, {
+        stroke: COLORS.oxblood,
+        strokeWidth: 0.8,
+      })),
+    // Hand-rolled notes field (field() geometry at y 500, h 42): the 26pt-tall cell
+    // sits below the writing-region minimum, so its rect keeps the cell_ prefix
+    // like the threads move column instead of the writing_ prefix.
+    text('encounter', 'notes_label', 40, 500, 441, 14, 'RULES NOTES / ADJUSTMENTS', {
+      fontSize: 7.2,
+      fontWeight: 'bold',
+      textColor: COLORS.mossDeep,
+      characterSpacing: 0.65,
+    }),
+    rect('encounter', 'cell_notes', 40, 516, 441, 26, COLORS.writing),
+    text('encounter', 'notes_value', 46, 520, 429, 18, '{{notes}}', {
+      dataBinding: 'notes',
+      fontFamily: 'georgia',
+      fontSize: 7.8,
+      verticalAlign: 'top',
+    }),
+    ...bankRail('encounter', 'ENC'),
   ],
 };
 
@@ -543,6 +630,67 @@ const lore = {
     ...field('lore', 'evidence', 'Evidence in play', 'evidence', 269, 321, 212, 86),
     ...field('lore', 'implications', 'Implications / adventure use', 'implications', 40, 418, 441, 78),
     ...field('lore', 'notes', 'Contradictions and notes', 'notes', 40, 507, 441, 49),
+    ...bankRail('lore', 'LOR'),
+  ],
+};
+
+const threadsRows = Array.from({ length: 7 }, (_, index) => index + 1);
+
+const threads = {
+  id: 'threads',
+  name: 'Thread Clocks',
+  width: W,
+  height: H,
+  elements: [
+    ...pageBase('threads', 'threads and clocks'),
+    ...titleBlock('threads'),
+    text('threads', 'key', 40, 152, 441, 16, 'SHADE A SEGMENT WHEN PRESSURE ADVANCES. FULL CLOCK = THE THREAD RESOLVES ITSELF.', {
+      fontSize: 6.8,
+      fontWeight: 'bold',
+      textColor: COLORS.oxblood,
+      characterSpacing: 0.4,
+    }),
+    // header band
+    rect('threads', 'head_thread', 40, 174, 145, 18, COLORS.mossDeep),
+    rect('threads', 'head_clock', 185, 174, 130, 18, COLORS.mossDeep),
+    rect('threads', 'head_owner', 315, 174, 66, 18, COLORS.mossDeep),
+    rect('threads', 'head_move', 381, 174, 100, 18, COLORS.mossDeep),
+    text('threads', 'head_thread_label', 45, 174, 135, 18, 'THREAD', { fontSize: 7, fontWeight: 'bold', textColor: COLORS.writing }),
+    text('threads', 'head_clock_label', 190, 174, 120, 18, 'CLOCK', { fontSize: 7, fontWeight: 'bold', textColor: COLORS.writing }),
+    text('threads', 'head_owner_label', 320, 174, 56, 18, 'OWNER', { fontSize: 7, fontWeight: 'bold', textColor: COLORS.writing }),
+    text('threads', 'head_move_label', 386, 174, 90, 18, 'NEXT MOVE', { fontSize: 7, fontWeight: 'bold', textColor: COLORS.writing }),
+    ...threadsRows.flatMap(row => {
+      const rowY = 192 + (row - 1) * 54;
+      const cells = [
+        rect('threads', `writing_thread_${row}`, 40, rowY, 145, 54, COLORS.writing),
+        text('threads', `thread_value_${row}`, 46, rowY + 4, 133, 46, `{{thread_${row}}}`, {
+          dataBinding: `thread_${row}`, fontFamily: 'georgia', fontSize: 8.6, verticalAlign: 'top',
+        }),
+        rect('threads', `cell_clock_${row}`, 185, rowY, 130, 54, COLORS.writing),
+        rect('threads', `cell_owner_${row}`, 315, rowY, 66, 54, COLORS.writing),
+        text('threads', `owner_value_${row}`, 319, rowY + 4, 58, 46, `{{owner_${row}}}`, {
+          dataBinding: `owner_${row}`, fontSize: 8, verticalAlign: 'top',
+        }),
+        rect('threads', `cell_move_${row}`, 381, rowY, 100, 54, COLORS.writing),
+        text('threads', `move_value_${row}`, 386, rowY + 4, 90, 46, `{{move_${row}}}`, {
+          dataBinding: `move_${row}`, fontFamily: 'georgia', fontSize: 8, verticalAlign: 'top',
+        }),
+      ];
+      for (let segment = 0; segment < 6; segment += 1) {
+        cells.push(rect('threads', `clock_seg_${row}_${segment + 1}`, 191 + segment * 20, rowY + 20, 14, 14, COLORS.writing, {
+          stroke: COLORS.oxblood,
+          strokeWidth: 0.8,
+        }));
+      }
+      return cells;
+    }),
+    // single-drawn edges
+    ...[185, 315, 381].map((lineX, index) =>
+      rect('threads', `line_vertical_${index + 1}`, lineX - 0.4, 174, 0.8, 396, COLORS.rule)),
+    ...threadsRows.map(row =>
+      rect('threads', `line_horizontal_${row}`, 40, 192 + (row - 1) * 54 - 0.4, 441, 0.8, COLORS.rule)),
+    rect('threads', 'boundary', 40, 174, 441, 396, '', { stroke: COLORS.rule, strokeWidth: 0.8 }),
+    ...bankRail('threads'),
   ],
 };
 
@@ -561,4 +709,5 @@ return {
   faction,
   encounter,
   lore,
+  threads,
 };

@@ -81,7 +81,7 @@ const characterData = (number, values = {}) => ({
   ...values,
 });
 
-const sessionData = (number, values = {}) => ({
+const sessionData = (number, count, values = {}) => ({
   subtitle: `Session ${String(number).padStart(2, '0')} | Prepare pressure, record choices, and carry consequences forward.`,
   menu_label: `SESSION ${String(number).padStart(2, '0')}`,
   date: '',
@@ -92,6 +92,8 @@ const sessionData = (number, values = {}) => ({
   consequence: '',
   outcome: '',
   next_steps: '',
+  nav_prev_label: number === 1 ? '' : `« S${String(number - 1).padStart(2, '0')}`,
+  nav_next_label: number === count ? '' : `S${String(number + 1).padStart(2, '0')} »`,
   ...values,
 });
 
@@ -174,6 +176,19 @@ const loreData = (number, values = {}) => ({
   ...values,
 });
 
+const threadsData = (values = {}) => {
+  const data = {
+    subtitle: 'Fronts, dangers, and promises in motion. One row per thread; shade clocks as pressure builds.',
+    menu_label: 'THREADS + CLOCKS',
+  };
+  for (let row = 1; row <= 7; row += 1) {
+    data[`thread_${row}`] = '';
+    data[`owner_${row}`] = '';
+    data[`move_${row}`] = '';
+  }
+  return { ...data, ...values };
+};
+
 const bankData = (label, count, note, values = {}) => ({
   subtitle: `${count} ${label.toLowerCase()} record${count === 1 ? '' : 's'} in this bank.`,
   menu_label: `${label} / ${count}`,
@@ -253,10 +268,19 @@ addNode('example_character_03', 'example_party', 'character', 'Sable Fen | Hedge
   notes: 'The bell answers Sable with images rather than sound.',
 }), { example: true });
 
+addNode('example_threads', 'example_workspace', 'threads', 'Threads & Clocks | Ashen Bell', threadsData({
+  thread_1: 'Greenwarden recovery party rides for Briar Watch',
+  owner_1: 'Iora / GM',
+  move_1: 'Arrives at dawn unless delayed by the gate oath.',
+  thread_2: 'The waking mile spreads north under the hill',
+  owner_2: 'GM',
+  move_2: 'Each damped toll adds one stable milestone.',
+}), { example: true });
+
 addNode('example_session_bank', 'example_workspace', 'bank', 'Session Ledger', bankData(
   'SESSIONS', 1, 'Open the demonstration session; its linked records remain canonical elsewhere in the codex.',
 ), { example: true });
-addNode('example_session_01', 'example_session_bank', 'session', 'Session 01 | The Bell Below', sessionData(1, {
+addNode('example_session_01', 'example_session_bank', 'session', 'Session 01 | The Bell Below', sessionData(1, 1, {
   menu_label: 'S01 / BELL BELOW',
   date: 'Late harvest / dusk to first watch',
   recap: 'The Lantern Company follows a route visible only where moss grows across old mile stones.',
@@ -376,6 +400,7 @@ for (let number = 1; number <= CONFIG.partySize; number += 1) {
   const label = String(number).padStart(2, '0');
   addNode(`blank_character_${label}`, 'blank_party', 'character', `Adventurer ${label}`, characterData(number));
 }
+addNode('blank_threads', 'blank_workspace', 'threads', 'Threads & Clocks', threadsData());
 
 const blankBanks = [
   ['session', 'SESSIONS', CONFIG.sessionCount, 'session', sessionData, 'Prepare and preserve one consequential record per play session.'],
@@ -392,7 +417,8 @@ blankBanks.forEach(([key, label, count, type, dataFactory, note]) => {
   addNode(bankId, 'blank_workspace', 'bank', `${label[0]}${label.slice(1).toLowerCase()} Bank`, bankData(label, count, note));
   for (let number = 1; number <= count; number += 1) {
     const numberLabel = String(number).padStart(2, '0');
-    addNode(`blank_${key}_${numberLabel}`, bankId, type, `${label[0]}${label.slice(1).toLowerCase()} ${numberLabel}`, dataFactory(number));
+    const data = key === 'session' ? dataFactory(number, count) : dataFactory(number);
+    addNode(`blank_${key}_${numberLabel}`, bankId, type, `${label[0]}${label.slice(1).toLowerCase()} ${numberLabel}`, data);
   }
 });
 

@@ -8,8 +8,9 @@ Calm wellness and fitness journal for reMarkable Paper Pro. It combines habit aw
 2. Set monthly intentions and mark six habits across a legible split-month matrix.
 3. Plan each week around movement, rest, energy, and recovery cues.
 4. Record configurable strength sessions with movement, sets, reps, load, RPE, and notes.
-5. Review monthly energy and recovery on a separate page.
-6. Carry one useful pattern into the next month.
+5. Log lifetime bests on the **Strength Milestones** page; mark strain on the recovery **body maps**.
+6. Review monthly energy and recovery on a separate page.
+7. Carry one useful pattern into the next month.
 
 Start Here offers two routes:
 
@@ -41,12 +42,13 @@ Unsupported values fail with a clear `Wellbeing Rhythm config` error. Zero worko
 - 1 cover and 1 Start Here guide
 - 1 guided workspace: baseline, month habits, week, 2 strength logs, recovery, reflection
 - 1 blank workspace and 1 baseline
+- 1 strength milestones register
 - 12 monthly habit dashboards
 - 52 weekly movement plans
 - 104 strength logs
 - 12 recovery pages
 - 12 monthly reflections
-- 204 exported pages total
+- 205 exported pages total
 
 No daily pages are generated.
 
@@ -54,15 +56,13 @@ No daily pages are generated.
 
 - Cover → `start_here`
 - Start Here → `example_workspace` or `blank_workspace`
-- Workspace navigator → baseline or any configured month
-- Month → first week, or recovery when that month has no assigned week
-- Week → configured workout chain, next week, or monthly recovery
-- Workout → next workout, next week, or monthly recovery
-- Recovery → monthly reflection
+- Workspace navigator → baseline, strength milestones, or any configured month
+- Month → any week via the OPEN A WEEK index or `BEGIN MONTH →`; weeks chain with « WEEK / WEEK » chips (first week of a month reaches back into the previous month's last week); the last week continues to Recovery → Reflection.
+- Week → strength logs via `STRENGTH n »`; **Up** from a workout returns to its week, from a week to its month.
 - Reflection → `blank_workspace` month index
-- **Previous** follows the exact sequence parent; **Home** returns to `root`
+- **Previous** chips vanish at true sequence ends; **Home** returns to `root`
 
-Major destinations use stable IDs. Sequence links use a validated child at index `0`, including 52-week and zero-workout configurations. Final reflection pages show no misleading Next control.
+Major destinations use stable IDs. Continue chips are data-bound per node; zero-workout configurations show no dead controls. Final reflection pages show no misleading Next control.
 
 ## Border Construction
 

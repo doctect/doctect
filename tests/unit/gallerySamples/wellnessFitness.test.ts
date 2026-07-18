@@ -20,6 +20,7 @@ const contract: GallerySampleContract = {
         'workout',
         'recovery',
         'month_reflection',
+        'milestones',
     ],
     pageCount: [180, 220],
     palette: ['#a96551', '#7f9473', '#f1e7df'],
@@ -42,8 +43,8 @@ describe('Wellness & Fitness Journal gallery sample', () => {
         expect(blankNodes.filter(node => node.type === 'workout')).toHaveLength(104);
         expect(blankNodes.filter(node => node.type === 'recovery')).toHaveLength(12);
         expect(blankNodes.filter(node => node.type === 'month_reflection')).toHaveLength(12);
-        expect(exportedPageCount(sample)).toBe(204);
-        expect(Object.keys(sample.nodes).length).toBeLessThan(221);
+        expect(exportedPageCount(sample)).toBe(205);
+        expect(Object.keys(sample.nodes).length).toBeLessThan(222);
     });
 
     it('supports a short journal without workout pages', () => {
@@ -58,7 +59,7 @@ describe('Wellness & Fitness Journal gallery sample', () => {
 
         expect(validateGallerySample(sample, { ...contract, pageCount: [15, 30] })).toEqual([]);
         expect(blankWorkouts).toHaveLength(0);
-        expect(exportedPageCount(sample)).toBe(19);
+        expect(exportedPageCount(sample)).toBe(20);
     });
 
     it('keeps maximum configuration and dense navigation in bounds', () => {
@@ -72,7 +73,7 @@ describe('Wellness & Fitness Journal gallery sample', () => {
         const bounds = getElementBounds(navigator, sample.nodes, 'blank_workspace');
 
         expect(validateGallerySample(sample, { ...contract, pageCount: [300, 315] })).toEqual([]);
-        expect(exportedPageCount(sample)).toBe(308);
+        expect(exportedPageCount(sample)).toBe(309);
         expect(navigator.gridConfig).toMatchObject({
             cols: 3,
             gridBorderMode: 'all',
@@ -95,34 +96,56 @@ describe('Wellness & Fitness Journal gallery sample', () => {
         expect(() => loadGallerySample(contract.slug, { [key]: value })).toThrow(/Wellbeing Rhythm config/);
     });
 
-    it('keeps all 52 weeks and their workouts in an accessible ordered sequence', () => {
+    it('keeps weeks flat under months with chip navigation and indexable workouts', () => {
         const sample = loadGallerySample(contract.slug);
-        const visitedWeeks: any[] = [];
-        const visitedWorkouts: any[] = [];
+        const allWeeks: any[] = [];
 
         for (let month = 1; month <= 12; month += 1) {
-            const monthId = `blank_month_${String(month).padStart(2, '0')}`;
-            let current = sample.nodes[sample.nodes[monthId].children[0]];
+            const monthNode = sample.nodes[`blank_month_${String(month).padStart(2, '0')}`];
+            const children = monthNode.children.map((id: string) => sample.nodes[id]);
+            const weeks = children.filter((child: any) => child.type === 'week');
 
-            while (current.type === 'week' || current.type === 'workout') {
-                if (current.type === 'week') visitedWeeks.push(current);
-                else visitedWorkouts.push(current);
-                expect(current.children).toHaveLength(1);
-                current = sample.nodes[current.children[0]];
-            }
+            expect(children.at(-2).type, monthNode.id).toBe('recovery');
+            expect(children.at(-1).type, monthNode.id).toBe('month_reflection');
+            expect(children).toHaveLength(weeks.length + 2);
+            weeks.forEach((week: any) => {
+                const workouts = week.children.map((id: string) => sample.nodes[id]);
+                expect(workouts.every((workout: any) => workout.type === 'workout'), week.id).toBe(true);
+                expect(workouts, week.id).toHaveLength(2);
+                expect(workouts[0].data.continue_label, week.id).toBe('STRENGTH 2 »');
+                expect(workouts[1].data.continue_label, week.id).toBe('');
+                expect(week.data.continue_label, week.id).toBe('STRENGTH 1 »');
+            });
+            allWeeks.push(...weeks);
 
-            expect(current.type).toBe('recovery');
-            expect(sample.nodes[current.children[0]].type).toBe('month_reflection');
+            const recovery = children.at(-2);
+            const reflection = children.at(-1);
+            expect(recovery.data.nav_next_label).toBe('REFLECT »');
+            expect(recovery.data.nav_prev_label).toMatch(/^« WEEK \d{2}$/);
+            expect(reflection.data.nav_prev_label).toBe('« RECOVERY');
+            expect(weeks.at(-1).data.nav_next_label).toBe('RECOVERY »');
         }
 
-        expect(visitedWeeks.map(node => node.data.week_number)).toEqual(
+        expect(allWeeks.map(node => node.data.week_number)).toEqual(
             Array.from({ length: 52 }, (_, index) => index + 1),
         );
-        expect(visitedWorkouts).toHaveLength(104);
-        expect(visitedWorkouts.every(node => node.children.length === 1)).toBe(true);
-        expect(role(sample, 'week', 'continue')).toMatchObject({ linkTarget: 'child_index', linkValue: '0' });
-        expect(role(sample, 'workout', 'continue')).toMatchObject({ linkTarget: 'child_index', linkValue: '0' });
-        expect(role(sample, 'recovery', 'continue')).toMatchObject({ linkTarget: 'child_index', linkValue: '0' });
+        expect(allWeeks[0].data.nav_prev_label).toBe('');
+        expect(allWeeks[1].data.nav_prev_label).toBe('« WEEK 01');
+
+        const monthNavigator = role(sample, 'month_habits', 'navigator');
+        expect(monthNavigator).toBeTruthy();
+        expect(monthNavigator.gridConfig).toMatchObject({
+            sourceType: 'current', gridBorderMode: 'all', gridBorderStyle: 'solid',
+        });
+        expect(role(sample, 'week', 'continue')).toMatchObject({
+            linkTarget: 'child_index', linkValue: '0', dataBinding: 'continue_label',
+        });
+        expect(role(sample, 'workout', 'continue')).toMatchObject({
+            linkTarget: 'sibling', linkValue: '1', dataBinding: 'continue_label',
+        });
+        expect(role(sample, 'recovery', 'continue')).toMatchObject({
+            linkTarget: 'sibling', linkValue: '1', dataBinding: 'nav_next_label',
+        });
         expect(role(sample, 'month_reflection', 'workspace')).toMatchObject({
             linkTarget: 'specific_node',
             linkValue: 'blank_workspace',
@@ -148,8 +171,8 @@ describe('Wellness & Fitness Journal gallery sample', () => {
             energy: 'Steady, 3 / 5',
             recovery_note: 'Friday stayed gentle after a busy Thursday.',
         });
-        expect(guidedWorkouts).toHaveLength(1);
-        expect(sample.nodes[guidedWorkouts[0].children[0]].type).toBe('workout');
+        expect(guidedWorkouts).toHaveLength(2);
+        expect(guidedWorkouts[1].data.continue_label).toBe('');
         expect(exampleSource).not.toMatch(/diagnos|treat|cure|prescri|medical advice/i);
     });
 
@@ -160,6 +183,7 @@ describe('Wellness & Fitness Journal gallery sample', () => {
             /^(day|movement|energy|note)_\d+$/,
             /^habit_\d+_day_\d+$/,
             /^(movement|sets|reps|load|rpe|notes)_\d+$/,
+            /^(date|best|target)_\d+$/,
             /^(restored|felt_heavy|adjustment|energy_pattern|recovery_pattern)$/,
             /^(win|lesson|carry_forward)$/,
         ];
@@ -222,5 +246,95 @@ describe('Wellness & Fitness Journal gallery sample', () => {
         ['movement_1', 'sets_1', 'reps_1', 'load_1', 'rpe_1', 'notes_1'].forEach(field => {
             expect(workoutBindings.has(field), field).toBe(true);
         });
+    });
+
+    it('adds a strength milestones page and recovery body maps', () => {
+        const sample = loadGallerySample(contract.slug);
+
+        expect(sample.nodes.blank_milestones).toMatchObject({
+            type: 'milestones', parentId: 'blank_workspace',
+        });
+        expect(sample.nodes.blank_workspace.children.indexOf('blank_milestones')).toBe(1);
+        expect(sample.nodes.blank_milestones.data.movement_1).toBe('');
+
+        const milestoneBindings = new Set(sample.templates.milestones.elements
+            .map((element: any) => element.dataBinding)
+            .filter(Boolean));
+        ['movement_1', 'date_1', 'best_1', 'target_1', 'movement_8', 'target_8'].forEach(field => {
+            expect(milestoneBindings.has(field), field).toBe(true);
+        });
+
+        const bodyMaps = sample.templates.recovery.elements.filter((element: any) =>
+            element.type === 'svg' && (element.id.includes('_body_front_') || element.id.includes('_body_back_')),
+        );
+        expect(bodyMaps).toHaveLength(2);
+        bodyMaps.forEach((map: any) => {
+            expect(map.svgContent).toContain('viewBox');
+            expect(map.svgContent).not.toMatch(/<svg[^>]*\s(width|height)=/);
+            expect(map.svgContent).not.toMatch(/<(script|image|foreignObject|use|style)/i);
+        });
+        expect(sample.templates.milestones.name).not.toBe('Strength Milestones');
+    });
+
+    it('keeps recovery captions under the silhouettes and the title band free of chips and arcs', () => {
+        const sample = loadGallerySample(contract.slug);
+        const recovery = sample.templates.recovery.elements;
+        const bodyFront = recovery.find((element: any) => element.id.includes('_body_front_'));
+        const bodyBack = recovery.find((element: any) => element.id.includes('_body_back_'));
+        const captionFront = recovery.find((element: any) => element.id.includes('_body_caption_front_'));
+        const captionBack = recovery.find((element: any) => element.id.includes('_body_caption_back_'));
+
+        // one centered caption per silhouette, not a single space-padded run
+        expect(captionFront).toBeTruthy();
+        expect(captionBack).toBeTruthy();
+        expect(captionFront.text).toBe('front');
+        expect(captionBack.text).toBe('back');
+        expect(captionFront.x + captionFront.w / 2).toBe(bodyFront.x + bodyFront.w / 2);
+        expect(captionBack.x + captionBack.w / 2).toBe(bodyBack.x + bodyBack.w / 2);
+        expect(recovery.some((element: any) =>
+            element.type === 'text' && /front\s{2,}back/.test(element.text ?? ''),
+        )).toBe(false);
+
+        // prev-only pages park the chip in the far-right slot so long titles cannot collide
+        ['recovery', 'month_reflection'].forEach(templateId => {
+            const prevChip = role(sample, templateId, 'nav_prev');
+            expect(prevChip.x, templateId).toBe(411);
+            expect(sample.templates[templateId].elements.some((element: any) =>
+                element.id.includes('_nav_next_'),
+            ), templateId).toBe(false);
+        });
+        expect(role(sample, 'week', 'nav_prev').x).toBe(336);
+        expect(role(sample, 'week', 'nav_next').x).toBe(411);
+
+        // the reflection accent arc lives below the content, clear of title, chips, and footer
+        const reflectionArc = sample.templates.month_reflection.elements.find((element: any) =>
+            element.type === 'svg' && /_arc_\d+$/.test(element.id) && !element.id.includes('_header_arc_'),
+        );
+        expect(reflectionArc).toBeTruthy();
+        expect(reflectionArc.y).toBeGreaterThanOrEqual(520);
+        expect(reflectionArc.y + reflectionArc.h).toBeLessThanOrEqual(625);
+        expect(reflectionArc.x + reflectionArc.w).toBeLessThanOrEqual(328);
+    });
+
+    it('never paints an empty continue button when its bound label is blank', () => {
+        const sample = loadGallerySample(contract.slug);
+
+        // week and workout continue labels resolve to '' at sequence ends (a zero-workout
+        // week, and every week's last workout). A filled button would paint an empty box
+        // there because the engine draws the fill regardless of the (suppressed) empty text,
+        // so these must be unfilled text chips with a visible ink colour.
+        ['week', 'workout'].forEach(templateId => {
+            const button = role(sample, templateId, 'continue');
+            expect(button.dataBinding, templateId).toBe('continue_label');
+            expect(button.fill, templateId).toBe('');
+            expect(button.textColor, templateId).not.toBe('#fbf8f3'); // COLORS.paper — invisible without a fill
+            expect(button.textColor, templateId).toBeTruthy();
+        });
+
+        // recovery continue is bound to nav_next_label, which is always 'REFLECT »' (never
+        // blank), so it legitimately stays a filled button.
+        const recovery = role(sample, 'recovery', 'continue');
+        expect(recovery.dataBinding).toBe('nav_next_label');
+        expect(recovery.fill).not.toBe('');
     });
 });

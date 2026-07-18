@@ -214,6 +214,32 @@ const titleBlock = (templateId, title = '{{title}}', subtitle = '{{subtitle}}') 
   }),
 ];
 
+const navChips = (templateId, { prev = true, next = true } = {}) => {
+  const chips = [];
+  if (prev) {
+    chips.push(text(templateId, 'nav_prev', 31, 44, 90, 24, '{{nav_prev_label}}', {
+      dataBinding: 'nav_prev_label',
+      fontSize: 9,
+      fontWeight: 'bold',
+      textColor: COLORS.brass,
+      linkTarget: 'sibling',
+      linkValue: '-1',
+    }));
+  }
+  if (next) {
+    chips.push(text(templateId, 'nav_next', 391, 44, 90, 24, '{{nav_next_label}}', {
+      dataBinding: 'nav_next_label',
+      fontSize: 9,
+      fontWeight: 'bold',
+      textColor: COLORS.brass,
+      align: 'right',
+      linkTarget: 'sibling',
+      linkValue: '1',
+    }));
+  }
+  return chips;
+};
+
 const coverElements = [
   rect('cover', 'paper', 0, 0, W, H, COLORS.cream),
   rect('cover', 'forest_field', 0, 0, 226, H, COLORS.forest),
@@ -457,6 +483,7 @@ const monthElements = [
     linkTarget: 'child_index',
     linkValue: '0',
   }),
+  ...navChips('month'),
 ];
 
 const transactionRows = Array.from({ length: 8 }, (_, index) => {
@@ -475,14 +502,15 @@ const transactionElements = [
   ...staticTable('transactions', 31, 190, [69, 190, 100, 91], 40,
     ['DATE', 'DESCRIPTION', 'CATEGORY', 'AMOUNT'], transactionRows,
     ['left', 'left', 'left', 'right']),
-  text('transactions', 'continue', 329, 574, 152, 34, 'NEXT LOG / REVIEW', {
+  text('transactions', 'continue', 329, 574, 152, 34, '{{continue_label}}', {
+    dataBinding: 'continue_label',
     fontSize: 9,
     fontWeight: 'bold',
     textColor: COLORS.cream,
     fill: COLORS.forest,
     align: 'center',
-    linkTarget: 'child_index',
-    linkValue: '0',
+    linkTarget: 'sibling',
+    linkValue: '1',
   }),
 ];
 
@@ -511,6 +539,7 @@ const categoryElements = [
     fontSize: 10,
     verticalAlign: 'top',
   }),
+  ...navChips('category_review', { next: false }),
 ];
 
 const sinkingRows = Array.from({ length: 6 }, (_, index) => {
@@ -540,6 +569,7 @@ const sinkingElements = [
     fill: COLORS.brassPale,
     align: 'center',
   }),
+  ...navChips('sinking_funds'),
 ];
 
 const goalRows = Array.from({ length: 5 }, (_, index) => {
@@ -575,6 +605,16 @@ const goalElements = [
     fill: COLORS.brassPale,
     align: 'center',
   }),
+  text('goal', 'progress_label', 31, 234, 60, 14, 'PROGRESS', {
+    fontSize: 8,
+    fontWeight: 'bold',
+    textColor: COLORS.muted,
+  }),
+  ...Array.from({ length: 10 }, (_, index) =>
+    rect('goal', 'progress_seg', 95 + index * 39, 234, 36, 14, COLORS.paper, {
+      stroke: COLORS.forest,
+      strokeWidth: 0.8,
+    })),
   ...staticTable('goal', 31, 255, [146, 102, 102, 100], 49,
     ['MILESTONE', 'TARGET', 'SAVED', 'NEXT ACTION'], goalRows,
     ['left', 'right', 'right', 'left']),
@@ -589,6 +629,7 @@ const goalElements = [
     fontStyle: 'italic',
     fill: COLORS.paper,
   }),
+  ...navChips('goal'),
 ];
 
 const reviewRows = [
@@ -648,6 +689,81 @@ const yearReviewElements = [
     fontStyle: 'italic',
     fill: COLORS.brassPale,
   }),
+  ...navChips('year_review'),
+];
+
+const billsTickHeader = () => {
+  const cells = [];
+  'JFMAMJJASOND'.split('').forEach((initial, index) => {
+    cells.push(text('bills', 'tick_head', 296 + index * 15, 186, 12, 14, initial, {
+      fontSize: 6,
+      fontWeight: 'bold',
+      textColor: COLORS.cream,
+      align: 'center',
+    }));
+  });
+  return cells;
+};
+
+const billsElements = [
+  ...pageBase('bills', 'Bills & subscriptions'),
+  ...titleBlock('bills'),
+  text('bills', 'instruction', 31, 156, 450, 21, 'List what leaves the account on a schedule. Shade a square when that month is paid.', {
+    fontSize: 10,
+    fontStyle: 'italic',
+    textColor: COLORS.muted,
+  }),
+  // header band
+  rect('bills', 'table_cell_header_1', 31, 183, 150, 20, COLORS.forest),
+  rect('bills', 'table_cell_header_2', 181, 183, 42, 20, COLORS.forest),
+  rect('bills', 'table_cell_header_3', 223, 183, 68, 20, COLORS.forest),
+  rect('bills', 'table_cell_header_4', 291, 183, 190, 20, COLORS.forest),
+  text('bills', 'table_header_1', 36, 183, 140, 20, 'BILL', { fontSize: 9, fontWeight: 'bold', textColor: COLORS.cream }),
+  text('bills', 'table_header_2', 185, 183, 36, 20, 'DUE', { fontSize: 9, fontWeight: 'bold', textColor: COLORS.cream }),
+  text('bills', 'table_header_3', 227, 183, 60, 20, 'AMOUNT', { fontSize: 9, fontWeight: 'bold', textColor: COLORS.cream }),
+  ...billsTickHeader(),
+  // 8 rows
+  ...Array.from({ length: 8 }, (_, index) => {
+    const row = index + 1;
+    const rowY = 203 + index * 40;
+    const cells = [
+      rect('bills', `table_cell_${row}_1`, 31, rowY, 150, 40, COLORS.paper),
+      rect('bills', `table_cell_${row}_2`, 181, rowY, 42, 40, COLORS.paper),
+      rect('bills', `table_cell_${row}_3`, 223, rowY, 68, 40, COLORS.paper),
+      rect('bills', `table_cell_${row}_4`, 291, rowY, 190, 40, COLORS.paper),
+      text('bills', `table_value_${row}_1`, 36, rowY, 140, 40, `{{bill_${row}}}`, { dataBinding: `bill_${row}`, fontSize: 9 }),
+      text('bills', `table_value_${row}_2`, 185, rowY, 36, 40, `{{due_${row}}}`, { dataBinding: `due_${row}`, fontSize: 9, align: 'center' }),
+      text('bills', `table_value_${row}_3`, 227, rowY, 60, 40, `{{amount_${row}}}`, { dataBinding: `amount_${row}`, fontSize: 9, align: 'right' }),
+    ];
+    for (let month = 0; month < 12; month += 1) {
+      cells.push(rect('bills', `tick_${row}_${month + 1}`, 296 + month * 15, rowY + 14, 12, 12, COLORS.paper, {
+        stroke: COLORS.rule,
+        strokeWidth: 0.8,
+      }));
+    }
+    return cells;
+  }).flat(),
+  // single-drawn internal edges + boundary (same convention as staticTable)
+  ...[181, 223, 291].map((lineX, index) =>
+    rect('bills', `table_line_vertical_${index + 1}`, lineX - 0.4, 183, 0.8, 340, COLORS.rule)),
+  ...Array.from({ length: 8 }, (_, index) => {
+    const isHeaderRule = index === 0;
+    const thickness = isHeaderRule ? 1 : 0.8;
+    return rect('bills', `table_line_horizontal_${index + 1}`, 31, 203 + index * 40 - thickness / 2, 450, thickness, isHeaderRule ? COLORS.brass : COLORS.rule);
+  }),
+  rect('bills', 'table_boundary', 31, 183, 450, 340, '', { stroke: COLORS.rule, strokeWidth: 0.8 }),
+  text('bills', 'audit_label', 31, 543, 220, 18, 'ONE YOU COULD CANCEL THIS YEAR?', {
+    fontSize: 9,
+    fontWeight: 'bold',
+    textColor: COLORS.brass,
+  }),
+  text('bills', 'audit', 261, 534, 220, 36, '{{audit_note}}', {
+    dataBinding: 'audit_note',
+    fontSize: 10,
+    fontStyle: 'italic',
+    fill: COLORS.brassPale,
+  }),
+  ...navChips('bills'),
 ];
 
 const template = (id, name, elements) => ({ id, name, width: W, height: H, elements });
@@ -658,6 +774,7 @@ return {
   workspace: template('workspace', 'Workspace Gateway', workspaceElements),
   annual: template('annual', 'Annual Outlook', annualElements),
   month: template('month', 'Monthly Plan', monthElements),
+  bills: template('bills', 'Bills Register', billsElements),
   transactions: template('transactions', 'Transaction Log', transactionElements),
   category_review: template('category_review', 'Category Review', categoryElements),
   sinking_funds: template('sinking_funds', 'Sinking Funds', sinkingElements),

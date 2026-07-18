@@ -357,7 +357,7 @@ const trip = {
     ...field('trip', 'destination', 'Destination', 'destination', 34, 174, 270, 66),
     ...field('trip', 'dates', 'Dates', 'dates', 322, 174, 159, 66),
     ...field('trip', 'base', 'Home base', 'base', 34, 252, 447, 68),
-    grid('trip', 'navigator', 34, 350, 137, 62, 3),
+    grid('trip', 'navigator', 34, 350, 137, 44, 3),
     ...field('trip', 'travel_note', 'Route note', 'travel_note', 34, 508, 447, 92, { fontSize: 9 }),
   ],
 };
@@ -403,6 +403,14 @@ const reservation = {
       fill: COLORS.rust,
       align: 'center',
     }),
+    rect('reservation', 'tick_confirmed', 330, 176, 13, 13, COLORS.paper, { stroke: COLORS.sea, strokeWidth: 0.8 }),
+    text('reservation', 'tick_confirmed_label', 348, 172, 60, 20, 'CONFIRMED', {
+      fontSize: 7.5, fontWeight: 'bold', textColor: COLORS.seaDeep,
+    }),
+    rect('reservation', 'tick_paid', 420, 176, 13, 13, COLORS.paper, { stroke: COLORS.sea, strokeWidth: 0.8 }),
+    text('reservation', 'tick_paid_label', 438, 172, 43, 20, 'PAID', {
+      fontSize: 7.5, fontWeight: 'bold', textColor: COLORS.seaDeep,
+    }),
     ...field('reservation', 'provider', 'Place / service', 'provider', 34, 215, 447, 64),
     ...field('reservation', 'address', 'Address / meeting point', 'address', 34, 291, 447, 66),
     ...field('reservation', 'arrival', 'Arrival', 'arrival', 34, 369, 214, 62),
@@ -439,7 +447,7 @@ const day = {
   elements: [
     ...pageBase('day', 'daily field notes'),
     ...titleBlock('day'),
-    text('day', 'date_label', 34, 164, 447, 24, '{{date_label}}', {
+    text('day', 'date_label', 34, 164, 250, 24, '{{date_label}}', {
       dataBinding: 'date_label',
       fontSize: 9,
       fontWeight: 'bold',
@@ -455,6 +463,24 @@ const day = {
     ...field('day', 'field_notes', 'Field notes - details, sounds, fragments', 'field_notes', 34, 410, 447, 118, { fontSize: 10 }),
     ...field('day', 'weather', 'Weather / light', 'weather', 34, 541, 214, 59, { fontSize: 9 }),
     ...field('day', 'moment', 'One moment to keep', 'moment', 267, 541, 214, 59, { fontSize: 9 }),
+    text('day', 'nav_prev', 296, 164, 85, 24, '{{nav_prev_label}}', {
+      dataBinding: 'nav_prev_label',
+      fontSize: 9,
+      fontWeight: 'bold',
+      textColor: COLORS.seaDeep,
+      align: 'right',
+      linkTarget: 'sibling',
+      linkValue: '-1',
+    }),
+    text('day', 'nav_next', 391, 164, 90, 24, '{{nav_next_label}}', {
+      dataBinding: 'nav_next_label',
+      fontSize: 9,
+      fontWeight: 'bold',
+      textColor: COLORS.rustDeep,
+      align: 'right',
+      linkTarget: 'sibling',
+      linkValue: '1',
+    }),
   ],
 };
 
@@ -495,6 +521,77 @@ const expenses = {
   ],
 };
 
+const tastes = {
+  id: 'tastes',
+  name: 'Tastes Log',
+  width: W,
+  height: H,
+  elements: [
+    ...pageBase('tastes', 'tastes + finds'),
+    ...titleBlock('tastes'),
+    text('tastes', 'instruction', 34, 164, 447, 30, 'Food, drink, objects, small discoveries. Shade squares for the verdict — five means unforgettable.', {
+      fontFamily: 'georgia', fontSize: 10, textColor: COLORS.muted,
+    }),
+    ...staticTable('tastes', 'log', 34, 204, [150, 200], 50, ['WHERE', 'WHAT'],
+      Array.from({ length: 6 }, (_, index) => [`where_${index + 1}`, `dish_${index + 1}`])),
+    // verdict header + star squares column (right of the table)
+    rect('tastes', 'table_cell_header_log_3', 384, 204, 97, 50, COLORS.seaDeep),
+    text('tastes', 'verdict_head', 388, 204, 89, 50, 'VERDICT', {
+      fontSize: 8, fontWeight: 'bold', textColor: COLORS.paper,
+    }),
+    ...Array.from({ length: 6 }, (_, rowIndex) => {
+      const rowY = 204 + 50 * (rowIndex + 1);
+      const cells = [rect('tastes', `verdict_row_bg_${rowIndex + 1}`, 384, rowY, 97, 50, COLORS.paper)];
+      for (let star = 0; star < 5; star += 1) {
+        cells.push(rect('tastes', `star_${rowIndex + 1}_${star + 1}`, 390 + star * 18, rowY + 19, 13, 13, COLORS.paper, {
+          stroke: COLORS.rust,
+          strokeWidth: 0.8,
+        }));
+      }
+      return cells;
+    }).flat(),
+    ...Array.from({ length: 6 }, (_, index) =>
+      rect('tastes', `verdict_line_horizontal_${index + 1}`, 384, 204 + 50 * (index + 1) - 0.4, 97, 0.8, COLORS.rule)),
+    rect('tastes', 'verdict_line_vertical', 383.6, 204, 0.8, 350, COLORS.rule),
+    rect('tastes', 'verdict_boundary', 384, 204, 97, 350, '', { stroke: COLORS.rule, strokeWidth: 0.8 }),
+    ...field('tastes', 'best_bite', 'The one worth a detour', 'best_bite', 34, 560, 447, 62, { fontSize: 9 }),
+  ],
+};
+
+const sketches = {
+  id: 'sketches',
+  name: 'Sketch Frames',
+  width: W,
+  height: H,
+  elements: [
+    ...pageBase('sketches', 'tickets + sketches'),
+    ...titleBlock('sketches'),
+    text('sketches', 'instruction', 34, 160, 447, 26, 'Draw the doorway, tape the stub, map the corner. Caption each frame below it.', {
+      fontFamily: 'georgia', fontSize: 10, textColor: COLORS.muted,
+    }),
+    ...[0, 1, 2, 3].flatMap(index => {
+      const col = index % 2;
+      const row = Math.floor(index / 2);
+      const frameX = 34 + col * 232;
+      const frameY = 192 + row * 216;
+      return [
+        rect('sketches', `writing_frame_${index + 1}`, frameX, frameY, 215, 160, COLORS.paper, {
+          stroke: COLORS.rule,
+          strokeWidth: 0.8,
+        }),
+        text('sketches', `caption_label_${index + 1}`, frameX, frameY + 166, 60, 16, 'CAPTION', {
+          fontSize: 7, fontWeight: 'bold', textColor: COLORS.rustDeep,
+        }),
+        text('sketches', `caption_${index + 1}`, frameX + 62, frameY + 162, 153, 24, `{{caption_${index + 1}}}`, {
+          dataBinding: `caption_${index + 1}`,
+          fontFamily: 'georgia',
+          fontSize: 9,
+        }),
+      ];
+    }),
+  ],
+};
+
 const highlights = {
   id: 'highlights',
   name: 'Highlights',
@@ -523,5 +620,7 @@ return {
   day,
   packing,
   expenses,
+  tastes,
+  sketches,
   highlights,
 };

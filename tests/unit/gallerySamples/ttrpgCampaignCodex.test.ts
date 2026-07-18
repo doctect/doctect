@@ -13,9 +13,9 @@ const contract: GallerySampleContract = {
     slug: '08-ttrpg-campaign-codex',
     expectedTemplateIds: [
         'cover', 'start', 'workspace', 'campaign', 'bank', 'party', 'character',
-        'session', 'quest', 'npc', 'location', 'faction', 'encounter', 'lore',
+        'session', 'quest', 'npc', 'location', 'faction', 'encounter', 'lore', 'threads',
     ],
-    pageCount: [90, 125],
+    pageCount: [92, 130],
     palette: ['#783f38', '#667153', '#e8dcc7'],
     requiredStableNodeIds: ['root', 'start_here', 'example_workspace', 'blank_workspace'],
 };
@@ -54,7 +54,7 @@ describe('TTRPG Campaign Codex gallery sample', () => {
     it('generates a cross-referenced campaign codex', () => {
         const sample = expectValidGallerySample(contract.slug, contract);
 
-        expect(exportedPages(sample)).toHaveLength(125);
+        expect(exportedPages(sample)).toHaveLength(127);
         expect(sample.nodes.blank_party.children).toHaveLength(5);
         expect(sample.nodes.blank_session_bank.children).toHaveLength(16);
         expect(sample.nodes.blank_quest_bank.children).toHaveLength(12);
@@ -77,11 +77,12 @@ describe('TTRPG Campaign Codex gallery sample', () => {
             loreCount: 1,
         });
 
-        expect(validateGallerySample(sample, { ...contract, pageCount: [22, 42] })).toEqual([]);
-        expect(exportedPages(sample)).toHaveLength(40);
+        expect(validateGallerySample(sample, { ...contract, pageCount: [24, 44] })).toEqual([]);
+        expect(exportedPages(sample)).toHaveLength(42);
         expect(sample.nodes.blank_workspace.children).toEqual([
             'blank_campaign',
             'blank_party',
+            'blank_threads',
             'blank_session_bank',
             'blank_quest_bank',
             'blank_npc_bank',
@@ -104,8 +105,8 @@ describe('TTRPG Campaign Codex gallery sample', () => {
             loreCount: 16,
         });
 
-        expect(validateGallerySample(sample, { ...contract, pageCount: [208, 208] })).toEqual([]);
-        expect(exportedPages(sample)).toHaveLength(208);
+        expect(validateGallerySample(sample, { ...contract, pageCount: [210, 210] })).toEqual([]);
+        expect(exportedPages(sample)).toHaveLength(210);
         expect(sample.nodes.blank_party.children.at(-1)).toBe('blank_character_08');
         expect(sample.nodes.blank_session_bank.children.at(-1)).toBe('blank_session_32');
         expect(sample.nodes.blank_npc_bank.children.at(-1)).toBe('blank_npc_32');
@@ -207,7 +208,7 @@ describe('TTRPG Campaign Codex gallery sample', () => {
                 && element.linkValue === 'blank_workspace',
             ), `${id} skip`).toBe(true);
         });
-        expect(guidedIds).toHaveLength(25);
+        expect(guidedIds).toHaveLength(26);
     });
 
     it('stops example chrome context at the blank workspace boundary', () => {
@@ -247,7 +248,7 @@ describe('TTRPG Campaign Codex gallery sample', () => {
 
     it('keeps blank writable data clean', () => {
         const sample = loadGallerySample(contract.slug);
-        const writable = /^(premise|tone|safety|arc|calendar|notes|group_goal|resources|player|ancestry_class|level|hooks|bonds|abilities|date|recap|opening|beats|decisions|consequence|outcome|next_steps|status|patron|objective|stakes|clues|obstacles|progress|role|demeanor|desire|leverage|voice|relationship|secrets|region|atmosphere|features|hazards|routes|discoveries|reputation|agenda|pressure|setup|environment|adversaries|aftermath|category|truth|known_by|evidence|implications)$/;
+        const writable = /^(premise|tone|safety|arc|calendar|notes|group_goal|resources|player|ancestry_class|level|hooks|bonds|abilities|date|recap|opening|beats|decisions|consequence|outcome|next_steps|status|patron|objective|stakes|clues|obstacles|progress|role|demeanor|desire|leverage|voice|relationship|secrets|region|atmosphere|features|hazards|routes|discoveries|reputation|agenda|pressure|setup|environment|adversaries|aftermath|category|truth|known_by|evidence|implications|thread_\d+|owner_\d+|move_\d+)$/;
 
         Object.values(sample.nodes)
             .filter((node: any) => node.id.startsWith('blank_'))
@@ -344,6 +345,39 @@ describe('TTRPG Campaign Codex gallery sample', () => {
         expect(dividers.every((line: any) => line.w === 0.8 && line.h === 38)).toBe(true);
     });
 
+    it('adds threads-and-clocks tracking, session chips, and encounter rounds', () => {
+        const sample = loadGallerySample(contract.slug);
+
+        expect(sample.nodes.blank_threads).toMatchObject({ type: 'threads', parentId: 'blank_workspace' });
+        expect(sample.nodes.example_threads).toMatchObject({ type: 'threads', parentId: 'example_workspace' });
+        expect(sample.nodes.example_threads.data.thread_1).toMatch(/Greenwarden/i);
+
+        const clockSegments = sample.templates.threads.elements.filter((element: any) =>
+            element.type === 'rect' && element.id.includes('_clock_seg_'),
+        );
+        expect(clockSegments).toHaveLength(42);
+        clockSegments.forEach((segment: any) => {
+            expect(segment).toMatchObject({ w: 14, h: 14, stroke: '#783f38', strokeWidth: 0.8 });
+        });
+
+        const sessionPrev = role(sample, 'session', 'nav_prev');
+        const sessionNext = role(sample, 'session', 'nav_next');
+        expect(sessionPrev).toMatchObject({ linkTarget: 'sibling', linkValue: '-1', dataBinding: 'nav_prev_label' });
+        expect(sessionNext).toMatchObject({ linkTarget: 'sibling', linkValue: '1', dataBinding: 'nav_next_label' });
+        const sessions = sample.nodes.blank_session_bank.children.map((id: string) => sample.nodes[id]);
+        expect(sessions[0].data.nav_prev_label).toBe('');
+        expect(sessions[0].data.nav_next_label).toBe('S02 »');
+        expect(sessions.at(-1)!.data.nav_next_label).toBe('');
+        expect(sample.nodes.example_session_01.data.nav_prev_label).toBe('');
+        expect(sample.nodes.example_session_01.data.nav_next_label).toBe('');
+
+        const roundSegments = sample.templates.encounter.elements.filter((element: any) =>
+            element.type === 'rect' && element.id.includes('_round_seg_'),
+        );
+        expect(roundSegments).toHaveLength(6);
+        expect(sample.templates.threads.name).not.toBe('Threads & Clocks');
+    });
+
     it('uses newly authored heraldic, die, and route SVG geometry', () => {
         const sample = loadGallerySample(contract.slug);
         const artwork = sample.templates.cover.elements.find((element: any) => element.type === 'svg');
@@ -354,5 +388,61 @@ describe('TTRPG Campaign Codex gallery sample', () => {
         expect(artwork.svgContent).toContain('<path');
         expect(artwork.svgContent).toContain('<polygon');
         expect(artwork.svgContent).toContain('<circle');
+    });
+
+    it('gives every interior page a bank tab rail with one active tab on records', () => {
+        const sample = loadGallerySample(contract.slug);
+        const railTemplates = [
+            'campaign', 'bank', 'party', 'character', 'session', 'quest',
+            'npc', 'location', 'faction', 'encounter', 'lore', 'threads',
+        ];
+        const expectedTargets = [
+            'blank_session_bank', 'blank_quest_bank', 'blank_npc_bank', 'blank_location_bank',
+            'blank_faction_bank', 'blank_encounter_bank', 'blank_lore_bank',
+        ];
+        const activeByTemplate: Record<string, string> = {
+            session: 'ses', quest: 'qst', npc: 'npc', location: 'loc',
+            faction: 'fac', encounter: 'enc', lore: 'lor',
+        };
+
+        railTemplates.forEach(templateId => {
+            const elements = sample.templates[templateId].elements;
+            const links = elements.filter((element: any) => element.id.includes('_rail_link_'));
+            const tabs = elements.filter((element: any) => element.id.includes('_rail_tab_'));
+            const labels = elements.filter((element: any) => element.id.includes('_rail_label_'));
+
+            expect(links, templateId).toHaveLength(7);
+            expect(tabs, templateId).toHaveLength(7);
+            expect(labels, templateId).toHaveLength(7);
+            expect(links.map((link: any) => link.linkValue)).toEqual(expectedTargets);
+            links.forEach((link: any) => {
+                expect(link.linkTarget, link.id).toBe('specific_node');
+                expect(link.fill, link.id).toBe('');
+                expect(link.stroke, link.id).toBe('');
+                expect(link.rotation, link.id).toBe(0);
+                expect(link.x, link.id).toBeGreaterThanOrEqual(485);
+                expect(link.x + link.w, link.id).toBeLessThanOrEqual(509);
+            });
+            labels.forEach((label: any) => {
+                // Fallback branch: getElementBounds ignores rotation, so labels stay
+                // horizontal (rotation 0) to keep element.x + w inside the 509 page.
+                expect(label.rotation, label.id).toBe(0);
+            });
+
+            const activeKey = activeByTemplate[templateId];
+            const activeTabs = tabs.filter((tab: any) => tab.fill === '#783f38');
+            if (activeKey) {
+                expect(activeTabs, templateId).toHaveLength(1);
+                expect(activeTabs[0].id).toContain(`_rail_tab_${activeKey}_`);
+            } else {
+                expect(activeTabs, templateId).toHaveLength(0);
+            }
+        });
+
+        ['cover', 'start', 'workspace'].forEach(templateId => {
+            expect(sample.templates[templateId].elements.some((element: any) =>
+                element.id.includes('_rail_'),
+            ), templateId).toBe(false);
+        });
     });
 });

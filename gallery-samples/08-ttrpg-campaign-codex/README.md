@@ -4,7 +4,7 @@ TTRPG Campaign Codex for reMarkable Paper Pro (509 x 679). It keeps campaign int
 
 ## Workflow
 
-Campaign charter -> party -> sessions -> quests -> NPCs -> locations -> factions -> encounters -> lore.
+Campaign charter -> party -> threads & clocks -> sessions -> quests -> NPCs -> locations -> factions -> encounters -> lore.
 
 Start Here offers two stable destinations:
 
@@ -13,6 +13,8 @@ Start Here offers two stable destinations:
 
 Every guided page displays bound `EXAMPLE` and `Skip to blank workspace →` controls. Record pages expose only valid Home and Up actions; bank cards open every child record without terminal Previous or Next controls.
 
+Every interior page carries a right-edge bank rail (SES QST NPC LOC FAC ENC LOR) for one-tap lookup; record pages highlight their own bank. From guided example pages the rail jumps into the blank codex's banks.
+
 ## Guided Adventure
 
 The fictional Ashen Bell branch contains:
@@ -20,16 +22,18 @@ The fictional Ashen Bell branch contains:
 - Campaign charter and three-member Lantern Company.
 - One session with preparation, choices, outcome, next steps, and faction consequence.
 - One canonical quest, NPC, location, faction, encounter, and lore record.
+- A threads-and-clocks page with two active Ashen Bell fronts.
 - Five typed reference nodes from Session 01 to quest, NPC, location, faction consequence, and encounter.
 
 Reference wrappers resolve to canonical records and are omitted from PDF page order. Canonical records therefore export once even when opened from Session 01.
 
 ## Blank Inventory
 
-Default configuration creates 103 blank pages:
+Default configuration creates 104 blank pages:
 
 - 1 workspace and 1 campaign charter.
 - 1 party ledger with 5 adventurer records.
+- 1 threads & clocks tracker.
 - 7 bank indexes.
 - 16 session records.
 - 12 quest records.
@@ -39,7 +43,7 @@ Default configuration creates 103 blank pages:
 - 12 encounter records.
 - 8 lore records.
 
-With cover, Start Here, and 20 exported guided pages, default document contains 125 PDF pages. Minimum configuration contains 40 pages. Maximum configuration contains 208 pages.
+With cover, Start Here, and 21 exported guided pages, default document contains 127 PDF pages. Minimum configuration contains 42 pages. Maximum configuration contains 210 pages.
 
 Blank writable fields contain no example characters, events, outcomes, or world facts.
 
@@ -81,8 +85,9 @@ Unsupported or fractional values fail before hierarchy generation with setting-s
 - Faction records pair a visible -3 to +3 reputation scale with agenda, resources, pressure, and standing consequences.
 - Encounter records prioritize objective, setup, environment, adversaries, stakes, and aftermath.
 - Lore records separate world truth from who knows it, evidence in play, and implications.
+- Threads & clocks keep campaign pressure visible: one row per front, six shade-in segments each.
 
-Navigation grids use explicit single 0.8 px oxblood borders and fill-only cells. Faction reputation cells use one outer boundary and six unique dividers, avoiding doubled edges. All writing regions use visible unstroked warm-paper fills for editor and PDF output.
+Navigation grids use explicit single 0.8 px oxblood borders and fill-only cells. Faction reputation cells use one outer boundary and six unique dividers, avoiding doubled edges. All writing regions use visible unstroked warm-paper fills for editor and PDF output. Session records chain with « S / S » chips; first and last sessions show no dead chip.
 
 ## Files
 

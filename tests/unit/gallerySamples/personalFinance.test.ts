@@ -16,13 +16,14 @@ const contract: GallerySampleContract = {
         'workspace',
         'annual',
         'month',
+        'bills',
         'transactions',
         'category_review',
         'sinking_funds',
         'goal',
         'year_review',
     ],
-    pageCount: [58, 78],
+    pageCount: [58, 80],
     palette: ['#29483d', '#b68a4c', '#f4eddf'],
     requiredStableNodeIds: ['root', 'start_here', 'example_workspace', 'blank_workspace'],
 };
@@ -50,21 +51,21 @@ describe('Personal Finance Planner gallery sample', () => {
         ]);
         expect(guidedMonths).toHaveLength(1);
         expect(guidedMonths[0]).toMatchObject({ id: 'example_january', data: { month: 'January' } });
-        expect(exportedPageCount(sample)).toBe(66);
+        expect(exportedPageCount(sample)).toBe(68);
     });
 
     it('supports minimum transaction and goal banks', () => {
         const sample = loadGallerySample(contract.slug, { transactionPagesPerMonth: 1, goalCount: 1 });
 
         expect(validateGallerySample(sample, { ...contract, pageCount: [45, 65] })).toEqual([]);
-        expect(exportedPageCount(sample)).toBe(51);
+        expect(exportedPageCount(sample)).toBe(53);
     });
 
     it('keeps maximum configuration and its dense annual navigator in bounds', () => {
         const sample = loadGallerySample(contract.slug, { transactionPagesPerMonth: 4, goalCount: 8 });
 
         expect(validateGallerySample(sample, { ...contract, pageCount: [90, 100] })).toEqual([]);
-        expect(exportedPageCount(sample)).toBe(94);
+        expect(exportedPageCount(sample)).toBe(96);
 
         const navigator = sample.templates.annual.elements.find((element: any) =>
             element.type === 'grid' && element.id.includes('_navigator_'),
@@ -95,7 +96,7 @@ describe('Personal Finance Planner gallery sample', () => {
     it('draws each static table edge once without stroked cell rectangles', () => {
         const sample = loadGallerySample(contract.slug);
         const tableTemplates = [
-            'annual', 'month', 'transactions', 'category_review', 'sinking_funds', 'goal', 'year_review',
+            'annual', 'month', 'bills', 'transactions', 'category_review', 'sinking_funds', 'goal', 'year_review',
         ];
 
         tableTemplates.forEach(templateId => {
@@ -177,6 +178,7 @@ describe('Personal Finance Planner gallery sample', () => {
                 'fictional_notice', 'planned_income', 'actual_income', 'month_intention',
                 'housing', 'food', 'transport', 'leisure', 'savings', ...categoryAmounts,
             ],
+            bills: [...ranges(['bill', 'due', 'amount'], 8), 'audit_note'],
             transactions: ranges(['date', 'description', 'category', 'amount'], 8),
             category_review: [...categoryAmounts, 'reflection'],
             sinking_funds: [...ranges(['fund', 'target', 'saved', 'next'], 6), 'next_check'],
@@ -193,6 +195,7 @@ describe('Personal Finance Planner gallery sample', () => {
             'category_housing', 'category_food', 'category_transport',
             'category_leisure', 'category_savings', 'category_other',
             'review_lens_income', 'review_lens_spending', 'review_lens_savings', 'review_lens_debt',
+            'nav_prev_label', 'nav_next_label', 'continue_label',
         ]);
         const unboundSummaryFields = new Set(['housing', 'food', 'transport', 'leisure', 'savings']);
 
@@ -215,29 +218,52 @@ describe('Personal Finance Planner gallery sample', () => {
         });
     });
 
-    it('resolves month-to-transaction-to-review workflow and annual sections', () => {
+    it('resolves flat month workflow, annual sections, and sequence navigation', () => {
         const sample = loadGallerySample(contract.slug);
         const openLog = findRole(sample, 'month', 'open_log');
         const continueLink = findRole(sample, 'transactions', 'continue');
+        const reviewPrev = findRole(sample, 'category_review', 'nav_prev');
+        const monthPrev = findRole(sample, 'month', 'nav_prev');
+        const monthNext = findRole(sample, 'month', 'nav_next');
         const annualChildren = sample.nodes.blank_annual.children.map((id: string) => sample.nodes[id]);
 
         expect(openLog).toMatchObject({ linkTarget: 'child_index', linkValue: '0' });
-        expect(continueLink).toMatchObject({ linkTarget: 'child_index', linkValue: '0' });
+        expect(continueLink).toMatchObject({
+            linkTarget: 'sibling', linkValue: '1', dataBinding: 'continue_label',
+        });
+        expect(reviewPrev).toMatchObject({
+            linkTarget: 'sibling', linkValue: '-1', dataBinding: 'nav_prev_label',
+        });
+        expect(monthPrev).toMatchObject({ linkTarget: 'sibling', linkValue: '-1', dataBinding: 'nav_prev_label' });
+        expect(monthNext).toMatchObject({ linkTarget: 'sibling', linkValue: '1', dataBinding: 'nav_next_label' });
         expect(annualChildren.filter((node: any) => node.type === 'month')).toHaveLength(12);
         expect(annualChildren.filter((node: any) => node.type === 'sinking_funds')).toHaveLength(1);
         expect(annualChildren.filter((node: any) => node.type === 'goal')).toHaveLength(4);
         expect(annualChildren.filter((node: any) => node.type === 'year_review')).toHaveLength(1);
 
         annualChildren.filter((node: any) => node.type === 'month').forEach((month: any) => {
-            let current = sample.nodes[month.children[0]];
-            let transactionCount = 0;
-            while (current.type === 'transactions') {
-                transactionCount += 1;
-                current = sample.nodes[current.children[0]];
-            }
-            expect(transactionCount, month.id).toBe(2);
-            expect(current.type, month.id).toBe('category_review');
+            const children = month.children.map((id: string) => sample.nodes[id]);
+            expect(children.map((child: any) => child.type), month.id)
+                .toEqual(['transactions', 'transactions', 'category_review']);
+            expect(children[0].data.continue_label, month.id).toBe('LOG 02 »');
+            expect(children[1].data.continue_label, month.id).toBe('REVIEW »');
+            expect(children[2].data.nav_prev_label, month.id).toBe('« LOG 02');
         });
+
+        const months = annualChildren.filter((node: any) => node.type === 'month');
+        expect(months[0].data.nav_prev_label).toBe('');
+        expect(months[0].data.nav_next_label).toBe('FEB »');
+        expect(months[11].data.nav_prev_label).toBe('« NOV');
+        expect(months[11].data.nav_next_label).toBe('BILLS »');
+        expect(sample.nodes.blank_sinking_funds.data.nav_prev_label).toBe('« BILLS');
+        expect(sample.nodes.blank_sinking_funds.data.nav_next_label).toBe('GOAL 01 »');
+        expect(sample.nodes.blank_goal_01.data.nav_prev_label).toBe('« FUNDS');
+        expect(sample.nodes.blank_goal_04.data.nav_next_label).toBe('YEAR REVIEW »');
+        expect(sample.nodes.blank_year_review.data.nav_prev_label).toBe('« GOAL 04');
+        expect(sample.nodes.blank_year_review.data.nav_next_label).toBe('');
+        expect(sample.nodes.example_january.data.nav_next_label).toBe('BILLS »');
+        expect(sample.nodes.example_transactions.data.continue_label).toBe('REVIEW »');
+        expect(sample.nodes.example_category_review.data.nav_prev_label).toBe('« LOG 01');
     });
 
     it('uses abstract ring-and-path artwork without currency-brand imagery', () => {
@@ -247,5 +273,44 @@ describe('Personal Finance Planner gallery sample', () => {
         expect(artwork.svgContent).toContain('<circle');
         expect(artwork.svgContent).toContain('<path');
         expect(artwork.svgContent).not.toMatch(/[$€£¥]/);
+    });
+
+    it('adds a recurring-bills register with paid-month ticks and a goal progress track', () => {
+        const sample = loadGallerySample(contract.slug);
+        const bills = sample.nodes.blank_bills;
+        const annualChildren = sample.nodes.blank_annual.children;
+
+        expect(bills).toMatchObject({ type: 'bills', parentId: 'blank_annual' });
+        expect(annualChildren.indexOf('blank_bills')).toBe(12);
+        expect(annualChildren.indexOf('blank_sinking_funds')).toBe(13);
+        expect(bills.data).toMatchObject({
+            nav_prev_label: '« DEC', nav_next_label: 'FUNDS »', bill_1: '', audit_note: '',
+        });
+        expect(sample.nodes.example_bills).toMatchObject({ parentId: 'example_annual', type: 'bills' });
+        expect(sample.nodes.example_bills.data.bill_1).toBe('Internet (fictional)');
+        expect(sample.nodes.example_annual.children.indexOf('example_bills')).toBe(1);
+
+        const ticks = sample.templates.bills.elements.filter((element: any) =>
+            element.type === 'rect' && element.id.includes('_tick_'),
+        );
+        expect(ticks).toHaveLength(96);
+        ticks.forEach((tick: any) => {
+            expect(tick.w, tick.id).toBe(12);
+            expect(tick.h, tick.id).toBe(12);
+            expect(tick).toMatchObject({ fill: '#fbf8ef', stroke: '#89978f', strokeWidth: 0.8 });
+        });
+
+        const monthInitials = sample.templates.bills.elements.filter((element: any) =>
+            element.type === 'text' && element.id.includes('_tick_head_'),
+        );
+        expect(monthInitials.map((initial: any) => initial.text).join('')).toBe('JFMAMJJASOND');
+
+        const segments = sample.templates.goal.elements.filter((element: any) =>
+            element.type === 'rect' && element.id.includes('_progress_seg_'),
+        );
+        expect(segments).toHaveLength(10);
+        segments.forEach((segment: any) => {
+            expect(segment).toMatchObject({ fill: '#fbf8ef', stroke: '#29483d', strokeWidth: 0.8, h: 14 });
+        });
     });
 });
