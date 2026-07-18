@@ -56,7 +56,7 @@ describe('PDF text layout adapter', () => {
         };
     };
 
-    it('selects exact font before each uncached measurement and remeasures after clear', () => {
+    it('selects exact font before each layout cache lookup and remeasures after clear', () => {
         const calls: string[] = [];
         const doc = makeDoc(calls);
         const session = createPdfTextLayoutSession(doc as any, { sessionIdentity: 'export-1' });
@@ -74,14 +74,44 @@ describe('PDF text layout adapter', () => {
         expect(calls).toEqual(['font:resolved-family:bolditalic:12', 'width:12:cache me']);
 
         expect(session.layout(request(), 'registered:family:normal', selectFont, 'text one')).not.toBeNull();
-        expect(calls).toEqual(['font:resolved-family:bolditalic:12', 'width:12:cache me']);
+        expect(calls).toEqual([
+            'font:resolved-family:bolditalic:12', 'width:12:cache me',
+            'font:resolved-family:bolditalic:12',
+        ]);
 
         session.clear();
         expect(session.layout(request(), 'registered:family:normal', selectFont, 'text one')).not.toBeNull();
         expect(calls).toEqual([
             'font:resolved-family:bolditalic:12', 'width:12:cache me',
+            'font:resolved-family:bolditalic:12',
             'font:resolved-family:bolditalic:12', 'width:12:cache me',
         ]);
+    });
+
+    it('keys complete layouts by actual selected renderer identity before cache lookup', () => {
+        const doc = makeDoc();
+        let widthScale = 1;
+        let selectionIndex = 0;
+        doc.getTextWidth.mockImplementation((text: string) => text.length * widthScale);
+        const session = createPdfTextLayoutSession(doc as any, { sessionIdentity: 'fallback-export' });
+        const selectFont = vi.fn((size: number) => {
+            const useFallback = selectionIndex++ > 0;
+            widthScale = useFallback ? 2 : 1;
+            doc.setSelectedSize(size);
+            return {
+                family: useFallback ? 'fallback-family' : 'requested-family',
+                style: useFallback ? 'normal' : 'bold',
+                rendererIdentity: useFallback ? 'renderer:fallback' : 'renderer:requested',
+            };
+        });
+
+        const requested = session.layout(request(), 'same-requested-font', selectFont, 'text requested');
+        const fallback = session.layout(request(), 'same-requested-font', selectFont, 'text fallback');
+
+        expect(requested?.lines[0].width).toBe(8);
+        expect(fallback?.lines[0].width).toBe(16);
+        expect(selectFont).toHaveBeenCalledTimes(2);
+        expect(doc.getTextWidth).toHaveBeenCalledTimes(2);
     });
 
     it('keys widths by export identity, resolved font descriptor, size, and string', () => {

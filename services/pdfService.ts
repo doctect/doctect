@@ -649,6 +649,7 @@ const applyFont = (
     el: TemplateElement,
     isGreyscale = false,
     effectiveSize = resolveTextFontSize(el.fontSize),
+    onSelectionError?: (error: unknown, recovered: boolean) => void,
 ) => {
     let family = el.fontFamily || 'helvetica';
     if (family.toLowerCase() === 'georgia') family = 'times';
@@ -698,11 +699,16 @@ const applyFont = (
 
     try {
         doc.setFont(selectedFamily, selectedStyle);
-    } catch (e) {
-        console.warn(`[PDFService] Failed to set font ${family} ${style}. Falling back to helvetica.`, e);
+    } catch (error) {
         selectedFamily = 'helvetica';
         selectedStyle = 'normal';
-        doc.setFont(selectedFamily, selectedStyle);
+        try {
+            doc.setFont(selectedFamily, selectedStyle);
+        } catch (fallbackError) {
+            onSelectionError?.(fallbackError, false);
+            throw fallbackError;
+        }
+        onSelectionError?.(error, true);
     }
     doc.setFontSize(effectiveSize);
 
@@ -1494,8 +1500,18 @@ export const generatePDF = async (state: AppState, options: GeneratePDFOptions =
                             cellFontWeight || 'normal',
                             el.fontStyle || 'normal',
                         ].join(':');
-                        const selectFont = (size: number) => applyFont(doc, cellEl, options.isGreyscale, size);
                         const context = `grid ${el.id} cell ${childId}`;
+                        const selectFont = (size: number) => applyFont(
+                            doc,
+                            cellEl,
+                            options.isGreyscale,
+                            size,
+                            (error, recovered) => pdfTextSession.warnOnce(
+                                context,
+                                error,
+                                recovered ? 'Used font fallback for' : 'Skipped',
+                            ),
+                        );
                         const layout = pdfTextSession.layout({
                             text: String(txt),
                             contentWidth,
@@ -1784,8 +1800,18 @@ export const generatePDF = async (state: AppState, options: GeneratePDFOptions =
                         el.fontWeight || 'normal',
                         el.fontStyle || 'normal',
                     ].join(':');
-                    const selectFont = (size: number) => applyFont(doc, el, options.isGreyscale, size);
                     const context = `text ${el.id}`;
+                    const selectFont = (size: number) => applyFont(
+                        doc,
+                        el,
+                        options.isGreyscale,
+                        size,
+                        (error, recovered) => pdfTextSession.warnOnce(
+                            context,
+                            error,
+                            recovered ? 'Used font fallback for' : 'Skipped',
+                        ),
+                    );
                     const layout = pdfTextSession.layout({
                         text: textContent,
                         contentWidth: w,
@@ -1813,7 +1839,26 @@ export const generatePDF = async (state: AppState, options: GeneratePDFOptions =
                         );
                     }
                 } else {
-                    applyFont(doc, el, options.isGreyscale);
+                    const context = `${el.type} ${el.id}`;
+                    let fontReady = true;
+                    try {
+                        applyFont(
+                            doc,
+                            el,
+                            options.isGreyscale,
+                            fontSize,
+                            (error, recovered) => pdfTextSession.warnOnce(
+                                context,
+                                error,
+                                recovered ? 'Used font fallback for' : 'Skipped',
+                            ),
+                        );
+                    } catch (error) {
+                        fontReady = false;
+                        pdfTextSession.warnOnce(context, error);
+                    }
+
+                    if (fontReady) {
 
                 // Line height matching CSS lineHeight: 1.2
                 const lineHeight = fontSize * 1.2;
@@ -1903,6 +1948,7 @@ export const generatePDF = async (state: AppState, options: GeneratePDFOptions =
                         doc.line(lineX, lineY, lineX + txtWidth, lineY);
                     });
                 }
+                    }
                 }
             }
 

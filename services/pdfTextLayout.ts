@@ -38,6 +38,7 @@ export interface PdfTextDrawOptions {
 
 export interface PdfTextLayoutSession {
     readonly identity: string;
+    warnOnce(context: string, error: unknown, action?: string): void;
     layout(
         request: TextLayoutRequest,
         metricIdentity: string,
@@ -60,42 +61,71 @@ export function createPdfTextLayoutSession(
     const engine = createTextLayoutEngine();
     let warned = false;
 
-    const warnOnce = (context: string, error: unknown) => {
+    const warnOnce = (context: string, error: unknown, action = 'Skipped') => {
         if (warned) return;
         warned = true;
-        warn(`[PDFTextLayout] Skipped ${context}`, error);
+        warn(`[PDFTextLayout] ${action} ${context}`, error);
     };
 
     return {
         identity,
+        warnOnce,
 
         layout(request, metricIdentity, selectFont, context) {
-            const measurer = {
-                cacheKey: JSON.stringify([identity, metricIdentity]),
-                measureWidth(text: string, font: FontDescriptor): number {
-                    const selection = selectFont(font.size);
-                    const key = JSON.stringify([
-                        identity,
-                        metricIdentity,
-                        selection.rendererIdentity,
-                        selection.family,
-                        selection.style,
-                        font.family,
-                        font.weight,
-                        font.style,
-                        font.size,
-                        text,
-                    ]);
-                    const cached = widthCache.get(key);
-                    if (cached !== undefined) return cached;
-
-                    const width = doc.getTextWidth(text);
-                    if (Number.isFinite(width) && width >= 0) widthCache.set(key, width);
-                    return width;
-                },
-            };
-
             try {
+                if (
+                    request.text.length === 0
+                    || !Number.isFinite(request.fontSize)
+                    || request.fontSize <= 0
+                    || !Number.isFinite(request.contentWidth)
+                    || request.contentWidth <= 0
+                    || !Number.isFinite(request.contentHeight)
+                    || request.contentHeight <= 0
+                ) {
+                    return null;
+                }
+
+                let selectedSize = request.fontSize;
+                let selection = selectFont(selectedSize);
+                const effectiveMetricIdentity = JSON.stringify([
+                    identity,
+                    metricIdentity,
+                    selection.rendererIdentity,
+                    selection.family,
+                    selection.style,
+                    request.fontFamily,
+                    request.fontWeight,
+                    request.fontStyle,
+                    request.fontSize,
+                ]);
+                const measurer = {
+                    cacheKey: effectiveMetricIdentity,
+                    measureWidth(text: string, font: FontDescriptor): number {
+                        if (font.size !== selectedSize) {
+                            selectedSize = font.size;
+                            selection = selectFont(selectedSize);
+                        }
+                        const key = JSON.stringify([
+                            identity,
+                            metricIdentity,
+                            selection.rendererIdentity,
+                            selection.family,
+                            selection.style,
+                            font.family,
+                            font.weight,
+                            font.style,
+                            font.size,
+                            text,
+                        ]);
+                        const cached = widthCache.get(key);
+                        if (cached !== undefined) return cached;
+
+                        const width = doc.getTextWidth(text);
+                        if (Number.isFinite(width) && width >= 0) widthCache.set(key, width);
+                        return width;
+                    },
+                };
+
                 return engine.layout(request, measurer);
             } catch (error) {
                 warnOnce(context, error);

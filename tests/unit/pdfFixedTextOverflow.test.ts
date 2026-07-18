@@ -353,6 +353,68 @@ describe('fixed PDF text overflow rendering', () => {
         expect(warningCalls[0][0]).toBe('[PDFTextLayout] Skipped text font-failure');
     });
 
+    it('warns once for persistent fixed setFont failures and renders a following shape', async () => {
+        let fontAttempts = 0;
+        const roundedRects: unknown[][] = [];
+        pdfDocHook.onCreate = doc => {
+            const originalRoundedRect = doc.roundedRect;
+            doc.setFont = function () {
+                fontAttempts += 1;
+                throw new Error('persistent fixed setFont failure');
+            };
+            doc.roundedRect = function (this: any, ...args: any[]) {
+                roundedRects.push(args);
+                return originalRoundedRect.apply(this, args);
+            };
+        };
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+        let pdf = '';
+        let warningCalls: unknown[][] = [];
+
+        try {
+            pdf = await exportPdf([
+                baseElement('fixed-font-failure-one', {
+                    text: 'FIXED_FONT_FAILURE_ONE',
+                    rotation: 17,
+                    opacity: 0.5,
+                    textOverflow: 'clip',
+                    textWrap: false,
+                }),
+                baseElement('fixed-font-failure-two', {
+                    y: 100,
+                    text: 'FIXED_FONT_FAILURE_TWO',
+                    textOverflow: 'visible',
+                    textWrap: false,
+                    zIndex: 1,
+                }),
+                baseElement('native-font-failure', {
+                    y: 160,
+                    text: 'NATIVE_FONT_FAILURE',
+                    autoWidth: true,
+                    zIndex: 2,
+                }),
+                baseElement('font-failure-shape-control', {
+                    type: 'rect',
+                    y: 240,
+                    text: '',
+                    fill: '#eeeeee',
+                    zIndex: 3,
+                }),
+            ]);
+        } finally {
+            warningCalls = [...warn.mock.calls];
+            pdfDocHook.onCreate = null;
+            warn.mockRestore();
+        }
+
+        const stream = firstStream(pdf);
+        expect(warningCalls).toHaveLength(1);
+        expect(warningCalls[0][0]).toBe('[PDFTextLayout] Skipped text fixed-font-failure-one');
+        expect(fontAttempts).toBeGreaterThanOrEqual(4);
+        expect(roundedRects.some(args => args.at(-1) === 'F')).toBe(true);
+        expect(stream.match(/^q$/gm) || []).toHaveLength((stream.match(/^Q$/gm) || []).length);
+    });
+
     it('positions explicit lines at top, middle, and bottom line-box anchors', async () => {
         const stream = firstStream(await exportPdf([
             baseElement('top', { text: 'TOP_ANCHOR', y: 100, h: 60, verticalAlign: 'top', textOverflow: 'visible', textWrap: false }),

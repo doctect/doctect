@@ -173,6 +173,7 @@ describe('PDF grid shared text layout', () => {
         const clear = vi.fn();
         const session: PdfTextLayoutSession = {
             identity: 'mock-grid-export',
+            warnOnce: vi.fn(),
             layout,
             draw,
             clear,
@@ -307,6 +308,7 @@ describe('PDF grid shared text layout', () => {
         const draw = vi.fn(() => true);
         hooks.createSession = () => ({
             identity: 'narrow-grid-export',
+            warnOnce: vi.fn(),
             layout,
             draw,
             clear: vi.fn(),
@@ -369,6 +371,63 @@ describe('PDF grid shared text layout', () => {
         expect(measurements.find(entry => entry.text === 'SHORT' && entry.size === shortDraw!.size)?.style).toBe(shortDraw!.style);
         expect(measurements.find(entry => entry.text === 'A_LABEL_THAT_MUST_SHRINK' && entry.size === longDraw!.size)?.style).toBe(longDraw!.style);
         expect(element.fontSize).toBe(20);
+    });
+
+    it('remeasures identical cell requests when selected renderer falls back transiently', async () => {
+        const measuredFamilies: string[] = [];
+        const drawnFamilies: string[] = [];
+        let courierSelections = 0;
+        hooks.onPdfCreate = doc => {
+            const originalSetFont = doc.setFont;
+            const originalWidth = doc.getTextWidth;
+            const originalText = doc.text;
+            doc.setFont = function (this: any, family: string, style: string) {
+                if (family === 'courier') {
+                    courierSelections += 1;
+                    if (courierSelections >= 3) throw new Error('transient courier selection failure');
+                }
+                return originalSetFont.call(this, family, style);
+            };
+            doc.getTextWidth = function (this: any, text: string) {
+                measuredFamilies.push(this.getFont().fontName);
+                return originalWidth.call(this, text);
+            };
+            doc.text = function (this: any, ...args: any[]) {
+                drawnFamilies.push(this.getFont().fontName);
+                return originalText.apply(this, args);
+            };
+        };
+        const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+        let warningCalls: unknown[][] = [];
+
+        try {
+            await exportPdf([gridElement({
+                w: 120,
+                fill: '',
+                stroke: '',
+                strokeWidth: 0,
+                fontFamily: 'courier',
+                fontStyle: 'normal',
+                textOverflow: 'visible',
+                gridConfig: {
+                    ...gridElement().gridConfig!,
+                    cols: 2,
+                    gapX: 0,
+                    gridBorderMode: 'none',
+                    gridBorderWidth: 0,
+                    gridBorderColor: '',
+                    gridBorderStyle: 'none',
+                },
+            })], ['CACHE_IDENTITY', 'CACHE_IDENTITY']);
+        } finally {
+            warningCalls = [...warning.mock.calls];
+            warning.mockRestore();
+        }
+
+        expect(measuredFamilies).toEqual(['courier', 'helvetica']);
+        expect(drawnFamilies).toEqual(['courier', 'helvetica']);
+        expect(warningCalls).toHaveLength(1);
+        expect(warningCalls[0][0]).toBe('[PDFTextLayout] Used font fallback for grid grid cell cell-1');
     });
 
     it('positions top, middle, and bottom cell lines from full cell height', async () => {
@@ -481,6 +540,66 @@ describe('PDF grid shared text layout', () => {
             expect(dashPatterns.at(-1)).toEqual([]);
         },
     );
+
+    it('warns once and continues every cell and outer border when font selection persistently fails', async () => {
+        const events: string[] = [];
+        const links: Array<[number, number, number, number]> = [];
+        let fontAttempts = 0;
+        hooks.onPdfCreate = doc => {
+            const originalRoundedRect = doc.roundedRect;
+            const originalLink = doc.link;
+            doc.setFont = function () {
+                fontAttempts += 1;
+                throw new Error('persistent setFont failure');
+            };
+            doc.roundedRect = function (this: any, ...args: any[]) {
+                events.push(`rounded:${args.join(',')}`);
+                return originalRoundedRect.apply(this, args);
+            };
+            doc.link = function (this: any, x: number, y: number, width: number, height: number, options: any) {
+                links.push([x, y, width, height]);
+                return originalLink.call(this, x, y, width, height, options);
+            };
+        };
+        const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+        let pdf = '';
+        let warningCalls: unknown[][] = [];
+
+        try {
+            pdf = await exportPdf([gridElement({
+                w: 80,
+                fill: '',
+                stroke: '#123456',
+                strokeWidth: 2,
+                borderStyle: 'dashed',
+                borderRadius: 6,
+                opacity: 0.5,
+                fontFamily: '__builtin_fallback__',
+                textOverflow: 'clip',
+                gridConfig: {
+                    ...gridElement().gridConfig!,
+                    cols: 2,
+                    gapX: 0,
+                    gridBorderMode: 'none',
+                    gridBorderWidth: 0,
+                    gridBorderColor: '',
+                    gridBorderStyle: 'none',
+                },
+            })], ['FIRST_FONT_FAILURE', 'SECOND_FONT_FAILURE']);
+        } finally {
+            warningCalls = [...warning.mock.calls];
+            warning.mockRestore();
+        }
+
+        const stream = firstStream(pdf);
+        expect(warningCalls).toHaveLength(1);
+        expect(warningCalls[0][0]).toBe('[PDFTextLayout] Skipped grid grid cell cell-0');
+        expect(fontAttempts).toBeGreaterThanOrEqual(4);
+        expect(links).toEqual([[20, 20, 80, 40], [100, 20, 80, 40]]);
+        expect(events.at(-1)).toBe('rounded:21,21,158,38,6,6,D');
+        expect(stream.match(/^q$/gm) || []).toHaveLength((stream.match(/^Q$/gm) || []).length);
+        expect(stream).toContain('[] 0. d');
+    });
 
     it('balances rotated pattern, cell-text clip, outer border, and following element state', async () => {
         const pdf = await exportPdf([
