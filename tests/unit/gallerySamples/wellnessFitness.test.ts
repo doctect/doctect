@@ -315,4 +315,26 @@ describe('Wellness & Fitness Journal gallery sample', () => {
         expect(reflectionArc.y + reflectionArc.h).toBeLessThanOrEqual(625);
         expect(reflectionArc.x + reflectionArc.w).toBeLessThanOrEqual(328);
     });
+
+    it('never paints an empty continue button when its bound label is blank', () => {
+        const sample = loadGallerySample(contract.slug);
+
+        // week and workout continue labels resolve to '' at sequence ends (a zero-workout
+        // week, and every week's last workout). A filled button would paint an empty box
+        // there because the engine draws the fill regardless of the (suppressed) empty text,
+        // so these must be unfilled text chips with a visible ink colour.
+        ['week', 'workout'].forEach(templateId => {
+            const button = role(sample, templateId, 'continue');
+            expect(button.dataBinding, templateId).toBe('continue_label');
+            expect(button.fill, templateId).toBe('');
+            expect(button.textColor, templateId).not.toBe('#fbf8f3'); // COLORS.paper — invisible without a fill
+            expect(button.textColor, templateId).toBeTruthy();
+        });
+
+        // recovery continue is bound to nav_next_label, which is always 'REFLECT »' (never
+        // blank), so it legitimately stays a filled button.
+        const recovery = role(sample, 'recovery', 'continue');
+        expect(recovery.dataBinding).toBe('nav_next_label');
+        expect(recovery.fill).not.toBe('');
+    });
 });

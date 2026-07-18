@@ -471,7 +471,7 @@ const weekElements = [
   text('week', 'recovery_note', 329, 521, 152, 35, '{{recovery_note}}', { dataBinding: 'recovery_note', fontSize: 9, fill: COLORS.paper, align: 'center' }),
   text('week', 'continue', 328, 574, 153, 32, '{{continue_label}}', {
     dataBinding: 'continue_label',
-    fontSize: 9, fontWeight: 'bold', textColor: COLORS.paper, fill: COLORS.clay, align: 'center', borderRadius: 16,
+    fontSize: 9, fontWeight: 'bold', textColor: COLORS.clay, align: 'center',
     linkTarget: 'child_index', linkValue: '0',
   }),
   ...navChips('week'),
@@ -496,7 +496,7 @@ const workoutElements = [
   text('workout', 'closing', 145, 545, 177, 36, '{{session_note}}', { dataBinding: 'session_note', fontSize: 9, fill: COLORS.paper }),
   text('workout', 'continue', 328, 550, 153, 32, '{{continue_label}}', {
     dataBinding: 'continue_label',
-    fontSize: 9, fontWeight: 'bold', textColor: COLORS.paper, fill: COLORS.sageDeep, align: 'center', borderRadius: 16,
+    fontSize: 9, fontWeight: 'bold', textColor: COLORS.sageDeep, align: 'center',
     linkTarget: 'sibling', linkValue: '1',
   }),
 ];
