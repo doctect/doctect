@@ -19,13 +19,14 @@ const renderEditor = (value: TemplateElement) => render(
 
 describe('OverlayTextEditor padding', () => {
   it('keeps outer rotation geometry and starts full source inside the padded box', () => {
-    renderEditor(element());
+    renderEditor(element({ transformOrigin: { x: 0.25, y: 0.75 } }));
     const editor = screen.getByTestId('overlay-text-editor');
     const box = screen.getByTestId('overlay-text-editor-box');
     const outer = box.parentElement!;
 
     expect(outer).toHaveStyle({
       left: '10px', top: '20px', width: '100px', height: '40px', transform: 'rotate(15deg)',
+      transformOrigin: '25px 30px',
     });
     expect(box).toHaveStyle({
       left: '6px', top: '3px', width: '90px', height: '32px', overflow: 'visible',
