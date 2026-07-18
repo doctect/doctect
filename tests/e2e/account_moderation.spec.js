@@ -64,7 +64,7 @@ test('configured owner manages the full moderator authority lifecycle', async ({
             email: ownerEmail,
             password: TEST_PASSWORD,
             name: 'Configured Owner',
-            username: `owner_retry_${unique}`,
+            username: `owner_retry_${unique.slice(-18)}`,
         });
         expect(retryOwnerSetup).toMatchObject({ created: false, user: { email: ownerEmail, role: 'owner' } });
         const ownerIdentity = await ownerContext.request.get(`${API_BASE}/api/me`);
