@@ -3,6 +3,8 @@ import clsx from 'clsx';
 import type { AppNode, PageTemplate, TemplateElement } from '../../types';
 import { sortElementsForRender } from '../../services/layers';
 import { CanvasElement } from './CanvasElement';
+import { useCanvasTextLayoutSession } from './useCanvasTextLayoutSession';
+import type { CanvasTextLayoutSession } from '../../services/canvasTextLayout';
 
 export interface ReadOnlyPagePreviewProps {
   template: PageTemplate;
@@ -17,6 +19,7 @@ export interface ReadOnlyPagePreviewProps {
   testId?: string;
   interactive?: boolean;
   renderElement?: (element: TemplateElement) => React.ReactNode;
+  textLayoutSession?: CanvasTextLayoutSession;
 }
 
 export const ReadOnlyPagePreview = forwardRef<HTMLDivElement, ReadOnlyPagePreviewProps>(function ReadOnlyPagePreview({
@@ -32,7 +35,10 @@ export const ReadOnlyPagePreview = forwardRef<HTMLDivElement, ReadOnlyPagePrevie
   testId,
   interactive = false,
   renderElement,
+  textLayoutSession: injectedTextLayoutSession,
 }, ref) {
+  const textLayoutSession = useCanvasTextLayoutSession(injectedTextLayoutSession);
+
   return (
     <div
       ref={ref}
@@ -63,6 +69,7 @@ export const ReadOnlyPagePreview = forwardRef<HTMLDivElement, ReadOnlyPagePrevie
                 showHandles={false}
                 isEditing={false}
                 renderScale={scale}
+                textLayoutSession={textLayoutSession}
               />
             )
           ))}

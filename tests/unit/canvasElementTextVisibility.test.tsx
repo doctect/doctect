@@ -2,6 +2,7 @@ import { render } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { CanvasElement } from '../../components/canvas/CanvasElement';
 import type { AppNode, TemplateElement } from '../../types';
+import { createTestCanvasTextLayoutSession } from './canvasTestUtils';
 
 const nodes: Record<string, AppNode> = {
     root: { id: 'root', parentId: null, type: 'page', title: 'Root', data: {}, children: [] },
@@ -27,6 +28,7 @@ const renderElement = (element: TemplateElement) => render(
         currentNodeId="root"
         tool="select"
         showHandles={false}
+        textLayoutSession={createTestCanvasTextLayoutSession()}
     />,
 );
 

@@ -3,6 +3,7 @@ import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { ReadOnlyPagePreview } from '../../components/canvas/ReadOnlyPagePreview';
 import type { AppNode, PageTemplate } from '../../types';
+import { createTestCanvasTextLayoutSession } from './canvasTestUtils';
 
 const nodes: Record<string, AppNode> = {
   root: { id: 'root', parentId: null, type: 'page', title: 'Bound title', data: { label: 'Canvas value' }, children: [] },
@@ -23,7 +24,14 @@ const template: PageTemplate = {
 describe('ReadOnlyPagePreview', () => {
   it('renders the production canvas elements at the requested scale without editor controls', () => {
     const { container } = render(
-      <ReadOnlyPagePreview template={template} nodes={nodes} currentNodeId="root" scale={0.5} testId="page-preview" />,
+      <ReadOnlyPagePreview
+        template={template}
+        nodes={nodes}
+        currentNodeId="root"
+        scale={0.5}
+        testId="page-preview"
+        textLayoutSession={createTestCanvasTextLayoutSession()}
+      />,
     );
 
     expect(screen.getByTestId('page-preview')).toHaveStyle({ width: '100px', height: '150px' });
@@ -41,6 +49,7 @@ describe('ReadOnlyPagePreview', () => {
         currentNodeId="root"
         scale={1}
         backgroundOverlay={<div data-testid="grid-overlay" />}
+        textLayoutSession={createTestCanvasTextLayoutSession()}
       >
         <div data-testid="editor-overlay" />
       </ReadOnlyPagePreview>,

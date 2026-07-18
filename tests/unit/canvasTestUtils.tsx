@@ -2,6 +2,23 @@ import { vi } from 'vitest';
 import { render } from '@testing-library/react';
 import { Canvas } from '../../components/Canvas';
 import { AppNode, Layer, PageTemplate, TemplateElement } from '../../types';
+import type { CanvasTextLayoutSession } from '../../services/canvasTextLayout';
+import { createTextLayoutEngine, type FontDescriptor } from '../../services/textLayout';
+
+let nextTestSession = 1;
+
+export const createTestCanvasTextLayoutSession = (): CanvasTextLayoutSession => {
+    const engine = createTextLayoutEngine(100);
+    const measurer = {
+        cacheKey: `canvas-test-${nextTestSession++}`,
+        measureWidth: (text: string, font: FontDescriptor) => Array.from(text).length * font.size * 0.5,
+    };
+
+    return {
+        layout: (request) => engine.layout(request, measurer),
+        clear: () => engine.clear(),
+    };
+};
 
 // jsdom: getBoundingClientRect() is all zeros, so at scale 1 canvas coords == clientX/clientY.
 export const makeEl = (id: string, overrides: Partial<TemplateElement> = {}): TemplateElement => ({
@@ -36,6 +53,7 @@ export const renderCanvas = (elements: TemplateElement[], layers: Layer[], extra
             onSelectElements={onSelectElements}
             onZoom={vi.fn()}
             onInteractionStart={vi.fn()}
+            textLayoutSession={createTestCanvasTextLayoutSession()}
             {...extra}
         />
     );

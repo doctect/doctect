@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { CanvasElement } from '../../components/canvas/CanvasElement';
 import { ReadOnlyPagePreview } from '../../components/canvas/ReadOnlyPagePreview';
 import type { AppNode, PageTemplate, TemplateElement } from '../../types';
-import { makeEl, makeLayer, renderCanvas } from './canvasTestUtils';
+import { createTestCanvasTextLayoutSession, makeEl, makeLayer, renderCanvas } from './canvasTestUtils';
 
 const nodes: Record<string, AppNode> = {
   root: { id: 'root', parentId: null, type: 'page', title: 'Root', data: {}, children: ['child'] },
@@ -41,7 +41,13 @@ describe('scale-aware canvas patterns', () => {
       layers: [makeLayer('base', 0)], elements: [{ ...dot, layerId: 'base' }],
     };
     const { container } = render(
-      <ReadOnlyPagePreview template={template} nodes={nodes} currentNodeId="root" scale={0.125} />,
+      <ReadOnlyPagePreview
+        template={template}
+        nodes={nodes}
+        currentNodeId="root"
+        scale={0.125}
+        textLayoutSession={createTestCanvasTextLayoutSession()}
+      />,
     );
     expect(patternChild(container, 'dot-pattern').style.backgroundImage).toContain('transparent 6px');
   });
@@ -55,7 +61,14 @@ describe('scale-aware canvas patterns', () => {
         gridBorderMode: 'none', gridBorderWidth: 0, gridBorderColor: 'transparent', gridBorderStyle: 'solid',
       },
     });
-    const { container } = render(<CanvasElement element={grid} renderScale={0.125} {...baseProps} />);
+    const { container } = render(
+      <CanvasElement
+        element={grid}
+        renderScale={0.125}
+        textLayoutSession={createTestCanvasTextLayoutSession()}
+        {...baseProps}
+      />,
+    );
     const cell = container.querySelector('[data-element-id="grid-pattern"] > div') as HTMLElement;
     expect(cell.style.backgroundImage).toContain('repeating-linear-gradient(135deg');
     expect(cell.style.backgroundImage).toContain('#334155 8px');

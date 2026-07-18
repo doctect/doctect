@@ -10,6 +10,8 @@ import { SelectionHandles } from './canvas/SelectionHandles';
 import { resolveActiveLayerId, nextZIndexInLayer } from '../services/layers';
 import { hitTestPoint } from '../services/hitTest';
 import { SelectUnderMenu } from './canvas/SelectUnderMenu';
+import { useCanvasTextLayoutSession } from './canvas/useCanvasTextLayoutSession';
+import type { CanvasTextLayoutSession } from '../services/canvasTextLayout';
 
 interface CanvasProps {
     template: PageTemplate;
@@ -29,6 +31,7 @@ interface CanvasProps {
     activeLayerId?: string;
     /** Previews greyscale export: renders the elements layer desaturated. */
     greyscalePreview?: boolean;
+    textLayoutSession?: CanvasTextLayoutSession;
 }
 
 const MIN_DRAG_THRESHOLD = 5;
@@ -192,8 +195,10 @@ export const Canvas: React.FC<CanvasProps> = ({
     onInteractionStart,
     onSwitchToSelect,
     activeLayerId,
-    greyscalePreview
+    greyscalePreview,
+    textLayoutSession: injectedTextLayoutSession,
 }) => {
+    const textLayoutSession = useCanvasTextLayoutSession(injectedTextLayoutSession);
     const containerRef = useRef<HTMLDivElement>(null);
     const outerContainerRef = useRef<HTMLDivElement>(null);
     const zoomTarget = useRef<{ mx: number; my: number; cx: number; cy: number } | null>(null);
@@ -1567,6 +1572,7 @@ export const Canvas: React.FC<CanvasProps> = ({
                     nodes={nodes}
                     currentNodeId={currentNodeId}
                     scale={scale}
+                    textLayoutSession={textLayoutSession}
                     greyscalePreview={greyscalePreview}
                     interactive
                     renderElement={element => (
@@ -1584,6 +1590,7 @@ export const Canvas: React.FC<CanvasProps> = ({
                             }}
                             isEditing={editingElementId === element.id}
                             renderScale={scale}
+                            textLayoutSession={textLayoutSession}
                         />
                     )}
                     backgroundOverlay={showGrid ? (

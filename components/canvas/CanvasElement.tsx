@@ -3,67 +3,10 @@ import React from 'react';
 import DOMPurify from 'dompurify';
 import { TemplateElement, AppNode } from '../../types';
 import { hasVisibleTextFontSize, isVisibleText, resolveTextFontSize } from '../../services/textVisibility';
+import { resolveTextOverflowSettings } from '../../services/textOverflow';
+import { resolveCanvasFontFamily, type CanvasTextLayoutSession } from '../../services/canvasTextLayout';
 import { getElementBounds, traverseGridData } from './elementBounds';
 import { buildPatternBackgroundStyle } from './patternStyle';
-
-
-// Font family mapping for CSS (defined outside component for performance)
-const FONT_FAMILY_MAP: Record<string, string> = {
-    // Sans-Serif
-    'helvetica': 'Helvetica, Arial, sans-serif',
-    'open-sans': '"Open Sans", sans-serif',
-    'lato': 'Lato, sans-serif',
-    'montserrat': 'Montserrat, sans-serif',
-    'roboto': 'Roboto, sans-serif',
-    'poppins': 'Poppins, sans-serif',
-    'nunito': 'Nunito, sans-serif',
-    'inter': 'Inter, sans-serif',
-    'work-sans': '"Work Sans", sans-serif',
-    'source-sans-pro': '"Source Sans Pro", sans-serif',
-    'raleway': 'Raleway, sans-serif',
-    'ubuntu': 'Ubuntu, sans-serif',
-    'pt-sans': '"PT Sans", sans-serif',
-    'noto-sans': '"Noto Sans", sans-serif',
-    'oxygen': 'Oxygen, sans-serif',
-    'fira-sans': '"Fira Sans", sans-serif',
-    // Serif
-    'times': '"Times New Roman", Times, serif',
-    'lora': 'Lora, serif',
-    'merriweather': 'Merriweather, serif',
-    'playfair-display': '"Playfair Display", serif',
-    'pt-serif': '"PT Serif", serif',
-    'libre-baskerville': '"Libre Baskerville", serif',
-    'crimson-text': '"Crimson Text", serif',
-    'eb-garamond': '"EB Garamond", serif',
-    'cormorant-garamond': '"Cormorant Garamond", serif',
-    'noto-serif': '"Noto Serif", serif',
-    // Monospace
-    'courier': 'Courier, monospace',
-    'roboto-mono': '"Roboto Mono", monospace',
-    'fira-code': '"Fira Code", monospace',
-    'source-code-pro': '"Source Code Pro", monospace',
-    'jetbrains-mono': '"JetBrains Mono", monospace',
-    'ubuntu-mono': '"Ubuntu Mono", monospace',
-    // Handwriting / Script
-    'caveat': 'Caveat, cursive',
-    'dancing-script': '"Dancing Script", cursive',
-    'patrick-hand': '"Patrick Hand", cursive',
-    'pacifico': 'Pacifico, cursive',
-    'great-vibes': '"Great Vibes", cursive',
-    'satisfy': 'Satisfy, cursive',
-    'sacramento': 'Sacramento, cursive',
-    'allura': 'Allura, cursive',
-    'amatic-sc': '"Amatic SC", cursive',
-    'indie-flower': '"Indie Flower", cursive',
-    'kalam': 'Kalam, cursive',
-    'shadows-into-light': '"Shadows Into Light", cursive',
-    // Display
-    'bebas-neue': '"Bebas Neue", sans-serif',
-    'oswald': 'Oswald, sans-serif',
-    'anton': 'Anton, sans-serif',
-    'righteous': 'Righteous, cursive',
-    'archivo-black': '"Archivo Black", sans-serif',
-};
 
 interface CanvasElementProps {
     element: TemplateElement;
@@ -76,6 +19,7 @@ interface CanvasElementProps {
     onDoubleClick?: () => void;
     isEditing?: boolean;
     renderScale?: number;
+    textLayoutSession: CanvasTextLayoutSession;
 }
 
 // Helper: Evaluate simple arithmetic expression or look up field
@@ -247,7 +191,7 @@ const resolveText = (text: string | undefined, node: AppNode | undefined, nodes:
 };
 
 export const CanvasElement: React.FC<CanvasElementProps> = (props) => {
-    const { element, selected, nodes, currentNodeId, tool, showHandles, onDoubleClick, isEditing, renderScale = 1 } = props;
+    const { element, selected, nodes, currentNodeId, tool, showHandles, onDoubleClick, isEditing, renderScale = 1, textLayoutSession } = props;
 
     const contextNode = nodes[currentNodeId];
     const effectiveFontSize = resolveTextFontSize(element.fontSize);
@@ -321,7 +265,26 @@ export const CanvasElement: React.FC<CanvasElementProps> = (props) => {
         minHeight: element.autoWidth ? 20 : undefined,
     };
 
-    const fontFamily = FONT_FAMILY_MAP[element.fontFamily || 'helvetica'] || element.fontFamily;
+    const fontFamilyName = element.fontFamily || 'helvetica';
+    const fontFamily = resolveCanvasFontFamily(fontFamilyName);
+    const fixedTextSettings = element.type === 'text' && !element.autoWidth
+        ? resolveTextOverflowSettings(element)
+        : null;
+    const fixedTextLayout = fixedTextSettings && renderElementText
+        ? textLayoutSession.layout({
+            text: resolvedElementText,
+            contentWidth: element.w,
+            contentHeight: element.h,
+            fontSize: effectiveFontSize,
+            fontFamily: fontFamilyName,
+            fontWeight: element.fontWeight || 'normal',
+            fontStyle: element.fontStyle || 'normal',
+            textOverflow: fixedTextSettings.textOverflow,
+            textWrap: fixedTextSettings.textWrap,
+            align: element.align || 'center',
+            verticalAlign: element.verticalAlign || 'middle',
+        }, `text element ${element.id}`)
+        : null;
 
     // Grid
     if (element.type === 'grid' && element.gridConfig) {
@@ -715,7 +678,43 @@ export const CanvasElement: React.FC<CanvasElementProps> = (props) => {
                 }} />
             )}
 
-            {renderElementText && (
+            {fixedTextLayout && (
+                <div style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    width: element.w,
+                    height: element.h,
+                    overflow: fixedTextLayout.requiresClip ? 'hidden' : 'visible',
+                    padding: 0,
+                    color: element.textColor,
+                    fontFamily,
+                    fontWeight: element.fontWeight,
+                    fontStyle: element.fontStyle,
+                    textDecoration: element.textDecoration,
+                    textDecorationColor: element.textColor,
+                    pointerEvents: 'auto',
+                    zIndex: 2,
+                    opacity: isEditing ? 0 : 1,
+                }}>
+                    {fixedTextLayout.lines.map((line, index) => (
+                        <span
+                            key={index}
+                            data-text-layout-line
+                            style={{
+                                position: 'absolute',
+                                left: line.x,
+                                top: line.top,
+                                fontSize: fixedTextLayout.effectiveFontSize,
+                                lineHeight: `${fixedTextLayout.lineHeight}px`,
+                                whiteSpace: 'pre',
+                            }}
+                        >{line.text}</span>
+                    ))}
+                </div>
+            )}
+
+            {renderElementText && (element.type !== 'text' || element.autoWidth) && (
                 <div className="absolute flex" style={{
                     // Position at element origin with full height for vertical alignment
                     top: 0, left: 0,
