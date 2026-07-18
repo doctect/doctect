@@ -15,6 +15,7 @@ const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const isStr = (v) => typeof v === 'string';
 const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
 const TEXT_OVERFLOW_VALUES = ['clip', 'ellipsis', 'shrink', 'visible'];
+const TEXT_PADDING_SIDES = ['top', 'right', 'bottom', 'left'];
 
 export const validateAppState = (state) => {
     if (!isObj(state)) return fail('state must be an object');
@@ -74,6 +75,13 @@ export const validateAppState = (state) => {
                     }
                     if (el.textWrap !== undefined && typeof el.textWrap !== 'boolean') {
                         return fail(`template ${vid}/${tid} has an element with invalid textWrap`);
+                    }
+                }
+                if (Number.isInteger(state.schemaVersion) && state.schemaVersion >= 11
+                    && el && typeof el === 'object' && el.type === 'text' && el.textPadding !== undefined) {
+                    if (!isObj(el.textPadding)
+                        || TEXT_PADDING_SIDES.some(side => !isNum(el.textPadding[side]) || el.textPadding[side] < 0)) {
+                        return fail(`template ${vid}/${tid} has an element with invalid textPadding`);
                     }
                 }
             }

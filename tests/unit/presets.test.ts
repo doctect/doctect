@@ -17,17 +17,17 @@ const elements = () => [
 const page = () => ({ id: 'page', name: 'Page', width: 500, height: 700, layers, elements: elements() });
 const variants = () => ({ default: { id: 'default', name: 'Default', templates: { page: page() } } });
 
-describe('schema v10 presets', () => {
+describe('schema v11 presets', () => {
   beforeEach(() => localStorage.clear());
 
   it.each([
     ['blank', createBlankProject],
     ['notebook', createNotebookProject],
     ['planner', createPlannerProject],
-  ])('%s project is v10 without generator metadata', (_name, createProject) => {
+  ])('%s project is v11 without generator metadata', (_name, createProject) => {
     const state = createProject();
 
-    expect(state.schemaVersion).toBe(10);
+    expect(state.schemaVersion).toBe(11);
     expect(state.generator).toBeUndefined();
   });
 
@@ -44,7 +44,11 @@ describe('schema v10 presets', () => {
 
     expect(textElements.length).toBeGreaterThan(0);
     expect(gridElements.length).toBeGreaterThan(0);
-    textElements.forEach(element => expect(element).toMatchObject({ textOverflow: 'clip', textWrap: true }));
+    textElements.forEach(element => expect(element).toMatchObject({
+      textOverflow: 'clip',
+      textWrap: true,
+      textPadding: { top: 0, right: 0, bottom: 0, left: 0 },
+    }));
     gridElements.forEach(element => expect(element).toMatchObject({ textOverflow: 'clip', textWrap: false }));
   });
 
@@ -55,8 +59,11 @@ describe('schema v10 presets', () => {
     const state = loadPreset(source);
     const output = state.variants.default.templates.page.elements;
 
-    expect(state.schemaVersion).toBe(10);
-    expect(output[0]).toMatchObject({ type: 'text', textOverflow: 'clip', textWrap: true });
+    expect(state.schemaVersion).toBe(11);
+    expect(output[0]).toMatchObject({
+      type: 'text', textOverflow: 'clip', textWrap: true,
+      textPadding: { top: 0, right: 0, bottom: 0, left: 0 },
+    });
     expect(output[1]).toMatchObject({ type: 'grid', textOverflow: 'clip', textWrap: false });
     expect(output[2]).toMatchObject({ type: 'rect', textOverflow: 'future', textWrap: 1 });
     expect(state.nodes).not.toBe(source.nodes);
@@ -71,8 +78,11 @@ describe('schema v10 presets', () => {
     const state = loadPreset(source);
     const output = state.variants.default.templates.page.elements;
 
-    expect(state.schemaVersion).toBe(10);
-    expect(output[0]).toMatchObject({ type: 'text', textOverflow: 'clip', textWrap: true });
+    expect(state.schemaVersion).toBe(11);
+    expect(output[0]).toMatchObject({
+      type: 'text', textOverflow: 'clip', textWrap: true,
+      textPadding: { top: 0, right: 0, bottom: 0, left: 0 },
+    });
     expect(output[1]).toMatchObject({ type: 'grid', textOverflow: 'clip', textWrap: false });
     expect(state.nodes).not.toBe(source.nodes);
     expect(state.nodes.root).not.toBe(source.nodes.root);
@@ -101,8 +111,11 @@ describe('schema v10 presets', () => {
     const state = loadPreset(source);
     const output = state.variants.default.templates.page.elements;
 
-    expect(state.schemaVersion).toBe(10);
-    expect(output[0]).toMatchObject({ type: 'text', textOverflow: 'visible', textWrap: true });
+    expect(state.schemaVersion).toBe(11);
+    expect(output[0]).toMatchObject({
+      type: 'text', textOverflow: 'visible', textWrap: true,
+      textPadding: { top: 0, right: 0, bottom: 0, left: 0 },
+    });
     expect(output[1]).toMatchObject({ type: 'grid', textOverflow: 'ellipsis', textWrap: false });
   });
 
@@ -126,7 +139,7 @@ describe('schema v10 presets', () => {
 
     expect(preset.title).toBe('Custom');
     expect(preset.initialState?.rootId).toBe('root');
-    expect(preset.initialState?.schemaVersion).toBe(10);
+    expect(preset.initialState?.schemaVersion).toBe(11);
     expect(preset.initialState?.generator).toBeUndefined();
     expect(warn).toHaveBeenCalledWith('Saved generator was detached: Template script must be text.');
     warn.mockRestore();
@@ -148,8 +161,11 @@ describe('schema v10 presets', () => {
     const [preset] = getCustomPresets();
     const output = preset.initialState!.variants.default.templates.page.elements;
 
-    expect(preset.initialState?.schemaVersion).toBe(10);
-    expect(output[0]).toMatchObject({ textOverflow: 'clip', textWrap: true });
+    expect(preset.initialState?.schemaVersion).toBe(11);
+    expect(output[0]).toMatchObject({
+      textOverflow: 'clip', textWrap: true,
+      textPadding: { top: 0, right: 0, bottom: 0, left: 0 },
+    });
     expect(output[1]).toMatchObject({ textOverflow: 'visible', textWrap: true });
   });
 });

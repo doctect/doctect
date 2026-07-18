@@ -39,7 +39,7 @@ const state = {
     rootId: 'root',
     variants: { default: { id: 'default', name: 'Default', templates: { page: { id: 'page', name: 'Page', width: 500, height: 700, elements: [] } } } },
     activeVariantId: 'default',
-    schemaVersion: 10,
+    schemaVersion: 11,
 };
 
 const stateWithOverflow = () => ({
@@ -83,8 +83,15 @@ describe('EditorPage generator metadata loads', () => {
         expect(await screen.findByRole('alert')).toHaveTextContent('Saved generator was detached');
         const loaded = JSON.parse(screen.getByTestId('project-state').textContent || '{}');
         expect(loaded.generator).toBeUndefined();
-        expect(projectElement(loaded, 'valid-text')).toMatchObject({ textOverflow: 'shrink', textWrap: false });
-        expect(projectElement(loaded, 'malformed-text')).toMatchObject({ textOverflow: 'clip', textWrap: true });
+        expect(loaded.schemaVersion).toBe(11);
+        expect(projectElement(loaded, 'valid-text')).toMatchObject({
+            textOverflow: 'shrink', textWrap: false,
+            textPadding: { top: 0, right: 0, bottom: 0, left: 0 },
+        });
+        expect(projectElement(loaded, 'malformed-text')).toMatchObject({
+            textOverflow: 'clip', textWrap: true,
+            textPadding: { top: 0, right: 0, bottom: 0, left: 0 },
+        });
         expect(projectElement(loaded, 'valid-grid')).toMatchObject({ textOverflow: 'visible', textWrap: true });
         expect(projectElement(loaded, 'malformed-grid')).toMatchObject({ textOverflow: 'clip', textWrap: false });
         fireEvent.click(screen.getByRole('button', { name: 'Dismiss project load warnings' }));
@@ -94,16 +101,22 @@ describe('EditorPage generator metadata loads', () => {
     it.each([
         ['gallery open', undefined],
         ['gallery fork', { projectId: 'fork-1', lastSyncedCommitId: 'commit-1' }],
-    ])('normalizes a malformed current-v10 staged %s before ProjectEditor receives it', async (_label, cloud) => {
+    ])('normalizes a malformed v11 staged %s before ProjectEditor receives it', async (_label, cloud) => {
         stageImport({ name: 'Current Gallery Project', state: stateWithOverflow() as any, ...(cloud ? { cloud } : {}) });
 
         renderEditor();
 
         await screen.findByText('Current Gallery Project');
         const imported = JSON.parse(screen.getAllByTestId('project-state').at(-1)?.textContent || '{}');
-        expect(imported.schemaVersion).toBe(10);
-        expect(projectElement(imported, 'valid-text')).toMatchObject({ textOverflow: 'shrink', textWrap: false });
-        expect(projectElement(imported, 'malformed-text')).toMatchObject({ textOverflow: 'clip', textWrap: true });
+        expect(imported.schemaVersion).toBe(11);
+        expect(projectElement(imported, 'valid-text')).toMatchObject({
+            textOverflow: 'shrink', textWrap: false,
+            textPadding: { top: 0, right: 0, bottom: 0, left: 0 },
+        });
+        expect(projectElement(imported, 'malformed-text')).toMatchObject({
+            textOverflow: 'clip', textWrap: true,
+            textPadding: { top: 0, right: 0, bottom: 0, left: 0 },
+        });
         expect(projectElement(imported, 'valid-grid')).toMatchObject({ textOverflow: 'visible', textWrap: true });
         expect(projectElement(imported, 'malformed-grid')).toMatchObject({ textOverflow: 'clip', textWrap: false });
     });
@@ -118,7 +131,7 @@ describe('EditorPage generator metadata loads', () => {
         expect(await screen.findByRole('alert')).toHaveTextContent('Saved generator was detached');
         await screen.findByText('Gallery Project');
         const imported = JSON.parse(screen.getAllByTestId('project-state').at(-1)?.textContent || '{}');
-        expect(imported.schemaVersion).toBe(10);
+        expect(imported.schemaVersion).toBe(11);
         expect(imported.generator).toBeUndefined();
     });
 

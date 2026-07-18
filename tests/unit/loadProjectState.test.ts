@@ -32,7 +32,7 @@ describe('loadProjectState', () => {
   it('migrates and preserves valid generator source byte-exactly', () => {
     const result = loadProjectState({ ...validV8State(), generator: source });
 
-    expect(result.state.schemaVersion).toBe(10);
+    expect(result.state.schemaVersion).toBe(11);
     expect(result.state.generator).toEqual(source);
     expect(result.state.generator?.templateScript).toBe(source.templateScript);
     expect(result.warnings).toEqual([]);
@@ -45,14 +45,14 @@ describe('loadProjectState', () => {
     });
 
     expect(result.state.rootId).toBe('root');
-    expect(result.state.schemaVersion).toBe(10);
+    expect(result.state.schemaVersion).toBe(11);
     expect(result.state.generator).toBeUndefined();
     expect(result.warnings).toEqual([
       'Saved generator was detached: Hierarchy script must be text.',
     ]);
   });
 
-  it('returns a current-v10 state independent from its input', () => {
+  it('returns a v10 state independent from its input after migration', () => {
     const raw = { ...validV8State(), schemaVersion: 10, generator: { ...source, unknown: true } } as any;
     const original = structuredClone(raw);
 
@@ -60,6 +60,7 @@ describe('loadProjectState', () => {
     result.state.nodes.root.title = 'Edited after load';
 
     expect(raw).toEqual(original);
+    expect(result.state.schemaVersion).toBe(11);
     expect(result.state.generator).toEqual(source);
   });
 
@@ -69,8 +70,12 @@ describe('loadProjectState', () => {
       { type: 'grid', textOverflow: 'visible' },
     ]);
     const result = loadProjectState(raw);
+    expect(result.state.schemaVersion).toBe(11);
     expect(result.state.variants.default.templates.page.elements).toMatchObject([
-      { textOverflow: 'clip', textWrap: true },
+      {
+        textOverflow: 'clip', textWrap: true,
+        textPadding: { top: 0, right: 0, bottom: 0, left: 0 },
+      },
       { textOverflow: 'visible', textWrap: false },
     ]);
     expect(raw.variants.default.templates.page.elements[0].textOverflow).toBeNull();

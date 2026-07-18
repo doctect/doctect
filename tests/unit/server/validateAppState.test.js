@@ -103,6 +103,44 @@ describe('validateAppState', () => {
         expect(validateAppState(state)).toEqual({ ok: true });
     });
 
+    it('accepts canonical or missing v11 text padding', () => {
+        const state = goodState();
+        state.schemaVersion = 11;
+        state.variants.default.templates.page.elements = [
+            { id: 'canonical', type: 'text', textPadding: { top: 0, right: 1.25, bottom: 2, left: 3 } },
+            { id: 'missing', type: 'text' },
+        ];
+        expect(validateAppState(state)).toEqual({ ok: true });
+    });
+
+    it.each([
+        ['non-object', null],
+        ['array', [0, 0, 0, 0]],
+        ['missing side', { top: 0, right: 0, bottom: 0 }],
+        ['negative side', { top: -1, right: 0, bottom: 0, left: 0 }],
+        ['string side', { top: '1', right: 0, bottom: 0, left: 0 }],
+    ])('rejects v11 text padding with %s', (_label, textPadding) => {
+        const state = goodState();
+        state.schemaVersion = 11;
+        state.variants.default.templates.page.elements = [{ id: 'text', type: 'text', textPadding }];
+        expect(validateAppState(state)).toMatchObject({
+            ok: false,
+            error: expect.stringContaining('textPadding'),
+        });
+    });
+
+    it('ignores padding on v10 text and v11 non-text elements', () => {
+        const old = goodState();
+        old.schemaVersion = 10;
+        old.variants.default.templates.page.elements = [{ id: 'old', type: 'text', textPadding: -1 }];
+        expect(validateAppState(old)).toEqual({ ok: true });
+
+        const unrelated = goodState();
+        unrelated.schemaVersion = 11;
+        unrelated.variants.default.templates.page.elements = [{ id: 'rect', type: 'rect', textPadding: -1 }];
+        expect(validateAppState(unrelated)).toEqual({ ok: true });
+    });
+
     it.each([
         [10, 'rect'],
         [10, 'line'],

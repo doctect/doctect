@@ -19,7 +19,7 @@ export interface GeneratedProject {
     rootId: string;
     variants: Record<string, Variant>;
     activeVariantId: string;
-    schemaVersion: 10;
+    schemaVersion: typeof CURRENT_SCHEMA_VERSION;
 }
 
 export interface GeneratedProjectSummary {

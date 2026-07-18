@@ -3,6 +3,7 @@ import { AppState } from "../types";
 import { CURRENT_SCHEMA_VERSION } from "./migration";
 import { loadProjectState } from "./loadProjectState";
 import { ensureTemplateLayers } from "./layers";
+import { normalizeTextPaddingTemplate } from "./textPadding";
 import { normalizeTextOverflowTemplate } from "./textOverflow";
 import { blankPresetData } from "./blank_preset";
 import { notebookPresetData } from "./notebook_preset";
@@ -132,7 +133,9 @@ export const loadPreset = (data: any): AppState => {
     };
     for (const variant of Object.values<any>(current.variants)) {
         for (const [templateId, template] of Object.entries<any>(variant.templates)) {
-            variant.templates[templateId] = normalizeTextOverflowTemplate(ensureTemplateLayers(template));
+            variant.templates[templateId] = normalizeTextPaddingTemplate(
+                normalizeTextOverflowTemplate(ensureTemplateLayers(template)),
+            );
         }
     }
     return current as AppState;

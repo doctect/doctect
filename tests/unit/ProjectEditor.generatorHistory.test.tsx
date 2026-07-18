@@ -59,7 +59,7 @@ const generatedProject = {
         },
     },
     activeVariantId: 'generated',
-    schemaVersion: 10 as const,
+    schemaVersion: 11 as const,
 };
 
 const source = {
@@ -120,7 +120,7 @@ const initialState = (): AppState => ({
     nodeSelectorMode: 'grid_source',
     editingElementId: null,
     clipboard: [],
-    schemaVersion: 10,
+    schemaVersion: 11,
     generator: {
         formatVersion: 1,
         templateScript: 'return originalTemplates;',
@@ -195,7 +195,7 @@ describe('ProjectEditor generator history integration', () => {
             rootId: 'generated',
             variants: generatedProject.variants,
             activeVariantId: 'generated',
-            schemaVersion: 10,
+            schemaVersion: 11,
             generator: { ...source, generatedAt: '2026-07-14T12:34:56.000Z' },
             selectedNodeId: 'generated',
             selectedNodeIds: ['generated'],
@@ -214,7 +214,7 @@ describe('ProjectEditor generator history integration', () => {
             rootId: 'generated',
             variants: generatedProject.variants,
             activeVariantId: 'generated',
-            schemaVersion: 10,
+            schemaVersion: 11,
             generator: { ...source, generatedAt: '2026-07-14T12:34:56.000Z' },
             activeLayerId: 'generated-front',
         });

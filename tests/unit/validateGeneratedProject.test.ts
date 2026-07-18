@@ -18,8 +18,11 @@ const validHierarchy = () => ({
 });
 
 const overflowElements = () => [
-    { id: 'missing-text', type: 'text', layerId: 'content' },
-    { id: 'valid-text', type: 'text', textOverflow: 'ellipsis', textWrap: false, layerId: 'content' },
+    { id: 'missing-text', type: 'text', textPadding: { top: -1, left: '2' }, layerId: 'content' },
+    {
+        id: 'valid-text', type: 'text', textOverflow: 'ellipsis', textWrap: false,
+        textPadding: { top: 1.25, right: 2.5, bottom: 3.75, left: 4 }, layerId: 'content',
+    },
     { id: 'malformed-grid', type: 'grid', textOverflow: 'truncate', textWrap: 'true', layerId: 'content' },
     { id: 'rect', type: 'rect', textOverflow: 'future', textWrap: 1, layerId: 'content' },
 ];
@@ -27,7 +30,7 @@ const overflowElements = () => [
 const existingLayers = () => [{ id: 'content', name: 'Content', order: 0, visible: true, locked: false }];
 
 describe('validateGeneratedProject', () => {
-    it('accepts flat output, normalizes nodes and text overflow at v10, and leaves input unchanged', () => {
+    it('accepts flat output, normalizes nodes and text settings at v11, and leaves input unchanged', () => {
         const raw = { templates: validTemplates(), hierarchy: validHierarchy() };
         const before = structuredClone(raw);
 
@@ -38,7 +41,7 @@ describe('validateGeneratedProject', () => {
             project: {
                 rootId: 'root',
                 activeVariantId: 'default',
-                schemaVersion: 10,
+                schemaVersion: 11,
                 nodes: { root: { data: {}, children: [] } },
             },
             summary: {
@@ -69,12 +72,20 @@ describe('validateGeneratedProject', () => {
         const page = validation.project.variants.default.templates.page;
         expect(page.layers).toEqual(existingLayers());
         expect(page.elements).toEqual([
-            expect.objectContaining({ id: 'missing-text', textOverflow: 'clip', textWrap: true }),
-            expect.objectContaining({ id: 'valid-text', textOverflow: 'ellipsis', textWrap: false }),
+            expect.objectContaining({
+                id: 'missing-text', textOverflow: 'clip', textWrap: true,
+                textPadding: { top: 0, right: 0, bottom: 0, left: 0 },
+            }),
+            expect.objectContaining({
+                id: 'valid-text', textOverflow: 'ellipsis', textWrap: false,
+                textPadding: { top: 1.25, right: 2.5, bottom: 3.75, left: 4 },
+            }),
             expect.objectContaining({ id: 'malformed-grid', textOverflow: 'clip', textWrap: false }),
             expect.objectContaining({ id: 'rect', textOverflow: 'future', textWrap: 1 }),
         ]);
-        expect(validation.project.schemaVersion).toBe(10);
+        expect(page.elements[2]).not.toHaveProperty('textPadding');
+        expect(page.elements[3]).not.toHaveProperty('textPadding');
+        expect(validation.project.schemaVersion).toBe(11);
         expect(raw).toEqual(before);
     });
 
@@ -117,12 +128,20 @@ describe('validateGeneratedProject', () => {
         const page = validation.project.variants.eink.templates.page;
         expect(page.layers).toEqual(existingLayers());
         expect(page.elements).toEqual([
-            expect.objectContaining({ id: 'missing-text', textOverflow: 'clip', textWrap: true }),
-            expect.objectContaining({ id: 'valid-text', textOverflow: 'ellipsis', textWrap: false }),
+            expect.objectContaining({
+                id: 'missing-text', textOverflow: 'clip', textWrap: true,
+                textPadding: { top: 0, right: 0, bottom: 0, left: 0 },
+            }),
+            expect.objectContaining({
+                id: 'valid-text', textOverflow: 'ellipsis', textWrap: false,
+                textPadding: { top: 1.25, right: 2.5, bottom: 3.75, left: 4 },
+            }),
             expect.objectContaining({ id: 'malformed-grid', textOverflow: 'clip', textWrap: false }),
             expect.objectContaining({ id: 'rect', textOverflow: 'future', textWrap: 1 }),
         ]);
-        expect(validation.project.schemaVersion).toBe(10);
+        expect(page.elements[2]).not.toHaveProperty('textPadding');
+        expect(page.elements[3]).not.toHaveProperty('textPadding');
+        expect(validation.project.schemaVersion).toBe(11);
         expect(raw).toEqual(before);
     });
 

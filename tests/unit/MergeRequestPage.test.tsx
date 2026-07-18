@@ -152,7 +152,7 @@ describe('MergeRequestPage preview state loading', () => {
         mockUseSession.mockReturnValue({ data: { user: { id: 'owner-id' } } });
     });
 
-    it('normalizes current-v10 source and target through migrateState before thumbnail rendering', async () => {
+    it('normalizes v10 source and target through migrateState before thumbnail rendering', async () => {
         const sourceState = previewState('source');
         const targetState = previewState('target');
         const sourceBefore = structuredClone(sourceState);
@@ -174,11 +174,17 @@ describe('MergeRequestPage preview state loading', () => {
         await waitFor(() => expect(generateThumbnails).toHaveBeenCalledTimes(2));
         const [normalizedSource] = generateThumbnails.mock.calls[0];
         const [normalizedTarget] = generateThumbnails.mock.calls[1];
-        expect(normalizedSource.schemaVersion).toBe(10);
-        expect(previewElement(normalizedSource, 'source-text')).toMatchObject({ textOverflow: 'clip', textWrap: true });
+        expect(normalizedSource.schemaVersion).toBe(11);
+        expect(previewElement(normalizedSource, 'source-text')).toMatchObject({
+            textOverflow: 'clip', textWrap: true,
+            textPadding: { top: 0, right: 0, bottom: 0, left: 0 },
+        });
         expect(previewElement(normalizedSource, 'source-grid')).toMatchObject({ textOverflow: 'visible', textWrap: true });
-        expect(normalizedTarget.schemaVersion).toBe(10);
-        expect(previewElement(normalizedTarget, 'target-text')).toMatchObject({ textOverflow: 'shrink', textWrap: false });
+        expect(normalizedTarget.schemaVersion).toBe(11);
+        expect(previewElement(normalizedTarget, 'target-text')).toMatchObject({
+            textOverflow: 'shrink', textWrap: false,
+            textPadding: { top: 0, right: 0, bottom: 0, left: 0 },
+        });
         expect(previewElement(normalizedTarget, 'target-grid')).toMatchObject({ textOverflow: 'clip', textWrap: false });
         expect(sourceState).toEqual(sourceBefore);
         expect(targetState).toEqual(targetBefore);

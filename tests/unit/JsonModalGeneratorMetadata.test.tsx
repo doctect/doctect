@@ -85,9 +85,15 @@ describe('JsonModal generator metadata imports', () => {
 
         expect(props.onSave).toHaveBeenCalledOnce();
         const saved = props.onSave.mock.calls[0][0];
-        expect(saved.schemaVersion).toBe(10);
-        expect(savedElement(saved, 'valid-text')).toMatchObject({ textOverflow: 'ellipsis', textWrap: false });
-        expect(savedElement(saved, 'malformed-text')).toMatchObject({ textOverflow: 'clip', textWrap: true });
+        expect(saved.schemaVersion).toBe(11);
+        expect(savedElement(saved, 'valid-text')).toMatchObject({
+            textOverflow: 'ellipsis', textWrap: false,
+            textPadding: { top: 0, right: 0, bottom: 0, left: 0 },
+        });
+        expect(savedElement(saved, 'malformed-text')).toMatchObject({
+            textOverflow: 'clip', textWrap: true,
+            textPadding: { top: 0, right: 0, bottom: 0, left: 0 },
+        });
         expect(savedElement(saved, 'valid-grid')).toMatchObject({ textOverflow: 'shrink', textWrap: true });
         expect(savedElement(saved, 'malformed-grid')).toMatchObject({ textOverflow: 'clip', textWrap: false });
         expect(props.onClose).toHaveBeenCalledOnce();

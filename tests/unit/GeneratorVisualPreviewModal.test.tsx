@@ -35,7 +35,7 @@ const makePayload = (activeTemplateCount = 25, broken = false): GeneratorPreview
   );
   return {
     project: {
-      schemaVersion: 10,
+      schemaVersion: 11,
       rootId: 'root',
       activeVariantId: 'primary',
       nodes: {

@@ -93,7 +93,10 @@ describe('HistoryModal', () => {
             const onRestore = vi.fn();
             render(<HistoryModal cloudProjectId="proj-1" onRestore={onRestore} onClose={vi.fn()} />);
             fireEvent.click((await screen.findAllByRole('button', { name: 'Restore' }))[0]);
-            await waitFor(() => expect(onRestore).toHaveBeenCalledWith(commitState));
+            await waitFor(() => expect(onRestore).toHaveBeenCalledWith(expect.objectContaining({
+                schemaVersion: 11,
+                generator,
+            })));
             expect(onRestore.mock.calls[0][0].generator).toEqual(generator);
         });
 
@@ -115,7 +118,7 @@ describe('HistoryModal', () => {
             expect(onRestore.mock.invocationCallOrder[0]).toBeLessThan(alert.mock.invocationCallOrder[0]);
         });
 
-        it('normalizes current-v10 overflow settings before restoring into the editor', async () => {
+        it('normalizes v10 overflow settings before restoring into the editor', async () => {
             vi.spyOn(window, 'confirm').mockReturnValue(true);
             vi.spyOn(cloudApi, 'getCommit').mockResolvedValue({
                 id: 'c2', message: 'Second save', createdAt: '2026-02-01T00:00:00.000Z',
@@ -128,8 +131,15 @@ describe('HistoryModal', () => {
 
             await waitFor(() => expect(onRestore).toHaveBeenCalledOnce());
             const restored = onRestore.mock.calls[0][0];
-            expect(overflowElement(restored, 'valid-text')).toMatchObject({ textOverflow: 'visible', textWrap: false });
-            expect(overflowElement(restored, 'malformed-text')).toMatchObject({ textOverflow: 'clip', textWrap: true });
+            expect(restored.schemaVersion).toBe(11);
+            expect(overflowElement(restored, 'valid-text')).toMatchObject({
+                textOverflow: 'visible', textWrap: false,
+                textPadding: { top: 0, right: 0, bottom: 0, left: 0 },
+            });
+            expect(overflowElement(restored, 'malformed-text')).toMatchObject({
+                textOverflow: 'clip', textWrap: true,
+                textPadding: { top: 0, right: 0, bottom: 0, left: 0 },
+            });
             expect(overflowElement(restored, 'valid-grid')).toMatchObject({ textOverflow: 'shrink', textWrap: true });
             expect(overflowElement(restored, 'malformed-grid')).toMatchObject({ textOverflow: 'clip', textWrap: false });
         });
@@ -182,6 +192,7 @@ describe('HistoryModal', () => {
             fireEvent.click((await screen.findAllByRole('button', { name: 'Open in editor' }))[0]);
 
             await waitFor(() => expect(onClone).toHaveBeenCalledWith({ state: malformedOverflowState }));
+            expect(onClone.mock.calls[0][0].state.schemaVersion).toBe(10);
             expect(overflowElement(onClone.mock.calls[0][0].state, 'malformed-text')).toMatchObject({
                 textOverflow: 'truncate', textWrap: 'true',
             });

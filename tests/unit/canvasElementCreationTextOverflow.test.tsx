@@ -33,6 +33,7 @@ describe('canvas element creation text overflow defaults', () => {
 
         expect(clickText).toMatchObject({
             type: 'text', autoWidth: true, textOverflow: 'clip', textWrap: true,
+            textPadding: { top: 0, right: 0, bottom: 0, left: 0 },
         });
         expectLastUsedUnchanged('false');
     });
@@ -43,6 +44,7 @@ describe('canvas element creation text overflow defaults', () => {
 
         expect(dragText).toMatchObject({
             type: 'text', textOverflow: 'clip', textWrap: true,
+            textPadding: { top: 0, right: 0, bottom: 0, left: 0 },
         });
         expectLastUsedUnchanged('false');
     });
@@ -54,6 +56,7 @@ describe('canvas element creation text overflow defaults', () => {
         expect(dragGrid).toMatchObject({
             type: 'grid', textOverflow: 'clip', textWrap: false,
         });
+        expect(dragGrid).not.toHaveProperty('textPadding');
         expectLastUsedUnchanged('true');
     });
 
@@ -63,6 +66,7 @@ describe('canvas element creation text overflow defaults', () => {
 
         expect(dragRect).not.toHaveProperty('textOverflow');
         expect(dragRect).not.toHaveProperty('textWrap');
+        expect(dragRect).not.toHaveProperty('textPadding');
         expectLastUsedUnchanged('true');
     });
 });

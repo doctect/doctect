@@ -9,6 +9,7 @@ import { OverlayTextEditor } from './canvas/OverlayTextEditor';
 import { SelectionHandles } from './canvas/SelectionHandles';
 import { resolveActiveLayerId, nextZIndexInLayer } from '../services/layers';
 import { hitTestPoint } from '../services/hitTest';
+import { ZERO_TEXT_PADDING } from '../services/textPadding';
 import { SelectUnderMenu } from './canvas/SelectUnderMenu';
 import { useCanvasTextLayoutSession } from './canvas/useCanvasTextLayoutSession';
 import type { CanvasTextLayoutSession } from '../services/canvasTextLayout';
@@ -1348,6 +1349,7 @@ export const Canvas: React.FC<CanvasProps> = ({
                         autoWidth: true,
                         textOverflow: 'clip',
                         textWrap: true,
+                        textPadding: { ...ZERO_TEXT_PADDING },
                         fontSize: parseInt(localStorage.getItem('doctect_last_fontSize') || '16'),
                         fontFamily: localStorage.getItem('doctect_last_fontFamily') || 'helvetica',
                         fontWeight: (localStorage.getItem('doctect_last_fontWeight') as 'normal' | 'bold') || 'normal',
@@ -1418,6 +1420,7 @@ export const Canvas: React.FC<CanvasProps> = ({
                 ...(tool === 'text' || tool === 'grid'
                     ? { textOverflow: 'clip' as const, textWrap: tool === 'text' }
                     : {}),
+                ...(tool === 'text' ? { textPadding: { ...ZERO_TEXT_PADDING } } : {}),
                 fontSize: parseInt(localStorage.getItem('doctect_last_fontSize') || '16'),
                 fontFamily: localStorage.getItem('doctect_last_fontFamily') || 'helvetica',
                 fontWeight: (localStorage.getItem('doctect_last_fontWeight') as 'normal' | 'bold') || 'normal',

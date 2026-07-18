@@ -39,6 +39,12 @@ const element = (state: any, id: string): any => {
   return found;
 };
 
+const expectCanonicalTextPadding = (state: any) => {
+  allElements(state).filter(item => item.type === 'text').forEach(item => {
+    expect(item).toMatchObject({ textPadding: { top: 0, right: 0, bottom: 0, left: 0 } });
+  });
+};
+
 const nearestWrapBoundaryDistance = (request: ReturnType<typeof textOverflowFixtureRequests>[number]['request']): number => {
   const widths = request.text.replace(/\r\n?/g, '\n').split('\n').flatMap(line => {
     const graphemes = segmentGraphemes(line);
@@ -106,6 +112,8 @@ describe('text overflow v10 persistence fixture', () => {
     expect(allApplicableSettings(snapshot)).toEqual(expected);
     expect(allApplicableSettings(loaded)).toEqual(expected);
     expect(allApplicableSettings(decoded)).toEqual(expected);
+    expect(loaded.schemaVersion).toBe(11);
+    expectCanonicalTextPadding(loaded);
     expect(snapshot.variants).not.toBe(fixture.variants);
     expect(loaded.variants).not.toBe(jsonRoundTrip.variants);
     expect(decoded.variants).not.toBe(fixture.variants);
@@ -122,11 +130,21 @@ describe('text overflow v10 persistence fixture', () => {
 
     const loaded = loadProjectState(JSON.parse(JSON.stringify(current))).state;
 
-    expect(element(loaded, 'text-clip-nowrap')).toMatchObject({ textOverflow: 'clip', textWrap: false });
-    expect(element(loaded, 'text-ellipsis-nowrap')).toMatchObject({ textOverflow: 'ellipsis', textWrap: true });
+    expect(loaded.schemaVersion).toBe(11);
+    expect(element(loaded, 'text-clip-nowrap')).toMatchObject({
+      textOverflow: 'clip', textWrap: false,
+      textPadding: { top: 0, right: 0, bottom: 0, left: 0 },
+    });
+    expect(element(loaded, 'text-ellipsis-nowrap')).toMatchObject({
+      textOverflow: 'ellipsis', textWrap: true,
+      textPadding: { top: 0, right: 0, bottom: 0, left: 0 },
+    });
     expect(element(loaded, 'grid-clip')).toMatchObject({ textOverflow: 'clip', textWrap: false });
     expect(element(loaded, 'grid-ellipsis')).toMatchObject({ textOverflow: 'ellipsis', textWrap: false });
-    expect(element(loaded, 'text-visible-wrap-rotated')).toMatchObject({ textOverflow: 'visible', textWrap: true });
+    expect(element(loaded, 'text-visible-wrap-rotated')).toMatchObject({
+      textOverflow: 'visible', textWrap: true,
+      textPadding: { top: 0, right: 0, bottom: 0, left: 0 },
+    });
     expect(element(loaded, 'rect-caption-out-of-scope')).toMatchObject({ textOverflow: 'future-mode', textWrap: 'true' });
     expect(current).toEqual(input);
   });
@@ -143,9 +161,12 @@ describe('text overflow v10 persistence fixture', () => {
 
     const loaded = loadProjectState(legacy).state;
 
-    expect(loaded.schemaVersion).toBe(10);
+    expect(loaded.schemaVersion).toBe(11);
     allElements(loaded).filter(item => item.type === 'text').forEach(item => {
-      expect(item).toMatchObject({ textOverflow: 'visible', textWrap: true });
+      expect(item).toMatchObject({
+        textOverflow: 'visible', textWrap: true,
+        textPadding: { top: 0, right: 0, bottom: 0, left: 0 },
+      });
     });
     allElements(loaded).filter(item => item.type === 'grid').forEach(item => {
       expect(item).toMatchObject({ textOverflow: 'ellipsis', textWrap: false });
@@ -155,7 +176,7 @@ describe('text overflow v10 persistence fixture', () => {
     });
   });
 
-  it('normalizes generated output as new content before creating an independent v10 app state', () => {
+  it('normalizes generated output as new content before creating an independent v11 app state', () => {
     const template = clone(fixture.variants.parity.templates['parity-page']) as any;
     const missingText = clone(element(fixture, 'text-clip-nowrap'));
     delete missingText.textOverflow;
@@ -176,11 +197,18 @@ describe('text overflow v10 persistence fixture', () => {
 
     expect(validation.ok).toBe(true);
     if (validation.ok === false) throw new Error(validation.message);
-    expect(validation.project.schemaVersion).toBe(10);
-    expect(element(validation.project, 'text-clip-nowrap')).toMatchObject({ textOverflow: 'clip', textWrap: true });
-    expect(element(validation.project, 'text-ellipsis-nowrap')).toMatchObject({ textOverflow: 'visible', textWrap: false });
+    expect(validation.project.schemaVersion).toBe(11);
+    expect(element(validation.project, 'text-clip-nowrap')).toMatchObject({
+      textOverflow: 'clip', textWrap: true,
+      textPadding: { top: 0, right: 0, bottom: 0, left: 0 },
+    });
+    expect(element(validation.project, 'text-ellipsis-nowrap')).toMatchObject({
+      textOverflow: 'visible', textWrap: false,
+      textPadding: { top: 0, right: 0, bottom: 0, left: 0 },
+    });
     expect(element(validation.project, 'grid-clip')).toMatchObject({ textOverflow: 'clip', textWrap: false });
     expect(element(validation.project, 'rect-caption-out-of-scope')).toMatchObject({ textOverflow: 'future-mode', textWrap: 'true' });
+    expectCanonicalTextPadding(validation.project);
 
     const generated = createGeneratedAppState(
       createBlankProject(),
@@ -188,7 +216,8 @@ describe('text overflow v10 persistence fixture', () => {
       { formatVersion: 1, templateScript: 'return templates;', hierarchyScript: 'return hierarchy;' },
       '2026-07-18T12:00:00.000Z',
     );
-    expect(generated.schemaVersion).toBe(10);
+    expect(generated.schemaVersion).toBe(11);
+    expectCanonicalTextPadding(generated);
     expect(allApplicableSettings(generated)).toEqual(allApplicableSettings(validation.project));
     expect(generated.variants).not.toBe(validation.project.variants);
     element(generated, 'text-clip-nowrap').textOverflow = 'visible';
@@ -215,10 +244,14 @@ describe('text overflow v10 persistence fixture', () => {
 
     const preset = loadPreset(undeclared);
 
-    expect(preset.schemaVersion).toBe(10);
-    expect(element(preset, 'text-clip-nowrap')).toMatchObject({ textOverflow: 'clip', textWrap: true });
+    expect(preset.schemaVersion).toBe(11);
+    expect(element(preset, 'text-clip-nowrap')).toMatchObject({
+      textOverflow: 'clip', textWrap: true,
+      textPadding: { top: 0, right: 0, bottom: 0, left: 0 },
+    });
     expect(element(preset, 'grid-clip')).toMatchObject({ textOverflow: 'clip', textWrap: false });
     expect(element(preset, 'rect-caption-out-of-scope')).toMatchObject({ textOverflow: 'future-mode', textWrap: 'true' });
+    expectCanonicalTextPadding(preset);
     expect(undeclared).toEqual(undeclaredBefore);
 
     const custom = clone(fixture) as any;
@@ -232,8 +265,12 @@ describe('text overflow v10 persistence fixture', () => {
     }]));
 
     const [loadedCustom] = getCustomPresets();
-    expect(loadedCustom.initialState?.schemaVersion).toBe(10);
-    expect(element(loadedCustom.initialState, 'text-clip-nowrap')).toMatchObject({ textOverflow: 'ellipsis', textWrap: false });
+    expect(loadedCustom.initialState?.schemaVersion).toBe(11);
+    expect(element(loadedCustom.initialState, 'text-clip-nowrap')).toMatchObject({
+      textOverflow: 'ellipsis', textWrap: false,
+      textPadding: { top: 0, right: 0, bottom: 0, left: 0 },
+    });
     expect(element(loadedCustom.initialState, 'grid-clip')).toMatchObject({ textOverflow: 'visible', textWrap: true });
+    expectCanonicalTextPadding(loadedCustom.initialState);
   });
 });

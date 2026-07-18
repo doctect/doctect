@@ -8,7 +8,7 @@ const trackEvent = vi.hoisted(() => vi.fn());
 const lastCreateResult = vi.hoisted(() => ({ current: undefined as boolean | undefined }));
 
 const generatedProject = {
-    schemaVersion: 10 as const,
+    schemaVersion: 11 as const,
     rootId: 'generated-root',
     activeVariantId: 'generated-variant',
     nodes: {
@@ -98,6 +98,7 @@ describe('EditorPage generated project creation', () => {
             generatedAt: expect.any(String),
         });
         expect(created.initialState.rootId).toBe('generated-root');
+        expect(created.initialState.schemaVersion).toBe(11);
         expect(localStorage.getItem('hype_active_project')).toBe(created.id);
         expect(trackEvent).toHaveBeenCalledWith('project_created_from_generator', {
             sourceProjectId: 'source-project',

@@ -21,6 +21,7 @@ const makeState = (): AppState => ({
                         id: 'fixed-text', type: 'text', x: 10, y: 10, w: 80, h: 20,
                         rotation: 0, fill: '', stroke: '', strokeWidth: 0, opacity: 1,
                         autoWidth: false, textOverflow: 'shrink', textWrap: false,
+                        textPadding: { top: 1, right: 2, bottom: 3, left: 4 },
                     }],
                 },
             },
@@ -44,7 +45,7 @@ const makeState = (): AppState => ({
     nodeSelectorMode: 'grid_source',
     editingElementId: null,
     clipboard: [],
-    schemaVersion: 10,
+    schemaVersion: 11,
     generator: {
         formatVersion: 1,
         templateScript: 'return originalTemplates;',
@@ -62,12 +63,14 @@ describe('project document snapshots', () => {
         state.variants.original.name = 'Mutated';
         state.variants.original.templates.page.elements[0].autoWidth = true;
         state.variants.original.templates.page.elements[0].textOverflow = 'visible';
+        state.variants.original.templates.page.elements[0].textPadding!.left = 99;
         state.generator!.templateScript = 'mutated';
 
         expect(snapshot.nodes.root.title).toBe('Before');
         expect(snapshot.variants.original.name).toBe('Original');
         expect(snapshot.variants.original.templates.page.elements[0]).toMatchObject({
             autoWidth: false, textOverflow: 'shrink', textWrap: false,
+            textPadding: { top: 1, right: 2, bottom: 3, left: 4 },
         });
         expect(snapshot).not.toHaveProperty('elementPropertySections');
         expect(snapshot.generator?.templateScript).toBe('return originalTemplates;');
@@ -92,7 +95,7 @@ describe('project document snapshots', () => {
                 },
             },
             activeVariantId: 'generated',
-            schemaVersion: 11,
+            schemaVersion: 12,
             generator: {
                 formatVersion: 1,
                 templateScript: 'new templates',
@@ -119,7 +122,7 @@ describe('project document snapshots', () => {
             rootId: 'root',
             variants: snapshot.variants,
             activeVariantId: 'original',
-            schemaVersion: 10,
+            schemaVersion: 11,
             generator: before.generator,
             selectedNodeId: 'root',
             selectedNodeIds: ['root'],
