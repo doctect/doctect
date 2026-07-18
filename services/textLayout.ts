@@ -101,54 +101,105 @@ function wrapHardLine(
 
     const graphemes = graphemesFor(text);
     const lines: RawLine[] = [];
-    let start = 0;
+    let lineStart = 0;
+    let cursor = 0;
+    let candidate = '';
+    let lastFitWidth = 0;
+    let latestWhitespaceEnd = -1;
+    let latestWhitespaceWidth = 0;
+    let suffixAfterWhitespace = '';
 
-    while (start < graphemes.length) {
-        let cursor = start;
-        let lastFitWidth = 0;
-        let latestWhitespace = -1;
-        let latestWhitespaceWidth = 0;
+    for (const grapheme of graphemes) {
+        const graphemeStart = cursor;
+        cursor += grapheme.length;
+        candidate += grapheme;
+        const candidateWidth = measureWidth(candidate, fontSize);
 
-        while (cursor < graphemes.length) {
-            const candidate = graphemes.slice(start, cursor + 1).join('');
-            const candidateWidth = measureWidth(candidate, fontSize);
+        if (candidateWidth <= contentWidth) {
+            lastFitWidth = candidateWidth;
+            if (isWhitespace(grapheme)) {
+                latestWhitespaceEnd = cursor;
+                latestWhitespaceWidth = candidateWidth;
+                suffixAfterWhitespace = '';
+            } else if (latestWhitespaceEnd >= lineStart) {
+                suffixAfterWhitespace += grapheme;
+            }
+            continue;
+        }
 
-            if (candidateWidth <= contentWidth) {
-                lastFitWidth = candidateWidth;
-                if (isWhitespace(graphemes[cursor])) {
-                    latestWhitespace = cursor;
-                    latestWhitespaceWidth = candidateWidth;
+        if (latestWhitespaceEnd >= lineStart) {
+            lines.push({
+                text: text.slice(lineStart, latestWhitespaceEnd),
+                width: latestWhitespaceWidth,
+            });
+            lineStart = latestWhitespaceEnd;
+            candidate = suffixAfterWhitespace + grapheme;
+            const carriedPrefixWidth = suffixAfterWhitespace.length === 0
+                ? 0
+                : measureWidth(suffixAfterWhitespace, fontSize);
+            const carriedWidth = measureWidth(candidate, fontSize);
+            latestWhitespaceEnd = -1;
+            suffixAfterWhitespace = '';
+
+            if (carriedWidth <= contentWidth) {
+                lastFitWidth = carriedWidth;
+                if (isWhitespace(grapheme)) {
+                    latestWhitespaceEnd = cursor;
+                    latestWhitespaceWidth = carriedWidth;
                 }
-                cursor += 1;
                 continue;
             }
 
-            if (latestWhitespace >= start) {
+            if (graphemeStart > lineStart) {
                 lines.push({
-                    text: graphemes.slice(start, latestWhitespace + 1).join(''),
-                    width: latestWhitespaceWidth,
+                    text: text.slice(lineStart, graphemeStart),
+                    width: carriedPrefixWidth,
                 });
-                start = latestWhitespace + 1;
-            } else if (cursor === start) {
-                lines.push({ text: candidate, width: candidateWidth });
-                start = cursor + 1;
+                lineStart = graphemeStart;
+                candidate = grapheme;
+                const graphemeWidth = measureWidth(grapheme, fontSize);
+                if (graphemeWidth <= contentWidth) {
+                    lastFitWidth = graphemeWidth;
+                    if (isWhitespace(grapheme)) {
+                        latestWhitespaceEnd = cursor;
+                        latestWhitespaceWidth = graphemeWidth;
+                    }
+                    continue;
+                }
+                lines.push({ text: grapheme, width: graphemeWidth });
             } else {
-                lines.push({
-                    text: graphemes.slice(start, cursor).join(''),
-                    width: lastFitWidth,
-                });
-                start = cursor;
+                lines.push({ text: grapheme, width: carriedWidth });
             }
-            break;
-        }
-
-        if (cursor === graphemes.length) {
+        } else if (graphemeStart > lineStart) {
             lines.push({
-                text: graphemes.slice(start).join(''),
+                text: text.slice(lineStart, graphemeStart),
                 width: lastFitWidth,
             });
-            start = graphemes.length;
+            lineStart = graphemeStart;
+            candidate = grapheme;
+            const graphemeWidth = measureWidth(grapheme, fontSize);
+            if (graphemeWidth <= contentWidth) {
+                lastFitWidth = graphemeWidth;
+                if (isWhitespace(grapheme)) {
+                    latestWhitespaceEnd = cursor;
+                    latestWhitespaceWidth = graphemeWidth;
+                }
+                continue;
+            }
+            lines.push({ text: grapheme, width: graphemeWidth });
+        } else {
+            lines.push({ text: grapheme, width: candidateWidth });
         }
+
+        lineStart = cursor;
+        candidate = '';
+        lastFitWidth = 0;
+        latestWhitespaceEnd = -1;
+        suffixAfterWhitespace = '';
+    }
+
+    if (lineStart < text.length) {
+        lines.push({ text: text.slice(lineStart), width: lastFitWidth });
     }
 
     return lines;
@@ -189,13 +240,32 @@ function ellipsizeLine(
     if (ellipsisWidth > contentWidth) return { text: '', width: 0 };
 
     const graphemes = graphemesFor(line.text);
-    for (let end = graphemes.length; end > 0; end -= 1) {
-        const text = `${graphemes.slice(0, end).join('')}${ELLIPSIS}`;
-        const width = measureWidth(text, fontSize);
-        if (width <= contentWidth) return { text, width };
+    const graphemeEnds = new Array<number>(graphemes.length + 1);
+    graphemeEnds[0] = 0;
+    let codeUnitEnd = 0;
+    for (let index = 0; index < graphemes.length; index += 1) {
+        codeUnitEnd += graphemes[index].length;
+        graphemeEnds[index + 1] = codeUnitEnd;
     }
 
-    return { text: ELLIPSIS, width: ellipsisWidth };
+    let low = 0;
+    let high = graphemes.length;
+    let retainedText = ELLIPSIS;
+    let retainedWidth = ellipsisWidth;
+    while (low < high) {
+        const candidateCount = Math.ceil((low + high) / 2);
+        const text = `${line.text.slice(0, graphemeEnds[candidateCount])}${ELLIPSIS}`;
+        const width = measureWidth(text, fontSize);
+        if (width <= contentWidth) {
+            low = candidateCount;
+            retainedText = text;
+            retainedWidth = width;
+        } else {
+            high = candidateCount - 1;
+        }
+    }
+
+    return { text: retainedText, width: retainedWidth };
 }
 
 function positionLines(

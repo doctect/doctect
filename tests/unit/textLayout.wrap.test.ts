@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
     createTextLayoutEngine,
     TextMeasurementError,
@@ -184,5 +184,41 @@ describe('common text layout', () => {
         createTextLayoutEngine().layout(request({ text, contentWidth: 7 }), monoMeasurer(calls));
 
         expect(calls.length).toBeLessThanOrEqual([...text].length * 3);
+    });
+
+    it('does not reconstruct growing grapheme prefixes while wrapping long input', async () => {
+        vi.resetModules();
+        const actual = await import('../../services/graphemes');
+        let reconstructedGraphemes = 0;
+        vi.doMock('../../services/graphemes', () => ({
+            segmentGraphemes(text: string) {
+                const graphemes = actual.segmentGraphemes(text);
+                return new Proxy(graphemes, {
+                    get(target, property, receiver) {
+                        if (property !== 'slice') return Reflect.get(target, property, receiver);
+                        return (start?: number, end?: number) => {
+                            const result = target.slice(start, end);
+                            reconstructedGraphemes += result.length;
+                            return result;
+                        };
+                    },
+                });
+            },
+        }));
+
+        try {
+            const { createTextLayoutEngine: createIsolatedEngine } = await import('../../services/textLayout');
+            const text = 'A'.repeat(2_048);
+            const result = createIsolatedEngine().layout(request({
+                text,
+                contentWidth: text.length,
+            }), monoMeasurer())!;
+
+            expect(result.lines.map(line => line.text)).toEqual([text]);
+            expect(reconstructedGraphemes).toBeLessThanOrEqual(text.length * 2);
+        } finally {
+            vi.doUnmock('../../services/graphemes');
+            vi.resetModules();
+        }
     });
 });

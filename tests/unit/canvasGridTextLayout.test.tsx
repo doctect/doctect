@@ -218,6 +218,48 @@ describe('Canvas grid text layout', () => {
         expect(fake.layout.mock.calls.map(([request]) => request.text)).toEqual(['SHORT', 'A MUCH LONGER LABEL']);
     });
 
+    it('applies first-column style over header and alternation at occupied intersections', () => {
+        const fake = createLayoutSession();
+        const styledNodes: Record<string, AppNode> = {
+            ...nodes,
+            group: {
+                ...nodes.group,
+                children: ['short', 'long', 'empty', 'row-one', 'row-two'],
+            },
+            'row-one': {
+                id: 'row-one', parentId: 'group', type: 'page', title: 'Row one',
+                data: { label: 'ROW ONE' }, children: [],
+            },
+            'row-two': {
+                id: 'row-two', parentId: 'group', type: 'page', title: 'Row two',
+                data: { label: 'ROW TWO' }, children: [],
+            },
+        };
+        const base = gridElement();
+        const element = gridElement({
+            gridConfig: { ...base.gridConfig!, offsetStart: 0 },
+        });
+        const { container } = render(
+            <CanvasElement
+                element={element}
+                textLayoutSession={fake.session}
+                {...props}
+                nodes={styledNodes}
+            />,
+        );
+
+        const cells = Array.from(container.querySelectorAll<HTMLElement>('[data-grid-cell]'));
+        expect(cells[0]).toHaveStyle({ backgroundColor: '#333333' });
+        expect(cells[0].querySelector('[data-grid-cell-text]')).toHaveStyle({
+            color: '#bbbbbb', fontWeight: 'normal',
+        });
+        expect(cells[1]).toHaveStyle({ backgroundColor: '#222222' });
+        expect(cells[4]).toHaveStyle({ backgroundColor: '#333333' });
+        expect(cells[4].querySelector('[data-grid-cell-text]')).toHaveStyle({
+            color: '#bbbbbb', fontWeight: 'normal',
+        });
+    });
+
     it('retains mock cells while laying out each generated label explicitly', () => {
         const fake = createLayoutSession();
         const mockNodes: Record<string, AppNode> = {

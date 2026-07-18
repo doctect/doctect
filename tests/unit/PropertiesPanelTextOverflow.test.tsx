@@ -59,4 +59,44 @@ describe('PropertiesPanel text overflow history', () => {
             expect(saveHistory).toBe(true);
         }
     });
+
+    it('preserves an existing fontSize exactly in one saved change per overflow control update', () => {
+        const onUpdateElements = vi.fn();
+        const sizedElement = { ...textElement, fontSize: 13.75 };
+        const sizedState: AppState = {
+            ...state,
+            variants: {
+                default: {
+                    ...state.variants.default,
+                    templates: {
+                        page: {
+                            ...state.variants.default.templates.page,
+                            elements: [sizedElement],
+                        },
+                    },
+                },
+            },
+        };
+        render(
+            <PropertiesPanel
+                state={sizedState}
+                onUpdateElements={onUpdateElements}
+                onUpdateNode={vi.fn()}
+                onDeleteElements={vi.fn()}
+                onOpenNodeSelector={vi.fn()}
+                onUpdateTemplate={vi.fn()}
+            />,
+        );
+
+        fireEvent.change(screen.getByLabelText('Overflow'), { target: { value: 'ellipsis' } });
+        fireEvent.click(screen.getByLabelText('Wrap'));
+
+        expect(onUpdateElements.mock.calls).toEqual([
+            [[{ ...sizedElement, textOverflow: 'ellipsis' }], true],
+            [[{ ...sizedElement, textWrap: false }], true],
+        ]);
+        for (const [elements] of onUpdateElements.mock.calls) {
+            expect(elements[0].fontSize).toBe(13.75);
+        }
+    });
 });

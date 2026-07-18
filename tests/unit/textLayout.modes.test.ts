@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { TextOverflow } from '../../types';
+import { segmentGraphemes } from '../../services/graphemes';
 import { createTextLayoutEngine } from '../../services/textLayout';
 import { monoMeasurer, request } from './textLayoutTestUtils';
 
@@ -137,6 +138,33 @@ describe('text overflow modes', () => {
         }), monoMeasurer(calls));
 
         expect(calls.length).toBeLessThanOrEqual([...text].length + 3);
+    });
+
+    it('selects a whole-grapheme ellipsis prefix with nonquadratic measured input', () => {
+        const cluster = '👍🏽';
+        const graphemeCount = 1_024;
+        const text = cluster.repeat(graphemeCount);
+        let measuredCodeUnits = 0;
+        let calls = 0;
+        const measurer = {
+            cacheKey: 'long-grapheme-work-v1',
+            measureWidth(candidate: string, font: { size: number }) {
+                calls += 1;
+                measuredCodeUnits += candidate.length;
+                return segmentGraphemes(candidate).length * font.size;
+            },
+        };
+
+        const result = createTextLayoutEngine().layout(request({
+            text,
+            contentWidth: 3,
+            textOverflow: 'ellipsis',
+            textWrap: false,
+        }), measurer)!;
+
+        expect(result.lines.map(line => line.text)).toEqual([`${cluster}${cluster}…`]);
+        expect(calls).toBeLessThanOrEqual(Math.ceil(Math.log2(graphemeCount)) + 4);
+        expect(measuredCodeUnits).toBeLessThanOrEqual(text.length * 16);
     });
 });
 
