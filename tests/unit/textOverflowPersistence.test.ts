@@ -3,12 +3,14 @@ import { resolve } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { AppState, TemplateElement } from '../../types';
 import { createGeneratedAppState } from '../../services/generatedProjectState';
+import { segmentGraphemes } from '../../services/graphemes';
 import { loadProjectState } from '../../services/loadProjectState';
 import { createBlankProject, getCustomPresets, loadPreset } from '../../services/presets';
 import { snapshotDocument } from '../../services/projectDocumentSnapshot';
 import { validateGeneratedProject } from '../../services/validateGeneratedProject';
 import { MAX_STATE_BYTES } from '../../shared/projectLimits.js';
 import { decodeStateRow, encodeState } from '../../server/stateCodec.js';
+import { textOverflowFixtureMetric, textOverflowFixtureRequests } from '../helpers/textOverflowParityFixture';
 
 const fixture = JSON.parse(readFileSync(
   resolve('tests/fixtures/text-overflow-parity-v10.json'),
@@ -37,6 +39,16 @@ const element = (state: any, id: string): any => {
   return found;
 };
 
+const nearestWrapBoundaryDistance = (request: ReturnType<typeof textOverflowFixtureRequests>[number]['request']): number => {
+  const widths = request.text.replace(/\r\n?/g, '\n').split('\n').flatMap(line => {
+    const graphemes = segmentGraphemes(line);
+    return graphemes.map((_, index) => (
+      textOverflowFixtureMetric(graphemes.slice(0, index + 1).join(''), request.fontSize)
+    ));
+  });
+  return Math.min(...widths.map(width => Math.abs(request.contentWidth - width)));
+};
+
 describe('text overflow v10 persistence fixture', () => {
   beforeEach(() => localStorage.clear());
 
@@ -62,11 +74,8 @@ describe('text overflow v10 persistence fixture', () => {
       expect(['clip', 'ellipsis', 'shrink', 'visible']).toContain(setting.textOverflow);
       expect(typeof setting.textWrap).toBe('boolean');
     }
-    for (const item of [...fixedText, ...grids].filter(candidate => candidate.textWrap)) {
-      const contentWidth = item.type === 'grid' ? item.w - 2 : item.w;
-      const metricStep = (item.fontSize ?? 12) * 0.5;
-      const remainder = contentWidth % metricStep;
-      expect(Math.min(remainder, metricStep - remainder)).toBeGreaterThanOrEqual(1);
+    for (const { context, request } of textOverflowFixtureRequests(fixture).filter(item => item.request.textWrap)) {
+      expect(nearestWrapBoundaryDistance(request), context).toBeGreaterThanOrEqual(1);
     }
     expect(new Set(fixedText.map(item => item.align))).toEqual(new Set(['left', 'center', 'right']));
     expect(new Set(fixedText.map(item => item.verticalAlign))).toEqual(new Set(['top', 'middle', 'bottom']));

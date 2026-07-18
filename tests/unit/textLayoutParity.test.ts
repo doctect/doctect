@@ -1,62 +1,21 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import type { AppState, TemplateElement, TextOverflow } from '../../types';
+import type { AppState } from '../../types';
 import { createCanvasTextLayoutSession } from '../../services/canvasTextLayout';
-import { segmentGraphemes } from '../../services/graphemes';
 import { createPdfTextLayoutSession } from '../../services/pdfTextLayout';
 import type { TextLayoutRequest, TextLayoutResult } from '../../services/textLayout';
+import { textOverflowFixtureMetric, textOverflowFixtureRequests } from '../helpers/textOverflowParityFixture';
 
 const fixture = JSON.parse(readFileSync(
   resolve('tests/fixtures/text-overflow-parity-v10.json'),
   'utf8',
 )) as AppState;
 
-interface FixtureRequest {
-  context: string;
-  request: TextLayoutRequest;
-}
-
 const template = fixture.variants.parity.templates['parity-page'];
 const elements = template.elements;
 const fixedText = elements.filter(item => item.type === 'text' && !item.autoWidth);
 const grids = elements.filter(item => item.type === 'grid');
-const childLabels = fixture.nodes[fixture.rootId].children.map(id => fixture.nodes[id].title);
-
-const requestFor = (
-  item: TemplateElement,
-  text: string,
-  textWrap = item.textWrap as boolean,
-  grid = false,
-): TextLayoutRequest => ({
-  text,
-  contentWidth: grid ? Math.max(0, item.w - 2) : item.w,
-  contentHeight: item.h,
-  fontSize: item.fontSize ?? 12,
-  fontFamily: item.fontFamily ?? 'helvetica',
-  fontWeight: item.fontWeight ?? 'normal',
-  fontStyle: item.fontStyle ?? 'normal',
-  textOverflow: item.textOverflow as TextOverflow,
-  textWrap,
-  align: item.align ?? 'left',
-  verticalAlign: item.verticalAlign ?? 'top',
-});
-
-const fixtureRequests = (): FixtureRequest[] => [
-  ...fixedText.map(item => ({
-    context: item.id,
-    request: requestFor(item, item.text ?? ''),
-  })),
-  ...grids.flatMap(item => [false, true].flatMap(textWrap => {
-    const labels = item.textOverflow === 'shrink' ? childLabels : [childLabels[1]];
-    return labels.map((label, index) => ({
-      context: `${item.id}:${textWrap ? 'wrap' : 'nowrap'}:cell-${index}`,
-      request: requestFor(item, label, textWrap, true),
-    }));
-  })),
-];
-
-const metric = (text: string, size: number) => segmentGraphemes(text).length * size * 0.5;
 
 const createSessions = () => {
   let canvasFontSize = 0;
@@ -66,7 +25,7 @@ const createSessions = () => {
       const match = value.match(/([0-9.]+)px/);
       canvasFontSize = match ? Number(match[1]) : Number.NaN;
     },
-    measureText: vi.fn((text: string) => ({ width: metric(text, canvasFontSize) })),
+    measureText: vi.fn((text: string) => ({ width: textOverflowFixtureMetric(text, canvasFontSize) })),
   };
   const canvas = createCanvasTextLayoutSession({
     sessionIdentity: 'parity-canvas',
@@ -75,7 +34,7 @@ const createSessions = () => {
 
   let pdfFontSize = 0;
   const pdfDoc = {
-    getTextWidth: vi.fn((text: string) => metric(text, pdfFontSize)),
+    getTextWidth: vi.fn((text: string) => textOverflowFixtureMetric(text, pdfFontSize)),
   };
   const pdf = createPdfTextLayoutSession(pdfDoc as any, { sessionIdentity: 'parity-pdf' });
   const selectFont = (size: number) => {
@@ -101,7 +60,7 @@ const expectPolicyParity = (canvasResult: TextLayoutResult | null, pdfResult: Te
 
 describe('Canvas/PDF text layout parity under equal metrics', () => {
   it('covers every fixed and grid mode/wrap pair plus fixture edge cases', () => {
-    const requests = fixtureRequests();
+    const requests = textOverflowFixtureRequests(fixture);
     const fixedPairs = fixedText.map(item => `${item.textOverflow}:${item.textWrap}`).sort();
     const gridPairs = grids.flatMap(item => [false, true].map(wrap => `${item.textOverflow}:${wrap}`)).sort();
 
@@ -122,7 +81,7 @@ describe('Canvas/PDF text layout parity under equal metrics', () => {
 
   it('returns identical policy and line geometry for cold, warm, and cleared adapter caches', () => {
     const sessions = createSessions();
-    const requests = fixtureRequests();
+    const requests = textOverflowFixtureRequests(fixture);
     const coldResults = new Map<string, { canvas: TextLayoutResult; pdf: TextLayoutResult }>();
 
     for (const { context, request } of requests) {
