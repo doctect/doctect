@@ -9,13 +9,14 @@ const SIZE_WARN_CHARS = 100000; // mirrors the import warning threshold in Proje
 
 interface SvgSourceSectionProps {
     svgContent: string;
+    expanded: boolean;
+    onToggle: () => void;
     // saveHistory=true only on the first commit of an edit burst (one focus
     // session = one undo step, however many debounced commits it produces).
     onCommit: (svg: string, saveHistory: boolean) => void;
 }
 
-export const SvgSourceSection: React.FC<SvgSourceSectionProps> = ({ svgContent, onCommit }) => {
-    const [expanded, setExpanded] = useState(true);
+export const SvgSourceSection: React.FC<SvgSourceSectionProps> = ({ svgContent, expanded, onToggle, onCommit }) => {
     const [draft, setDraft] = useState(svgContent);
     const [error, setError] = useState<string | null>(null);
     const lastCommittedRef = useRef(svgContent);
@@ -74,8 +75,9 @@ export const SvgSourceSection: React.FC<SvgSourceSectionProps> = ({ svgContent, 
             title="SVG Source"
             icon={FileCode}
             testId="svg-source-section"
+            variant="compact"
             expanded={expanded}
-            onToggle={() => setExpanded(v => !v)}
+            onToggle={onToggle}
         >
             <div className="px-4 pb-4 space-y-2">
                 <textarea

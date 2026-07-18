@@ -25,6 +25,11 @@ const state: AppState = {
     editingElementId: null, clipboard: [],
 };
 
+const sectionExpanded = {
+    grid: true, geometry: true, appearance: true,
+    typography: true, interaction: true, svgSource: true,
+};
+
 function renderEditor(element: TemplateElement) {
     const onUpdate = vi.fn();
     const result = render(
@@ -35,6 +40,8 @@ function renderEditor(element: TemplateElement) {
             state={state}
             selectionIsTextOnly={element.type === 'text'}
             autoWidthSelection={element.autoWidth === true}
+            sectionExpanded={sectionExpanded}
+            onToggleSection={vi.fn()}
         />,
     );
     return { ...result, onUpdate };

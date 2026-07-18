@@ -30,6 +30,11 @@ const element: TemplateElement = {
     autoWidth: true, fontSize: 12,
 };
 
+const sectionExpanded = {
+    grid: true, geometry: true, appearance: true,
+    typography: true, interaction: true, svgSource: true,
+};
+
 afterEach(() => vi.restoreAllMocks());
 
 describe('SingleElementEditor auto-width text edits', () => {
@@ -44,6 +49,8 @@ describe('SingleElementEditor auto-width text edits', () => {
             state={state}
             selectionIsTextOnly={element.type === 'text'}
             autoWidthSelection={element.autoWidth === true}
+            sectionExpanded={sectionExpanded}
+            onToggleSection={vi.fn()}
             activeNode={activeNode}
         />);
 

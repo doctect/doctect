@@ -10,6 +10,7 @@ import { resolveTextOverflowSettings } from '../../services/textOverflow';
 import { measureAutoWidthText } from '../../services/autoWidthText';
 import { resolveElementPreviewText } from '../../services/previewText';
 import { DEFAULT_TEXT_FONT_SIZE, resolveTextFontSize } from '../../services/textVisibility';
+import { CollapsibleSection } from '../CollapsibleSection';
 
 // Font family mapping for CSS (used for font dropdown preview)
 const getFontFamily = (fontValue: string): string => {
@@ -69,6 +70,16 @@ const getFontFamily = (fontValue: string): string => {
 
 export type AutoWidthSelection = boolean | 'mixed';
 
+export type ElementPropertySectionKey =
+    | 'grid'
+    | 'geometry'
+    | 'appearance'
+    | 'typography'
+    | 'interaction'
+    | 'svgSource';
+
+export type ElementPropertySectionState = Record<ElementPropertySectionKey, boolean>;
+
 interface SingleElementEditorProps {
     element: TemplateElement;
     onUpdate: (updates: Partial<TemplateElement> | ((prev: TemplateElement) => Partial<TemplateElement>), saveHistory?: boolean) => void;
@@ -76,6 +87,8 @@ interface SingleElementEditorProps {
     state: AppState;
     selectionIsTextOnly: boolean;
     autoWidthSelection: AutoWidthSelection;
+    sectionExpanded: ElementPropertySectionState;
+    onToggleSection: (section: ElementPropertySectionKey) => void;
     activeNode?: AppNode;
 }
 
@@ -243,7 +256,17 @@ const SmartInput = ({
     );
 };
 
-export const SingleElementEditor: React.FC<SingleElementEditorProps> = ({ element, onUpdate, onOpenNodeSelector, state, selectionIsTextOnly, autoWidthSelection, activeNode }) => {
+export const SingleElementEditor: React.FC<SingleElementEditorProps> = ({
+    element,
+    onUpdate,
+    onOpenNodeSelector,
+    state,
+    selectionIsTextOnly,
+    autoWidthSelection,
+    sectionExpanded,
+    onToggleSection,
+    activeNode,
+}) => {
 
     const [showRefBuilder, setShowRefBuilder] = useState(false);
     const [showFontPicker, setShowFontPicker] = useState(false);
@@ -466,8 +489,15 @@ export const SingleElementEditor: React.FC<SingleElementEditorProps> = ({ elemen
         <div className="space-y-4 pb-10">
             {/* Grid Config */}
             {element.type === 'grid' && element.gridConfig && (
-                <div className="space-y-2 bg-indigo-50 p-2 rounded border border-indigo-100">
-                    <label className="text-xs font-semibold text-indigo-700 uppercase flex items-center gap-1"><Grid3X3 size={12} /> Grid Configuration</label>
+                <CollapsibleSection
+                    title="Grid Configuration"
+                    icon={Grid3X3}
+                    variant="compact"
+                    testId="grid-configuration-section"
+                    expanded={sectionExpanded.grid}
+                    onToggle={() => onToggleSection('grid')}
+                >
+                    <div className="space-y-2 bg-indigo-50 p-2 rounded border border-indigo-100">
                     <div className="grid grid-cols-3 gap-1">
                         <div><label className="text-[10px] text-slate-500">Cols</label><input type="number" min="1" value={safeVal(element.gridConfig.cols)} onChange={e => onUpdate({ gridConfig: { ...element.gridConfig!, cols: parseInt(e.target.value) } })} className="w-full border rounded px-1 text-sm" /></div>
                         <div><label className="text-[10px] text-slate-500">Gap X</label><input type="number" min="0" value={safeVal(element.gridConfig.gapX)} onChange={e => onUpdate({ gridConfig: { ...element.gridConfig!, gapX: parseInt(e.target.value) } })} className="w-full border rounded px-1 text-sm" /></div>
@@ -761,12 +791,18 @@ export const SingleElementEditor: React.FC<SingleElementEditorProps> = ({ elemen
                             )}
                         </div>
                     </div>
-                </div>
+                    </div>
+                </CollapsibleSection>
             )}
 
             {/* Position */}
-            <div>
-                <label className="text-xs font-semibold text-slate-500 uppercase block mb-1">Geometry</label>
+            <CollapsibleSection
+                title="Geometry"
+                variant="compact"
+                testId="geometry-section"
+                expanded={sectionExpanded.geometry}
+                onToggle={() => onToggleSection('geometry')}
+            >
                 <div className="grid grid-cols-4 gap-2">
                     <SmartInput
                         label="X"
@@ -821,11 +857,18 @@ export const SingleElementEditor: React.FC<SingleElementEditorProps> = ({ elemen
                         </div>
                     </div>
                 </div>
-            </div>
+            </CollapsibleSection>
 
             {/* Appearance */}
-            <div className="space-y-3 border-t pt-3">
-                <label className="text-xs font-semibold text-slate-500 uppercase flex items-center gap-1"><Palette size={12} /> Appearance</label>
+            <CollapsibleSection
+                title="Appearance"
+                icon={Palette}
+                variant="compact"
+                testId="appearance-section"
+                expanded={sectionExpanded.appearance}
+                onToggle={() => onToggleSection('appearance')}
+            >
+                <div className="space-y-3">
 
                 {/* Fill */}
                 <div className="flex items-center gap-2">
@@ -1028,12 +1071,20 @@ export const SingleElementEditor: React.FC<SingleElementEditorProps> = ({ elemen
                         <input type="number" min="0" className="w-full border rounded px-1 text-xs" value={element.borderRadius || 0} onChange={e => onUpdate({ borderRadius: parseInt(e.target.value) })} />
                     </div>
                 </div>
-            </div>
+                </div>
+            </CollapsibleSection>
 
             {/* Typography */}
             {(element.type === 'text' || element.type === 'grid' || element.text || element.dataBinding) && (
-                <div className="space-y-3 border-t pt-3">
-                    <label className="text-xs font-semibold text-slate-500 uppercase flex items-center gap-1"><Type size={12} /> Typography</label>
+                <CollapsibleSection
+                    title="Typography"
+                    icon={Type}
+                    variant="compact"
+                    testId="typography-section"
+                    expanded={sectionExpanded.typography}
+                    onToggle={() => onToggleSection('typography')}
+                >
+                    <div className="space-y-3">
 
                     {selectionIsTextOnly && (
                         <div className="flex items-center gap-2 rounded border border-slate-200 px-2 py-1.5">
@@ -1234,19 +1285,29 @@ export const SingleElementEditor: React.FC<SingleElementEditorProps> = ({ elemen
                             </div>
                         </div>
                     </div>
-                </div>
+                    </div>
+                </CollapsibleSection>
             )}
 
             {element.type === 'svg' && state.selectedElementIds.length === 1 && (
                 <SvgSourceSection
                     svgContent={element.svgContent || ''}
+                    expanded={sectionExpanded.svgSource}
+                    onToggle={() => onToggleSection('svgSource')}
                     onCommit={(svg, saveHistory) => onUpdate({ svgContent: svg }, saveHistory)}
                 />
             )}
 
             {/* Links / Interactions */}
-            <div className="space-y-3 border-t pt-3">
-                <label className="text-xs font-semibold text-slate-500 uppercase flex items-center gap-1"><MousePointer2 size={12} /> Interaction</label>
+            <CollapsibleSection
+                title="Interaction"
+                icon={MousePointer2}
+                variant="compact"
+                testId="interaction-section"
+                expanded={sectionExpanded.interaction}
+                onToggle={() => onToggleSection('interaction')}
+            >
+                <div className="space-y-3">
 
                 <div>
                     <label className="text-[10px] text-slate-400">On Click</label>
@@ -1327,7 +1388,8 @@ export const SingleElementEditor: React.FC<SingleElementEditorProps> = ({ elemen
                         </div>
                     </div>
                 )}
-            </div>
+                </div>
+            </CollapsibleSection>
         </div>
     );
 };

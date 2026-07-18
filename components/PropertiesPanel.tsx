@@ -1,11 +1,15 @@
 
 
-import React, { useState, useCallback } from 'react';
+import React, { useCallback } from 'react';
 import { AppState, AppNode, TemplateElement, PageTemplate } from '../types';
 import { Trash, Settings2, RectangleVertical, RectangleHorizontal, ToggleRight, ToggleLeft } from 'lucide-react';
 
 import { PAGE_PRESETS, RM_PP_WIDTH, RM_PP_HEIGHT, toDisplayUnit, fromDisplayUnit } from '../constants/editor';
-import { SingleElementEditor } from './properties/SingleElementEditor';
+import {
+    SingleElementEditor,
+    type ElementPropertySectionKey,
+    type ElementPropertySectionState,
+} from './properties/SingleElementEditor';
 import { NodeProperties } from './properties/NodeProperties';
 import { CollapsibleSection } from './CollapsibleSection';
 import clsx from 'clsx';
@@ -21,10 +25,28 @@ interface PropertiesPanelProps {
     layersSlot?: React.ReactNode;
 }
 
+const INITIAL_ELEMENT_PROPERTY_SECTIONS: ElementPropertySectionState = {
+    grid: true,
+    geometry: true,
+    appearance: true,
+    typography: true,
+    interaction: true,
+    svgSource: true,
+};
+
 export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({ state, activePreviewNode, onUpdateElements, onUpdateNode, onDeleteElements, onOpenNodeSelector, onUpdateTemplate, layersSlot }) => {
     const { nodes, selectedNodeId, viewMode, selectedElementIds, variants, activeVariantId, selectedTemplateId } = state;
     // Session-local: Template Settings starts expanded, collapsible from its header.
     const [settingsExpanded, setSettingsExpanded] = React.useState(true);
+    const [elementPropertySections, setElementPropertySections] = React.useState<ElementPropertySectionState>(
+        () => ({ ...INITIAL_ELEMENT_PROPERTY_SECTIONS }),
+    );
+    const toggleElementPropertySection = useCallback((section: ElementPropertySectionKey) => {
+        setElementPropertySections(current => ({
+            ...current,
+            [section]: !current[section],
+        }));
+    }, []);
     const node = nodes[selectedNodeId];
     const isHierarchyMode = viewMode === 'hierarchy';
 
@@ -317,6 +339,8 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({ state, activeP
                             state={state}
                             selectionIsTextOnly={selectionIsTextOnly}
                             autoWidthSelection={autoWidthSelection}
+                            sectionExpanded={elementPropertySections}
+                            onToggleSection={toggleElementPropertySection}
                             activeNode={activePreviewNode}
                         />
                     </>
