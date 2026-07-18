@@ -11,6 +11,7 @@ export interface AppNode {
 }
 
 export type ElementType = 'rect' | 'ellipse' | 'text' | 'triangle' | 'grid' | 'line' | 'svg';
+export type TextOverflow = 'clip' | 'ellipsis' | 'shrink' | 'visible';
 export type FillType = 'solid' | 'pattern';
 export type PatternType = 'lines-h' | 'lines-v' | 'lines-d' | 'dots';
 
@@ -97,6 +98,8 @@ export interface TemplateElement {
   fontSize?: number;
   fontFamily?: string;
   autoWidth?: boolean;
+  textOverflow?: TextOverflow;
+  textWrap?: boolean;
   fontWeight?: 'normal' | 'bold';
   fontStyle?: 'normal' | 'italic';
   textDecoration?: 'none' | 'underline' | 'line-through';

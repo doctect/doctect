@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { migrateState, CURRENT_SCHEMA_VERSION } from '../../services/migration';
+import { migrateState, CURRENT_SCHEMA_VERSION, needsMigration } from '../../services/migration';
 import { createBlankProject, createNotebookProject, createPlannerProject, loadPreset } from '../../services/presets';
 
 const el = (id: string, zIndex?: number) => ({
@@ -43,12 +43,12 @@ const source = {
 
 describe('migrateV7ToV8', () => {
     it('continues to the current schema version', () => {
-        expect(CURRENT_SCHEMA_VERSION).toBe(9);
+        expect(CURRENT_SCHEMA_VERSION).toBe(10);
     });
 
     it('creates exactly one default "Layer 1" per template across all variants and tags every element', () => {
         const out: any = migrateState(v7State());
-        expect(out.schemaVersion).toBe(9);
+        expect(out.schemaVersion).toBe(10);
         for (const variant of Object.values<any>(out.variants)) {
             for (const tpl of Object.values<any>(variant.templates)) {
                 expect(tpl.layers).toHaveLength(1);
@@ -73,7 +73,7 @@ describe('migrateV7ToV8', () => {
             templates: { page: { id: 'page', name: 'Page', width: 500, height: 700, elements: [el('a', 1)] } },
         };
         const out: any = migrateState(legacy);
-        expect(out.schemaVersion).toBe(9);
+        expect(out.schemaVersion).toBe(10);
         const tpl = out.variants.default.templates.page;
         expect(tpl.layers).toHaveLength(1);
         expect(tpl.elements[0].layerId).toBe(tpl.layers[0].id);
@@ -99,13 +99,103 @@ describe('migrateV8ToV9', () => {
         const before = structuredClone(input);
         const output = migrateState(input);
 
-        expect(CURRENT_SCHEMA_VERSION).toBe(9);
-        expect(output.schemaVersion).toBe(9);
+        expect(CURRENT_SCHEMA_VERSION).toBe(10);
+        expect(output.schemaVersion).toBe(10);
         expect(output.generator).toEqual(source);
         expect(input).toEqual(before);
         expect(migrateState(structuredClone(output))).toEqual(output);
         expect(migrateState(validV8State()).generator).toBeUndefined();
-        expect(migrateState(validLegacyV0State()).schemaVersion).toBe(9);
+        expect(migrateState(validLegacyV0State()).schemaVersion).toBe(10);
+    });
+});
+
+const overflowElements = (prefix: string) => [
+    { ...el(`${prefix}-fixed`), type: 'text', autoWidth: false, textOverflow: 'shrink', textWrap: false },
+    { ...el(`${prefix}-auto`), type: 'text', autoWidth: true, textOverflow: 'ellipsis', textWrap: false },
+    { ...el(`${prefix}-grid`), type: 'grid', textOverflow: 'visible', textWrap: true },
+    { ...el(`${prefix}-rect`), textOverflow: 'future', textWrap: 'false', custom: { keep: true } },
+];
+
+const v9OverflowState = () => ({
+    schemaVersion: 9,
+    nodes: {},
+    rootId: 'root',
+    activeVariantId: 'default',
+    variants: {
+        default: { id: 'default', name: 'Default', templates: {
+            page: { id: 'page', name: 'Page', width: 500, height: 700, elements: overflowElements('default') },
+        } },
+        tablet: { id: 'tablet', name: 'Tablet', templates: {
+            page: { id: 'page', name: 'Page', width: 800, height: 600, elements: overflowElements('tablet') },
+        } },
+    },
+    templates: {
+        legacy: { id: 'legacy', name: 'Legacy', width: 500, height: 700, elements: overflowElements('legacy') },
+    },
+});
+
+describe('migrateV9ToV10', () => {
+    it('preserves legacy text and grid appearance across variants and flat templates', () => {
+        const input = v9OverflowState();
+        const before = structuredClone(input);
+        const output: any = migrateState(input);
+        const templates = [
+            output.variants.default.templates.page,
+            output.variants.tablet.templates.page,
+            output.templates.legacy,
+        ];
+        const originalTemplates = [
+            before.variants.default.templates.page,
+            before.variants.tablet.templates.page,
+            before.templates.legacy,
+        ];
+
+        expect(output.schemaVersion).toBe(10);
+        templates.forEach((template, index) => {
+            expect(template.elements[0]).toMatchObject({ textOverflow: 'visible', textWrap: true });
+            expect(template.elements[1]).toMatchObject({ textOverflow: 'visible', textWrap: true });
+            expect(template.elements[2]).toMatchObject({ textOverflow: 'ellipsis', textWrap: false });
+            expect(template.elements[3]).toEqual(originalTemplates[index].elements[3]);
+        });
+        expect(input).toEqual(before);
+        expect(migrateState(output)).toEqual(output);
+    });
+
+    it('normalizes malformed current values while preserving valid values', () => {
+        const input: any = {
+            ...v9OverflowState(),
+            schemaVersion: 10,
+            variants: {
+                default: { id: 'default', name: 'Default', templates: {
+                    page: { id: 'page', name: 'Page', width: 100, height: 100, elements: [
+                        { type: 'text', textOverflow: null, textWrap: 'true' },
+                        { type: 'grid', textOverflow: 'visible', textWrap: true },
+                    ] },
+                } },
+            },
+        };
+        const before = structuredClone(input);
+
+        const output: any = migrateState(input);
+
+        expect(output.variants.default.templates.page.elements).toEqual([
+            { type: 'text', textOverflow: 'clip', textWrap: true },
+            { type: 'grid', textOverflow: 'visible', textWrap: true },
+        ]);
+        expect(input).toEqual(before);
+        expect(needsMigration(input)).toBe(false);
+    });
+
+    it('returns future-version state untouched by reference', () => {
+        const future: any = {
+            schemaVersion: 11,
+            variants: { default: { templates: { page: { elements: [
+                { type: 'text', textOverflow: null, textWrap: 'future' },
+            ] } } } },
+        };
+
+        expect(migrateState(future)).toBe(future);
+        expect(migrateState(future)).toEqual(future);
     });
 });
 

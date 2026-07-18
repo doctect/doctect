@@ -13,11 +13,12 @@
 
 import { AppState } from '../types';
 import { ensureTemplateLayers } from './layers';
+import { normalizeTextOverflow } from './textOverflow';
 
 /**
  * Current schema version. Increment this when making breaking changes.
  */
-export const CURRENT_SCHEMA_VERSION = 9;
+export const CURRENT_SCHEMA_VERSION = 10;
 
 /**
  * Migration v0 → v1
@@ -88,8 +89,8 @@ export function migrateState(state: any): AppState {
     // Determine current version (undefined or missing = version 0)
     let version = state.schemaVersion ?? 0;
 
-    // If already at current version, no migration needed
-    if (version >= CURRENT_SCHEMA_VERSION) {
+    // Preserve unsupported future versions without rewriting their state.
+    if (version > CURRENT_SCHEMA_VERSION) {
         return state as AppState;
     }
 
@@ -143,9 +144,14 @@ export function migrateState(state: any): AppState {
         version = 9;
     }
 
+    if (version < 10) {
+        migratedState = migrateV9ToV10(migratedState);
+        version = 10;
+    }
+
     console.log(`[Migration] Migration complete. Now at v${CURRENT_SCHEMA_VERSION}`);
 
-    return migratedState as AppState;
+    return normalizeTextOverflow(migratedState as Record<string, any>) as AppState;
 }
 
 /**
@@ -329,6 +335,40 @@ function migrateV8ToV9(state: any): any {
     console.log('[Migration] Applying v8 → v9: Adding optional generator provenance');
     const migrated = JSON.parse(JSON.stringify(state));
     migrated.schemaVersion = 9;
+    return migrated;
+}
+
+/**
+ * Migration v9 → v10
+ *
+ * Preserves legacy rendering while adding canonical text overflow settings.
+ */
+function migrateV9ToV10(state: any): any {
+    console.log('[Migration] Applying v9 → v10: Adding text overflow settings');
+    const migrated = JSON.parse(JSON.stringify(state));
+
+    const migrateTemplates = (templates: any) => {
+        if (!templates || typeof templates !== 'object') return;
+        Object.values(templates).forEach((template: any) => {
+            if (!Array.isArray(template?.elements)) return;
+            template.elements.forEach((element: any) => {
+                if (element.type === 'text') {
+                    element.textOverflow = 'visible';
+                    element.textWrap = true;
+                } else if (element.type === 'grid') {
+                    element.textOverflow = 'ellipsis';
+                    element.textWrap = false;
+                }
+            });
+        });
+    };
+
+    if (migrated.variants && typeof migrated.variants === 'object') {
+        Object.values(migrated.variants).forEach((variant: any) => migrateTemplates(variant?.templates));
+    }
+    migrateTemplates(migrated.templates);
+
+    migrated.schemaVersion = 10;
     return migrated;
 }
 

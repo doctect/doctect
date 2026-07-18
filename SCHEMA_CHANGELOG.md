@@ -4,6 +4,27 @@ This document tracks changes to the AppState JSON schema used by the project.
 
 ---
 
+## Version 10
+**Date:** 2026-07-18
+
+### Changes
+- Added optional `textOverflow` (`clip`, `ellipsis`, `shrink`, or `visible`) and `textWrap`
+  fields to text and grid elements
+- New and normalized text defaults to `clip` with wrapping; grids default to `clip` without wrapping
+- Renderer support interprets these fields for fixed-size text and grids; auto-width text stores normalized
+  values but ignores them while rendering
+
+### Migration Notes
+- The sequential v9 → v10 migration preserves legacy appearance by assigning `visible` with wrapping
+  to every text element and `ellipsis` without wrapping to every grid element. Existing experimental
+  values are overwritten; other element objects remain unchanged.
+- Exact-current v10 loads strictly normalize malformed or missing applicable fields using new-content
+  defaults. Valid enum and boolean values are preserved.
+- Older projects migrate sequentially through v10. Future-version projects are not downgraded or rewritten.
+- No server database or SQL migration is required.
+
+---
+
 ## Version 9
 **Date:** 2026-07-13
 
@@ -106,4 +127,4 @@ Enables template preview node selection. When editing templates in Templates vie
 Original schema without versioning. Any JSON file without a `schemaVersion` field is treated as version 0.
 
 ### Migration Path
-v0 → v1 → v2 → v3 → v4 → v5 → v6 → v7 → v8 → v9 (sequential migration through all versions)
+v0 → v1 → v2 → v3 → v4 → v5 → v6 → v7 → v8 → v9 → v10 (sequential migration through all versions)
