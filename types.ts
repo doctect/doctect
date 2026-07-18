@@ -62,6 +62,13 @@ export interface GridConfig {
   alternateColumnFill?: string;
 }
 
+export interface TextPadding {
+  top: number;
+  right: number;
+  bottom: number;
+  left: number;
+}
+
 export interface TemplateElement {
   id: string;
   type: ElementType;
@@ -100,6 +107,7 @@ export interface TemplateElement {
   autoWidth?: boolean;
   textOverflow?: TextOverflow;
   textWrap?: boolean;
+  textPadding?: TextPadding;
   fontWeight?: 'normal' | 'bold';
   fontStyle?: 'normal' | 'italic';
   textDecoration?: 'none' | 'underline' | 'line-through';
