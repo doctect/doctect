@@ -9,8 +9,11 @@ import { normalizeSvgColorsInTree, desaturateSvgColorsInTree, bakeElementOpacity
 import { sortElementsForRender } from "./layers";
 import { isVisibleText, resolveTextFontSize } from "./textVisibility";
 import { MAX_NODES, MAX_REFERENCE_DEPTH, MAX_TRAVERSAL_DEPTH } from "../shared/projectLimits.js";
+import { createPdfTextLayoutSession } from "./pdfTextLayout";
+import { resolveTextOverflowSettings } from "./textOverflow";
 
 const DEBUG_PDF = false; // Set to true to see debug visuals
+const EMBEDDED_HELVETICA_FAMILY = '__embedded_helvetica__';
 
 // Mapping of supported custom fonts to their source TTF files
 // Using raw.githubusercontent.com for reliable access to the Google Fonts repo
@@ -641,7 +644,12 @@ const drawPattern = (doc: jsPDF, type: string, x: number, y: number, w: number, 
     }
 };
 
-const applyFont = (doc: jsPDF, el: TemplateElement, isGreyscale = false) => {
+const applyFont = (
+    doc: jsPDF,
+    el: TemplateElement,
+    isGreyscale = false,
+    effectiveSize = resolveTextFontSize(el.fontSize),
+) => {
     let family = el.fontFamily || 'helvetica';
     if (family.toLowerCase() === 'georgia') family = 'times';
 
@@ -679,18 +687,36 @@ const applyFont = (doc: jsPDF, el: TemplateElement, isGreyscale = false) => {
         else if (el.fontStyle === 'italic') style = 'italic';
     }
 
+    const registeredFamily = family === 'helvetica' ? EMBEDDED_HELVETICA_FAMILY : family;
+    const availableStyles = doc.getFontList()[registeredFamily];
+    let selectedFamily = registeredFamily;
+    let selectedStyle = style;
+    if (!availableStyles?.includes(style)) {
+        selectedFamily = 'helvetica';
+        selectedStyle = 'normal';
+    }
+
     try {
-        doc.setFont(family, style);
+        doc.setFont(selectedFamily, selectedStyle);
     } catch (e) {
         console.warn(`[PDFService] Failed to set font ${family} ${style}. Falling back to helvetica.`, e);
-        doc.setFont('helvetica', 'normal');
+        selectedFamily = 'helvetica';
+        selectedStyle = 'normal';
+        doc.setFont(selectedFamily, selectedStyle);
     }
-    doc.setFontSize(resolveTextFontSize(el.fontSize));
+    doc.setFontSize(effectiveSize);
 
     const rgb = isGreyscale
         ? hexToGreyscale(el.textColor || "#000000")
         : hexToRgb(el.textColor || "#000000");
     if (rgb) doc.setTextColor(rgb.r, rgb.g, rgb.b);
+
+    const actualFont = doc.getFont();
+    return {
+        family: actualFont.fontName || selectedFamily,
+        style: actualFont.fontStyle || selectedStyle,
+        rendererIdentity: `${actualFont.id}:${actualFont.postScriptName}:${actualFont.encoding || ''}`,
+    };
 };
 
 // Calculate AABB for rotated elements to place links correctly
@@ -825,6 +851,9 @@ export const generatePDF = async (state: AppState, options: GeneratePDFOptions =
         unit: "pt",
         format: initialFormat
     });
+    const pdfTextSession = createPdfTextLayoutSession(doc);
+
+    try {
 
     // --- FONT LOADING START ---
     const usedFamilies = new Set<string>();
@@ -873,7 +902,8 @@ export const generatePDF = async (state: AppState, options: GeneratePDFOptions =
 
                     const fileName = `${family}-${variant}.ttf`;
                     doc.addFileToVFS(fileName, binaryStr);
-                    doc.addFont(fileName, family, variant);
+                    const registeredFamily = family === 'helvetica' ? EMBEDDED_HELVETICA_FAMILY : family;
+                    doc.addFont(fileName, registeredFamily, variant);
                 } catch (err) {
                     console.error(`[PDFService] Error loading font ${family} ${variant}:`, err);
                 }
@@ -1724,7 +1754,51 @@ export const generatePDF = async (state: AppState, options: GeneratePDFOptions =
             const renderText = isVisibleText(textContent, el.fontSize);
 
             if (renderText) {
-                applyFont(doc, el, options.isGreyscale);
+                const usesSharedLayout = el.type === 'text' && !el.autoWidth;
+                if (usesSharedLayout) {
+                    const selectedFont = applyFont(doc, el, options.isGreyscale, fontSize);
+                    const settings = resolveTextOverflowSettings(el)!;
+                    const metricIdentity = [
+                        pdfTextSession.identity,
+                        selectedFont.rendererIdentity,
+                        selectedFont.family,
+                        selectedFont.style,
+                        el.fontWeight || 'normal',
+                        el.fontStyle || 'normal',
+                    ].join(':');
+                    const selectFont = (size: number) => {
+                        applyFont(doc, el, options.isGreyscale, size);
+                    };
+                    const context = `text ${el.id}`;
+                    const layout = pdfTextSession.layout({
+                        text: textContent,
+                        contentWidth: w,
+                        contentHeight: h,
+                        fontSize,
+                        fontFamily: selectedFont.family,
+                        fontWeight: el.fontWeight || 'normal',
+                        fontStyle: el.fontStyle || 'normal',
+                        textOverflow: settings.textOverflow,
+                        textWrap: settings.textWrap,
+                        align: el.align || 'center',
+                        verticalAlign: el.verticalAlign || 'middle',
+                    }, metricIdentity, selectFont, context);
+
+                    if (layout) {
+                        if (el.textDecoration === 'underline') {
+                            const underlineRgb = options.isGreyscale
+                                ? hexToGreyscale(el.textColor || '#000000')
+                                : hexToRgb(el.textColor || '#000000');
+                            if (underlineRgb) doc.setDrawColor(underlineRgb.r, underlineRgb.g, underlineRgb.b);
+                        }
+                        pdfTextSession.draw(
+                            layout,
+                            { x: lx, y: ly, width: w, height: h, yOffset },
+                            { selectFont, textDecoration: el.textDecoration, context },
+                        );
+                    }
+                } else {
+                    applyFont(doc, el, options.isGreyscale);
 
                 // Line height matching CSS lineHeight: 1.2
                 const lineHeight = fontSize * 1.2;
@@ -1814,6 +1888,7 @@ export const generatePDF = async (state: AppState, options: GeneratePDFOptions =
                         doc.line(lineX, lineY, lineX + txtWidth, lineY);
                     });
                 }
+                }
             }
 
             if (hasTransform) doc.restoreGraphicsState();
@@ -1830,6 +1905,9 @@ export const generatePDF = async (state: AppState, options: GeneratePDFOptions =
     }
     const vName = state.variants[targetVariantId]?.name || 'export';
     doc.save(`${options.projectName || 'project'}_${vName}.pdf`);
+    } finally {
+        pdfTextSession.clear();
+    }
 };
 
 /**

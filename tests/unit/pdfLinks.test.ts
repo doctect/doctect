@@ -134,6 +134,29 @@ describe('PDF export link annotations', () => {
         expect(pdf).toContain('/Dest');
     });
 
+    it('keeps whole-element URL and internal links when ellipsis draws zero glyphs', async () => {
+        const fontWarning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+        const pdf = await exportBytes(makeState([
+            {
+                ...baseEl('zero-glyph-url', 0), type: 'text', text: 'URL_LINK_SOURCE',
+                w: 0.1, fontSize: 12, fontFamily: '__builtin_fallback__',
+                textOverflow: 'ellipsis', textWrap: false,
+                linkTarget: 'url', linkValue: 'https://example.com/ZEROGLYPH',
+            },
+            {
+                ...baseEl('zero-glyph-internal', 1), type: 'text', text: 'INTERNAL_LINK_SOURCE',
+                w: 0.1, fontSize: 12, fontFamily: '__builtin_fallback__',
+                textOverflow: 'ellipsis', textWrap: false,
+                linkTarget: 'specific_node', linkValue: 'second',
+            },
+        ], true));
+        fontWarning.mockRestore();
+
+        expect(firstPageTextOperatorCount(pdf)).toBe(0);
+        expect(pdf).toContain('https://example.com/ZEROGLYPH');
+        expect(pdf).toContain('/Dest');
+    });
+
     it('omits text glyphs and links for whitespace-only resolved text', async () => {
         const pdf = await exportBytes(makeState([
             {
