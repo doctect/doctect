@@ -13,6 +13,14 @@ interface PdfTextLayoutSessionOptions {
     warn?: (message: string, error: unknown) => void;
 }
 
+interface PdfFontSelection {
+    family: string;
+    style: string;
+    rendererIdentity: string;
+}
+
+type PdfFontSelector = (size: number) => PdfFontSelection;
+
 export interface PdfTextDrawBox {
     x: number;
     y: number;
@@ -22,8 +30,9 @@ export interface PdfTextDrawBox {
 }
 
 export interface PdfTextDrawOptions {
-    selectFont(size: number): void;
+    selectFont: PdfFontSelector;
     textDecoration?: string;
+    decorationColor?: { r: number; g: number; b: number } | null;
     context: string;
 }
 
@@ -32,7 +41,7 @@ export interface PdfTextLayoutSession {
     layout(
         request: TextLayoutRequest,
         metricIdentity: string,
-        selectFont: (size: number) => void,
+        selectFont: PdfFontSelector,
         context: string,
     ): TextLayoutResult | null;
     draw(layout: TextLayoutResult, box: PdfTextDrawBox, options: PdfTextDrawOptions): boolean;
@@ -64,9 +73,13 @@ export function createPdfTextLayoutSession(
             const measurer = {
                 cacheKey: JSON.stringify([identity, metricIdentity]),
                 measureWidth(text: string, font: FontDescriptor): number {
+                    const selection = selectFont(font.size);
                     const key = JSON.stringify([
                         identity,
                         metricIdentity,
+                        selection.rendererIdentity,
+                        selection.family,
+                        selection.style,
                         font.family,
                         font.weight,
                         font.style,
@@ -76,7 +89,6 @@ export function createPdfTextLayoutSession(
                     const cached = widthCache.get(key);
                     if (cached !== undefined) return cached;
 
-                    selectFont(font.size);
                     const width = doc.getTextWidth(text);
                     if (Number.isFinite(width) && width >= 0) widthCache.set(key, width);
                     return width;
@@ -94,15 +106,28 @@ export function createPdfTextLayoutSession(
         draw(layout, box, drawOptions) {
             let saved = false;
             let succeeded = true;
+            const hasDecoration = drawOptions.textDecoration === 'underline';
 
             try {
-                if (layout.requiresClip) {
+                if (layout.requiresClip || hasDecoration) {
                     doc.saveGraphicsState();
                     saved = true;
+                }
+                if (layout.requiresClip) {
                     (doc as any).rect(box.x, box.y + box.yOffset, box.width, box.height, null);
                     doc.clip();
                     if (typeof doc.discardPath === 'function') doc.discardPath();
                     else (doc as any).internal.write('n');
+                }
+
+                if (hasDecoration) {
+                    if (drawOptions.decorationColor) {
+                        const { r, g, b } = drawOptions.decorationColor;
+                        doc.setDrawColor(r, g, b);
+                    }
+                    doc.setLineWidth(Math.max(0.5, layout.effectiveFontSize * 0.05));
+                    doc.setLineDashPattern([], 0);
+                    doc.setLineCap('butt');
                 }
 
                 drawOptions.selectFont(layout.effectiveFontSize);
@@ -116,10 +141,7 @@ export function createPdfTextLayoutSession(
                     );
                 });
 
-                if (drawOptions.textDecoration === 'underline') {
-                    doc.setLineWidth(Math.max(0.5, layout.effectiveFontSize * 0.05));
-                    doc.setLineDashPattern([], 0);
-                    doc.setLineCap('butt');
+                if (hasDecoration) {
                     layout.lines.forEach(line => {
                         if (line.text.length === 0) return;
                         const x = box.x + line.x;

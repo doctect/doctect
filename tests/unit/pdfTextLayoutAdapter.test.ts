@@ -46,10 +46,10 @@ describe('PDF text layout adapter', () => {
             clip: vi.fn(() => calls.push('clip')),
             discardPath: vi.fn(() => calls.push('discard')),
             text: vi.fn((text: string, x: number, y: number) => calls.push(`text:${text}@${x},${y}`)),
-            setDrawColor: vi.fn(),
+            setDrawColor: vi.fn((r: number, g: number, b: number) => calls.push(`color:${r},${g},${b}`)),
             setLineWidth: vi.fn((width: number) => calls.push(`lineWidth:${width}`)),
-            setLineDashPattern: vi.fn(),
-            setLineCap: vi.fn(),
+            setLineDashPattern: vi.fn(() => calls.push('dash:solid')),
+            setLineCap: vi.fn((cap: string) => calls.push(`cap:${cap}`)),
             line: vi.fn((x1: number, y1: number, x2: number, y2: number) => calls.push(`line:${x1},${y1}-${x2},${y2}`)),
             restoreGraphicsState: vi.fn(() => calls.push('restore')),
             internal: { write: vi.fn((operator: string) => calls.push(operator)) },
@@ -61,28 +61,32 @@ describe('PDF text layout adapter', () => {
         const doc = makeDoc(calls);
         const session = createPdfTextLayoutSession(doc as any, { sessionIdentity: 'export-1' });
         const selectFont = vi.fn((size: number) => {
-            calls.push(`font:${size}`);
+            calls.push(`font:resolved-family:bolditalic:${size}`);
             doc.setSelectedSize(size);
+            return {
+                family: 'resolved-family',
+                style: 'bolditalic',
+                rendererIdentity: 'renderer-font-17',
+            };
         });
 
         expect(session.layout(request(), 'registered:family:normal', selectFont, 'text one')).not.toBeNull();
-        expect(calls).toEqual(['font:12', 'width:12:cache me']);
+        expect(calls).toEqual(['font:resolved-family:bolditalic:12', 'width:12:cache me']);
 
         expect(session.layout(request(), 'registered:family:normal', selectFont, 'text one')).not.toBeNull();
-        expect(calls).toEqual(['font:12', 'width:12:cache me']);
+        expect(calls).toEqual(['font:resolved-family:bolditalic:12', 'width:12:cache me']);
 
         session.clear();
         expect(session.layout(request(), 'registered:family:normal', selectFont, 'text one')).not.toBeNull();
         expect(calls).toEqual([
-            'font:12', 'width:12:cache me',
-            'font:12', 'width:12:cache me',
+            'font:resolved-family:bolditalic:12', 'width:12:cache me',
+            'font:resolved-family:bolditalic:12', 'width:12:cache me',
         ]);
     });
 
     it('keys widths by export identity, resolved font descriptor, size, and string', () => {
         const doc = makeDoc();
         const session = createPdfTextLayoutSession(doc as any, { sessionIdentity: 'export-identity' });
-        const selectFont = (size: number) => doc.setSelectedSize(size);
         const variants: TextLayoutRequest[] = [
             request(),
             request({ fontFamily: 'other-family' }),
@@ -93,6 +97,14 @@ describe('PDF text layout adapter', () => {
         ];
 
         variants.forEach(input => {
+            const selectFont = (size: number) => {
+                doc.setSelectedSize(size);
+                return {
+                    family: input.fontFamily,
+                    style: `${input.fontWeight}:${input.fontStyle}`,
+                    rendererIdentity: `renderer:${input.fontFamily}:${input.fontWeight}:${input.fontStyle}`,
+                };
+            };
             expect(session.layout(input, 'same-caller-identity', selectFont, 'text key')).not.toBeNull();
         });
 
@@ -102,7 +114,10 @@ describe('PDF text layout adapter', () => {
     it('evicts least-recently-used widths after 20,000 entries', () => {
         const doc = makeDoc();
         const session = createPdfTextLayoutSession(doc as any, { sessionIdentity: 'bounded-export' });
-        const selectFont = (size: number) => doc.setSelectedSize(size);
+        const selectFont = (size: number) => {
+            doc.setSelectedSize(size);
+            return { family: 'font', style: 'normal', rendererIdentity: 'renderer:font:normal' };
+        };
 
         for (let index = 0; index <= 20_000; index += 1) {
             session.layout(request({ text: `entry-${index}` }), 'font', selectFont, 'bounded text');
@@ -117,7 +132,10 @@ describe('PDF text layout adapter', () => {
         const calls: string[] = [];
         const doc = makeDoc(calls);
         const session = createPdfTextLayoutSession(doc as any, { sessionIdentity: 'draw-export' });
-        const selectFont = (size: number) => calls.push(`font:${size}`);
+        const selectFont = (size: number) => {
+            calls.push(`font:family:bold:${size}`);
+            return { family: 'family', style: 'bold', rendererIdentity: 'renderer:family:bold' };
+        };
 
         expect(session.draw(
             layoutResult(),
@@ -127,7 +145,7 @@ describe('PDF text layout adapter', () => {
 
         expect(calls).toEqual([
             'save', 'rect:10,20,100,40', 'clip', 'discard',
-            'font:12', 'text:first@10,30.8', 'text:second@10,45.2',
+            'font:family:bold:12', 'text:first@10,30.8', 'text:second@10,45.2',
             'restore',
         ]);
         expect(doc.text).toHaveBeenNthCalledWith(1, 'first', 10, 30.8, { align: 'left', baseline: 'alphabetic' });
@@ -141,10 +159,16 @@ describe('PDF text layout adapter', () => {
         expect(session.draw(
             layoutResult({ requiresClip: false, lines: [layoutResult().lines[0]] }),
             { x: 10, y: 20, width: 100, height: 40, yOffset: 700 },
-            { selectFont: size => calls.push(`font:${size}`), context: 'text visible' },
+            {
+                selectFont: size => {
+                    calls.push(`font:family:normal:${size}`);
+                    return { family: 'family', style: 'normal', rendererIdentity: 'renderer:family:normal' };
+                },
+                context: 'text visible',
+            },
         )).toBe(true);
 
-        expect(calls).toEqual(['font:12', 'text:first@10,730.8']);
+        expect(calls).toEqual(['font:family:normal:12', 'text:first@10,730.8']);
         expect(doc.saveGraphicsState).not.toHaveBeenCalled();
         expect(doc.rect).not.toHaveBeenCalled();
         expect(doc.restoreGraphicsState).not.toHaveBeenCalled();
@@ -156,16 +180,71 @@ describe('PDF text layout adapter', () => {
         const session = createPdfTextLayoutSession(doc as any, { sessionIdentity: 'underline-export' });
         const underlined = layoutResult({
             lines: [{ text: 'under', width: 30, x: 5, top: 0, baseline: 10.8 }],
+            requiresClip: false,
         });
 
         expect(session.draw(
             underlined,
             { x: 10, y: 20, width: 100, height: 40, yOffset: 0 },
-            { selectFont: size => calls.push(`font:${size}`), textDecoration: 'underline', context: 'text underline' },
+            {
+                selectFont: size => {
+                    calls.push(`font:family:italic:${size}`);
+                    return { family: 'family', style: 'italic', rendererIdentity: 'renderer:family:italic' };
+                },
+                textDecoration: 'underline',
+                decorationColor: { r: 10, g: 20, b: 30 },
+                context: 'text underline',
+            },
         )).toBe(true);
 
+        expect(calls).toEqual([
+            'save',
+            'color:10,20,30',
+            'lineWidth:0.6000000000000001',
+            'dash:solid',
+            'cap:butt',
+            'font:family:italic:12',
+            'text:under@15,30.8',
+            'line:15,32.6-45,32.6',
+            'restore',
+        ]);
+        expect(doc.rect).not.toHaveBeenCalled();
         expect(doc.setLineWidth).toHaveBeenCalledWith(0.6000000000000001);
         expect(doc.line).toHaveBeenCalledWith(15, 32.6, 45, 32.6);
+    });
+
+    it('restores visible decoration state when styling throws', () => {
+        const calls: string[] = [];
+        const doc = makeDoc(calls);
+        doc.setDrawColor.mockImplementationOnce(() => {
+            calls.push('color:failed');
+            throw new Error('decoration color failed');
+        });
+        const warn = vi.fn();
+        const session = createPdfTextLayoutSession(doc as any, { sessionIdentity: 'failed-decoration-export', warn });
+
+        const result = session.draw(
+            layoutResult({ requiresClip: false, lines: [layoutResult().lines[0]] }),
+            { x: 10, y: 20, width: 100, height: 40, yOffset: 0 },
+            {
+                selectFont: size => {
+                    calls.push(`font:family:normal:${size}`);
+                    return { family: 'family', style: 'normal', rendererIdentity: 'renderer:family:normal' };
+                },
+                textDecoration: 'underline',
+                decorationColor: { r: 10, g: 20, b: 30 },
+                context: 'text decoration failure',
+            },
+        );
+
+        expect(result).toBe(false);
+        expect(calls).toEqual([
+            'save',
+            'color:failed',
+            'restore',
+        ]);
+        expect(doc.rect).not.toHaveBeenCalled();
+        expect(warn).toHaveBeenCalledOnce();
     });
 
     it('warns once for measurement failures and continues later layouts', () => {
@@ -176,7 +255,10 @@ describe('PDF text layout adapter', () => {
             .mockImplementation((text: string) => text.length * 6);
         const warn = vi.fn();
         const session = createPdfTextLayoutSession(doc as any, { sessionIdentity: 'failed-measure-export', warn });
-        const selectFont = (size: number) => doc.setSelectedSize(size);
+        const selectFont = (size: number) => {
+            doc.setSelectedSize(size);
+            return { family: 'font', style: 'normal', rendererIdentity: 'renderer:font:normal' };
+        };
 
         expect(session.layout(request({ text: 'invalid' }), 'font', selectFont, 'text invalid')).toBeNull();
         expect(session.layout(request({ text: 'throws' }), 'font', selectFont, 'text throws')).toBeNull();
@@ -195,7 +277,13 @@ describe('PDF text layout adapter', () => {
         const warn = vi.fn();
         const session = createPdfTextLayoutSession(doc as any, { sessionIdentity: 'failed-draw-export', warn });
         const box = { x: 10, y: 20, width: 100, height: 40, yOffset: 0 };
-        const options = { selectFont: (size: number) => calls.push(`font:${size}`), context: 'text draw' };
+        const options = {
+            selectFont: (size: number) => {
+                calls.push(`font:family:normal:${size}`);
+                return { family: 'family', style: 'normal', rendererIdentity: 'renderer:family:normal' };
+            },
+            context: 'text draw',
+        };
 
         expect(session.draw(layoutResult(), box, options)).toBe(false);
         expect(doc.restoreGraphicsState).toHaveBeenCalledTimes(1);

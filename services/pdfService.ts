@@ -1080,50 +1080,59 @@ export const generatePDF = async (state: AppState, options: GeneratePDFOptions =
             let lx = x;
             let ly = y;
             let yOffset = 0; // The magic offset to neutralize jsPDF's Y-flip
+            let transformStateSaved = false;
+            let transformStateRestored = false;
+            const restoreElementTransform = () => {
+                if (!transformStateSaved || transformStateRestored) return;
+                transformStateRestored = true;
+                doc.restoreGraphicsState();
+            };
 
-            if (hasTransform) {
-                doc.saveGraphicsState();
+            try {
+                if (hasTransform) {
+                    doc.saveGraphicsState();
+                    transformStateSaved = true;
 
-                // SVG elements are excluded: svg2pdf emits its own per-shape graphics
-                // states which REPLACE (not multiply) this outer /ca — the element
-                // opacity is baked into the SVG tree instead (bakeElementOpacityIntoSvg).
-                if (hasOpacity && el.type !== 'svg') {
-                    try {
-                        const GState = (doc as any).GState;
-                        if (GState) {
-                            // 'opacity' alone only sets /ca (fill alpha); strokes would
-                            // stay fully opaque. /CA must carry the same value.
-                            doc.setGState(new GState({ opacity: opacity, 'stroke-opacity': opacity }));
-                        }
-                    } catch (e) { }
+                    // SVG elements are excluded: svg2pdf emits its own per-shape graphics
+                    // states which REPLACE (not multiply) this outer /ca — the element
+                    // opacity is baked into the SVG tree instead (bakeElementOpacityIntoSvg).
+                    if (hasOpacity && el.type !== 'svg') {
+                        try {
+                            const GState = (doc as any).GState;
+                            if (GState) {
+                                // 'opacity' alone only sets /ca (fill alpha); strokes would
+                                // stay fully opaque. /CA must carry the same value.
+                                doc.setGState(new GState({ opacity: opacity, 'stroke-opacity': opacity }));
+                            }
+                        } catch (e) { }
+                    }
+
+                    if (hasRotation) {
+                        // Convert Top-Left Coords to PDF Bottom-Left Coords for the Pivot
+                        const pdfCx = cx;
+                        const pdfCy = pageHeight - cy; // Flip Y for PDF origin
+
+                        // Angle: PDF rotation is Counter-Clockwise. Screen is Clockwise.
+                        // So we invert the angle.
+                        const pdfAngle = -angle;
+
+                        const rad = pdfAngle * (Math.PI / 180);
+                        const c = Math.cos(rad);
+                        const s = Math.sin(rad);
+
+                        // Matrix: Translate(pdfCx, pdfCy) * Rotate(pdfAngle)
+                        const matrixStr = `${c.toFixed(5)} ${s.toFixed(5)} ${(-s).toFixed(5)} ${c.toFixed(5)} ${pdfCx.toFixed(3)} ${pdfCy.toFixed(3)} cm`;
+
+                        (doc as any).internal.write(matrixStr);
+
+                        // Local Drawing Bounds: Pivot is now (0,0), so element top-left is at (-w*ox, -h*oy)
+                        lx = -w * ox;
+                        ly = -h * oy;
+
+                        // Apply offset to neutralize jsPDF's Y-flip logic inside drawing commands
+                        yOffset = pageHeight;
+                    }
                 }
-
-                if (hasRotation) {
-                    // Convert Top-Left Coords to PDF Bottom-Left Coords for the Pivot
-                    const pdfCx = cx;
-                    const pdfCy = pageHeight - cy; // Flip Y for PDF origin
-
-                    // Angle: PDF rotation is Counter-Clockwise. Screen is Clockwise.
-                    // So we invert the angle.
-                    const pdfAngle = -angle;
-
-                    const rad = pdfAngle * (Math.PI / 180);
-                    const c = Math.cos(rad);
-                    const s = Math.sin(rad);
-
-                    // Matrix: Translate(pdfCx, pdfCy) * Rotate(pdfAngle)
-                    const matrixStr = `${c.toFixed(5)} ${s.toFixed(5)} ${(-s).toFixed(5)} ${c.toFixed(5)} ${pdfCx.toFixed(3)} ${pdfCy.toFixed(3)} cm`;
-
-                    (doc as any).internal.write(matrixStr);
-
-                    // Local Drawing Bounds: Pivot is now (0,0), so element top-left is at (-w*ox, -h*oy)
-                    lx = -w * ox;
-                    ly = -h * oy;
-
-                    // Apply offset to neutralize jsPDF's Y-flip logic inside drawing commands
-                    yOffset = pageHeight;
-                }
-            }
 
             // Handle Line
             if (el.type === 'line') {
@@ -1139,7 +1148,7 @@ export const generatePDF = async (state: AppState, options: GeneratePDFOptions =
                         doc.line(lx, ly + yOffset, lx + w, ly + h + yOffset);
                     }
                 }
-                if (hasTransform) doc.restoreGraphicsState();
+                restoreElementTransform();
                 applyElementLink(el, x, y, w, h, angle, resolvedTargetId);
                 continue;
             }
@@ -1177,7 +1186,7 @@ export const generatePDF = async (state: AppState, options: GeneratePDFOptions =
                     console.error('[PDFService] Error rendering SVG:', err);
                 }
 
-                if (hasTransform) doc.restoreGraphicsState();
+                restoreElementTransform();
                 applyElementLink(el, x, y, w, h, angle, resolvedTargetId);
                 continue;
             }
@@ -1216,7 +1225,7 @@ export const generatePDF = async (state: AppState, options: GeneratePDFOptions =
                 }
 
                 if (items.length === 0) {
-                    if (hasTransform) doc.restoreGraphicsState();
+                    restoreElementTransform();
                     continue;
                 }
 
@@ -1540,7 +1549,7 @@ export const generatePDF = async (state: AppState, options: GeneratePDFOptions =
                 }
 
                 doc.setLineDashPattern([], 0);
-                if (hasTransform) doc.restoreGraphicsState();
+                restoreElementTransform();
                 continue;
             }
 
@@ -1756,26 +1765,21 @@ export const generatePDF = async (state: AppState, options: GeneratePDFOptions =
             if (renderText) {
                 const usesSharedLayout = el.type === 'text' && !el.autoWidth;
                 if (usesSharedLayout) {
-                    const selectedFont = applyFont(doc, el, options.isGreyscale, fontSize);
                     const settings = resolveTextOverflowSettings(el)!;
                     const metricIdentity = [
                         pdfTextSession.identity,
-                        selectedFont.rendererIdentity,
-                        selectedFont.family,
-                        selectedFont.style,
+                        el.fontFamily || 'helvetica',
                         el.fontWeight || 'normal',
                         el.fontStyle || 'normal',
                     ].join(':');
-                    const selectFont = (size: number) => {
-                        applyFont(doc, el, options.isGreyscale, size);
-                    };
+                    const selectFont = (size: number) => applyFont(doc, el, options.isGreyscale, size);
                     const context = `text ${el.id}`;
                     const layout = pdfTextSession.layout({
                         text: textContent,
                         contentWidth: w,
                         contentHeight: h,
                         fontSize,
-                        fontFamily: selectedFont.family,
+                        fontFamily: el.fontFamily || 'helvetica',
                         fontWeight: el.fontWeight || 'normal',
                         fontStyle: el.fontStyle || 'normal',
                         textOverflow: settings.textOverflow,
@@ -1785,16 +1789,15 @@ export const generatePDF = async (state: AppState, options: GeneratePDFOptions =
                     }, metricIdentity, selectFont, context);
 
                     if (layout) {
-                        if (el.textDecoration === 'underline') {
-                            const underlineRgb = options.isGreyscale
+                        const decorationColor = el.textDecoration === 'underline'
+                            ? options.isGreyscale
                                 ? hexToGreyscale(el.textColor || '#000000')
-                                : hexToRgb(el.textColor || '#000000');
-                            if (underlineRgb) doc.setDrawColor(underlineRgb.r, underlineRgb.g, underlineRgb.b);
-                        }
+                                : hexToRgb(el.textColor || '#000000')
+                            : null;
                         pdfTextSession.draw(
                             layout,
                             { x: lx, y: ly, width: w, height: h, yOffset },
-                            { selectFont, textDecoration: el.textDecoration, context },
+                            { selectFont, textDecoration: el.textDecoration, decorationColor, context },
                         );
                     }
                 } else {
@@ -1891,11 +1894,14 @@ export const generatePDF = async (state: AppState, options: GeneratePDFOptions =
                 }
             }
 
-            if (hasTransform) doc.restoreGraphicsState();
+            restoreElementTransform();
 
             // Apply Link (if resolvedTargetId exists from earlier validation check)
             if (el.type !== 'text' || renderText) {
                 applyElementLink(el, x, y, w, h, angle, resolvedTargetId);
+            }
+            } finally {
+                restoreElementTransform();
             }
         }
     }

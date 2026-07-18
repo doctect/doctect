@@ -3,6 +3,23 @@ import { describe, expect, it, vi } from 'vitest';
 import { generatePDF } from '../../services/pdfService';
 import type { AppState, TemplateElement, TextOverflow } from '../../types';
 
+const pdfDocHook = vi.hoisted(() => ({
+    onCreate: null as ((doc: any) => void) | null,
+}));
+
+vi.mock('jspdf', async () => {
+    const actual = await vi.importActual<typeof import('jspdf')>('jspdf');
+    const ActualJsPDF = actual.jsPDF;
+    const WrappedJsPDF = function (this: unknown, ...args: any[]) {
+        const doc = new ActualJsPDF(...args as ConstructorParameters<typeof ActualJsPDF>);
+        pdfDocHook.onCreate?.(doc);
+        return doc;
+    } as unknown as typeof ActualJsPDF;
+    Object.assign(WrappedJsPDF, ActualJsPDF);
+    WrappedJsPDF.prototype = ActualJsPDF.prototype;
+    return { ...actual, jsPDF: WrappedJsPDF };
+});
+
 const PAGE_HEIGHT = 800;
 
 const baseElement = (id: string, overrides: Partial<TemplateElement> = {}): TemplateElement => ({
@@ -201,6 +218,141 @@ describe('fixed PDF text overflow rendering', () => {
         expect(element.fontSize).toBe(20);
     });
 
+    it('selects exact production family, style, weight, and fallback before measurement and draw', async () => {
+        const measuredFonts: Array<Record<string, unknown>> = [];
+        const drawnFonts: Array<Record<string, unknown>> = [];
+        const snapshot = (doc: any, text: string) => {
+            const font = doc.getFont();
+            return {
+                text,
+                family: font.fontName,
+                style: font.fontStyle,
+                rendererIdentity: `${font.id}:${font.postScriptName}:${font.encoding || ''}`,
+                isStandardFont: font.isStandardFont,
+            };
+        };
+        pdfDocHook.onCreate = doc => {
+            const originalMeasure = doc.getTextWidth;
+            const originalDraw = doc.text;
+            doc.getTextWidth = function (this: any, text: string) {
+                measuredFonts.push(snapshot(this, text));
+                return originalMeasure.call(this, text);
+            };
+            doc.text = function (this: any, ...args: any[]) {
+                drawnFonts.push(snapshot(this, String(args[0])));
+                return originalDraw.apply(this, args);
+            };
+        };
+
+        try {
+            await exportPdf([
+                baseElement('bold-font', {
+                    text: 'EXACT_BOLD_FONT',
+                    w: 200,
+                    fontFamily: 'courier',
+                    fontWeight: 'bold',
+                    textOverflow: 'visible',
+                    textWrap: false,
+                }),
+                baseElement('italic-font', {
+                    y: 80,
+                    text: 'EXACT_ITALIC_FONT',
+                    w: 200,
+                    fontFamily: 'courier',
+                    fontStyle: 'italic',
+                    textOverflow: 'visible',
+                    textWrap: false,
+                }),
+                baseElement('fallback-font', {
+                    y: 140,
+                    text: 'EXACT_FALLBACK_FONT',
+                    w: 200,
+                    fontFamily: '__missing_font__',
+                    fontWeight: 'bold',
+                    fontStyle: 'italic',
+                    textOverflow: 'visible',
+                    textWrap: false,
+                }),
+            ]);
+        } finally {
+            pdfDocHook.onCreate = null;
+        }
+
+        const measuredBold = measuredFonts.find(entry => entry.text === 'EXACT_BOLD_FONT');
+        const drawnBold = drawnFonts.find(entry => entry.text === 'EXACT_BOLD_FONT');
+        const measuredItalic = measuredFonts.find(entry => entry.text === 'EXACT_ITALIC_FONT');
+        const drawnItalic = drawnFonts.find(entry => entry.text === 'EXACT_ITALIC_FONT');
+        const measuredFallback = measuredFonts.find(entry => entry.text === 'EXACT_FALLBACK_FONT');
+        const drawnFallback = drawnFonts.find(entry => entry.text === 'EXACT_FALLBACK_FONT');
+
+        expect(measuredBold).toMatchObject({ family: 'courier', style: 'bold' });
+        expect(drawnBold).toMatchObject({
+            family: 'courier',
+            style: 'bold',
+            rendererIdentity: measuredBold?.rendererIdentity,
+        });
+        expect(measuredItalic).toMatchObject({ family: 'courier', style: 'italic' });
+        expect(drawnItalic).toMatchObject({
+            family: 'courier',
+            style: 'italic',
+            rendererIdentity: measuredItalic?.rendererIdentity,
+        });
+        expect(measuredFallback).toMatchObject({ family: 'helvetica', style: 'normal', isStandardFont: true });
+        expect(drawnFallback).toMatchObject({
+            family: 'helvetica',
+            style: 'normal',
+            rendererIdentity: measuredFallback?.rendererIdentity,
+            isStandardFont: true,
+        });
+    });
+
+    it('guards initial fixed-font failure and restores the outer transform before continuing', async () => {
+        let failNextSelection = true;
+        pdfDocHook.onCreate = doc => {
+            const originalSetFontSize = doc.setFontSize;
+            doc.setFontSize = function (this: any, size: number) {
+                if (failNextSelection) {
+                    failNextSelection = false;
+                    throw new Error('font selection failed');
+                }
+                return originalSetFontSize.call(this, size);
+            };
+        };
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+        let pdf = '';
+        let warningCalls: unknown[][] = [];
+
+        try {
+            pdf = await exportPdf([
+                baseElement('font-failure', {
+                    text: 'FONT_FAILURE',
+                    rotation: 17,
+                    opacity: 0.5,
+                    textOverflow: 'clip',
+                    textWrap: false,
+                }),
+                baseElement('font-control', {
+                    y: 100,
+                    text: 'FONT_FAILURE_CONTROL',
+                    textOverflow: 'visible',
+                    textWrap: false,
+                    zIndex: 1,
+                }),
+            ]);
+        } finally {
+            warningCalls = [...warn.mock.calls];
+            pdfDocHook.onCreate = null;
+            warn.mockRestore();
+        }
+
+        const stream = firstStream(pdf);
+        expect(stream).not.toContain('(FONT_FAILURE) Tj');
+        expect(stream).toContain('(FONT_FAILURE_CONTROL) Tj');
+        expect(stream.match(/^q$/gm) || []).toHaveLength((stream.match(/^Q$/gm) || []).length);
+        expect(warningCalls).toHaveLength(1);
+        expect(warningCalls[0][0]).toBe('[PDFTextLayout] Skipped text font-failure');
+    });
+
     it('positions explicit lines at top, middle, and bottom line-box anchors', async () => {
         const stream = firstStream(await exportPdf([
             baseElement('top', { text: 'TOP_ANCHOR', y: 100, h: 60, verticalAlign: 'top', textOverflow: 'visible', textWrap: false }),
@@ -227,10 +379,13 @@ describe('fixed PDF text overflow rendering', () => {
             }),
         ]));
         const glyphIndex = stream.indexOf('(UNDERLINE_FIXED) Tj');
+        const styleIndex = stream.indexOf('0.6000000000000001 w');
         const underlineOperators = stream.slice(glyphIndex);
 
         expect(glyphIndex).toBeGreaterThan(-1);
-        expect(underlineOperators).toMatch(/0\.6000000000000001 w[\s\S]*?[-\d.]+ [-\d.]+ m\n[-\d.]+ [-\d.]+ l\nS/);
+        expect(styleIndex).toBeGreaterThan(-1);
+        expect(styleIndex).toBeLessThan(glyphIndex);
+        expect(underlineOperators).toMatch(/[-\d.]+ [-\d.]+ m\n[-\d.]+ [-\d.]+ l\nS/);
     });
 
     it('nests local clipping inside rotation and restores before the following element', async () => {
