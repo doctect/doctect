@@ -12,6 +12,7 @@ import clsx from 'clsx';
 
 interface PropertiesPanelProps {
     state: AppState;
+    activePreviewNode?: AppNode;
     onUpdateElements: (elements: TemplateElement[], saveHistory: boolean) => void;
     onUpdateNode: (id: string, updates: Partial<AppNode>) => void;
     onDeleteElements: (ids: string[]) => void;
@@ -20,7 +21,7 @@ interface PropertiesPanelProps {
     layersSlot?: React.ReactNode;
 }
 
-export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({ state, onUpdateElements, onUpdateNode, onDeleteElements, onOpenNodeSelector, onUpdateTemplate, layersSlot }) => {
+export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({ state, activePreviewNode, onUpdateElements, onUpdateNode, onDeleteElements, onOpenNodeSelector, onUpdateTemplate, layersSlot }) => {
     const { nodes, selectedNodeId, viewMode, selectedElementIds, variants, activeVariantId, selectedTemplateId } = state;
     // Session-local: Template Settings starts expanded, collapsible from its header.
     const [settingsExpanded, setSettingsExpanded] = React.useState(true);
@@ -35,6 +36,16 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({ state, onUpdat
         if (!template) return [];
         return selectedElementIds.map(id => template.elements.find(el => el.id === id)).filter(Boolean) as TemplateElement[];
     }, [selectedElementIds, template]);
+    const selectionIsTextOnly = selectedElements.length > 0
+        && selectedElements.every(element => element.type === 'text');
+    const enabledAutoWidthCount = selectionIsTextOnly
+        ? selectedElements.filter(element => !!element.autoWidth).length
+        : 0;
+    const autoWidthSelection: boolean | 'mixed' = enabledAutoWidthCount === 0
+        ? false
+        : enabledAutoWidthCount === selectedElements.length
+            ? true
+            : 'mixed';
 
     // Generate a "Synthetic" element for Multi-Edit
     // If values match across all selected, show key. If not, show "Mixed" or special value.
@@ -304,7 +315,9 @@ export const PropertiesPanel: React.FC<PropertiesPanelProps> = ({ state, onUpdat
                             onUpdate={handleUpdate}
                             onOpenNodeSelector={handleOpenNodeSelector}
                             state={state}
-                            activeNode={state.viewMode === 'hierarchy' ? node : undefined}
+                            selectionIsTextOnly={selectionIsTextOnly}
+                            autoWidthSelection={autoWidthSelection}
+                            activeNode={activePreviewNode}
                         />
                     </>
                 ) : (

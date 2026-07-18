@@ -42,6 +42,8 @@ describe('SingleElementEditor auto-width text edits', () => {
             onUpdate={onUpdate}
             onOpenNodeSelector={vi.fn()}
             state={state}
+            selectionIsTextOnly={element.type === 'text'}
+            autoWidthSelection={element.autoWidth === true}
             activeNode={activeNode}
         />);
 

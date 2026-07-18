@@ -33,6 +33,8 @@ function renderEditor(element: TemplateElement) {
             onUpdate={onUpdate}
             onOpenNodeSelector={vi.fn()}
             state={state}
+            selectionIsTextOnly={element.type === 'text'}
+            autoWidthSelection={element.autoWidth === true}
         />,
     );
     return { ...result, onUpdate };

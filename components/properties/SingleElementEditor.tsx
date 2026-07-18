@@ -9,6 +9,7 @@ import clsx from 'clsx';
 import { resolveTextOverflowSettings } from '../../services/textOverflow';
 import { measureAutoWidthText } from '../../services/autoWidthText';
 import { resolveElementPreviewText } from '../../services/previewText';
+import { DEFAULT_TEXT_FONT_SIZE, resolveTextFontSize } from '../../services/textVisibility';
 
 // Font family mapping for CSS (used for font dropdown preview)
 const getFontFamily = (fontValue: string): string => {
@@ -66,11 +67,15 @@ const getFontFamily = (fontValue: string): string => {
     return fontMap[fontValue] || fontValue;
 };
 
+export type AutoWidthSelection = boolean | 'mixed';
+
 interface SingleElementEditorProps {
     element: TemplateElement;
     onUpdate: (updates: Partial<TemplateElement> | ((prev: TemplateElement) => Partial<TemplateElement>), saveHistory?: boolean) => void;
     onOpenNodeSelector: (mode: 'grid_source' | 'link_element') => void;
     state: AppState;
+    selectionIsTextOnly: boolean;
+    autoWidthSelection: AutoWidthSelection;
     activeNode?: AppNode;
 }
 
@@ -238,12 +243,18 @@ const SmartInput = ({
     );
 };
 
-export const SingleElementEditor: React.FC<SingleElementEditorProps> = ({ element, onUpdate, onOpenNodeSelector, state, activeNode }) => {
+export const SingleElementEditor: React.FC<SingleElementEditorProps> = ({ element, onUpdate, onOpenNodeSelector, state, selectionIsTextOnly, autoWidthSelection, activeNode }) => {
 
     const [showRefBuilder, setShowRefBuilder] = useState(false);
     const [showFontPicker, setShowFontPicker] = useState(false);
     const [fontSearch, setFontSearch] = useState('');
     const textOverflowControlId = React.useId();
+    const autoWidthCheckboxRef = React.useRef<HTMLInputElement>(null);
+    React.useEffect(() => {
+        if (autoWidthCheckboxRef.current) {
+            autoWidthCheckboxRef.current.indeterminate = autoWidthSelection === 'mixed';
+        }
+    }, [autoWidthSelection]);
     const textOverflowSettings = resolveTextOverflowSettings(element);
     const textOverflowControlsDisabled = element.type === 'text' && !!element.autoWidth;
 
@@ -425,6 +436,30 @@ export const SingleElementEditor: React.FC<SingleElementEditorProps> = ({ elemen
     const safeVal = (val: any) => {
         if (val === 'Mixed' || val === undefined || val === null || isNaN(Number(val))) return '';
         return Math.round(Number(val));
+    };
+
+    const handleAutoWidthToggle = () => {
+        const enable = autoWidthSelection !== true;
+        onUpdate(previous => {
+            if (!enable) return { autoWidth: false };
+            const previewText = resolveElementPreviewText(previous, activeNode, state.nodes);
+            const measurement = measureAutoWidthText(previewText, previous);
+            if (measurement) return { autoWidth: true, ...measurement };
+
+            const resolvedFontSize = resolveTextFontSize(previous.fontSize);
+            const fontSize = Number.isFinite(resolvedFontSize) && resolvedFontSize > 0
+                ? resolvedFontSize
+                : DEFAULT_TEXT_FONT_SIZE;
+            return {
+                autoWidth: true,
+                w: Number.isFinite(previous.w) && previous.w > 0
+                    ? previous.w
+                    : Math.max(10, fontSize),
+                h: Number.isFinite(previous.h) && previous.h > 0
+                    ? previous.h
+                    : Math.max(20, fontSize * 1.5),
+            };
+        });
     };
 
     return (
@@ -999,6 +1034,25 @@ export const SingleElementEditor: React.FC<SingleElementEditorProps> = ({ elemen
             {(element.type === 'text' || element.type === 'grid' || element.text || element.dataBinding) && (
                 <div className="space-y-3 border-t pt-3">
                     <label className="text-xs font-semibold text-slate-500 uppercase flex items-center gap-1"><Type size={12} /> Typography</label>
+
+                    {selectionIsTextOnly && (
+                        <div className="flex items-center gap-2 rounded border border-slate-200 px-2 py-1.5">
+                            <input
+                                ref={autoWidthCheckboxRef}
+                                id={`${textOverflowControlId}-auto-width`}
+                                type="checkbox"
+                                checked={autoWidthSelection === true}
+                                aria-checked={autoWidthSelection === 'mixed' ? 'mixed' : autoWidthSelection}
+                                onChange={handleAutoWidthToggle}
+                            />
+                            <label
+                                htmlFor={`${textOverflowControlId}-auto-width`}
+                                className="text-xs text-slate-600"
+                            >
+                                Auto width
+                            </label>
+                        </div>
+                    )}
 
                     {element.type !== 'grid' && (
                         <div>

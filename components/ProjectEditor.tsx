@@ -1167,6 +1167,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, project
                     />
                     <PropertiesPanel
                         state={state}
+                        activePreviewNode={state.nodes[effectivePreviewNodeId]}
                         onUpdateElements={(els, save) => handleUpdateTemplateElements(els, save)}
                         onUpdateNode={handleUpdateNode}
                         onDeleteElements={(ids) => { saveToHistory(); handleDeleteElements(ids); }}

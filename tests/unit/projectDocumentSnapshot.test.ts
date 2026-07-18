@@ -20,7 +20,7 @@ const makeState = (): AppState => ({
                     elements: [{
                         id: 'fixed-text', type: 'text', x: 10, y: 10, w: 80, h: 20,
                         rotation: 0, fill: '', stroke: '', strokeWidth: 0, opacity: 1,
-                        textOverflow: 'shrink', textWrap: false,
+                        autoWidth: false, textOverflow: 'shrink', textWrap: false,
                     }],
                 },
             },
@@ -60,14 +60,16 @@ describe('project document snapshots', () => {
 
         state.nodes.root.title = 'Mutated';
         state.variants.original.name = 'Mutated';
+        state.variants.original.templates.page.elements[0].autoWidth = true;
         state.variants.original.templates.page.elements[0].textOverflow = 'visible';
         state.generator!.templateScript = 'mutated';
 
         expect(snapshot.nodes.root.title).toBe('Before');
         expect(snapshot.variants.original.name).toBe('Original');
         expect(snapshot.variants.original.templates.page.elements[0]).toMatchObject({
-            textOverflow: 'shrink', textWrap: false,
+            autoWidth: false, textOverflow: 'shrink', textWrap: false,
         });
+        expect(snapshot).not.toHaveProperty('elementPropertySections');
         expect(snapshot.generator?.templateScript).toBe('return originalTemplates;');
     });
 
