@@ -126,6 +126,33 @@ describe('text overflow modes', () => {
         expect(result.requiresClip).toBe(true);
     });
 
+    it('removes graphemes from the end without assuming monotonic prefix widths', () => {
+        const widths: Record<string, number> = {
+            'ABCD': 4,
+            'ABCD…': 5,
+            'ABC…': 3,
+            'AB…': 4,
+            'A…': 2,
+            '…': 1,
+        };
+        const measurer = {
+            cacheKey: 'nonmonotonic-prefix-v1',
+            measureWidth(text: string) {
+                return widths[text] ?? text.length;
+            },
+        };
+
+        const result = createTextLayoutEngine().layout(request({
+            text: 'ABCD\nhidden',
+            contentWidth: 3,
+            textOverflow: 'ellipsis',
+            textWrap: false,
+        }), measurer)!;
+
+        expect(result.lines.map(line => [line.text, line.width])).toEqual([['ABC…', 3]]);
+        expect(result.truncated).toBe(true);
+    });
+
     it('bounds ellipsis removal to one measurement per removed grapheme', () => {
         const calls: string[] = [];
         const text = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
@@ -140,17 +167,15 @@ describe('text overflow modes', () => {
         expect(calls.length).toBeLessThanOrEqual([...text].length + 3);
     });
 
-    it('selects a whole-grapheme ellipsis prefix with nonquadratic measured input', () => {
+    it('tests each whole-grapheme ellipsis candidate boundary at most once', () => {
         const cluster = '👍🏽';
         const graphemeCount = 1_024;
         const text = cluster.repeat(graphemeCount);
-        let measuredCodeUnits = 0;
-        let calls = 0;
+        const measuredCandidates: string[] = [];
         const measurer = {
             cacheKey: 'long-grapheme-work-v1',
             measureWidth(candidate: string, font: { size: number }) {
-                calls += 1;
-                measuredCodeUnits += candidate.length;
+                measuredCandidates.push(candidate);
                 return segmentGraphemes(candidate).length * font.size;
             },
         };
@@ -163,8 +188,8 @@ describe('text overflow modes', () => {
         }), measurer)!;
 
         expect(result.lines.map(line => line.text)).toEqual([`${cluster}${cluster}…`]);
-        expect(calls).toBeLessThanOrEqual(Math.ceil(Math.log2(graphemeCount)) + 4);
-        expect(measuredCodeUnits).toBeLessThanOrEqual(text.length * 16);
+        expect(measuredCandidates.length).toBeLessThanOrEqual(graphemeCount + 2);
+        expect(new Set(measuredCandidates).size).toBe(measuredCandidates.length);
     });
 });
 

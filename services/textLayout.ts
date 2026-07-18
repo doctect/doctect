@@ -248,24 +248,13 @@ function ellipsizeLine(
         graphemeEnds[index + 1] = codeUnitEnd;
     }
 
-    let low = 0;
-    let high = graphemes.length;
-    let retainedText = ELLIPSIS;
-    let retainedWidth = ellipsisWidth;
-    while (low < high) {
-        const candidateCount = Math.ceil((low + high) / 2);
+    for (let candidateCount = graphemes.length; candidateCount > 0; candidateCount -= 1) {
         const text = `${line.text.slice(0, graphemeEnds[candidateCount])}${ELLIPSIS}`;
         const width = measureWidth(text, fontSize);
-        if (width <= contentWidth) {
-            low = candidateCount;
-            retainedText = text;
-            retainedWidth = width;
-        } else {
-            high = candidateCount - 1;
-        }
+        if (width <= contentWidth) return { text, width };
     }
 
-    return { text: retainedText, width: retainedWidth };
+    return { text: ELLIPSIS, width: ellipsisWidth };
 }
 
 function positionLines(
