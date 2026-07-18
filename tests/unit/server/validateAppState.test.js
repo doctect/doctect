@@ -73,19 +73,20 @@ describe('validateAppState', () => {
     });
 
     it.each([
-        ['textOverflow', 'truncate'],
-        ['textWrap', 'true'],
-    ])('rejects malformed present v10 %s on text/grid', (field, value) => {
+        ['text', 'textOverflow', 'truncate'],
+        ['grid', 'textOverflow', 'truncate'],
+        ['text', 'textWrap', 'true'],
+        ['grid', 'textWrap', 'true'],
+    ])('rejects malformed present v10 %s %s', (type, field, value) => {
         const state = goodState();
         state.schemaVersion = 10;
         state.variants.default.templates.page.elements = [
-            { id: 'text', type: 'text', [field]: value },
-            { id: 'grid', type: 'grid', [field]: value },
+            { id: type, type, [field]: value },
         ];
         expect(validateAppState(state)).toMatchObject({ ok: false, error: expect.stringContaining(field) });
     });
 
-    it('accepts missing fields, old-schema malformed fields, and unrelated shape fields', () => {
+    it('accepts missing fields and old-schema malformed fields', () => {
         const current = goodState();
         current.schemaVersion = 10;
         current.variants.default.templates.page.elements = [
@@ -98,7 +99,20 @@ describe('validateAppState', () => {
         state.schemaVersion = 9;
         state.variants.default.templates.page.elements = [
             { id: 'old', type: 'text', textOverflow: 'old-value', textWrap: 'yes' },
-            { id: 'shape', type: 'rect', textOverflow: 'future', textWrap: 1 },
+        ];
+        expect(validateAppState(state)).toEqual({ ok: true });
+    });
+
+    it.each([
+        [10, 'rect'],
+        [10, 'line'],
+        [11, 'rect'],
+        [11, 'line'],
+    ])('accepts unrelated text fields on schema-v%s %s elements', (schemaVersion, type) => {
+        const state = goodState();
+        state.schemaVersion = schemaVersion;
+        state.variants.default.templates.page.elements = [
+            { id: type, type, textOverflow: 'future', textWrap: 1 },
         ];
         expect(validateAppState(state)).toEqual({ ok: true });
     });

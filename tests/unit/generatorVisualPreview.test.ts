@@ -4,7 +4,7 @@ import type { GeneratedProject } from '../../services/validateGeneratedProject';
 import type { AppNode, PageTemplate } from '../../types';
 
 const project: GeneratedProject = {
-    schemaVersion: 9,
+    schemaVersion: 10,
     rootId: 'root',
     activeVariantId: 'remarkable',
     nodes: {
@@ -87,7 +87,7 @@ describe('generator visual preview descriptors', () => {
         nodes['node-0'].children = rootChildren;
 
         const variants = buildVariantPreviews({
-            schemaVersion: 9,
+            schemaVersion: 10,
             rootId: 'node-0',
             activeVariantId: 'limit',
             nodes,

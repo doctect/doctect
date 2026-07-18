@@ -59,6 +59,8 @@ describe('schema v10 presets', () => {
     expect(output[0]).toMatchObject({ type: 'text', textOverflow: 'clip', textWrap: true });
     expect(output[1]).toMatchObject({ type: 'grid', textOverflow: 'clip', textWrap: false });
     expect(output[2]).toMatchObject({ type: 'rect', textOverflow: 'future', textWrap: 1 });
+    expect(state.nodes).not.toBe(source.nodes);
+    expect(state.nodes.root).not.toBe(source.nodes.root);
     expect(source).toEqual(before);
   });
 
@@ -72,7 +74,25 @@ describe('schema v10 presets', () => {
     expect(state.schemaVersion).toBe(10);
     expect(output[0]).toMatchObject({ type: 'text', textOverflow: 'clip', textWrap: true });
     expect(output[1]).toMatchObject({ type: 'grid', textOverflow: 'clip', textWrap: false });
+    expect(state.nodes).not.toBe(source.nodes);
+    expect(state.nodes.root).not.toBe(source.nodes.root);
     expect(source).toEqual(before);
+  });
+
+  it('isolates undeclared output node mutations from source and module presets', () => {
+    const source = { nodes: structuredClone(nodes), rootId: 'root', templates: { page: page() } };
+    const state = loadPreset(source);
+
+    state.nodes.root.title = 'Changed output';
+    expect(source.nodes.root.title).toBe('Root');
+
+    const firstBlank = createBlankProject();
+    const moduleTitle = firstBlank.nodes.root.title;
+    firstBlank.nodes.root.title = 'Changed blank output';
+    const secondBlank = createBlankProject();
+
+    expect(secondBlank.nodes).not.toBe(firstBlank.nodes);
+    expect(secondBlank.nodes.root.title).toBe(moduleTitle);
   });
 
   it('uses legacy rendering defaults for presets explicitly declared as v9', () => {

@@ -87,7 +87,7 @@ export const loadPreset = (data: any): AppState => {
 
     // Build base state - let migration handle conversion from templates to variants
     const baseState: any = {
-        nodes: data.nodes,
+        nodes: structuredClone(data.nodes),
         rootId: data.rootId,
         viewMode: 'hierarchy',
         selectedNodeId: data.rootId,
