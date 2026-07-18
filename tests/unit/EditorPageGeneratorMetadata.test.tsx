@@ -39,7 +39,7 @@ const state = {
     rootId: 'root',
     variants: { default: { id: 'default', name: 'Default', templates: { page: { id: 'page', name: 'Page', width: 500, height: 700, elements: [] } } } },
     activeVariantId: 'default',
-    schemaVersion: 9,
+    schemaVersion: 10,
 };
 
 const renderEditor = () => render(<MemoryRouter><EditorPage /></MemoryRouter>);
@@ -72,7 +72,7 @@ describe('EditorPage generator metadata loads', () => {
         expect(await screen.findByRole('alert')).toHaveTextContent('Saved generator was detached');
         await screen.findByText('Gallery Project');
         const imported = JSON.parse(screen.getAllByTestId('project-state').at(-1)?.textContent || '{}');
-        expect(imported.schemaVersion).toBe(9);
+        expect(imported.schemaVersion).toBe(10);
         expect(imported.generator).toBeUndefined();
     });
 
