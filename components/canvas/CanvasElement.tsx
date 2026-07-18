@@ -6,6 +6,7 @@ import { hasVisibleTextFontSize, isVisibleText, resolveTextFontSize } from '../.
 import { resolveTextOverflowSettings } from '../../services/textOverflow';
 import { resolveCanvasFontFamily, type CanvasTextLayoutSession } from '../../services/canvasTextLayout';
 import { resolveElementPreviewText } from '../../services/previewText';
+import { resolveTextContentBox } from '../../services/textPadding';
 import { getElementBounds, traverseGridData } from './elementBounds';
 import { buildPatternBackgroundStyle } from './patternStyle';
 
@@ -96,14 +97,17 @@ export const CanvasElement: React.FC<CanvasElementProps> = (props) => {
 
     const fontFamilyName = element.fontFamily || 'helvetica';
     const fontFamily = resolveCanvasFontFamily(fontFamilyName);
-    const fixedTextSettings = element.type === 'text' && !element.autoWidth
+    const fixedTextContentBox = element.type === 'text' && !element.autoWidth
+        ? resolveTextContentBox(element)
+        : null;
+    const fixedTextSettings = fixedTextContentBox
         ? resolveTextOverflowSettings(element)
         : null;
     const fixedTextLayout = fixedTextSettings && renderElementText
         ? textLayoutSession.layout({
             text: resolvedElementText,
-            contentWidth: element.w,
-            contentHeight: element.h,
+            contentWidth: fixedTextContentBox!.width,
+            contentHeight: fixedTextContentBox!.height,
             fontSize: effectiveFontSize,
             fontFamily: fontFamilyName,
             fontWeight: element.fontWeight || 'normal',
@@ -562,10 +566,10 @@ export const CanvasElement: React.FC<CanvasElementProps> = (props) => {
             {fixedTextLayout && (
                 <div style={{
                     position: 'absolute',
-                    top: 0,
-                    left: 0,
-                    width: element.w,
-                    height: element.h,
+                    top: fixedTextContentBox!.y,
+                    left: fixedTextContentBox!.x,
+                    width: fixedTextContentBox!.width,
+                    height: fixedTextContentBox!.height,
                     overflow: fixedTextLayout.requiresClip ? 'hidden' : 'visible',
                     padding: 0,
                     color: element.textColor,

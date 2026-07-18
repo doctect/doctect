@@ -17,6 +17,16 @@ const elements = template.elements;
 const fixedText = elements.filter(item => item.type === 'text' && !item.autoWidth);
 const grids = elements.filter(item => item.type === 'grid');
 
+const paddedFixture = (): AppState => {
+  const state = structuredClone(fixture);
+  state.variants.parity.templates['parity-page'].elements.forEach(item => {
+    if (item.type === 'text' && !item.autoWidth) {
+      item.textPadding = { top: 1, right: 2, bottom: 3, left: 4 };
+    }
+  });
+  return state;
+};
+
 const createSessions = () => {
   let canvasFontSize = 0;
   const canvasContext = {
@@ -60,7 +70,8 @@ const expectPolicyParity = (canvasResult: TextLayoutResult | null, pdfResult: Te
 
 describe('Canvas/PDF text layout parity under equal metrics', () => {
   it('covers every fixed and grid mode/wrap pair plus fixture edge cases', () => {
-    const requests = textOverflowFixtureRequests(fixture);
+    const activeFixture = paddedFixture();
+    const requests = textOverflowFixtureRequests(activeFixture);
     const fixedPairs = fixedText.map(item => `${item.textOverflow}:${item.textWrap}`).sort();
     const gridPairs = grids.flatMap(item => [false, true].map(wrap => `${item.textOverflow}:${wrap}`)).sort();
 
@@ -77,11 +88,26 @@ describe('Canvas/PDF text layout parity under equal metrics', () => {
     expect(new Set(requests.map(item => item.request.align))).toEqual(new Set(['left', 'center', 'right']));
     expect(new Set(requests.map(item => item.request.verticalAlign))).toEqual(new Set(['top', 'middle', 'bottom']));
     expect(requests.filter(item => item.context.startsWith('grid-shrink:'))).toHaveLength(4);
+    const activeElements = activeFixture.variants.parity.templates['parity-page'].elements;
+    for (const item of activeElements.filter(item => item.type === 'text' && !item.autoWidth)) {
+      const request = requests.find(candidate => candidate.context === item.id)!.request;
+      expect(request.contentWidth).toBe(item.w - 6);
+      expect(request.contentHeight).toBe(item.h - 4);
+    }
+    for (const item of activeElements.filter(item => item.type === 'grid')) {
+      const gridRequests = requests.filter(candidate => candidate.context.startsWith(`${item.id}:`));
+      expect(gridRequests.length).toBeGreaterThan(0);
+      gridRequests.forEach(({ request }) => {
+        expect(request.contentWidth).toBe(item.w - 2);
+        expect(request.contentHeight).toBe(item.h);
+      });
+    }
   });
 
   it('returns identical policy and line geometry for cold, warm, and cleared adapter caches', () => {
     const sessions = createSessions();
-    const requests = textOverflowFixtureRequests(fixture);
+    const activeFixture = paddedFixture();
+    const requests = textOverflowFixtureRequests(activeFixture);
     const coldResults = new Map<string, { canvas: TextLayoutResult; pdf: TextLayoutResult }>();
 
     for (const { context, request } of requests) {

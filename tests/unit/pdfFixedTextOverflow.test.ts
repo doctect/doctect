@@ -133,6 +133,7 @@ describe('fixed PDF text overflow rendering', () => {
                 text: marker,
                 textOverflow: mode,
                 textWrap: wrap,
+                textPadding: { top: 1, right: 2, bottom: 3, left: 4 },
             });
         }));
         const auto = baseElement('AUTO_NATIVE', {
@@ -196,6 +197,38 @@ describe('fixed PDF text overflow rendering', () => {
         expect(stream).not.toContain('(SECOND) Tj');
         expect(stream.match(/…/g)).toHaveLength(2);
         expect(stream).not.toContain('GAMMA');
+    });
+
+    it('clips to the padded box and skips exhausted padded content', async () => {
+        const rectCalls: any[][] = [];
+        pdfDocHook.onCreate = doc => {
+            const originalRect = doc.rect;
+            doc.rect = function (this: any, ...args: any[]) {
+                rectCalls.push(args);
+                return originalRect.apply(this, args);
+            };
+        };
+        try {
+            const pdf = await exportPdf([
+                baseElement('PADDED_CLIP', {
+                    text: 'PADDED_CLIP',
+                    textOverflow: 'clip',
+                    textWrap: false,
+                    textPadding: { top: 2, right: 5, bottom: 4, left: 3 },
+                }),
+                baseElement('EXHAUSTED', {
+                    y: 100,
+                    text: 'EXHAUSTED',
+                    textOverflow: 'clip',
+                    textPadding: { top: 50, right: 0, bottom: 0, left: 0 },
+                }),
+            ]);
+            expect(pdf).toContain('PADDED_CLIP');
+            expect(pdf).not.toContain('EXHAUSTED');
+            expect(rectCalls).toContainEqual([23, 22, 92, 34, null]);
+        } finally {
+            pdfDocHook.onCreate = null;
+        }
     });
 
     it('uses a smaller effective Tf for shrink without changing source font size', async () => {
@@ -457,6 +490,7 @@ describe('fixed PDF text overflow rendering', () => {
                 rotation: 17,
                 textOverflow: 'clip',
                 textWrap: false,
+                textPadding: { top: 1, right: 2, bottom: 3, left: 4 },
             }),
             baseElement('control', {
                 y: 100,
@@ -490,6 +524,7 @@ describe('fixed PDF text overflow rendering', () => {
                 text: 'VISIBLE_UNCLIPPED',
                 textOverflow: 'visible',
                 textWrap: false,
+                textPadding: { top: 1, right: 2, bottom: 3, left: 4 },
             }),
         ]));
 

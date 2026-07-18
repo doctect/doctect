@@ -139,14 +139,16 @@ describe('PDF export link annotations', () => {
         const pdf = await exportBytes(makeState([
             {
                 ...baseEl('zero-glyph-url', 0), type: 'text', text: 'URL_LINK_SOURCE',
-                w: 0.1, fontSize: 12, fontFamily: '__builtin_fallback__',
+                w: 100, fontSize: 12, fontFamily: '__builtin_fallback__',
                 textOverflow: 'ellipsis', textWrap: false,
+                textPadding: { top: 0, right: 60, bottom: 0, left: 60 },
                 linkTarget: 'url', linkValue: 'https://example.com/ZEROGLYPH',
             },
             {
                 ...baseEl('zero-glyph-internal', 1), type: 'text', text: 'INTERNAL_LINK_SOURCE',
-                w: 0.1, fontSize: 12, fontFamily: '__builtin_fallback__',
+                w: 100, fontSize: 12, fontFamily: '__builtin_fallback__',
                 textOverflow: 'ellipsis', textWrap: false,
+                textPadding: { top: 0, right: 60, bottom: 0, left: 60 },
                 linkTarget: 'specific_node', linkValue: 'second',
             },
         ], true));

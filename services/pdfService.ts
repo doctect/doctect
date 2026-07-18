@@ -11,6 +11,7 @@ import { isVisibleText, resolveTextFontSize } from "./textVisibility";
 import { MAX_NODES, MAX_REFERENCE_DEPTH, MAX_TRAVERSAL_DEPTH } from "../shared/projectLimits.js";
 import { createPdfTextLayoutSession } from "./pdfTextLayout";
 import { resolveTextOverflowSettings } from "./textOverflow";
+import { resolveTextContentBox } from "./textPadding";
 
 const DEBUG_PDF = false; // Set to true to see debug visuals
 const EMBEDDED_HELVETICA_FAMILY = '__embedded_helvetica__';
@@ -1794,6 +1795,7 @@ export const generatePDF = async (state: AppState, options: GeneratePDFOptions =
                 const usesSharedLayout = el.type === 'text' && !el.autoWidth;
                 if (usesSharedLayout) {
                     const settings = resolveTextOverflowSettings(el)!;
+                    const contentBox = resolveTextContentBox(el);
                     const metricIdentity = [
                         pdfTextSession.identity,
                         el.fontFamily || 'helvetica',
@@ -1814,8 +1816,8 @@ export const generatePDF = async (state: AppState, options: GeneratePDFOptions =
                     );
                     const layout = pdfTextSession.layout({
                         text: textContent,
-                        contentWidth: w,
-                        contentHeight: h,
+                        contentWidth: contentBox.width,
+                        contentHeight: contentBox.height,
                         fontSize,
                         fontFamily: el.fontFamily || 'helvetica',
                         fontWeight: el.fontWeight || 'normal',
@@ -1834,7 +1836,13 @@ export const generatePDF = async (state: AppState, options: GeneratePDFOptions =
                             : null;
                         pdfTextSession.draw(
                             layout,
-                            { x: lx, y: ly, width: w, height: h, yOffset },
+                            {
+                                x: lx + contentBox.x,
+                                y: ly + contentBox.y,
+                                width: contentBox.width,
+                                height: contentBox.height,
+                                yOffset,
+                            },
                             { selectFont, textDecoration: el.textDecoration, decorationColor, context },
                         );
                     }

@@ -213,15 +213,19 @@ describe('Canvas fixed text rendering', () => {
         ['visible', true],
     ] as const)('renders explicit %s lines with wrap=%s', (textOverflow, textWrap) => {
         const fake = createFakeLayoutSession(request => fixedLayout(request.textOverflow !== 'visible'));
-        const element = fixedElement({ textOverflow, textWrap });
+        const element = fixedElement({
+            textOverflow,
+            textWrap,
+            textPadding: { top: 2, right: 5, bottom: 4, left: 3 },
+        });
         const { container } = render(
             <CanvasElement element={element} textLayoutSession={fake.session} {...canvasElementProps} />,
         );
 
         expect(fake.layout).toHaveBeenCalledWith({
             text: 'RESOLVED TEXT',
-            contentWidth: 123,
-            contentHeight: 45,
+            contentWidth: 115,
+            contentHeight: 39,
             fontSize: 17,
             fontFamily: 'open-sans',
             fontWeight: 'bold',
@@ -247,10 +251,10 @@ describe('Canvas fixed text rendering', () => {
         const textContainer = lines[0].parentElement as HTMLElement;
         expect(textContainer).toHaveStyle({
             position: 'absolute',
-            left: '0px',
-            top: '0px',
-            width: '123px',
-            height: '45px',
+            left: '3px',
+            top: '2px',
+            width: '115px',
+            height: '39px',
             overflow: textOverflow === 'visible' ? 'visible' : 'hidden',
             padding: '0px',
             color: '#123456',
@@ -265,6 +269,24 @@ describe('Canvas fixed text rendering', () => {
         const outer = container.querySelector<HTMLElement>('[data-element-id="fixed-text"]')!;
         expect(outer.style.transform).toBe('translate(12px, 14px) rotate(27deg)');
         expect(container.querySelectorAll('[style*="rotate(27deg)"]')).toHaveLength(1);
+    });
+
+    it('skips view-mode lines when padding exhausts either content axis', () => {
+        const fake = createFakeLayoutSession(request => (
+            request.contentWidth <= 0 || request.contentHeight <= 0 ? null : fixedLayout(true)
+        ));
+        const { container } = render(
+            <CanvasElement
+                element={fixedElement({ textPadding: { top: 50, right: 0, bottom: 0, left: 0 } })}
+                textLayoutSession={fake.session}
+                {...canvasElementProps}
+            />,
+        );
+        expect(fake.layout).toHaveBeenCalledWith(
+            expect.objectContaining({ contentWidth: 123, contentHeight: 0 }),
+            expect.any(String),
+        );
+        expect(container.querySelectorAll('[data-text-layout-line]')).toHaveLength(0);
     });
 
     it('keeps line layout and local geometry invariant across render scales', () => {

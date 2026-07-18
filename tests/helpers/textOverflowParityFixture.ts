@@ -1,6 +1,7 @@
 import type { AppState, TemplateElement, TextOverflow } from '../../types';
 import { segmentGraphemes } from '../../services/graphemes';
 import type { TextLayoutRequest } from '../../services/textLayout';
+import { resolveTextContentBox } from '../../services/textPadding';
 
 export interface TextOverflowFixtureRequest {
   context: string;
@@ -16,19 +17,25 @@ const requestFor = (
   text: string,
   textWrap = item.textWrap as boolean,
   grid = false,
-): TextLayoutRequest => ({
-  text,
-  contentWidth: grid ? Math.max(0, item.w - 2) : item.w,
-  contentHeight: item.h,
-  fontSize: item.fontSize ?? 12,
-  fontFamily: item.fontFamily ?? 'helvetica',
-  fontWeight: item.fontWeight ?? 'normal',
-  fontStyle: item.fontStyle ?? 'normal',
-  textOverflow: item.textOverflow as TextOverflow,
-  textWrap,
-  align: item.align ?? 'left',
-  verticalAlign: item.verticalAlign ?? 'top',
-});
+): TextLayoutRequest => {
+  const contentBox = grid
+    ? { width: Math.max(0, item.w - 2), height: item.h }
+    : resolveTextContentBox(item);
+
+  return {
+    text,
+    contentWidth: contentBox.width,
+    contentHeight: contentBox.height,
+    fontSize: item.fontSize ?? 12,
+    fontFamily: item.fontFamily ?? 'helvetica',
+    fontWeight: item.fontWeight ?? 'normal',
+    fontStyle: item.fontStyle ?? 'normal',
+    textOverflow: item.textOverflow as TextOverflow,
+    textWrap,
+    align: item.align ?? 'left',
+    verticalAlign: item.verticalAlign ?? 'top',
+  };
+};
 
 export const textOverflowFixtureRequests = (fixture: AppState): TextOverflowFixtureRequest[] => {
   const template = fixture.variants.parity.templates['parity-page'];
