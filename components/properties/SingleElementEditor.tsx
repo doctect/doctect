@@ -275,7 +275,9 @@ export const SingleElementEditor: React.FC<SingleElementEditorProps> = ({
     const setAutoWidthCheckboxRef = React.useCallback((checkbox: HTMLInputElement | null) => {
         if (checkbox) checkbox.indeterminate = autoWidthSelection === 'mixed';
     }, [autoWidthSelection]);
-    const shouldAutoFocusTextRef = React.useRef(element.type === 'text' && !element.text);
+    const shouldAutoFocusTextRef = React.useRef(
+        sectionExpanded.typography && element.type === 'text' && !element.text,
+    );
     const setTextAreaRef = React.useCallback((textarea: HTMLTextAreaElement | null) => {
         if (textarea && shouldAutoFocusTextRef.current) {
             shouldAutoFocusTextRef.current = false;

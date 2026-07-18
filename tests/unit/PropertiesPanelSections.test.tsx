@@ -125,6 +125,24 @@ describe('PropertiesPanel element section disclosure', () => {
         expect(props.onUpdateElements).not.toHaveBeenCalled();
     });
 
+    it('keeps focus on collapsed Typography when an empty text selection is opened', () => {
+        const props = callbacks();
+        const view = render(<PropertiesPanel state={stateFor(['text'])} {...props} />);
+        const typography = screen.getByRole('button', { name: 'Typography' });
+        typography.focus();
+        fireEvent.click(typography);
+
+        view.rerender(<PropertiesPanel state={stateFor(['empty-text'])} {...props} />);
+        const selectedTypography = screen.getByRole('button', { name: 'Typography' });
+        expect(selectedTypography).toHaveAttribute('aria-expanded', 'false');
+        selectedTypography.focus();
+
+        fireEvent.click(selectedTypography);
+        expect(screen.getByPlaceholderText('Text content or {{field}}')).not.toHaveFocus();
+        expect(selectedTypography).toHaveFocus();
+        expect(props.onUpdateElements).not.toHaveBeenCalled();
+    });
+
     it('resets all choices when PropertiesPanel remounts', () => {
         const props = callbacks();
         const first = render(<PropertiesPanel state={stateFor(['text'])} {...props} />);
