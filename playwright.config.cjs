@@ -7,7 +7,7 @@ if (!Number.isInteger(webPort) || webPort <= 0 || !Number.isInteger(apiPort) || 
 }
 const webOrigin = `http://localhost:${webPort}`;
 const apiOrigin = `http://localhost:${apiPort}`;
-process.env.E2E_API_BASE ||= apiOrigin;
+process.env.E2E_API_BASE = apiOrigin;
 
 const e2eOwnerEmail = process.env.E2E_OWNER_EMAIL || `owner-${Date.now()}-${process.pid}@test.dev`;
 process.env.E2E_OWNER_EMAIL = e2eOwnerEmail;
