@@ -275,4 +275,44 @@ describe('Wellness & Fitness Journal gallery sample', () => {
         });
         expect(sample.templates.milestones.name).not.toBe('Strength Milestones');
     });
+
+    it('keeps recovery captions under the silhouettes and the title band free of chips and arcs', () => {
+        const sample = loadGallerySample(contract.slug);
+        const recovery = sample.templates.recovery.elements;
+        const bodyFront = recovery.find((element: any) => element.id.includes('_body_front_'));
+        const bodyBack = recovery.find((element: any) => element.id.includes('_body_back_'));
+        const captionFront = recovery.find((element: any) => element.id.includes('_body_caption_front_'));
+        const captionBack = recovery.find((element: any) => element.id.includes('_body_caption_back_'));
+
+        // one centered caption per silhouette, not a single space-padded run
+        expect(captionFront).toBeTruthy();
+        expect(captionBack).toBeTruthy();
+        expect(captionFront.text).toBe('front');
+        expect(captionBack.text).toBe('back');
+        expect(captionFront.x + captionFront.w / 2).toBe(bodyFront.x + bodyFront.w / 2);
+        expect(captionBack.x + captionBack.w / 2).toBe(bodyBack.x + bodyBack.w / 2);
+        expect(recovery.some((element: any) =>
+            element.type === 'text' && /front\s{2,}back/.test(element.text ?? ''),
+        )).toBe(false);
+
+        // prev-only pages park the chip in the far-right slot so long titles cannot collide
+        ['recovery', 'month_reflection'].forEach(templateId => {
+            const prevChip = role(sample, templateId, 'nav_prev');
+            expect(prevChip.x, templateId).toBe(411);
+            expect(sample.templates[templateId].elements.some((element: any) =>
+                element.id.includes('_nav_next_'),
+            ), templateId).toBe(false);
+        });
+        expect(role(sample, 'week', 'nav_prev').x).toBe(336);
+        expect(role(sample, 'week', 'nav_next').x).toBe(411);
+
+        // the reflection accent arc lives below the content, clear of title, chips, and footer
+        const reflectionArc = sample.templates.month_reflection.elements.find((element: any) =>
+            element.type === 'svg' && /_arc_\d+$/.test(element.id) && !element.id.includes('_header_arc_'),
+        );
+        expect(reflectionArc).toBeTruthy();
+        expect(reflectionArc.y).toBeGreaterThanOrEqual(520);
+        expect(reflectionArc.y + reflectionArc.h).toBeLessThanOrEqual(625);
+        expect(reflectionArc.x + reflectionArc.w).toBeLessThanOrEqual(328);
+    });
 });

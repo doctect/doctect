@@ -285,7 +285,9 @@ const titleBlock = (templateId, title = '{{title}}', subtitle = '{{subtitle}}') 
 const navChips = (templateId, { prev = true, next = true } = {}) => {
   const chips = [];
   if (prev) {
-    chips.push(text(templateId, 'nav_prev', 336, 88, 70, 26, '{{nav_prev_label}}', {
+    // With no next chip the prev chip takes the far-right slot, keeping the
+    // title band clear of long titles such as "January Recovery Notes".
+    chips.push(text(templateId, 'nav_prev', next ? 336 : 411, 88, 70, 26, '{{nav_prev_label}}', {
       dataBinding: 'nav_prev_label',
       fontSize: 8.5,
       fontWeight: 'bold',
@@ -519,7 +521,10 @@ const recoveryElements = [
   rect('recovery', 'body_panel', 270, 384, 211, 114, COLORS.paper, { stroke: COLORS.rule, strokeWidth: 0.8 }),
   svg('recovery', 'body_front', 292, 390, 62, 103, bodyFront),
   svg('recovery', 'body_back', 380, 390, 62, 103, bodyBack),
-  text('recovery', 'body_caption', 270, 498, 211, 13, 'front              back', {
+  text('recovery', 'body_caption_front', 292, 498, 62, 13, 'front', {
+    fontSize: 7.5, textColor: COLORS.muted, align: 'center',
+  }),
+  text('recovery', 'body_caption_back', 380, 498, 62, 13, 'back', {
     fontSize: 7.5, textColor: COLORS.muted, align: 'center',
   }),
   text('recovery', 'adjustment_label', 32, 516, 449, 18, 'ONE ADJUSTMENT FOR NEXT MONTH', { fontSize: 9, fontWeight: 'bold', textColor: COLORS.clay }),
@@ -535,7 +540,8 @@ const recoveryElements = [
 const reflectionElements = [
   ...pageBase('month_reflection', 'Monthly reflection'),
   ...titleBlock('month_reflection'),
-  svg('month_reflection', 'arc', 306, 91, 151, 55, smallArc),
+  // Accent arc sits bottom-left, clear of the title band, chips, and footer.
+  svg('month_reflection', 'arc', 32, 563, 151, 55, smallArc),
   text('month_reflection', 'win_label', 32, 174, 449, 18, 'A WIN WORTH NOTICING', { fontSize: 9, fontWeight: 'bold', textColor: COLORS.clay }),
   rect('month_reflection', 'win_box', 32, 201, 449, 94, COLORS.paper, { stroke: COLORS.rule, strokeWidth: 0.8 }),
   text('month_reflection', 'win', 45, 213, 423, 69, '{{win}}', { dataBinding: 'win', fontSize: 12, fontFamily: 'georgia', verticalAlign: 'top' }),
