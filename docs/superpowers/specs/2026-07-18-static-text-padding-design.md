@@ -1,7 +1,7 @@
 # Static Text Padding Design
 
 **Date:** 2026-07-18
-**Status:** Approved in conversation; awaiting written-spec review
+**Status:** Approved
 **Package:** Element Properties Package 2
 
 ## Objective
@@ -115,7 +115,7 @@ Migration behavior:
 
 After sequential migration, normalize all current-v11 text padding defensively. This covers malformed current-version imports and in-memory/generated states. Unsupported future schema versions retain the existing pass-through behavior.
 
-All text creation boundaries produce explicit zero padding:
+All text creation boundaries produce explicit canonical padding. Direct Canvas/editor creation starts with four zeros; preset and generator normalization preserves supplied valid sides and replaces missing or invalid sides with zero:
 
 - direct Canvas/editor text creation;
 - preset normalization;
