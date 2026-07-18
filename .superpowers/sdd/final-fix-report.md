@@ -1,104 +1,146 @@
-# Element Properties Final Review Fix Report
+# Account Moderation Final Fix Report
 
 ## Status
 
-- Result: DONE
-- Start commit: `eb749de`
-- Branch: `feature/element-properties-auto-width-collapse`
-- Worktree: `/media/anoop/ssd_1/Work/doctect/doctect/.worktrees/element-properties-auto-width-collapse`
-- Findings fixed: all three final-review Important findings
+All final whole-branch review findings were addressed in isolated worktree `/media/anoop/ssd_1/Work/doctect/doctect/.worktrees/account-moderation` on branch `feat/account-moderation`.
 
-## Commits
+Primary implementation commit:
 
-- `eecc488` - `fix: gate empty text autofocus on typography`
-- `e1b5962` - `fix: capture SVG history decision on edit`
-- `51c12e7` - `fix: bind E2E API base to selected port`
+- `3db726701f713c09fb619fb8c56b91e8ac7f38ca` — `fix(auth): close suspension races`
+- `3ab8136bf6825fd2ef0dc99ada3dd5635be84018` — `fix(auth): serialize guard cleanup`
 
-## Fixes
+## Root Causes
 
-### Empty text autofocus
+### Normalized Better Auth administrator bypass
 
-Root cause: `SingleElementEditor` armed its one-shot textarea ref from element
-emptiness alone. Selecting an empty text element while Typography was collapsed
-therefore left the ref armed until disclosure reopening mounted the textarea,
-which stole focus from the disclosure button.
+Express matched `/api/auth/admin` against raw request path before Better Call constructed and normalized its URL. Raw and percent-encoded dot segments could therefore miss Express prefix middleware, normalize to Better Auth `/admin/*`, and execute plugin administrator endpoints. Better Auth pre-hook only enforced password policy and did not reject normalized administrator paths.
 
-Fix: include initial `sectionExpanded.typography` in the mount-scoped autofocus
-decision. Initial expanded selection still focuses the textarea; selection while
-collapsed never arms later autofocus.
+Fix: retained Express prefix block and `admin()` plugin, then added normalized `ctx.path === '/admin' || ctx.path.startsWith('/admin/')` denial in Better Auth `hooks.before` before plugin endpoint execution.
 
-### SVG history debounce
+### Session creation race
 
-Root cause: the debounce timer read mutable `historySavedRef` when it fired.
-Collapse, expansion, and refocus could reset that ref after an edit was
-scheduled, turning a subsequent commit in an existing burst into an incorrect
-new history checkpoint.
+Better Auth's admin plugin read user suspension state before inserting a session. Suspension locked user, updated suspension fields, and deleted current sessions, but no database invariant prevented a concurrent insert after deletion. Application auth guards then trusted Better Auth's resolved session user without re-reading current suspension fields.
 
-Fix: capture `saveHistory` and focus-session identity when scheduling. A timer
-uses its captured history decision and only marks history saved when its focus
-session is still current. Draft, validation, external reseed, latest callback,
-debounce cancellation, and refocus behavior remain intact.
+Fix: appended migration `012_session_suspension_guard`. PostgreSQL trigger locks referenced user row with `FOR UPDATE` before evaluating active suspension; SQLite trigger rejects active inserts under serialized writer behavior. Application guards now lock and read fresh `banned`/`banExpires` in one transaction, delete all target sessions in that transaction only while state remains active, and return required-auth `401` or optional-auth null.
 
-### Isolated Playwright API origin
+### Guard cleanup/restoration race
 
-Root cause: `process.env.E2E_API_BASE ||= apiOrigin` retained a stale ambient
-origin even when `E2E_API_PORT` selected an isolated backend. Direct API tests
-and exported web-server env could therefore escape selected backend and its
-email safeguards.
+Fresh guard read and session deletion originally used separate autocommit queries. Restoration could clear suspension, commit, and permit a new sign-in after guard read active state but before guard deletion; stale cleanup then deleted newly valid session.
 
-Fix: always derive `E2E_API_BASE` from validated `E2E_API_PORT`. Child-process
-config probes prove stale ambient origin is replaced in both `process.env` and
-exported config, while defaults remain web `3000` and API `3001`.
+Fix: guard suspension check and cleanup share `withTransaction`. PostgreSQL locks target user `FOR UPDATE`; SQLite serializes with `BEGIN IMMEDIATE`. If guard locks first, cleanup commits before restoration and later sign-in survives. If restoration commits first, guard recheck sees inactive state and performs no deletion.
+
+### PostgreSQL transaction-start trigger clock
+
+Migration `012` compared expiry with PostgreSQL `CURRENT_TIMESTAMP`, fixed at transaction start. Session insert waiting on suspension's user lock could evaluate stale pre-wait time and reject a suspension that expired during wait.
+
+Fix: kept migrations `001`-`012` unchanged and appended `013_session_suspension_wall_clock`. It replaces PostgreSQL function comparison with `(clock_timestamp() AT TIME ZONE 'UTC')`; wall clock advances during lock wait, and UTC conversion matches timestamp-without-time-zone `banExpires`. SQLite uses safe `SELECT 1` because migration `012` trigger already evaluates `julianday('now')` at execution.
+
+### Transaction-time expiry
+
+`expiresAt` was checked before transaction entry only. Target and project locks could outlive a short remaining expiry, after which writes persisted an already-expired suspension and changed sessions/projects/audit.
+
+Fix: after target/project locks and validation, server samples transaction write time, rejects elapsed expiry with `400`, and performs no writes.
+
+### Input and UI gaps
+
+JavaScript `Date.parse` accepted locale strings, timezone-less strings, and normalized impossible calendar dates. Project selection array had per-ID validation but no cardinality ceiling. Admin page chose controls only from suspension status and ignored protected administrator role.
+
+Fix: strict calendar-valid ISO-8601 parsing with explicit timezone, named 20-project cap matching default supported public-project scale, and protected-administrator UI state with no suspension/restoration controls or confirmation. Server `403` remains authoritative.
+
+### Full-suite fixture failure
+
+Two migration atomicity fixtures marked `001_auth_tables` applied but omitted its `session` table. Migration `012` correctly failed against that impossible ledger/schema combination. Fixtures now include migration-001 session schema; production migration was not weakened.
 
 ## RED Evidence
 
-Tests were added before production changes and run in isolation.
+Tests were written and run before production edits.
 
-- Autofocus command: `npx vitest run tests/unit/PropertiesPanelSections.test.tsx -t "keeps focus on collapsed Typography when an empty text selection is opened"`
-- First test draft failed before target assertion because selection remounts the keyed editor and detaches the old disclosure node. Test reacquired and focused the current disclosure, matching real reopening behavior.
-- Valid RED: `1 failed`, `5 skipped`; textarea received focus after reopening when expected not focused.
-- SVG command: `npx vitest run tests/unit/svgSourceSection.test.tsx -t "keeps the scheduled history decision when collapse and refocus start a new session"`
-- RED: `1 failed`, `13 skipped`; second commit received `saveHistory=true` instead of expected `false`.
-- Config command: `npx vitest run tests/unit/playwrightConfig.test.js`
-- RED: `1 failed`, `1 passed`; stale `http://localhost:9999` remained in process and exported server env instead of selected `http://localhost:4318`.
+- Initial focused RED command: `npx vitest run tests/unit/server/accountModeration.test.js tests/unit/server/accountModerationMigration.test.js tests/unit/server/migrationsPostgres.test.js tests/unit/server/guards.test.js tests/unit/AdminModerationPage.test.tsx`
+- Result: `5` files failed; `11` tests failed, `68` passed, `79` total.
+- Normalized raw paths returned `200` and demonstrated real plugin execution: unban cleared suspension, role mutation promoted user, create added administrator, list exposed users, and remove deleted user. Expected 404/state snapshots failed.
+- Migration `012` was absent; SQLite active-user session inserts resolved instead of rejecting; exact PostgreSQL function/trigger statements were absent.
+- Required guard returned `200` for directly suspended preexisting session; optional guard returned user instead of null; sessions remained.
+- Lock/clock test returned `200` instead of `400` and changed account/session/project/audit state.
+- Protected administrator label was absent and suspension controls remained rendered.
+- Two extra RED failures were restoration timestamp assertions caused by failed expiry test leaking mocked time; test was corrected with `finally` before implementation.
+
+Separate validation/cardinality RED command:
+
+- `npx vitest run tests/unit/server/accountModeration.test.js -t "rejects noncanonical|rejects more than 20"`
+- Result: `4` failed, `1` passed, `40` skipped.
+- Timezone-less, locale, and impossible-date values returned `200` instead of `400`.
+- 21 project IDs reached transaction conflict and returned `409` instead of input `400`.
+- Existing invalid `+24:00` offset already returned `400`; retained as boundary regression coverage.
+
+Guard/restoration and wall-clock RED command:
+
+- `npx vitest run tests/unit/server/guardsRestorationRace.test.js tests/unit/server/migrationsPostgres.test.js`
+- Result: `2` files failed; `4` tests failed, `3` passed.
+- Guard-first ordering was `guard-check`, `restore-clear`, `sign-in`, `guard-delete`, proving stale cleanup deleted post-restoration session.
+- Both race tests proved guard used no transaction and generated no PostgreSQL `FOR UPDATE` query.
+- Migration-order test found no `013`; exact UTC wall-clock function statement was absent.
 
 ## GREEN Evidence
 
-- `npx vitest run tests/unit/PropertiesPanelSections.test.tsx`: `1` file, `6` tests passed, including existing initial expanded autofocus behavior.
-- `npx vitest run tests/unit/svgSourceSection.test.tsx`: `1` file, `14` tests passed.
-- `npx vitest run tests/unit/playwrightConfig.test.js`: `1` file, `2` tests passed.
-- Combined focused command covering original package regressions plus config probe: `14` files, `99` tests passed in `4.77s`.
-- `E2E_API_BASE=http://localhost:9999 E2E_WEB_PORT=4317 E2E_API_PORT=4318 npx playwright test tests/e2e/element_properties.spec.js --project=chromium`: `1 passed` in `9.0s`.
-- `npx vitest run --no-file-parallelism --maxWorkers=1`: `158` files, `1494` tests passed in `289.68s`.
-- `npm run build`: exit `0`; `2130` modules transformed, built in `11.84s`.
-- `npx tsc --noEmit --pretty false`: expected exit `2` with exact documented five-diagnostic baseline and no new diagnostic:
-  - `tests/unit/changePassword.test.tsx(17,60) TS2556`
-  - `tests/unit/loginEmailVerification.test.tsx(11,51) TS2556`
-  - `tests/unit/loginEmailVerification.test.tsx(12,51) TS2556`
-  - `tests/unit/loginEmailVerification.test.tsx(15,81) TS2556`
-  - `tests/unit/svgEditing.test.ts(33,39) TS2339`
+- First focused GREEN: `5` files passed, `84` tests passed.
+- Expanded migration/auth/guards/moderation/page suite: `13` files passed, `126` tests passed.
+- Migration fixture regression rerun: `2` files passed, `2` tests passed.
+- Final full `npx vitest run`: `127` files passed, `1073` tests passed, duration `19.36s`.
+- `npm run build`: exit `0`, `2114` modules transformed, built in `20.23s`; existing chunk-size warning remains.
+- `npx tsc --noEmit --pretty false`: exact baseline five diagnostics, zero delta:
+  - Four `TS2556` diagnostics in `tests/unit/changePassword.test.tsx` and `tests/unit/loginEmailVerification.test.tsx`.
+  - One `TS2339` diagnostic in `tests/unit/svgEditing.test.ts`.
+- Chromium E2E: isolated client/API ports `43920`/`43921`, scratch SQLite, empty `DATABASE_URL`; `1 passed (6.6s)`. Temporary config/database removed.
+- `git diff --check`: no output.
 
-## Scope Checks
+Guard/restoration follow-up GREEN evidence:
 
-- Restored only generated `server/analytics.db` after test execution.
-- `git diff --check eb749de..HEAD`: exit `0`, no output.
-- `git diff --exit-code eb749de..HEAD -- docs types.ts services/migration.ts server package.json package-lock.json`: exit `0`, no output.
-- Implementation diff before this required report: exactly `6` files, `117` insertions, `5` deletions.
-- No schema, migration, server, package, padding, or ordinary documentation change.
+- Focused guards/migrations/moderation: `5` files passed, `66` tests passed.
+- Expanded focused suite: `7` files passed, `72` tests passed.
+- Final full `npx vitest run`: `128` files passed, `1077` tests passed, duration `21.55s`.
+- `npm run build`: exit `0`, `2114` modules transformed, built in `20.51s`; existing chunk-size warning remains.
+- `npx tsc --noEmit --pretty false`: exact same five baseline diagnostics, zero delta.
+- Chromium E2E: isolated client/API ports `43930`/`43931`, scratch SQLite, empty `DATABASE_URL`; `1 passed (6.7s)`. Temporary config/database removed.
+
+Normal sign-up/sign-in, active `BANNED_USER`, expired sign-in cleanup, required/optional guard behavior, migration idempotency, moderation rollback, protected page, and full administrator E2E workflow all ran in focused or full verification.
+
+## Changed Files
+
+- `server/auth.js` — normalized Better Auth administrator path denial.
+- `server/migrations/index.js` — append-only migrations `012_session_suspension_guard` and `013_session_suspension_wall_clock`.
+- `server/middleware/guards.js` — transaction-locked fresh suspension read, active-session cleanup, unauthenticated handling.
+- `server/routes/adminModeration.js` — canonical expiry validation, 20-ID cap, post-lock expiry check.
+- `pages/AdminModerationPage.tsx` — protected administrator state and suppressed controls/confirmation.
+- `tests/unit/server/accountModeration.test.js` — raw normalized-path integration, expiry/cardinality/clock coverage, trigger-compatible session fixtures.
+- `tests/unit/server/accountModerationMigration.test.js` — SQLite trigger behavior and statement-array coverage.
+- `tests/unit/server/migrationsPostgres.test.js` — exact PostgreSQL trigger SQL/serialization contract.
+- `tests/unit/server/guards.test.js` — fresh required/optional active-state denial and cleanup.
+- `tests/unit/server/guardsRestorationRace.test.js` — deterministic guard-first/restoration-first serialization and session-survival coverage.
+- `tests/unit/AdminModerationPage.test.tsx` — protected administrator page behavior.
+- `tests/unit/server/publishedSnapshotMigration.test.js` — complete migration-001 fixture schema.
+- `tests/unit/server/publishedMetadataMigrationAtomicity.test.js` — complete migration-001 fixture schema.
+- `docs/8-cloud-and-gallery.md` — operational and HTTP contract updates plus PostgreSQL limitation.
+- `docs/superpowers/specs/2026-07-16-account-moderation-design.md` — implemented security/race/validation/UI design.
+- `docs/superpowers/plans/2026-07-16-account-moderation-final-review-fixes.md` — executable final-fix TDD plan.
 
 ## Self-Review
 
-- Autofocus decision reads Typography state only during selected editor mount; later disclosure remounts cannot re-arm it.
-- Existing initial expanded autofocus regression remains explicit and passing.
-- SVG history decision is immutable per scheduled timer; new focus sessions cannot alter old timer intent or be marked by old timers.
-- Existing invalid-draft, validation-error, external-reseed, callback freshness, timer cancellation, and focus-session tests all pass.
-- Playwright API origin assignment happens before `webServer.env` spreads `process.env`; direct tests and child servers share selected backend.
-- Config probe runs in fresh Node processes, removes inherited port/base variables, and checks both isolated and default cases deterministically.
-- Full diff contains no unrelated refactor or prohibited scope change.
+- Migrations `001`-`012` unchanged; `013` appended.
+- Trigger bodies remain intact array statements.
+- PostgreSQL insert trigger locks target user before evaluating active state, matching suspension's user-first lock order.
+- Application guard locks target user and conditionally deletes sessions in one transaction, matching restoration's user-first lock order.
+- Deterministic barriers prove both lock orderings preserve post-restoration session.
+- PostgreSQL expiry comparison uses wall-clock UTC timestamp compatible with `banExpires TIMESTAMP`.
+- SQLite behavior proves unbanned allowed, indefinite/future active rejected, expired allowed.
+- Every changed application SQL statement uses each `$n` once.
+- Express block retained as defense-in-depth; Better Auth `admin()` retained for `BANNED_USER` and expired-ban cleanup.
+- Raw direct/dot/encoded-case/path tests cover ban, unban, role, create, list, and remove with 404 plus user/account/session/audit snapshots.
+- Post-lock expiry test verifies zero account/session/project/audit mutation.
+- Administrator server `403` unchanged; UI only improves safety and clarity.
+- No unrelated production refactor or dependency added.
 
-## Concerns
+## Residual Concerns
 
-- Repository retains five pre-existing TypeScript diagnostics listed above; diagnostic delta is zero.
-- Full Vitest output retains existing React Router future warnings and one caught analytics fetch failure; suite has zero failed tests or unhandled failures.
-- Build retains existing large-chunk warning.
-- Reviewer subagent was unavailable in this harness; manual full-diff self-review found no remaining Critical or Important finding.
+- No live PostgreSQL harness exists. PostgreSQL migrations `012`/`013` are exact SQL-contract tested, including `FOR UPDATE` and UTC wall-clock expression, but not executed against live PostgreSQL. Documentation does not claim live execution.
+- Existing five TypeScript diagnostics remain unchanged.
+- Existing React Router warnings, intentional rollback logs, test email fallbacks, and Vite chunk-size warning remain unrelated.
