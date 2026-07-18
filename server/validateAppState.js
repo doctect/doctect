@@ -14,6 +14,7 @@ const fail = (error) => ({ ok: false, error });
 const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const isStr = (v) => typeof v === 'string';
 const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
+const TEXT_OVERFLOW_VALUES = ['clip', 'ellipsis', 'shrink', 'visible'];
 
 export const validateAppState = (state) => {
     if (!isObj(state)) return fail('state must be an object');
@@ -65,6 +66,15 @@ export const validateAppState = (state) => {
             for (const el of tpl.elements) {
                 if (el && typeof el === 'object' && el.layerId !== undefined && !isStr(el.layerId)) {
                     return fail(`template ${vid}/${tid} has an element with a non-string layerId`);
+                }
+                if (Number.isInteger(state.schemaVersion) && state.schemaVersion >= 10
+                    && el && typeof el === 'object' && (el.type === 'text' || el.type === 'grid')) {
+                    if (el.textOverflow !== undefined && !TEXT_OVERFLOW_VALUES.includes(el.textOverflow)) {
+                        return fail(`template ${vid}/${tid} has an element with invalid textOverflow`);
+                    }
+                    if (el.textWrap !== undefined && typeof el.textWrap !== 'boolean') {
+                        return fail(`template ${vid}/${tid} has an element with invalid textWrap`);
+                    }
                 }
             }
             totalElements += tpl.elements.length;

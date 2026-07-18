@@ -217,21 +217,18 @@ describe('presets are layer-tagged (belt-and-suspenders)', () => {
 });
 
 // The three shipped presets are flat-`templates`-shaped, so their create*Project tests above
-// never exercise the variants-shaped trap: loadPreset stamps variants presets at
-// CURRENT_SCHEMA_VERSION, so migrateState skips versioned steps including migrateV7ToV8 while
-// current-v10 normalization still runs. The belt-and-suspenders forEach in loadPreset is the ONLY
-// thing that tags their layers. This block drives that path directly (and guards Fix 1's deep-clone
-// independence).
-describe('loadPreset: variants-shaped preset (belt-and-suspenders path)', () => {
-    // Variants-shaped, untagged (no layers / no layerId). loadPreset stamps it at
-    // CURRENT_SCHEMA_VERSION, skipping migrateV7ToV8 while current-v10 normalization still runs.
+// Undeclared presets are new content, so they get current defaults without a legacy migration.
+describe('loadPreset: undeclared variants-shaped preset', () => {
     const variantsPresetData = () => ({
         nodes: { root: { id: 'root', parentId: null, type: 'page', title: 'Root', data: {}, children: [] } },
         rootId: 'root',
         activeVariantId: 'default',
         variants: {
             default: { id: 'default', name: 'Default', templates: {
-                page: { id: 'page', name: 'Page', width: 500, height: 700, elements: [el('a', 5), el('b')] },
+                page: { id: 'page', name: 'Page', width: 500, height: 700, elements: [
+                    { ...el('a', 5), type: 'text' },
+                    { ...el('b'), type: 'grid' },
+                ] },
             } },
             tablet: { id: 'tablet', name: 'Tablet', templates: {
                 page: { id: 'page', name: 'Page', width: 800, height: 600, elements: [el('c', 2)] },
@@ -250,6 +247,8 @@ describe('loadPreset: variants-shaped preset (belt-and-suspenders path)', () => 
                 tpl.elements.forEach((e: any) => expect(ids.has(e.layerId)).toBe(true));
             }
         }
+        expect(state.variants.default.templates.page.elements[0]).toMatchObject({ textOverflow: 'clip', textWrap: true });
+        expect(state.variants.default.templates.page.elements[1]).toMatchObject({ textOverflow: 'clip', textWrap: false });
     });
 
     it('produces independent layer ids per call and never mutates the source preset data (Fix 1)', () => {

@@ -17,8 +17,17 @@ const validHierarchy = () => ({
     rootId: 'root',
 });
 
+const overflowElements = () => [
+    { id: 'missing-text', type: 'text', layerId: 'content' },
+    { id: 'valid-text', type: 'text', textOverflow: 'ellipsis', textWrap: false, layerId: 'content' },
+    { id: 'malformed-grid', type: 'grid', textOverflow: 'truncate', textWrap: 'true', layerId: 'content' },
+    { id: 'rect', type: 'rect', textOverflow: 'future', textWrap: 1, layerId: 'content' },
+];
+
+const existingLayers = () => [{ id: 'content', name: 'Content', order: 0, visible: true, locked: false }];
+
 describe('validateGeneratedProject', () => {
-    it('accepts flat output, normalizes nodes, migrates to v9, and leaves input unchanged', () => {
+    it('accepts flat output, normalizes nodes and text overflow at v10, and leaves input unchanged', () => {
         const raw = { templates: validTemplates(), hierarchy: validHierarchy() };
         const before = structuredClone(raw);
 
@@ -29,7 +38,7 @@ describe('validateGeneratedProject', () => {
             project: {
                 rootId: 'root',
                 activeVariantId: 'default',
-                schemaVersion: 9,
+                schemaVersion: 10,
                 nodes: { root: { data: {}, children: [] } },
             },
             summary: {
@@ -41,6 +50,31 @@ describe('validateGeneratedProject', () => {
                 warnings: [],
             },
         });
+        expect(raw).toEqual(before);
+    });
+
+    it('canonicalizes missing and malformed flat text overflow while retaining valid values and layers', () => {
+        const raw = {
+            templates: {
+                page: { ...template('page', overflowElements()), layers: existingLayers() },
+            },
+            hierarchy: validHierarchy(),
+        };
+        const before = structuredClone(raw);
+
+        const validation = validateGeneratedProject(raw);
+
+        expect(validation.ok).toBe(true);
+        if (!validation.ok) throw new Error('Expected valid generated project');
+        const page = validation.project.variants.default.templates.page;
+        expect(page.layers).toEqual(existingLayers());
+        expect(page.elements).toEqual([
+            expect.objectContaining({ id: 'missing-text', textOverflow: 'clip', textWrap: true }),
+            expect.objectContaining({ id: 'valid-text', textOverflow: 'ellipsis', textWrap: false }),
+            expect.objectContaining({ id: 'malformed-grid', textOverflow: 'clip', textWrap: false }),
+            expect.objectContaining({ id: 'rect', textOverflow: 'future', textWrap: 1 }),
+        ]);
+        expect(validation.project.schemaVersion).toBe(10);
         expect(raw).toEqual(before);
     });
 
@@ -60,6 +94,36 @@ describe('validateGeneratedProject', () => {
             project: { activeVariantId: 'tablet' },
             summary: { variantCount: 2, variantNames: ['E-ink', 'Tablet'], templateCount: 2 },
         });
+    });
+
+    it('canonicalizes missing and malformed variant text overflow without mutating input', () => {
+        const templates = {
+            variants: {
+                eink: {
+                    id: 'eink',
+                    name: 'E-ink',
+                    templates: { page: { ...template('page', overflowElements()), layers: existingLayers() } },
+                },
+            },
+            activeVariantId: 'eink',
+        };
+        const raw = { templates, hierarchy: validHierarchy() };
+        const before = structuredClone(raw);
+
+        const validation = validateGeneratedProject(raw);
+
+        expect(validation).toMatchObject({ ok: true, project: { activeVariantId: 'eink' } });
+        if (!validation.ok) throw new Error('Expected valid generated project');
+        const page = validation.project.variants.eink.templates.page;
+        expect(page.layers).toEqual(existingLayers());
+        expect(page.elements).toEqual([
+            expect.objectContaining({ id: 'missing-text', textOverflow: 'clip', textWrap: true }),
+            expect.objectContaining({ id: 'valid-text', textOverflow: 'ellipsis', textWrap: false }),
+            expect.objectContaining({ id: 'malformed-grid', textOverflow: 'clip', textWrap: false }),
+            expect.objectContaining({ id: 'rect', textOverflow: 'future', textWrap: 1 }),
+        ]);
+        expect(validation.project.schemaVersion).toBe(10);
+        expect(raw).toEqual(before);
     });
 
     it('rejects a missing hierarchy root', () => {

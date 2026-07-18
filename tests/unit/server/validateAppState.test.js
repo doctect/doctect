@@ -72,6 +72,37 @@ describe('validateAppState', () => {
         expect(validateAppState(s).ok).toBe(false);
     });
 
+    it.each([
+        ['textOverflow', 'truncate'],
+        ['textWrap', 'true'],
+    ])('rejects malformed present v10 %s on text/grid', (field, value) => {
+        const state = goodState();
+        state.schemaVersion = 10;
+        state.variants.default.templates.page.elements = [
+            { id: 'text', type: 'text', [field]: value },
+            { id: 'grid', type: 'grid', [field]: value },
+        ];
+        expect(validateAppState(state)).toMatchObject({ ok: false, error: expect.stringContaining(field) });
+    });
+
+    it('accepts missing fields, old-schema malformed fields, and unrelated shape fields', () => {
+        const current = goodState();
+        current.schemaVersion = 10;
+        current.variants.default.templates.page.elements = [
+            { id: 'text', type: 'text' },
+            { id: 'grid', type: 'grid' },
+        ];
+        expect(validateAppState(current)).toEqual({ ok: true });
+
+        const state = goodState();
+        state.schemaVersion = 9;
+        state.variants.default.templates.page.elements = [
+            { id: 'old', type: 'text', textOverflow: 'old-value', textWrap: 'yes' },
+            { id: 'shape', type: 'rect', textOverflow: 'future', textWrap: 1 },
+        ];
+        expect(validateAppState(state)).toEqual({ ok: true });
+    });
+
     it('accepts valid generator metadata', () => {
         expect(validateAppState({ ...goodState(), generator: validGenerator() })).toEqual({ ok: true });
     });

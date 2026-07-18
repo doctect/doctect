@@ -1341,6 +1341,8 @@ export const Canvas: React.FC<CanvasProps> = ({
                         layerId,
                         text: '',
                         autoWidth: true,
+                        textOverflow: 'clip',
+                        textWrap: true,
                         fontSize: parseInt(localStorage.getItem('doctect_last_fontSize') || '16'),
                         fontFamily: localStorage.getItem('doctect_last_fontFamily') || 'helvetica',
                         fontWeight: (localStorage.getItem('doctect_last_fontWeight') as 'normal' | 'bold') || 'normal',
@@ -1408,6 +1410,9 @@ export const Canvas: React.FC<CanvasProps> = ({
                 zIndex: nextZIndexInLayer(elements, layerId),
                 layerId,
                 text: tool === 'text' ? '' : undefined,
+                ...(tool === 'text' || tool === 'grid'
+                    ? { textOverflow: 'clip' as const, textWrap: tool === 'text' }
+                    : {}),
                 fontSize: parseInt(localStorage.getItem('doctect_last_fontSize') || '16'),
                 fontFamily: localStorage.getItem('doctect_last_fontFamily') || 'helvetica',
                 fontWeight: (localStorage.getItem('doctect_last_fontWeight') as 'normal' | 'bold') || 'normal',

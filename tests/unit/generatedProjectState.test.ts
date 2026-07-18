@@ -6,7 +6,7 @@ it('builds a fresh generated app state without mutating base or generated projec
   const base = createBlankProject();
   base.scale = 3;
   const generated = {
-    schemaVersion: 9 as const,
+    schemaVersion: 10 as const,
     rootId: 'generated-root',
     activeVariantId: 'v1',
     nodes: { 'generated-root': { id: 'generated-root', parentId: null, type: 'page', title: 'Generated', data: {}, children: [] } },
@@ -19,7 +19,7 @@ it('builds a fresh generated app state without mutating base or generated projec
   const state = createGeneratedAppState(base, generated, source, '2026-07-14T12:00:00.000Z');
 
   expect(state).toMatchObject({
-    rootId: 'generated-root', activeVariantId: 'v1', schemaVersion: 9,
+    rootId: 'generated-root', activeVariantId: 'v1', schemaVersion: 10,
     selectedNodeId: 'generated-root', selectedNodeIds: ['generated-root'],
     selectedTemplateId: '', selectedTemplateIds: [], selectedElementIds: [],
     generator: { ...source, generatedAt: '2026-07-14T12:00:00.000Z' },

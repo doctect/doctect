@@ -1,5 +1,6 @@
 import { PageTemplate, Variant } from '../types';
 import { ensureTemplateLayers } from './layers';
+import { normalizeTextOverflowTemplate } from './textOverflow';
 
 // Auto-generates element ids missing from a hand-written generator template without mutating
 // sandbox output (matches the generator's existing tolerance for omitted per-element ids).
@@ -18,7 +19,7 @@ function normalizeFlatTemplates(raw: Record<string, any>): Record<string, PageTe
     const normalized: Record<string, PageTemplate> = Object.create(null);
     Object.values(raw || {}).forEach((tpl: any) => {
         if (!tpl || !tpl.id) return;
-        normalized[tpl.id] = ensureTemplateLayers(autoIdElements(tpl));
+        normalized[tpl.id] = normalizeTextOverflowTemplate(ensureTemplateLayers(autoIdElements(tpl)));
     });
     return normalized;
 }

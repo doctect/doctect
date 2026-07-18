@@ -11,7 +11,7 @@ import {
 } from '../shared/projectLimits.js';
 import type { GeneratorSandboxRawResult } from './generatorSandbox';
 import { normalizeGeneratedTemplates } from './generatorTemplates';
-import { migrateState } from './migration';
+import { CURRENT_SCHEMA_VERSION } from './migration';
 import { computePageOrder } from './pdfService';
 
 export interface GeneratedProject {
@@ -19,7 +19,7 @@ export interface GeneratedProject {
     rootId: string;
     variants: Record<string, Variant>;
     activeVariantId: string;
-    schemaVersion: 9;
+    schemaVersion: 10;
 }
 
 export interface GeneratedProjectSummary {
@@ -300,25 +300,13 @@ export function validateGeneratedProject(raw: GeneratorSandboxRawResult): Genera
     }
     if (owned.size !== nodeEntries.length) return fail('hierarchy', 'Hierarchy contains nodes not owned by the root tree.');
 
-    let project: GeneratedProject;
-    try {
-        const migrated = migrateState({
-            nodes,
-            rootId: cloned.hierarchy.rootId,
-            variants,
-            activeVariantId,
-            schemaVersion: 8,
-        });
-        project = {
-            nodes: migrated.nodes,
-            rootId: migrated.rootId,
-            variants: migrated.variants,
-            activeVariantId: migrated.activeVariantId,
-            schemaVersion: 9,
-        };
-    } catch (error) {
-        return fail('migration', error instanceof Error ? error.message : 'Generated project migration failed.');
-    }
+    const project: GeneratedProject = {
+        nodes,
+        rootId: cloned.hierarchy.rootId,
+        variants,
+        activeVariantId,
+        schemaVersion: CURRENT_SCHEMA_VERSION,
+    };
 
     if (utf8Bytes(JSON.stringify(project)) > MAX_STATE_BYTES) {
         return fail('limits', `Generated project exceeds ${MAX_STATE_BYTES} bytes after normalization.`);

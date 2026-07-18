@@ -1,8 +1,9 @@
 
 import { AppState } from "../types";
-import { migrateState, CURRENT_SCHEMA_VERSION } from "./migration";
+import { CURRENT_SCHEMA_VERSION } from "./migration";
 import { loadProjectState } from "./loadProjectState";
 import { ensureTemplateLayers } from "./layers";
+import { normalizeTextOverflowTemplate } from "./textOverflow";
 import { blankPresetData } from "./blank_preset";
 import { notebookPresetData } from "./notebook_preset";
 import { plannerPresetData } from "./planner_preset";
@@ -107,35 +108,34 @@ export const loadPreset = (data: any): AppState => {
         clipboard: [],
     };
 
-    // Pass through templates or variants as-is - migration will handle conversion
-    if (hasTemplates) {
-        baseState.templates = data.templates;
-        baseState.schemaVersion = 3; // Force v3 -> v4 migration
-    } else {
-        baseState.variants = data.variants;
-        baseState.activeVariantId = data.activeVariantId || Object.keys(data.variants)[0];
-        baseState.schemaVersion = CURRENT_SCHEMA_VERSION;
+    const declaredVersion = Object.hasOwn(data, 'schemaVersion') ? data.schemaVersion : undefined;
+    if (Number.isInteger(declaredVersion)) {
+        return loadProjectState({
+            ...baseState,
+            ...(hasTemplates ? { templates: structuredClone(data.templates) } : {}),
+            ...(hasVariants ? {
+                variants: structuredClone(data.variants),
+                activeVariantId: data.activeVariantId || Object.keys(data.variants)[0],
+            } : {}),
+            schemaVersion: declaredVersion,
+        }).state;
     }
 
-    // Migrate to ensure all elements have required fields
-    let migrated = migrateState(baseState);
-
-    // Belt-and-suspenders (spec §Migration): variants-shaped presets are stamped
-    // CURRENT_SCHEMA_VERSION above, so migrateState early-returns WITHOUT cloning and hands
-    // back the module's source `data.variants` object graph by reference. Deep-clone before
-    // tagging so we never mutate the shared preset data and each project gets independent
-    // layer ids. (The flat-`templates` path already ran the full clone-ing migration chain.)
-    if (hasVariants) {
-        migrated = JSON.parse(JSON.stringify(migrated)) as AppState;
+    const variants = hasVariants
+        ? structuredClone(data.variants)
+        : { default: { id: 'default', name: 'Default', templates: structuredClone(data.templates) } };
+    const current = {
+        ...baseState,
+        variants,
+        activeVariantId: data.activeVariantId || Object.keys(variants)[0],
+        schemaVersion: CURRENT_SCHEMA_VERSION,
+    };
+    for (const variant of Object.values<any>(current.variants)) {
+        for (const [templateId, template] of Object.entries<any>(variant.templates)) {
+            variant.templates[templateId] = normalizeTextOverflowTemplate(ensureTemplateLayers(template));
+        }
     }
-
-    // Ensure layer tagging directly (migrateV7ToV8 is skipped for the stamped variants path).
-    Object.values(migrated.variants).forEach(variant => {
-        Object.keys(variant.templates).forEach(tid => {
-            variant.templates[tid] = ensureTemplateLayers(variant.templates[tid]);
-        });
-    });
-    return migrated;
+    return current as AppState;
 };
 
 // --- PRESET 1: BLANK PROJECT ---

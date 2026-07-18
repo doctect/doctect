@@ -3,6 +3,7 @@ import { resolveActiveLayerId } from './layers';
 import { createBlankProject } from './presets';
 import type { GeneratedProject } from './validateGeneratedProject';
 import type { GeneratorSourceDraft } from './generatorVisualPreview';
+import { CURRENT_SCHEMA_VERSION } from './migration';
 
 export function createGeneratedAppState(
   base: AppState,
@@ -18,7 +19,7 @@ export function createGeneratedAppState(
     rootId: project.rootId,
     variants: structuredClone(project.variants),
     activeVariantId: project.activeVariantId,
-    schemaVersion: 9,
+    schemaVersion: CURRENT_SCHEMA_VERSION,
     scale: createBlankProject().scale,
     generator: { ...source, generatedAt },
     selectedNodeId: project.rootId,
