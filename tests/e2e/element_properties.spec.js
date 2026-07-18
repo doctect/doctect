@@ -160,6 +160,8 @@ test.describe('Element Properties auto width and disclosure', () => {
 
         const top = pane.getByLabel('Padding top');
         const right = pane.getByLabel('Padding right');
+        const bottom = pane.getByLabel('Padding bottom');
+        const left = pane.getByLabel('Padding left');
         const link = pane.getByLabel('Link padding sides');
         await expect(link).toBeChecked();
         await top.fill('8');
@@ -183,17 +185,36 @@ test.describe('Element Properties auto width and disclosure', () => {
         await expect(editorBox).toHaveCSS('top', '8px');
         await expect(editorBox).toHaveCSS('width', '160px');
         await expect(editorBox).toHaveCSS('height', '24px');
-        await expect(pane.getByTestId('overlay-text-editor')).toContainText('Short');
+        await expect(pane.getByTestId('overlay-text-editor')).toHaveText('Short');
         await page.keyboard.press('Escape');
 
         const autoWidth = pane.getByLabel('Auto width', { exact: true });
         await autoWidth.check();
         await expect(top).toBeDisabled();
         await expect(canvasElement(page, 'literal').locator('[data-text-layout-line]')).toHaveCount(0);
+        const measuredOuterSize = await canvasElement(page, 'literal').evaluate(node => ({
+            width: Number.parseFloat(node.style.width),
+            height: Number.parseFloat(node.style.height),
+        }));
 
         await autoWidth.uncheck();
         await expect(top).toBeEnabled();
+        await expect(top).toHaveValue('8');
+        await expect(right).toHaveValue('12');
+        await expect(bottom).toHaveValue('8');
+        await expect(left).toHaveValue('8');
         await expect(textBox).toHaveCSS('left', '8px');
         await expect(textBox).toHaveCSS('top', '8px');
+        const restoredContentSize = await textBox.evaluate(node => {
+            const style = getComputedStyle(node);
+            return {
+                width: Number.parseFloat(style.width),
+                height: Number.parseFloat(style.height),
+            };
+        });
+        expect(restoredContentSize).toEqual({
+            width: measuredOuterSize.width - 8 - 12,
+            height: measuredOuterSize.height - 8 - 8,
+        });
     });
 });
