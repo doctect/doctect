@@ -1,11 +1,12 @@
 
 import React, { useState } from 'react';
-import { AppNode, AppState, TemplateElement, TraversalStep } from '../../types';
+import { AppNode, AppState, TemplateElement, TextOverflow, TraversalStep } from '../../types';
 import { Grid3X3, ArrowLeft, Palette, Type, MousePointer2, Bold, Italic, Underline, ArrowUp, ArrowDown, Plus, AlignLeft, AlignCenter, AlignRight, AlignStartVertical, AlignEndVertical, AlignCenterVertical, Trash2, Layers, Network, Trash, Settings2, RectangleHorizontal, RectangleVertical, Share2, Link2, ChevronUp, ChevronDown, PanelTop, PanelRight, PanelBottom, PanelLeft, ToggleRight, ToggleLeft } from 'lucide-react';
 import { ChildIndexSelector } from './ChildIndexSelector';
 import { SvgSourceSection } from './SvgSourceSection';
 import { BORDER_STYLES, FONTS } from '../../constants/editor';
 import clsx from 'clsx';
+import { resolveTextOverflowSettings } from '../../services/textOverflow';
 
 // Font family mapping for CSS (used for font dropdown preview)
 const getFontFamily = (fontValue: string): string => {
@@ -240,6 +241,9 @@ export const SingleElementEditor: React.FC<SingleElementEditorProps> = ({ elemen
     const [showRefBuilder, setShowRefBuilder] = useState(false);
     const [showFontPicker, setShowFontPicker] = useState(false);
     const [fontSearch, setFontSearch] = useState('');
+    const textOverflowControlId = React.useId();
+    const textOverflowSettings = resolveTextOverflowSettings(element);
+    const textOverflowControlsDisabled = element.type === 'text' && !!element.autoWidth;
 
     // Ref Builder State (Strings now to support fields)
     const [refPIdx, setRefPIdx] = useState("0");
@@ -1139,6 +1143,50 @@ export const SingleElementEditor: React.FC<SingleElementEditorProps> = ({ elemen
                                 <button onClick={() => { const newDeco = element.textDecoration === 'underline' ? 'none' : 'underline'; localStorage.setItem('doctect_last_textDecoration', newDeco); onUpdate({ textDecoration: newDeco }); }} className={clsx("p-1 rounded", element.textDecoration === 'underline' && "bg-white shadow-sm text-blue-600")}><Underline size={12} /></button>
                             </div>
                         </div>
+                        {textOverflowSettings && (
+                            <div className="space-y-2 rounded border border-slate-200 p-2">
+                                <div>
+                                    <label
+                                        htmlFor={`${textOverflowControlId}-mode`}
+                                        className="text-[10px] text-slate-500 block mb-1"
+                                    >
+                                        {element.type === 'grid' ? 'Cell text overflow' : 'Overflow'}
+                                    </label>
+                                    <select
+                                        id={`${textOverflowControlId}-mode`}
+                                        className="w-full border rounded px-2 py-1 text-xs bg-white disabled:bg-slate-100 disabled:text-slate-400"
+                                        value={textOverflowSettings.textOverflow}
+                                        disabled={textOverflowControlsDisabled}
+                                        onChange={e => onUpdate({ textOverflow: e.target.value as TextOverflow })}
+                                    >
+                                        <option value="clip">Clip</option>
+                                        <option value="ellipsis">Ellipsis</option>
+                                        <option value="shrink">Shrink</option>
+                                        <option value="visible">Visible</option>
+                                    </select>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                    <input
+                                        id={`${textOverflowControlId}-wrap`}
+                                        type="checkbox"
+                                        checked={textOverflowSettings.textWrap}
+                                        disabled={textOverflowControlsDisabled}
+                                        onChange={e => onUpdate({ textWrap: e.target.checked })}
+                                    />
+                                    <label
+                                        htmlFor={`${textOverflowControlId}-wrap`}
+                                        className="text-xs text-slate-600"
+                                    >
+                                        {element.type === 'grid' ? 'Wrap cell text' : 'Wrap'}
+                                    </label>
+                                </div>
+                                {textOverflowControlsDisabled && (
+                                    <p className="text-[10px] leading-snug text-slate-500">
+                                        Auto-width text sizes to content; overflow and wrap apply only to fixed-size text.
+                                    </p>
+                                )}
+                            </div>
+                        )}
                         <div className="flex bg-slate-100 rounded p-1 gap-1 justify-between">
                             <div className="flex gap-1">
                                 <button onClick={() => { localStorage.setItem('doctect_last_align', 'left'); onUpdate({ align: 'left' }); }} className={clsx("p-1 rounded", element.align === 'left' && "bg-white shadow-sm text-blue-600")} title="Align Left"><AlignLeft size={12} /></button>

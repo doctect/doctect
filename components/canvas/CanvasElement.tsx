@@ -340,6 +340,8 @@ export const CanvasElement: React.FC<CanvasElementProps> = (props) => {
         const displayItems = isMock ? Array.from({ length: 6 }) : items;
         const safeGapX = gapX ?? 10;
         const safeGapY = gapY ?? 10;
+        const gridTextSettings = resolveTextOverflowSettings(element)!;
+        const gridTextContentWidth = Math.max(0, element.w - 2);
 
         let templatePattern = displayField || '{{title}}';
         if (!templatePattern.includes('{{')) {
@@ -502,8 +504,25 @@ export const CanvasElement: React.FC<CanvasElementProps> = (props) => {
                         })
                         : {};
 
+                    const resolvedCellFontWeight = cellFontWeight || 'normal';
+                    const cellTextLayout = isVisibleText(label, element.fontSize)
+                        ? textLayoutSession.layout({
+                            text: label,
+                            contentWidth: gridTextContentWidth,
+                            contentHeight: element.h,
+                            fontSize: effectiveFontSize,
+                            fontFamily: fontFamilyName,
+                            fontWeight: resolvedCellFontWeight,
+                            fontStyle: element.fontStyle || 'normal',
+                            textOverflow: gridTextSettings.textOverflow,
+                            textWrap: gridTextSettings.textWrap,
+                            align: element.align || 'center',
+                            verticalAlign: element.verticalAlign || 'middle',
+                        }, `grid element ${element.id} cell ${idx}`)
+                        : null;
+
                     return (
-                        <div key={idx} style={{
+                        <div key={idx} data-grid-cell style={{
                             position: 'absolute', left: cx, top: cy, width: element.w, height: element.h,
                             boxSizing: 'border-box',
                             backgroundColor: element.fillType === 'pattern' ? 'transparent' : (cellFill || 'transparent'),
@@ -516,14 +535,47 @@ export const CanvasElement: React.FC<CanvasElementProps> = (props) => {
                             fontSize: renderedFontSize,
                             color: cellTextColor,
                             fontFamily: fontFamily,
-                            fontWeight: cellFontWeight,
+                            fontWeight: resolvedCellFontWeight,
                             fontStyle: element.fontStyle,
                             textDecoration: element.textDecoration,
                             textDecorationColor: cellTextColor,
-                            overflow: 'hidden'
-                        }}>{isVisibleText(label, element.fontSize) && (
-                            <span className="truncate" style={{ padding: '0 1px' }}>{label}</span>
-                        )}</div>
+                            overflow: 'visible'
+                        }}>
+                            {cellTextLayout && (
+                                <div data-grid-cell-text style={{
+                                    position: 'absolute',
+                                    left: 1,
+                                    top: 0,
+                                    width: gridTextContentWidth,
+                                    height: element.h,
+                                    overflow: cellTextLayout.requiresClip ? 'hidden' : 'visible',
+                                    padding: 0,
+                                    color: cellTextColor,
+                                    fontFamily,
+                                    fontSize: cellTextLayout.effectiveFontSize,
+                                    fontWeight: resolvedCellFontWeight,
+                                    fontStyle: element.fontStyle,
+                                    textDecoration: element.textDecoration,
+                                    textDecorationColor: cellTextColor,
+                                    pointerEvents: 'none',
+                                }}>
+                                    {cellTextLayout.lines.map((line, lineIndex) => (
+                                        <span
+                                            key={lineIndex}
+                                            data-text-layout-line
+                                            style={{
+                                                position: 'absolute',
+                                                left: line.x,
+                                                top: line.top,
+                                                fontSize: cellTextLayout.effectiveFontSize,
+                                                lineHeight: `${cellTextLayout.lineHeight}px`,
+                                                whiteSpace: 'pre',
+                                            }}
+                                        >{line.text}</span>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
                     );
                 })}
 
