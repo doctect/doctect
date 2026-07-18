@@ -35,9 +35,14 @@ export function measureAutoWidthText(
         probe.textContent = text.length > 0 ? text : ' ';
         doc.body.appendChild(probe);
 
-        const w = Math.ceil(probe.offsetWidth + 25);
-        const h = Math.max(20, Math.ceil(probe.offsetHeight));
-        if (Number.isFinite(w) && w > 0 && Number.isFinite(h) && h > 0) {
+        const measuredWidth = probe.offsetWidth;
+        const measuredHeight = probe.offsetHeight;
+        if (
+            Number.isFinite(measuredWidth) && measuredWidth >= 0
+            && Number.isFinite(measuredHeight) && measuredHeight >= 0
+        ) {
+            const w = Math.ceil(measuredWidth + 25);
+            const h = Math.max(20, Math.ceil(measuredHeight));
             result = { w, h };
         }
     } catch {
@@ -46,9 +51,30 @@ export function measureAutoWidthText(
         if (probe) {
             try {
                 probe.remove();
+            } catch {}
+
+            let parent: Node | null = null;
+            try {
+                parent = probe.parentNode;
             } catch {
+                cleanupSafe = false;
+            }
+            if (parent) {
                 try {
-                    probe.parentNode?.removeChild(probe);
+                    parent.removeChild(probe);
+                } catch {}
+                try {
+                    parent = probe.parentNode;
+                } catch {
+                    cleanupSafe = false;
+                }
+            }
+            if (cleanupSafe && parent) {
+                try {
+                    const nativeRemoveChild = probe.ownerDocument?.defaultView
+                        ?.Node.prototype.removeChild;
+                    if (!nativeRemoveChild) throw new Error('Native DOM cleanup unavailable');
+                    nativeRemoveChild.call(parent, probe);
                 } catch {
                     cleanupSafe = false;
                 }

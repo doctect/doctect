@@ -22,6 +22,64 @@ const nodes: Record<string, AppNode> = {
     },
 };
 
+const precedenceNodes: Record<string, AppNode> = {
+    ancestor: {
+        id: 'ancestor', parentId: null, type: 'page', title: 'Ancestor',
+        data: { selfKey: 'ancestor', ancestorKey: 'ancestor' }, children: ['current'],
+    },
+    current: {
+        id: 'current', parentId: 'ancestor', type: 'page', title: 'Current',
+        data: { selfKey: 'self' }, children: ['child'], referenceId: 'reference-target',
+    },
+    'reference-target': {
+        id: 'reference-target', parentId: null, type: 'page', title: 'Reference target',
+        data: {
+            selfKey: 'reference', ancestorKey: 'reference', referenceKey: 'reference',
+        },
+        children: [],
+    },
+    'referrer-ancestor': {
+        id: 'referrer-ancestor', parentId: null, type: 'page', title: 'Referrer ancestor',
+        data: {
+            selfKey: 'referrer', ancestorKey: 'referrer', referenceKey: 'referrer',
+            referrerKey: 'referrer',
+        },
+        children: ['target-referrer'],
+    },
+    'target-referrer': {
+        id: 'target-referrer', parentId: 'referrer-ancestor', type: 'page', title: 'Referrer',
+        data: {}, children: [], referenceId: 'reference-target',
+    },
+    child: {
+        id: 'child', parentId: 'current', type: 'page', title: 'Child',
+        data: {
+            selfKey: 'child', ancestorKey: 'child', referenceKey: 'child',
+            referrerKey: 'child', childKey: 'child',
+        },
+        children: [],
+    },
+};
+
+const arithmeticNodes: Record<string, AppNode> = {
+    current: {
+        id: 'current', parentId: null, type: 'page', title: 'Current',
+        data: { base: '0', span: '2', zero: '0' },
+        children: ['unused-left', 'reverse-target', 'unused-right'],
+    },
+    'reverse-target': {
+        id: 'reverse-target', parentId: 'current', type: 'page', title: 'Target',
+        data: {}, children: [],
+    },
+    week: {
+        id: 'week', parentId: null, type: 'week', title: 'Arithmetic week',
+        data: {}, children: ['reverse-referrer'],
+    },
+    'reverse-referrer': {
+        id: 'reverse-referrer', parentId: 'week', type: 'page', title: 'Referrer',
+        data: {}, children: [], referenceId: 'reverse-target',
+    },
+};
+
 const text = (overrides: Partial<TemplateElement> = {}) => ({
     text: '', dataBinding: undefined, ...overrides,
 });
@@ -58,5 +116,26 @@ describe('resolveElementPreviewText', () => {
             nodes.root,
             nodes,
         )).toBe('Week title W42');
+    });
+
+    it('keeps self, ancestor, reference, referrer-ancestor, then child precedence', () => {
+        expect(resolveElementPreviewText(
+            text({ text: '{{selfKey}} {{ancestorKey}} {{referenceKey}} {{referrerKey}} {{childKey}}' }),
+            precedenceNodes.current,
+            precedenceNodes,
+        )).toBe('self ancestor reference referrer child');
+    });
+
+    it('evaluates addition and subtraction for forward and negative reverse searches', () => {
+        expect(resolveElementPreviewText(
+            text({ text: '{{child_referrer:base+1:span-1:week:title}}' }),
+            arithmeticNodes.current,
+            arithmeticNodes,
+        )).toBe('Arithmetic week');
+        expect(resolveElementPreviewText(
+            text({ text: '{{child_referrer:base+2:zero-2:week:title}}' }),
+            arithmeticNodes.current,
+            arithmeticNodes,
+        )).toBe('Arithmetic week');
     });
 });
