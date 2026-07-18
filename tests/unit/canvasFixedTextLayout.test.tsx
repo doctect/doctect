@@ -356,6 +356,7 @@ describe('Canvas fixed text rendering', () => {
             text: 'FULL SOURCE TEXT',
             fontSize: 12,
             layerId: 'base',
+            textPadding: { top: 3, right: 4, bottom: 5, left: 6 },
         });
         const { container } = renderCanvas([element], [makeLayer('base', 0)], {
             textLayoutSession: fake.session,
@@ -365,6 +366,9 @@ describe('Canvas fixed text rendering', () => {
 
         const committedLine = container.querySelector<HTMLElement>('[data-text-layout-line]')!;
         expect(committedLine.parentElement).toHaveStyle({ opacity: '0' });
+        expect(screen.getByTestId('overlay-text-editor-box')).toHaveStyle({
+            left: '6px', top: '3px', width: '110px', height: '32px',
+        });
         expect(screen.getByTestId('overlay-text-editor')).toHaveTextContent('FULL SOURCE TEXT');
     });
 });

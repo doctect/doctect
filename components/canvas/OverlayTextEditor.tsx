@@ -1,6 +1,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { TemplateElement } from '../../types';
+import { resolveTextContentBox } from '../../services/textPadding';
 
 // Duplicate font map to ensure consistency without refactoring risk
 const FONT_FAMILY_MAP: Record<string, string> = {
@@ -183,6 +184,11 @@ export const OverlayTextEditor: React.FC<OverlayTextEditorProps> = ({ element, o
     };
 
     const fontFamily = getFontFamily(element.fontFamily || 'helvetica');
+    const contentBox = element.autoWidth
+        ? { x: 0, y: 0, width: element.w, height: element.h }
+        : resolveTextContentBox(element);
+    const editorWidth = Math.max(1, contentBox.width);
+    const editorHeight = Math.max(1, contentBox.height);
 
     return (
         <div
@@ -193,52 +199,59 @@ export const OverlayTextEditor: React.FC<OverlayTextEditorProps> = ({ element, o
                 width: element.w,
                 height: element.h,
                 transform: `rotate(${element.rotation || 0}deg)`,
+                transformOrigin: element.transformOrigin
+                    ? `${element.transformOrigin.x * element.w}px ${element.transformOrigin.y * element.h}px`
+                    : 'center',
                 zIndex: 1000,
-                // Match CanvasElement Flex Layout
-                display: 'flex',
-                justifyContent: element.align === 'center' ? 'center' : element.align === 'right' ? 'flex-end' : 'flex-start',
-                alignItems: element.verticalAlign === 'top' ? 'flex-start' : element.verticalAlign === 'bottom' ? 'flex-end' : 'center',
-                // Explicitly allow visible overflow
-                overflow: 'visible',
-                // Match Font Styles
-                fontFamily: fontFamily,
-                fontSize: element.fontSize,
-                lineHeight: 1.2, // Match CanvasElement line-height
-                fontWeight: element.fontWeight,
-                fontStyle: element.fontStyle,
-                textDecoration: element.textDecoration,
-                textDecorationColor: element.textColor,
-                color: element.textColor,
-                // Cursor interaction
-                cursor: 'text',
-                pointerEvents: 'auto',
-                // Outline to indicate editing state
-                outline: '1px solid #3b82f6',
-                // MATCHING CanvasElement: NO Padding
-                padding: 0,
-                caretColor: '#000000'
+                pointerEvents: 'none',
             }}
-            onClick={() => editorRef.current?.focus()}
         >
             <div
-                ref={editorRef}
-                data-testid="overlay-text-editor"
-                contentEditable
-                suppressContentEditableWarning
-                onInput={handleInput}
-                onBlur={handleBlur}
-                onKeyDown={handleKeyDown}
+                data-testid="overlay-text-editor-box"
                 style={{
-                    outline: 'none',
-                    minWidth: '1px',
-                    // EXACT MATCH to CanvasElement whiteSpace logic to prevent jump
-                    whiteSpace: element.autoWidth ? 'pre' : 'pre-wrap',
-                    maxWidth: element.autoWidth ? 'none' : '100%',
-                    textAlign: element.align || 'left',
-                    // Removed lineHeight to match CanvasElement (inherits default)
+                    position: 'absolute',
+                    left: contentBox.x,
+                    top: contentBox.y,
+                    width: editorWidth,
+                    height: editorHeight,
+                    display: 'flex',
+                    justifyContent: element.align === 'center' ? 'center' : element.align === 'right' ? 'flex-end' : 'flex-start',
+                    alignItems: element.verticalAlign === 'top' ? 'flex-start' : element.verticalAlign === 'bottom' ? 'flex-end' : 'center',
+                    overflow: 'visible',
+                    fontFamily,
+                    fontSize: element.fontSize,
+                    lineHeight: 1.2,
+                    fontWeight: element.fontWeight,
+                    fontStyle: element.fontStyle,
+                    textDecoration: element.textDecoration,
+                    textDecorationColor: element.textColor,
+                    color: element.textColor,
+                    cursor: 'text',
+                    pointerEvents: 'auto',
+                    outline: '1px solid #3b82f6',
+                    padding: 0,
+                    caretColor: '#000000',
                 }}
+                onClick={() => editorRef.current?.focus()}
             >
-                {initialText}
+                <div
+                    ref={editorRef}
+                    data-testid="overlay-text-editor"
+                    contentEditable
+                    suppressContentEditableWarning
+                    onInput={handleInput}
+                    onBlur={handleBlur}
+                    onKeyDown={handleKeyDown}
+                    style={{
+                        outline: 'none',
+                        minWidth: '1px',
+                        whiteSpace: element.autoWidth ? 'pre' : 'pre-wrap',
+                        maxWidth: element.autoWidth ? 'none' : '100%',
+                        textAlign: element.align || 'left',
+                    }}
+                >
+                    {initialText}
+                </div>
             </div>
         </div>
     );
