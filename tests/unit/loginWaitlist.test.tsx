@@ -101,4 +101,37 @@ describe('LoginPage waitlist behavior', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Sign Up' }));
         expect(await screen.findByText(/Free accounts are full/)).toBeInTheDocument();
     });
+
+    it('shows the waitlist panel when Google signup was rejected by the cap', async () => {
+        // Status fetch says open (fail-open) — the explicit OAuth rejection must still win.
+        mocks.getSignupStatus.mockResolvedValue({ open: true });
+        renderLogin('/login?error=Signups_are_temporarily_closed_%E2%80%94_the_free_account_limit_has_been_reached.');
+        expect(await screen.findByText(/Free accounts are full/)).toBeInTheDocument();
+    });
+
+    it('does not open the waitlist panel for unrelated OAuth errors', async () => {
+        mocks.getSignupStatus.mockResolvedValue({ open: true });
+        renderLogin('/login?error=invalid_code');
+        await waitFor(() => expect(mocks.getSignupStatus).toHaveBeenCalled());
+        expect(screen.queryByText(/Free accounts are full/)).not.toBeInTheDocument();
+    });
+
+    it('passes an errorCallbackURL pointing at /login to Google sign-in', async () => {
+        mocks.getSignupStatus.mockResolvedValue({ open: true });
+        renderLogin();
+        fireEvent.click(screen.getByText('Sign in with Google'));
+        await waitFor(() => expect(mocks.signInSocial).toHaveBeenCalledWith(expect.objectContaining({
+            errorCallbackURL: expect.stringContaining('/login'),
+        })));
+    });
+});
+
+describe('isSignupCapOAuthError', () => {
+    it('matches only the signup-cap error slug', async () => {
+        const { isSignupCapOAuthError } = await import('../../shared/signupCapMessages.js');
+        expect(isSignupCapOAuthError('Signups_are_temporarily_closed_—_the_free_account_limit_has_been_reached.')).toBe(true);
+        expect(isSignupCapOAuthError('Signups_are_temporarily_closed')).toBe(true);
+        expect(isSignupCapOAuthError('invalid_code')).toBe(false);
+        expect(isSignupCapOAuthError(null)).toBe(false);
+    });
 });

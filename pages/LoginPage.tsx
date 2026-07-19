@@ -3,6 +3,7 @@ import { signIn, signUp, authClient, useSession } from '../lib/auth-client';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { Loader2 } from 'lucide-react';
 import { validatePassword } from '../shared/passwordPolicy.js';
+import { isSignupCapOAuthError } from '../shared/signupCapMessages.js';
 import { cloudApi } from '../services/cloudApi';
 
 // A 403 from sign-in/email can mean the account is unverified OR (admin plugin)
@@ -42,6 +43,7 @@ export const LoginPage = () => {
     const location = useLocation();
     const from = (location.state as { from?: string } | null)?.from;
     const verifiedBanner = new URLSearchParams(location.search).get('verified') === '1';
+    const oauthCapRejected = isSignupCapOAuthError(new URLSearchParams(location.search).get('error'));
     const verificationCallbackURL = `${window.location.origin}/login?verified=1`;
     const { data: session } = useSession();
 
@@ -57,12 +59,21 @@ export const LoginPage = () => {
     useEffect(() => {
         let cancelled = false;
         cloudApi.getSignupStatus()
-            // Functional update so a status response that arrives after a submit-time
-            // SIGNUP_CAP_REACHED error can never reopen the closed panel.
-            .then(({ open }) => { if (!cancelled) setSignupOpen(prev => prev && open); })
+            // prev && open (not plain `open`): Task 4 made the close monotonic — a
+            // deferred/stale open:true response must never reopen a panel closed by a
+            // submit-time SIGNUP_CAP_REACHED. The oauthCapRejected guard extends the
+            // same rule to the OAuth-rejection close.
+            .then(({ open }) => { if (!cancelled && !oauthCapRejected) setSignupOpen(prev => prev && open); })
             .catch(() => { /* Fail toward the normal form; the server still enforces the cap. */ });
         return () => { cancelled = true; };
-    }, []);
+    }, [oauthCapRejected]);
+
+    useEffect(() => {
+        if (oauthCapRejected) {
+            setIsLogin(false);
+            setSignupOpen(false);
+        }
+    }, [oauthCapRejected]);
 
     const isCapError = (error: any): boolean => error?.code === 'SIGNUP_CAP_REACHED';
 
@@ -328,7 +339,8 @@ export const LoginPage = () => {
                         onClick={async () => {
                             await signIn.social({
                                 provider: "google",
-                                callbackURL: window.location.origin + (from ?? '/app')
+                                callbackURL: window.location.origin + (from ?? '/app'),
+                                errorCallbackURL: window.location.origin + '/login'
                             });
                         }}
                         className="w-full flex items-center justify-center gap-2 border border-gray-300 bg-white text-gray-700 py-2 rounded-md hover:bg-gray-50 transition-colors font-medium text-sm"
