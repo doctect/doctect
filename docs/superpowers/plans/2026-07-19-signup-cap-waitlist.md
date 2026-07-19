@@ -1082,7 +1082,11 @@ Add an effect after the signup-status effect from Task 4, and guard that effect'
     useEffect(() => {
         let cancelled = false;
         cloudApi.getSignupStatus()
-            .then(({ open }) => { if (!cancelled && !oauthCapRejected) setSignupOpen(open); })
+            // prev && open (not plain `open`): Task 4 made the close monotonic — a
+            // deferred/stale open:true response must never reopen a panel closed by a
+            // submit-time SIGNUP_CAP_REACHED. The oauthCapRejected guard extends the
+            // same rule to the OAuth-rejection close.
+            .then(({ open }) => { if (!cancelled && !oauthCapRejected) setSignupOpen(prev => prev && open); })
             .catch(() => { /* Fail toward the normal form; the server still enforces the cap. */ });
         return () => { cancelled = true; };
     }, [oauthCapRejected]);
