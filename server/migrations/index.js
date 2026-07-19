@@ -514,5 +514,16 @@ export const migrations = [
             `CREATE TRIGGER IF NOT EXISTS platform_audit_actions_no_update BEFORE UPDATE ON platform_audit_actions BEGIN SELECT RAISE(ABORT, 'platform_audit_actions is append-only'); END`,
             `CREATE TRIGGER IF NOT EXISTS platform_audit_actions_no_delete BEFORE DELETE ON platform_audit_actions BEGIN SELECT RAISE(ABORT, 'platform_audit_actions is append-only'); END`,
         ],
-    }
+    },
+    {
+        id: '015_waitlist',
+        pg: `
+            CREATE TABLE IF NOT EXISTS waitlist (
+                id TEXT PRIMARY KEY,
+                email TEXT NOT NULL UNIQUE,
+                "createdAt" TIMESTAMP NOT NULL
+            )
+        `
+        // sqlite: same DDL works on better-sqlite3 (TIMESTAMP degrades to TEXT affinity)
+    },
 ];

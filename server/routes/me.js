@@ -1,6 +1,8 @@
+import { randomUUID } from 'crypto';
 import { Router } from 'express';
 import { strictOptionalAuth } from '../middleware/guards.js';
 import { query } from '../db.js';
+import { isSignupOpen } from '../signupCap.js';
 
 const router = Router();
 
@@ -37,6 +39,38 @@ router.get('/api/users/:username', async (req, res) => {
             ratingCount: Number(r.rating_count ?? 0)
         }))
     });
+});
+
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+router.get('/api/signup-status', async (req, res) => {
+    let open = true;
+    try {
+        open = await isSignupOpen();
+    } catch (error) {
+        // Same fail-open stance as the signup hook: a broken counter reads as open.
+        console.error('Signup status check failed:', error);
+    }
+    // Deliberately exposes only the boolean — never the count or the cap value.
+    res.json({ open });
+});
+
+router.post('/api/waitlist', async (req, res) => {
+    if (await isSignupOpen()) {
+        // Signups open: refuse, so the table can't become a general email collector.
+        return res.status(409).json({ error: 'Signups are open — you can create an account right now.', code: 'SIGNUPS_OPEN' });
+    }
+    const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+    if (!email || email.length > 254 || !EMAIL_PATTERN.test(email)) {
+        return res.status(400).json({ error: 'Enter a valid email address.' });
+    }
+    // ON CONFLICT DO NOTHING: duplicate joins are idempotent success and don't
+    // reveal whether an address was already on the list. Same syntax on both DBs.
+    await query(
+        'INSERT INTO waitlist (id, email, "createdAt") VALUES ($1, $2, $3) ON CONFLICT (email) DO NOTHING',
+        [randomUUID(), email, new Date().toISOString()]
+    );
+    res.json({ ok: true });
 });
 
 export default router;
