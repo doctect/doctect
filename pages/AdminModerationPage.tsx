@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { AdminWaitlistSection } from '../components/AdminWaitlistSection';
 import { AppHeader } from '../components/AppHeader';
 import { ModerationConfirmationDialog, moderationDurations } from '../components/moderation/ModerationConfirmationDialog';
 import type { ModerationConfirmation, ModerationDuration } from '../components/moderation/ModerationConfirmationDialog';
@@ -555,6 +556,8 @@ export function AdminModerationPage({ actorRole }: { actorRole: Extract<Platform
                             </div>
                         </section>
                     )}
+
+                    <AdminWaitlistSection />
 
                     {confirming && hasCurrentAuthority(confirming) && (
                         <ModerationConfirmationDialog

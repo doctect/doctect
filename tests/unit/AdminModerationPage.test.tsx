@@ -13,6 +13,7 @@ const api = vi.hoisted(() => ({
     promoteAdmin: vi.fn(),
     revokeAdmin: vi.fn(),
     getGlobalAudit: vi.fn(),
+    getAdminWaitlist: vi.fn(),
 }));
 
 vi.mock('../../services/cloudApi', async importOriginal => ({
@@ -67,6 +68,7 @@ describe('AdminModerationPage', () => {
             account: { ...account, role: 'user', moderationVersion: 4 }, actions: [],
         });
         api.getGlobalAudit.mockResolvedValue({ items: [], nextCursor: null });
+        api.getAdminWaitlist.mockResolvedValue({ count: 0, entries: [] });
     });
 
     it('mounts global audit for owners but never for admins', async () => {
