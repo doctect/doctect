@@ -116,6 +116,20 @@ describe('LoginPage waitlist behavior', () => {
         expect(screen.queryByText(/Free accounts are full/)).not.toBeInTheDocument();
     });
 
+    it('surfaces a generic error banner for unrelated OAuth errors', async () => {
+        mocks.getSignupStatus.mockResolvedValue({ open: true });
+        renderLogin('/login?error=invalid_code');
+        expect(await screen.findByText('Google sign-in failed — please try again.')).toBeInTheDocument();
+        expect(screen.queryByText(/Free accounts are full/)).not.toBeInTheDocument();
+    });
+
+    it('shows no OAuth error banner on a plain /login render', async () => {
+        mocks.getSignupStatus.mockResolvedValue({ open: true });
+        renderLogin();
+        await waitFor(() => expect(mocks.getSignupStatus).toHaveBeenCalled());
+        expect(screen.queryByText('Google sign-in failed — please try again.')).not.toBeInTheDocument();
+    });
+
     it('passes an errorCallbackURL pointing at /login to Google sign-in', async () => {
         mocks.getSignupStatus.mockResolvedValue({ open: true });
         renderLogin();

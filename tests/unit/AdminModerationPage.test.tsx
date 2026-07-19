@@ -71,6 +71,12 @@ describe('AdminModerationPage', () => {
         api.getAdminWaitlist.mockResolvedValue({ count: 0, entries: [] });
     });
 
+    it('mounts the admin waitlist section', async () => {
+        renderPage();
+        expect(await screen.findByText('Waitlist (0)')).toBeInTheDocument();
+        await screen.findByRole('link', { name: 'Sign in' });
+    });
+
     it('mounts global audit for owners but never for admins', async () => {
         const admin = renderPage('admin');
         expect(screen.queryByRole('heading', { name: 'Global audit' })).toBeNull();

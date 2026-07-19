@@ -43,7 +43,8 @@ export const LoginPage = () => {
     const location = useLocation();
     const from = (location.state as { from?: string } | null)?.from;
     const verifiedBanner = new URLSearchParams(location.search).get('verified') === '1';
-    const oauthCapRejected = isSignupCapOAuthError(new URLSearchParams(location.search).get('error'));
+    const oauthErrorParam = new URLSearchParams(location.search).get('error');
+    const oauthCapRejected = isSignupCapOAuthError(oauthErrorParam);
     const verificationCallbackURL = `${window.location.origin}/login?verified=1`;
     const { data: session } = useSession();
 
@@ -72,8 +73,13 @@ export const LoginPage = () => {
         if (oauthCapRejected) {
             setIsLogin(false);
             setSignupOpen(false);
+        } else if (oauthErrorParam) {
+            // Any non-cap ?error= slug (invalid_code, access_denied, …) means a
+            // genuine Google OAuth failure landed here via errorCallbackURL —
+            // never leave the user staring at a silent login form.
+            setError('Google sign-in failed — please try again.');
         }
-    }, [oauthCapRejected]);
+    }, [oauthCapRejected, oauthErrorParam]);
 
     const isCapError = (error: any): boolean => error?.code === 'SIGNUP_CAP_REACHED';
 
