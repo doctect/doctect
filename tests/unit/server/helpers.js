@@ -49,6 +49,10 @@ export const initTestApp = async () => {
     // signup send real Resend email. Present-but-empty wins over dotenv and
     // is falsy to server/email.js (console fallback).
     process.env.RESEND_API_KEY = '';
+    // A developer's .env may set SIGNUP_CAP (e.g. 0 to rehearse the closed
+    // state); unit tests create accounts constantly and must never hit the cap.
+    // Present-but-empty = default cap, never delete (dotenv resurrection).
+    process.env.SIGNUP_CAP = '';
     const { runMigrations } = await import('../../../server/migrations.js');
     await runMigrations();
     const { createApp } = await import('../../../server/app.js');

@@ -74,6 +74,7 @@ module.exports = defineConfig({
             ...process.env,
             PORT: String(apiPort),
             RESEND_API_KEY: '',
+            SIGNUP_CAP: '',
             OWNER_EMAILS: e2eOwnerEmail,
             CLIENT_URL: webOrigin,
             BETTER_AUTH_URL: `${apiOrigin}/api/auth`,

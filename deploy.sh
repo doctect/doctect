@@ -82,6 +82,7 @@ OWNER_EMAILS="${OWNER_EMAILS:-}"
 DATABASE_URL="${DATABASE_URL:-}"
 RESEND_API_KEY="${RESEND_API_KEY:-}"
 EMAIL_FROM="${EMAIL_FROM:-}"
+SIGNUP_CAP="${SIGNUP_CAP:-}"
 TRUSTED_ORIGINS="${TRUSTED_ORIGINS:-}"
 CLIENT_URL="${CLIENT_URL:-}"
 BETTER_AUTH_URL="${BETTER_AUTH_URL:-}"
@@ -137,7 +138,8 @@ gcloud run deploy "$APP_NAME" \
   --set-env-vars "^;^OWNER_EMAILS=${OWNER_EMAILS}" \
   --set-env-vars "DATABASE_URL=$DATABASE_URL" \
   --set-env-vars "RESEND_API_KEY=$RESEND_API_KEY" \
-  --set-env-vars "EMAIL_FROM=$EMAIL_FROM"
+  --set-env-vars "EMAIL_FROM=$EMAIL_FROM" \
+  --set-env-vars "SIGNUP_CAP=$SIGNUP_CAP"
 # Get the deployed URL
 SERVICE_URL=$(gcloud run services describe "$APP_NAME" --platform managed --region "$REGION" --format 'value(status.url)')
 

@@ -72,6 +72,7 @@ const runDeploy = ({ failStage = '', repositoryState = 'absent', serviceEnvState
             DATABASE_URL: 'postgres://deploy-test',
             RESEND_API_KEY: '',
             EMAIL_FROM: '',
+            SIGNUP_CAP: '7',
             TRUSTED_ORIGINS: '',
             CLIENT_URL: '',
             BETTER_AUTH_URL: '',
@@ -112,6 +113,7 @@ describe('deploy.sh failure handling', () => {
         expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
         expect(result.calls).not.toContain('artifacts repositories create');
         expect(result.calls).not.toContain('--remove-env-vars BETTER_AUTH_URL');
+        expect(result.calls).toContain('SIGNUP_CAP=7');
         expect(result.stdout).toContain('Artifact Registry repository already exists.');
         expect(result.stdout).toContain('BETTER_AUTH_URL is already absent.');
         expect(result.stdout).toContain('Deployment complete!');

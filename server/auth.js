@@ -6,6 +6,8 @@ import { validatePassword } from "../shared/passwordPolicy.js";
 import db from "./db.js";
 import { sendEmail } from "./email.js";
 import { reconcileOwnerAuthority } from "./ownerAuthority.js";
+import { isSignupOpen } from "./signupCap.js";
+import { SIGNUP_CAP_MESSAGE } from "../shared/signupCapMessages.js";
 
 // Paths where a password is being SET. Sign-in is deliberately absent:
 // pre-existing weaker passwords must keep working until changed.
@@ -96,6 +98,19 @@ export const createAuth = (config = {}) => {
         databaseHooks: {
             user: {
                 create: {
+                    before: async (user) => {
+                        let open = true;
+                        try {
+                            open = await isSignupOpen();
+                        } catch (error) {
+                            // Fail open: a broken counter must not lock signups entirely.
+                            console.error('Signup cap check failed:', error);
+                        }
+                        if (!open) {
+                            throw new APIError("FORBIDDEN", { message: SIGNUP_CAP_MESSAGE, code: "SIGNUP_CAP_REACHED" });
+                        }
+                        return { data: user };
+                    },
                     after: async (user) => {
                         try {
                             await reconcileOwnerAuthority({ userId: user.id });
