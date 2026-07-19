@@ -3,6 +3,7 @@ import { signIn, signUp, authClient, useSession } from '../lib/auth-client';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { Loader2 } from 'lucide-react';
 import { validatePassword } from '../shared/passwordPolicy.js';
+import { cloudApi } from '../services/cloudApi';
 
 // A 403 from sign-in/email can mean the account is unverified OR (admin plugin)
 // that the user is banned -- both surface as status 403, so the status alone
@@ -32,6 +33,11 @@ export const LoginPage = () => {
     const [verifyEmailFor, setVerifyEmailFor] = useState<string | null>(null);
     const [resent, setResent] = useState(false);
     const [resendError, setResendError] = useState<string | null>(null);
+    const [signupOpen, setSignupOpen] = useState(true);
+    const [waitlistEmail, setWaitlistEmail] = useState('');
+    const [waitlistJoined, setWaitlistJoined] = useState(false);
+    const [waitlistError, setWaitlistError] = useState<string | null>(null);
+    const [waitlistBusy, setWaitlistBusy] = useState(false);
     const navigate = useNavigate();
     const location = useLocation();
     const from = (location.state as { from?: string } | null)?.from;
@@ -47,6 +53,32 @@ export const LoginPage = () => {
             navigate(from ?? '/app', { replace: true });
         }
     }, [verifiedBanner, session, from, navigate]);
+
+    useEffect(() => {
+        let cancelled = false;
+        cloudApi.getSignupStatus()
+            // Functional update so a status response that arrives after a submit-time
+            // SIGNUP_CAP_REACHED error can never reopen the closed panel.
+            .then(({ open }) => { if (!cancelled) setSignupOpen(prev => prev && open); })
+            .catch(() => { /* Fail toward the normal form; the server still enforces the cap. */ });
+        return () => { cancelled = true; };
+    }, []);
+
+    const isCapError = (error: any): boolean => error?.code === 'SIGNUP_CAP_REACHED';
+
+    const handleJoinWaitlist = async (e: React.FormEvent) => {
+        e.preventDefault();
+        setWaitlistBusy(true);
+        setWaitlistError(null);
+        try {
+            await cloudApi.joinWaitlist(waitlistEmail.trim());
+            setWaitlistJoined(true);
+        } catch (err: any) {
+            setWaitlistError(err.message || 'Something went wrong — try again.');
+        } finally {
+            setWaitlistBusy(false);
+        }
+    };
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -105,11 +137,19 @@ export const LoginPage = () => {
                         setVerifyEmailFor(email);
                     },
                     onError: (ctx) => {
-                        setError(ctx.error.message);
+                        if (isCapError(ctx.error)) {
+                            setSignupOpen(false);
+                        } else {
+                            setError(ctx.error.message);
+                        }
                     }
                 });
                 if (result?.error) {
-                    setError(result.error.message);
+                    if (isCapError(result.error)) {
+                        setSignupOpen(false);
+                    } else {
+                        setError(result.error.message);
+                    }
                 } else if (result?.data) {
                     setVerifyEmailFor(email);
                 }
@@ -125,7 +165,7 @@ export const LoginPage = () => {
         <div className="h-screen overflow-y-auto flex items-center justify-center bg-gray-50 p-4">
             <div className="w-full max-w-md bg-white rounded-lg shadow-md p-8">
                 <h2 className="text-2xl font-bold mb-6 text-center text-gray-800">
-                    {verifyEmailFor ? 'Verify your email' : (isLogin ? 'Sign In' : 'Create Account')}
+                    {verifyEmailFor ? 'Verify your email' : (isLogin ? 'Sign In' : (signupOpen ? 'Create Account' : 'Join the waitlist'))}
                 </h2>
 
                 {verifiedBanner && !verifyEmailFor && (
@@ -169,6 +209,40 @@ export const LoginPage = () => {
                         >
                             Back
                         </button>
+                    </div>
+                ) : (!isLogin && !signupOpen) ? (
+                    <div className="space-y-4">
+                        <p className="text-slate-600 text-sm">
+                            Free accounts are full — we cap accounts at launch. Leave your email and
+                            we'll let you know when spots open. You can keep using the editor and
+                            gallery without an account.
+                        </p>
+                        {waitlistJoined ? (
+                            <p className="text-sm text-green-600">You're on the list — we'll be in touch.</p>
+                        ) : (
+                            <form onSubmit={handleJoinWaitlist} className="space-y-3">
+                                <div>
+                                    <label htmlFor="waitlist-email" className="block text-sm font-medium text-gray-700 mb-1">Email</label>
+                                    <input
+                                        id="waitlist-email"
+                                        type="email"
+                                        value={waitlistEmail}
+                                        onChange={(e) => setWaitlistEmail(e.target.value)}
+                                        className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                        required
+                                    />
+                                </div>
+                                {waitlistError && <p className="text-sm text-red-600">{waitlistError}</p>}
+                                <button
+                                    type="submit"
+                                    disabled={waitlistBusy}
+                                    className="w-full bg-blue-600 text-white py-2 rounded-md hover:bg-blue-700 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+                                >
+                                    {waitlistBusy && <Loader2 size={16} className="animate-spin" />}
+                                    Join the waitlist
+                                </button>
+                            </form>
+                        )}
                     </div>
                 ) : (
                 <form onSubmit={handleSubmit} className="space-y-4">

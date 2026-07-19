@@ -180,6 +180,12 @@ export const cloudApi = {
     me: async (): Promise<MeUser | null> =>
         (await api<{ user: MeUser | null }>('/api/me')).user,
 
+    getSignupStatus: () => api<{ open: boolean }>('/api/signup-status'),
+    joinWaitlist: (email: string) =>
+        api<{ ok: true }>('/api/waitlist', { method: 'POST', body: JSON.stringify({ email }) }),
+    getAdminWaitlist: () =>
+        api<{ count: number; entries: { email: string; createdAt: string }[] }>('/api/admin/waitlist'),
+
     createProject: (args: { name: string; state: AppState; message?: string }) =>
         api<{ project: CloudProject; commit: { id: string } }>('/api/projects', { method: 'POST', body: JSON.stringify(args) }),
 
