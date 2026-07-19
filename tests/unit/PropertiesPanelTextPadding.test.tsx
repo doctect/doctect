@@ -1,5 +1,5 @@
 import React from 'react';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PropertiesPanel } from '../../components/PropertiesPanel';
 import type { AppNode, AppState, TemplateElement } from '../../types';
@@ -36,11 +36,31 @@ const callbacks = () => ({
 });
 
 afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
     document.body.replaceChildren();
 });
 
 describe('PropertiesPanel text padding', () => {
+    it('renders one compact four-side row below the text alignment controls', () => {
+        const source = text('one', { autoWidth: false });
+        const props = callbacks();
+        render(<PropertiesPanel state={stateFor([source], ['one'])} {...props} />);
+
+        const controls = screen.getByTestId('text-padding-controls');
+        const alignLeft = screen.getByTitle('Align Left');
+        const alignmentRow = alignLeft.parentElement?.parentElement;
+        expect(alignLeft.compareDocumentPosition(controls) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+        expect(alignmentRow?.nextElementSibling).toBe(controls);
+        const inputs = within(controls).getAllByRole('spinbutton');
+        expect(inputs).toHaveLength(4);
+        inputs.forEach(input => expect(input).toHaveClass('pr-5'));
+        expect(within(controls).getByText('T')).toBeVisible();
+        expect(within(controls).getByText('R')).toBeVisible();
+        expect(within(controls).getByText('B')).toBeVisible();
+        expect(within(controls).getByText('L')).toBeVisible();
+    });
+
     it('applies one linked decimal to all sides in one saved update', () => {
         const source = text('one', { autoWidth: false, textPadding: { top: 0, right: 0, bottom: 0, left: 0 } });
         const props = callbacks();
@@ -54,6 +74,137 @@ describe('PropertiesPanel text padding', () => {
             ...source,
             textPadding: { top: 7.5, right: 7.5, bottom: 7.5, left: 7.5 },
         }], true);
+    });
+
+    it('increments the selected side by one and applies it through linked mode', () => {
+        const source = text('one', { autoWidth: false, textPadding: { top: 2, right: 4, bottom: 6, left: 8 } });
+        const props = callbacks();
+        render(<PropertiesPanel state={stateFor([source], ['one'])} {...props} />);
+
+        const increase = screen.getByLabelText('Increase top padding');
+        fireEvent.mouseDown(increase);
+        fireEvent.mouseUp(increase);
+
+        expect(props.onUpdateElements).toHaveBeenCalledOnce();
+        expect(props.onUpdateElements).toHaveBeenCalledWith([{
+            ...source,
+            textPadding: { top: 3, right: 3, bottom: 3, left: 3 },
+        }], true);
+    });
+
+    it('supports keyboard increments through the number input', () => {
+        const source = text('one', { autoWidth: false, textPadding: { top: 2, right: 4, bottom: 6, left: 8 } });
+        const props = callbacks();
+        render(<PropertiesPanel state={stateFor([source], ['one'])} {...props} />);
+
+        fireEvent.keyDown(screen.getByLabelText('Padding top'), { key: 'ArrowUp' });
+
+        expect(props.onUpdateElements).toHaveBeenCalledWith([{
+            ...source,
+            textPadding: { top: 3, right: 3, bottom: 3, left: 3 },
+        }], true);
+    });
+
+    it('supports click activation for assistive technology', () => {
+        const source = text('one', { autoWidth: false, textPadding: { top: 2, right: 4, bottom: 6, left: 8 } });
+        const props = callbacks();
+        render(<PropertiesPanel state={stateFor([source], ['one'])} {...props} />);
+
+        fireEvent.click(screen.getByLabelText('Increase top padding'), { detail: 0 });
+
+        expect(props.onUpdateElements).toHaveBeenCalledWith([{
+            ...source,
+            textPadding: { top: 3, right: 3, bottom: 3, left: 3 },
+        }], true);
+    });
+
+    it('treats a mixed value as zero when incrementing and clamps decrement at zero when unlinked', () => {
+        const first = text('first', { autoWidth: false, textPadding: { top: 2, right: 0, bottom: 3, left: 4 } });
+        const second = text('second', { autoWidth: false, textPadding: { top: 5, right: 0, bottom: 7, left: 8 } });
+        const props = callbacks();
+        render(<PropertiesPanel state={stateFor([first, second], ['first', 'second'])} {...props} />);
+        fireEvent.click(screen.getByLabelText('Link padding sides'));
+
+        fireEvent.mouseDown(screen.getByLabelText('Increase top padding'));
+        fireEvent.mouseUp(screen.getByLabelText('Increase top padding'));
+        expect(props.onUpdateElements).toHaveBeenLastCalledWith([
+            { ...first, textPadding: { top: 1, right: 0, bottom: 3, left: 4 } },
+            { ...second, textPadding: { top: 1, right: 0, bottom: 7, left: 8 } },
+        ], true);
+
+        fireEvent.mouseDown(screen.getByLabelText('Decrease right padding'));
+        fireEvent.mouseUp(screen.getByLabelText('Decrease right padding'));
+        expect(props.onUpdateElements).toHaveBeenLastCalledWith([first, second], true);
+    });
+
+    it('repeats increments while held and stops the timer when unmounted', () => {
+        vi.useFakeTimers();
+        const source = text('one', { autoWidth: false, textPadding: { top: 0, right: 0, bottom: 0, left: 0 } });
+        const props = callbacks();
+        const view = render(<PropertiesPanel state={stateFor([source], ['one'])} {...props} />);
+
+        fireEvent.mouseDown(screen.getByLabelText('Increase top padding'));
+        expect(props.onUpdateElements).toHaveBeenCalledOnce();
+        act(() => vi.advanceTimersByTime(400));
+        expect(props.onUpdateElements).toHaveBeenCalledTimes(3);
+        expect(props.onUpdateElements).toHaveBeenLastCalledWith([{
+            ...source,
+            textPadding: { top: 3, right: 3, bottom: 3, left: 3 },
+        }], true);
+
+        view.unmount();
+        act(() => vi.advanceTimersByTime(500));
+        expect(props.onUpdateElements).toHaveBeenCalledTimes(3);
+    });
+
+    it('uses the latest commit callback while a held increment repeats', () => {
+        vi.useFakeTimers();
+        const source = text('one', { autoWidth: false, textPadding: { top: 0, right: 0, bottom: 0, left: 0 } });
+        const firstProps = callbacks();
+        const nextProps = callbacks();
+        const state = stateFor([source], ['one']);
+        const view = render(<PropertiesPanel state={state} {...firstProps} />);
+
+        fireEvent.mouseDown(screen.getByLabelText('Increase top padding'));
+        expect(firstProps.onUpdateElements).toHaveBeenCalledOnce();
+        view.rerender(<PropertiesPanel state={state} {...nextProps} />);
+        act(() => vi.advanceTimersByTime(400));
+
+        expect(firstProps.onUpdateElements).toHaveBeenCalledOnce();
+        expect(nextProps.onUpdateElements).toHaveBeenCalledTimes(2);
+        fireEvent.mouseUp(screen.getByLabelText('Increase top padding'));
+    });
+
+    it('stops held repeats on mouse release and mouse leave', () => {
+        vi.useFakeTimers();
+        const source = text('one', { autoWidth: false });
+        const props = callbacks();
+        render(<PropertiesPanel state={stateFor([source], ['one'])} {...props} />);
+        const increase = screen.getByLabelText('Increase top padding');
+
+        fireEvent.mouseDown(increase);
+        fireEvent.mouseUp(increase);
+        act(() => vi.advanceTimersByTime(500));
+        expect(props.onUpdateElements).toHaveBeenCalledOnce();
+
+        fireEvent.mouseDown(increase);
+        fireEvent.mouseLeave(increase);
+        act(() => vi.advanceTimersByTime(500));
+        expect(props.onUpdateElements).toHaveBeenCalledTimes(2);
+    });
+
+    it('stops a held repeat when the selected element set changes', () => {
+        vi.useFakeTimers();
+        const first = text('first', { autoWidth: false });
+        const second = text('second', { autoWidth: false });
+        const props = callbacks();
+        const view = render(<PropertiesPanel state={stateFor([first, second], ['first'])} {...props} />);
+
+        fireEvent.mouseDown(screen.getByLabelText('Increase top padding'));
+        view.rerender(<PropertiesPanel state={stateFor([first, second], ['second'])} {...props} />);
+        act(() => vi.advanceTimersByTime(500));
+
+        expect(props.onUpdateElements).toHaveBeenCalledOnce();
     });
 
     it('applies a linked mixed multi-selection edit to every side in one saved update', () => {
@@ -98,7 +249,16 @@ describe('PropertiesPanel text padding', () => {
         const props = callbacks();
         const view = render(<PropertiesPanel state={stateFor([auto], ['auto'])} {...props} />);
         expect(screen.getByLabelText('Padding top')).toBeDisabled();
-        expect(screen.getByText('Padding applies only to fixed-size text.')).toBeVisible();
+        expect(screen.getByLabelText('Increase top padding')).toBeDisabled();
+        expect(screen.getByLabelText('Decrease top padding')).toBeDisabled();
+        const controls = screen.getByTestId('text-padding-controls');
+        const tooltip = screen.getByRole('tooltip');
+        expect(controls).toHaveAttribute('tabindex', '0');
+        expect(controls).toHaveAttribute('aria-describedby', tooltip.id);
+        expect(controls).toHaveClass('focus-visible:ring-2');
+        expect(screen.getByText('T').closest('label')).toHaveClass('focus-within:ring-1');
+        expect(tooltip).toHaveTextContent('Padding applies only to fixed-size text. Turn off Auto width to edit it.');
+        expect(tooltip).toHaveClass('group-hover:opacity-100', 'group-focus:opacity-100');
 
         view.rerender(<PropertiesPanel state={stateFor([fixed, auto], ['fixed', 'auto'])} {...props} />);
         expect(screen.getByLabelText('Padding top')).toBeDisabled();

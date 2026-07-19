@@ -1127,15 +1127,6 @@ export const SingleElementEditor: React.FC<SingleElementEditorProps> = ({
                         </div>
                     )}
 
-                    {textPaddingSelection && (
-                        <TextPaddingControls
-                            values={textPaddingSelection}
-                            disabled={autoWidthSelection !== false}
-                            selectionKey={textPaddingSelectionKey}
-                            onCommit={handleTextPaddingCommit}
-                        />
-                    )}
-
                     {element.type !== 'grid' && (
                         <div>
                             <textarea
@@ -1315,6 +1306,14 @@ export const SingleElementEditor: React.FC<SingleElementEditorProps> = ({
                                 <button onClick={() => onUpdate({ verticalAlign: 'bottom' })} className={clsx("p-1 rounded", element.verticalAlign === 'bottom' && "bg-white shadow-sm text-blue-600")} title="Align Bottom"><AlignEndVertical size={12} /></button>
                             </div>
                         </div>
+                        {textPaddingSelection && (
+                            <TextPaddingControls
+                                values={textPaddingSelection}
+                                disabled={autoWidthSelection !== false}
+                                selectionKey={textPaddingSelectionKey}
+                                onCommit={handleTextPaddingCommit}
+                            />
+                        )}
                     </div>
                     </div>
                 </CollapsibleSection>
