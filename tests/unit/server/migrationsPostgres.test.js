@@ -150,12 +150,16 @@ describe('PostgreSQL migration contract', () => {
         const { runMigrations } = await import('../../../server/migrations.js');
         await runMigrations();
 
-        expect(migrations.slice(-4).map(({ id }) => id)).toEqual([
+        // Select by id, not position: a positional slice(-4) broke every time a
+        // later migration was appended. This still proves each audit-era
+        // migration exists exactly once and in order.
+        const auditIds = [
             '011_account_moderation',
             '012_session_suspension_guard',
             '013_session_suspension_wall_clock',
             '014_platform_audit_actions',
-        ]);
+        ];
+        expect(migrations.map(({ id }) => id).filter(id => auditIds.includes(id))).toEqual(auditIds);
         const texts = dbCalls.map(call => call.text);
         expect(texts).toContain(`CREATE TABLE IF NOT EXISTS platform_audit_actions (
       id TEXT PRIMARY KEY,
