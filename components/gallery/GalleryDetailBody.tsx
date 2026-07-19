@@ -5,6 +5,7 @@ import { API_BASE } from '../../services/cloudApi';
 import { HistoryModal } from '../cloud/HistoryModal';
 import { UseGalleryDetailResult } from '../../hooks/useGalleryDetail';
 import { GalleryLink } from './GalleryLink';
+import { ProjectDescription } from './ProjectDescription';
 import { StarRating } from './StarRating';
 import { ReviewsSection } from './ReviewsSection';
 
@@ -37,7 +38,7 @@ export function GalleryDetailBody({ detail }: { detail: UseGalleryDetailResult }
                             {project.forkedFrom.author}/{project.forkedFrom.name}</GalleryLink>
                     </div>
                 )}
-                <p className="text-sm text-slate-600 mt-4 whitespace-pre-wrap">{project.description}</p>
+                <ProjectDescription text={project.description} />
                 <div className="flex flex-wrap gap-1 mt-3">
                     {project.tags.map(t => (
                         <button key={t} type="button" onClick={() => navigate(`/gallery?tag=${encodeURIComponent(t)}`)}
