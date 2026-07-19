@@ -40,7 +40,7 @@
 - Consumes: `query()` from `server/db.js`; `APIError` already imported in `server/auth.js`.
 - Produces: `getSignupCap(): number` and `isSignupOpen(): Promise<boolean>` (both exported from `server/signupCap.js`); `SIGNUP_CAP_MESSAGE: string` and `isSignupCapOAuthError(errorParam: string | null): boolean` (exported from `shared/signupCapMessages.js`); HTTP behavior: any account-creating auth call returns 403 with body `{ message: SIGNUP_CAP_MESSAGE, code: 'SIGNUP_CAP_REACHED' }` when the cap is reached. Tasks 2, 4, and 6 depend on these exact names.
 
-- [ ] **Step 1: Seal SIGNUP_CAP in the test and e2e harnesses**
+- [x] **Step 1: Seal SIGNUP_CAP in the test and e2e harnesses**
 
 In `tests/unit/server/helpers.js`, immediately after the `process.env.RESEND_API_KEY = '';` line (line 51), add:
 
@@ -57,7 +57,7 @@ In `playwright.config.cjs`, in the webServer `env` block after `RESEND_API_KEY: 
             SIGNUP_CAP: '',
 ```
 
-- [ ] **Step 2: Write the failing test**
+- [x] **Step 2: Write the failing test**
 
 Create `tests/unit/server/signupCap.test.js`:
 
@@ -165,12 +165,12 @@ describe('signup cap enforcement', () => {
 });
 ```
 
-- [ ] **Step 3: Run the test to verify it fails**
+- [x] **Step 3: Run the test to verify it fails**
 
 Run: `npx vitest run tests/unit/server/signupCap.test.js`
 Expected: FAIL — the cap tests ("blocks signup", "SIGNUP_CAP=0", "no user row", "fails open") fail because signups currently succeed regardless of `SIGNUP_CAP`.
 
-- [ ] **Step 4: Implement the cap module and shared message**
+- [x] **Step 4: Implement the cap module and shared message**
 
 Create `server/signupCap.js`:
 
@@ -212,7 +212,7 @@ export const isSignupCapOAuthError = (errorParam) =>
     typeof errorParam === 'string' && errorParam.startsWith('Signups_are_temporarily_closed');
 ```
 
-- [ ] **Step 5: Wire the hook into `server/auth.js`**
+- [x] **Step 5: Wire the hook into `server/auth.js`**
 
 Add imports at the top, next to the existing local imports:
 
@@ -254,12 +254,12 @@ Replace the existing `databaseHooks` block (lines 96–108) with:
 
 (The `after` hook is unchanged — only `before` is new.)
 
-- [ ] **Step 6: Run the test to verify it passes**
+- [x] **Step 6: Run the test to verify it passes**
 
 Run: `npx vitest run tests/unit/server/signupCap.test.js`
 Expected: PASS (7 tests).
 
-- [ ] **Step 7: Deploy/env plumbing, test-first**
+- [x] **Step 7: Deploy/env plumbing, test-first**
 
 In `tests/unit/server/deployScript.test.js`: add `SIGNUP_CAP: '7',` to the `runDeploy` env object (after `EMAIL_FROM: '',` line 74), and add this assertion to the `'skips repository creation and env removal when preflights report them present and absent'` test, after the existing `result.calls` assertions:
 
@@ -293,7 +293,7 @@ SIGNUP_CAP=
 Run: `npx vitest run tests/unit/server/deployScript.test.js`
 Expected: PASS.
 
-- [ ] **Step 8: Full server suite, then commit**
+- [x] **Step 8: Full server suite, then commit**
 
 Run: `npx vitest run tests/unit/server`
 Expected: all green (existing suites unaffected — helpers now pin `SIGNUP_CAP=''` = default cap 500, far above any test's account count).
@@ -316,7 +316,7 @@ git commit -m "feat: enforce verified-account signup cap"
 - Consumes: `isSignupOpen()` from `server/signupCap.js` (Task 1); `query` already imported in `me.js`.
 - Produces: `GET /api/signup-status` → `200 { open: boolean }`; `POST /api/waitlist` body `{ email }` → `200 { ok: true }` | `400 { error }` | `409 { error, code: 'SIGNUPS_OPEN' }`; table `waitlist(id TEXT PK, email TEXT NOT NULL UNIQUE, "createdAt" TIMESTAMP NOT NULL)`. Tasks 3 and 4 depend on these exact shapes.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/unit/server/waitlist.test.js`:
 
@@ -383,12 +383,12 @@ describe('POST /api/waitlist', () => {
 });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `npx vitest run tests/unit/server/waitlist.test.js`
 Expected: FAIL — `/api/signup-status` and `/api/waitlist` return 404 (routes don't exist).
 
-- [ ] **Step 3: Append the migration**
+- [x] **Step 3: Append the migration**
 
 In `server/migrations/index.js`, after the closing brace of the `014_platform_audit_actions` entry (keep it inside the `migrations` array), add:
 
@@ -406,7 +406,7 @@ In `server/migrations/index.js`, after the closing brace of the `014_platform_au
     },
 ```
 
-- [ ] **Step 4: Implement the endpoints**
+- [x] **Step 4: Implement the endpoints**
 
 In `server/routes/me.js`, extend the imports:
 
@@ -451,12 +451,12 @@ router.post('/api/waitlist', async (req, res) => {
 });
 ```
 
-- [ ] **Step 5: Run the test to verify it passes**
+- [x] **Step 5: Run the test to verify it passes**
 
 Run: `npx vitest run tests/unit/server/waitlist.test.js`
 Expected: PASS (6 tests).
 
-- [ ] **Step 6: Run migrations + me suites, then commit**
+- [x] **Step 6: Run migrations + me suites, then commit**
 
 Run: `npx vitest run tests/unit/server/migrations.test.js tests/unit/server/me.test.js`
 Expected: PASS.
@@ -478,7 +478,7 @@ git commit -m "feat: waitlist table, signup-status and waitlist endpoints"
 - Consumes: `waitlist` table (Task 2); `requireAdmin`, `query`, `asIso` already present in `adminModeration.js`.
 - Produces: `GET /api/admin/waitlist` → `200 { count: number, entries: [{ email, createdAt }] }` newest first; `401` anonymous, `403` non-admin. Task 5 depends on this shape.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/unit/server/adminWaitlist.test.js`:
 
@@ -525,12 +525,12 @@ describe('GET /api/admin/waitlist', () => {
 });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `npx vitest run tests/unit/server/adminWaitlist.test.js`
 Expected: FAIL — `/api/admin/waitlist` returns 404.
 
-- [ ] **Step 3: Implement the endpoint**
+- [x] **Step 3: Implement the endpoint**
 
 In `server/routes/adminModeration.js`, after the existing `/api/admin/users/:id` GET route, add:
 
@@ -544,12 +544,12 @@ router.get('/api/admin/waitlist', requireAdmin, async (req, res) => {
 });
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `npx vitest run tests/unit/server/adminWaitlist.test.js`
 Expected: PASS (2 tests).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add server/routes/adminModeration.js tests/unit/server/adminWaitlist.test.js
@@ -569,7 +569,7 @@ git commit -m "feat: admin waitlist listing endpoint"
 - Consumes: `GET /api/signup-status`, `POST /api/waitlist` (Task 2); `GET /api/admin/waitlist` (Task 3); the `api<T>` helper and `cloudApi` object in `services/cloudApi.ts`.
 - Produces: `cloudApi.getSignupStatus(): Promise<{ open: boolean }>`, `cloudApi.joinWaitlist(email: string): Promise<{ ok: true }>`, `cloudApi.getAdminWaitlist(): Promise<{ count: number; entries: { email: string; createdAt: string }[] }>`. Tasks 5 and 6 depend on these exact names.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/unit/loginWaitlist.test.tsx`:
 
@@ -680,12 +680,12 @@ describe('LoginPage waitlist behavior', () => {
 });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `npx vitest run tests/unit/loginWaitlist.test.tsx`
 Expected: FAIL — `getSignupStatus` doesn't exist on `cloudApi`, and no waitlist panel renders.
 
-- [ ] **Step 3: Add the cloudApi methods**
+- [x] **Step 3: Add the cloudApi methods**
 
 In `services/cloudApi.ts`, inside the `cloudApi` object, after the `me:` method, add:
 
@@ -697,7 +697,7 @@ In `services/cloudApi.ts`, inside the `cloudApi` object, after the `me:` method,
         api<{ count: number; entries: { email: string; createdAt: string }[] }>('/api/admin/waitlist'),
 ```
 
-- [ ] **Step 4: Implement the LoginPage waitlist panel**
+- [x] **Step 4: Implement the LoginPage waitlist panel**
 
 In `pages/LoginPage.tsx`:
 
@@ -827,12 +827,12 @@ Change the main render branch from `verifyEmailFor ? (...) : (<form ...>)` to a 
 
 The "Don't have an account? / Already have an account?" toggle at the bottom stays as is — switching to Sign Up while closed lands on the waitlist panel.
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `npx vitest run tests/unit/loginWaitlist.test.tsx`
 Expected: PASS (6 tests).
 
-- [ ] **Step 6: Run the other LoginPage suites, then commit**
+- [x] **Step 6: Run the other LoginPage suites, then commit**
 
 Run: `npx vitest run tests/unit/loginRedirect.test.tsx tests/unit/loginPasswordPolicy.test.tsx tests/unit/loginEmailVerification.test.tsx`
 Expected: PASS — the signup form's open-state behavior is unchanged.
@@ -855,7 +855,7 @@ git commit -m "feat: login waitlist panel when signup cap reached"
 - Consumes: `cloudApi.getAdminWaitlist()` (Task 4).
 - Produces: `AdminWaitlistSection` React component (named export, no props), rendered on the admin moderation page.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/unit/adminWaitlistSection.test.tsx`:
 
@@ -902,12 +902,12 @@ describe('AdminWaitlistSection', () => {
 });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `npx vitest run tests/unit/adminWaitlistSection.test.tsx`
 Expected: FAIL — the component module doesn't exist.
 
-- [ ] **Step 3: Implement the component and mount it**
+- [x] **Step 3: Implement the component and mount it**
 
 Create `components/AdminWaitlistSection.tsx`:
 
@@ -986,12 +986,12 @@ and insert between them:
                     <AdminWaitlistSection />
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `npx vitest run tests/unit/adminWaitlistSection.test.tsx tests/unit/adminModerationRouting.test.tsx`
 Expected: PASS (new component tests plus the existing page routing suite).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add components/AdminWaitlistSection.tsx pages/AdminModerationPage.tsx tests/unit/adminWaitlistSection.test.tsx
@@ -1012,7 +1012,7 @@ git commit -m "feat: admin dashboard waitlist section"
 
 Background (verified against the vendored better-auth 1.4.10 source, no spike needed): when the `user.create.before` databaseHook throws an `APIError` during the OAuth callback, `dist/oauth2/link-account.mjs` catches it and returns `{ error: e.message }`; `dist/api/routes/callback.mjs` `redirectOnError` then redirects to the client-supplied `errorCallbackURL` (from `parseState`) with `?error=<message with spaces replaced by underscores>`. Returning Google users never reach the hook, so their sign-in is unaffected.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `tests/unit/loginWaitlist.test.tsx`, inside the existing `describe('LoginPage waitlist behavior', ...)` block:
 
@@ -1055,12 +1055,12 @@ describe('isSignupCapOAuthError', () => {
 });
 ```
 
-- [ ] **Step 2: Run the tests to verify the new ones fail**
+- [x] **Step 2: Run the tests to verify the new ones fail**
 
 Run: `npx vitest run tests/unit/loginWaitlist.test.tsx`
 Expected: FAIL — the two panel tests and the errorCallbackURL test fail (matcher test passes; the module shipped in Task 1).
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 In `pages/LoginPage.tsx`:
 
@@ -1109,12 +1109,12 @@ In the Google button's `onClick`, add the error callback:
                             });
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `npx vitest run tests/unit/loginWaitlist.test.tsx`
 Expected: PASS (10 tests).
 
-- [ ] **Step 5: Full unit suite, then commit**
+- [x] **Step 5: Full unit suite, then commit**
 
 Run: `npx vitest run tests/unit`
 Expected: all green.
@@ -1134,7 +1134,7 @@ git commit -m "feat: route capped Google signups to the waitlist panel"
 **Interfaces:**
 - Consumes: everything above, running as a real app.
 
-- [ ] **Step 1: Boot the app with a tiny cap**
+- [x] **Step 1: Boot the app with a tiny cap**
 
 ```bash
 SIGNUP_CAP=1 RESEND_API_KEY= DATABASE_URL= \
@@ -1146,7 +1146,7 @@ npm run dev
 
 Vite serves the client on `http://localhost:3000`; the API server runs on `:3001`. There is no vite proxy, so `VITE_API_BASE` must point at the API server explicitly (same as the Playwright config does). `RESEND_API_KEY`/`DATABASE_URL` are present-but-empty inline for the usual dotenv-resurrection reason; the scratch `SQLITE_PATH` keeps the developer's real `server/analytics.db` untouched.
 
-- [ ] **Step 2: Create the one allowed account**
+- [x] **Step 2: Create the one allowed account**
 
 In a Playwright-driven or manual browser against `http://localhost:3000`: sign up `first@cap.test` with password `Password-1234!` and username `first_user`. Verify it directly in the database (same approach as the unit helpers):
 
@@ -1154,7 +1154,7 @@ In a Playwright-driven or manual browser against `http://localhost:3000`: sign u
 sqlite3 /tmp/claude-1000/-media-anoop-ssd-1-Work-doctect-doctect/850dc8b8-76ad-424d-8dfe-1e2bb27d55bf/scratchpad/capverify.db "UPDATE \"user\" SET \"emailVerified\" = 1 WHERE email = 'first@cap.test';"
 ```
 
-- [ ] **Step 3: Verify the closed state in the browser**
+- [x] **Step 3: Verify the closed state in the browser**
 
 - Reload `/login`, switch to Sign Up: the waitlist panel must render (screenshot).
 - Join the waitlist as `hopeful@cap.test`: success message (screenshot).
@@ -1163,11 +1163,11 @@ sqlite3 /tmp/claude-1000/-media-anoop-ssd-1-Work-doctect-doctect/850dc8b8-76ad-4
 - Sign in as `first@cap.test`, promote it to admin (`UPDATE "user" SET role = 'admin' ...` via sqlite3), open the admin moderation page: the Waitlist section lists `hopeful@cap.test` (screenshot).
 - `curl -s localhost:3001/api/signup-status` → `{"open":false}`.
 
-- [ ] **Step 4: Verify the open state**
+- [x] **Step 4: Verify the open state**
 
 Restart the server with `SIGNUP_CAP=5`: `/api/signup-status` → `{"open":true}`; the Sign Up form renders normally; `POST /api/waitlist` returns 409.
 
-- [ ] **Step 5: Record and commit**
+- [x] **Step 5: Record and commit**
 
 If any step surfaced a bug: fix it test-first (failing unit test → fix → green) before finishing. Then:
 
