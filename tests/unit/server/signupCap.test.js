@@ -80,7 +80,7 @@ describe('signup cap enforcement', () => {
     });
 
     it('falls back to the default cap on garbage values', async () => {
-        for (const bad of ['banana', '-5', '2.5']) {
+        for (const bad of ['banana', '-5', '2.5', ' ']) {
             process.env.SIGNUP_CAP = bad;
             expect((await signUp(uniqueEmail())).status, `SIGNUP_CAP=${bad}`).toBe(200);
         }

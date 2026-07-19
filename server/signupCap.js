@@ -5,7 +5,9 @@ const DEFAULT_CAP = 500;
 // Read per call, not at import: dotenv loads during server import, and tests
 // flip SIGNUP_CAP between requests.
 export const getSignupCap = () => {
-    const raw = process.env.SIGNUP_CAP;
+    // Trim first: whitespace-only must mean "unset" (default), not Number(' ')
+    // === 0, which would silently close signups.
+    const raw = process.env.SIGNUP_CAP?.trim();
     if (raw === undefined || raw === '') return DEFAULT_CAP;
     const parsed = Number(raw);
     if (!Number.isInteger(parsed) || parsed < 0) return DEFAULT_CAP;

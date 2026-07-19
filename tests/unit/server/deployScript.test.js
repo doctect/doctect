@@ -114,6 +114,14 @@ describe('deploy.sh failure handling', () => {
         expect(result.calls).not.toContain('artifacts repositories create');
         expect(result.calls).not.toContain('--remove-env-vars BETTER_AUTH_URL');
         expect(result.calls).toContain('SIGNUP_CAP=7');
+        // The Step-2 "services update" env block uses --set-env-vars, which
+        // REPLACES the full env set (merging is --update-env-vars); if that
+        // invocation omits SIGNUP_CAP, the deploy-time value is wiped.
+        const updateCalls = result.calls.split('\n').filter(line => line.includes('run services update'));
+        expect(updateCalls).not.toHaveLength(0);
+        for (const call of updateCalls) {
+            expect(call, 'services update must carry SIGNUP_CAP or --set-env-vars wipes it').toContain('SIGNUP_CAP=7');
+        }
         expect(result.stdout).toContain('Artifact Registry repository already exists.');
         expect(result.stdout).toContain('BETTER_AUTH_URL is already absent.');
         expect(result.stdout).toContain('Deployment complete!');

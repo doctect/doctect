@@ -193,7 +193,8 @@ gcloud run services update "$APP_NAME" \
   --set-env-vars "^;^OWNER_EMAILS=${OWNER_EMAILS}" \
   --set-env-vars DATABASE_URL="$DATABASE_URL" \
   --set-env-vars RESEND_API_KEY="$RESEND_API_KEY" \
-  --set-env-vars EMAIL_FROM="$EMAIL_FROM"
+  --set-env-vars EMAIL_FROM="$EMAIL_FROM" \
+  --set-env-vars SIGNUP_CAP="$SIGNUP_CAP"
 
 echo "Deployment complete!"
 echo "App is live at: $FINAL_CLIENT_URL"
