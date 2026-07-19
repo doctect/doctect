@@ -153,6 +153,14 @@ router.get('/api/admin/users/:id', async (req, res) => {
     });
 });
 
+router.get('/api/admin/waitlist', requireAdmin, async (req, res) => {
+    const rows = await query('SELECT email, "createdAt" FROM waitlist ORDER BY "createdAt" DESC, email DESC');
+    res.json({
+        count: rows.length,
+        entries: rows.map(row => ({ email: row.email, createdAt: asIso(row.createdAt) })),
+    });
+});
+
 router.post('/api/admin/users/:id/suspend', requireAdmin, async (req, res) => {
     const reason = validateReason(req.body?.reason);
     const expiry = validateExpiry(req.body?.expiresAt);
