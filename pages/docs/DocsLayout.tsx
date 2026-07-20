@@ -2,6 +2,7 @@ import React, { useEffect, useRef } from 'react';
 import { NavLink, Outlet, useLocation, Link } from 'react-router-dom';
 import { BookOpen } from 'lucide-react';
 import { AppHeader } from '../../components/AppHeader';
+import { DocsSearchBox } from '../../components/docs/DocsSearchBox';
 import { docsIndex } from '../../lib/docsContentIndex';
 import { TRACK_ORDER, TRACK_LABELS } from '../../lib/docsContent';
 import { tutorialUrl } from './docsUi';
@@ -30,7 +31,7 @@ export function DocsLayout() {
             <AppHeader />
             <div className="flex flex-1 min-h-0 max-w-[1400px] mx-auto w-full">
                 <aside className="w-72 hidden md:flex flex-col border-r bg-slate-50/50 flex-shrink-0">
-                    <div className="p-4 border-b" data-docs-search-slot />
+                    <div className="p-4 border-b"><DocsSearchBox /></div>
                     <nav role="navigation" className="flex-1 overflow-y-auto px-4 py-4 space-y-6 text-sm">
                         <NavLink to="/docs" end className={({ isActive }) => `block font-semibold px-2 py-1.5 rounded-lg ${isActive ? 'bg-blue-50 text-blue-700' : 'text-slate-700 hover:bg-white'}`}>
                             <span className="flex items-center gap-2"><BookOpen size={15} /> Learning Path</span>
