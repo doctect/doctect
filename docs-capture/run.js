@@ -25,20 +25,34 @@ for (const name of selected) {
     }
 }
 
-// Pre-flight: tutorial/lib/servers.js's vite child can outlive stop() (see
-// README Troubleshooting), leaving :5199/:3001 bound across runs. Check
-// before every scenario and fail fast with guidance instead of a cryptic
-// strictPort error deep inside startServers().
+// Pre-flight: catches ports still held by a genuinely foreign process (a
+// leftover from outside this run) before a scenario fails deep inside
+// startServers() with a cryptic strictPort error. Checked before every
+// scenario, so a multi-scenario batch also benefits between runs.
+//
+// Retries for a few seconds per port rather than checking once: the previous
+// scenario's own servers.stop() (SIGKILL on the process group) can take a
+// short moment to actually release the socket at the kernel level even
+// though the process is already gone — that's normal cleanup latency, not a
+// leak, and a single immediate check can lose that race.
 const isPortFree = (port) => new Promise((resolve) => {
     const srv = net.createServer();
     srv.once('error', () => resolve(false));
     srv.once('listening', () => srv.close(() => resolve(true)));
     srv.listen(port);
 });
+async function waitPortFree(port, timeoutMs = 5000, intervalMs = 250) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+        if (await isPortFree(port)) return true;
+        await new Promise(r => setTimeout(r, intervalMs));
+    }
+    return false;
+}
 async function checkPortsFree() {
     const busy = [];
     for (const port of [3001, 5199]) {
-        if (!(await isPortFree(port))) busy.push(port);
+        if (!(await waitPortFree(port))) busy.push(port);
     }
     if (busy.length) {
         console.error(`✗ port(s) ${busy.join(', ')} already in use — a previous tutorial/docs-capture run likely leaked a process.`);

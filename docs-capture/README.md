@@ -45,9 +45,14 @@ with this same guidance instead of a bare Playwright/Vite stack trace.
 run in this repo — the command line will mention this repo's path, e.g.
 `.../node_modules/.bin/vite --port 5199 --strictPort` — then rerun.
 
-**Root cause:** `tutorial/lib/servers.js` spawns Vite via `npx`; its `stop()` kills
-that handle, but `npx` interposes a wrapper process whose actual Vite child
-survives the kill and keeps `:5199` bound. A later `startServers()` call's own
-Vite spawn then silently fails to bind while `:5199` still answers (the stale
-instance), so the leak can go unnoticed rather than error — harmless if the
-frontend source hasn't changed since the leak, misleading otherwise.
+**Root cause (historical — fixed):** `tutorial/lib/servers.js` used to spawn Vite
+via `npx` and call `stop()` on that single handle; `npx` interposes a wrapper
+process whose actual Vite child was never covered by that kill, so it survived
+indefinitely and kept `:5199` bound across runs. It's now fixed at the source —
+both children are spawned `detached: true` and `stop()` kills each one's whole
+process group (`process.kill(-pid, 'SIGKILL')`), which reaps Vite's real process
+(and npx's wrapper) along with it. This pre-flight check stays in place for the
+case that's left: a genuinely unrelated process (not started by this pipeline)
+already sitting on `:3001`/`:5199` — it retries for a few seconds first, since a
+port can take a brief moment to release after `stop()` even when nothing is
+actually leaking.

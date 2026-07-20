@@ -36,14 +36,23 @@ export async function startServers(tag) {
         CLIENT_URL: 'http://localhost:5199',
     });
 
+    // detached: true makes each child the leader of its own new process
+    // group (pgid === pid). That lets stop() below kill the whole group —
+    // load-bearing for vite: it's spawned via npx, which interposes a
+    // wrapper process around the actual vite dev server; killing just the
+    // npx PID leaves that grandchild running and :5199 bound forever, which
+    // is exactly the bug this is fixing. Group-kill reaps npx's wrapper and
+    // the real vite process (and anything vite itself forks) in one shot.
     const api = spawn('node', ['server/index.js'], {
         cwd: ROOT, env,
         stdio: ['ignore', fs.openSync(apiLog, 'w'), fs.openSync(apiLog, 'a')],
+        detached: true,
     });
     const vite = spawn('npx', ['vite', '--port', '5199', '--strictPort'], {
         cwd: ROOT,
         env: { ...env, VITE_API_URL: 'http://localhost:3001/api/auth' },
         stdio: 'ignore',
+        detached: true,
     });
 
     await waitForHttp('http://localhost:3001/api/me');
@@ -60,8 +69,12 @@ export async function startServers(tag) {
             return links ? links[links.length - 1] : null;
         },
         stop() {
-            api.kill('SIGKILL');
-            vite.kill('SIGKILL');
+            // Negative pid = kill the whole process group (see the spawn
+            // comment above). try/catch because the group may already be
+            // gone (ESRCH) — stop() must never throw, callers rely on it
+            // being safe to call unconditionally during cleanup.
+            try { process.kill(-api.pid, 'SIGKILL'); } catch { /* already dead */ }
+            try { process.kill(-vite.pid, 'SIGKILL'); } catch { /* already dead */ }
         },
     };
 }
