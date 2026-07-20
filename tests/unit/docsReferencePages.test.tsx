@@ -52,6 +52,17 @@ describe('DocsReferenceIndexPage', () => {
     expect(screen.getByText('Grid Configuration')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Dynamic Offset/ })).toHaveAttribute('href', '/docs/reference/dynamic-offset');
   });
+  it('shows title, summary, and aliases on each card', () => {
+    // Contract bullet ("each card ... shows title + summary + aliases") -
+    // the test above only pins title+href; scoping into the card itself
+    // (rather than an unscoped screen-wide getByText) confirms the summary
+    // and alias text are actually part of *this* card, not just present
+    // somewhere else on the page.
+    at('/docs/reference');
+    const card = screen.getByRole('link', { name: /Dynamic Offset/ });
+    expect(within(card).getByText('Field-driven offset.')).toBeInTheDocument();
+    expect(within(card).getByText(/calendar offset/)).toBeInTheDocument();
+  });
   it('filters entries live', () => {
     at('/docs/reference');
     fireEvent.change(screen.getByPlaceholderText(/filter reference/i), { target: { value: 'zzz-no-match' } });
@@ -63,7 +74,19 @@ describe('DocsReferenceEntryPage', () => {
   it('renders entry with alias line and body', () => {
     at('/docs/reference/dynamic-offset');
     expect(screen.getByRole('heading', { level: 1, name: 'Dynamic Offset' })).toBeInTheDocument();
-    expect(screen.getByText(/calendar offset/)).toBeInTheDocument();
+    // Full phrase (not just the alias substring) pins the "Also known as: …"
+    // label from the contract, not merely that the alias value appears
+    // somewhere on the page.
+    expect(screen.getByText('Also known as: calendar offset')).toBeInTheDocument();
+    // entry.body rendered through DocsMarkdown - contract bullet "body via
+    // DocsMarkdown" - proves the markdown prop is actually wired up and
+    // reaches the screen, not merely that DocsMarkdown itself works (that's
+    // covered by docsMarkdown.test.tsx already).
+    expect(screen.getByText('Offset body.')).toBeInTheDocument();
+  });
+  it('shows the category badge', () => {
+    at('/docs/reference/dynamic-offset');
+    expect(screen.getByText('Grid Configuration')).toBeInTheDocument();
   });
   it('lists tutorials that reference the entry under "Appears in"', () => {
     at('/docs/reference/dynamic-offset');
