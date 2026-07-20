@@ -21,6 +21,15 @@ const fixtureFiles = vi.hoisted((): Record<string, string> => ({
     '---\ntitle: Grids\ndifficulty: intermediate\ntime: 10 min\nsummary: Data grids.\nprerequisites: editor/canvas-basics\n---\n\n## Sources\n\nSee [Dynamic Offset](/docs/reference/dynamic-offset).\n',
   '../docs-content/reference/grid/dynamic-offset.md':
     '---\ntitle: Dynamic Offset\nsummary: Field-driven offset.\naliases: calendar offset\n---\n\nOffset body.\n',
+  // 'shortcuts' sorts before 'grid' in CATEGORY_ORDER (lib/docsContent.ts:
+  // ['canvas-tools', 'shortcuts', 'element-properties', 'grid', ...]) but
+  // after it alphabetically ("Grid Configuration" < "Keyboard Shortcuts") -
+  // a second category is required so a test can tell "grouped by
+  // CATEGORY_ORDER" apart from "grouped alphabetically" or "grouped by
+  // fixture/insertion order" (with only one populated category, as before
+  // this entry existed, every one of those hypotheses renders identically).
+  '../docs-content/reference/shortcuts/quick-save.md':
+    '---\ntitle: Quick Save\nsummary: Save without leaving the keyboard.\n---\n\nPress the shortcut.\n',
 }));
 
 vi.mock('../../lib/docsContentIndex', () => ({
@@ -51,6 +60,16 @@ describe('DocsReferenceIndexPage', () => {
     at('/docs/reference');
     expect(screen.getByText('Grid Configuration')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Dynamic Offset/ })).toHaveAttribute('href', '/docs/reference/dynamic-offset');
+  });
+  it('renders category sections in CATEGORY_ORDER, not insertion or alphabetical order', () => {
+    // 'shortcuts' (Keyboard Shortcuts) precedes 'grid' (Grid Configuration)
+    // in CATEGORY_ORDER, but follows it both alphabetically ("G" < "K") and
+    // in this fixture's own object-literal insertion order (dynamic-offset
+    // is declared before quick-save above) - so this ordering is only
+    // reproduced by grouping via CATEGORY_ORDER specifically.
+    at('/docs/reference');
+    const headings = screen.getAllByRole('heading', { level: 2 }).map(h => h.textContent);
+    expect(headings).toEqual(['Keyboard Shortcuts', 'Grid Configuration']);
   });
   it('shows title, summary, and aliases on each card', () => {
     // Contract bullet ("each card ... shows title + summary + aliases") -
