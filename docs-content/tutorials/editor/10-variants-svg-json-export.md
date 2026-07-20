@@ -33,7 +33,7 @@ Switching variants in the dropdown also switches which template is selected — 
 
 Select any template in Templates mode and the right panel's **Template Settings** section holds the page size controls: a preset dropdown (A4, Letter, Legal, A5, then e-ink devices grouped by screen size — reMarkable, Boox, Supernote, Kindle Scribe), Width and Height inputs with a unit selector, and Portrait/Landscape buttons that swap the two.
 
-The unit selector — **pt / px / in / mm** — converts; it doesn't relabel. Templates are stored in points, and the other units re-express that same physical size: 1 inch is 72 pt, 1 mm is about 2.835 pt, and px is treated 1:1 with pt. Switch an A4 page from pt to mm and the fields change from 595.28 × 841.89 to 210 × 297 — the page itself hasn't moved a hair. Type a value in any unit and it converts back on entry, so "make it exactly 210 mm wide" is: pick mm, type 210.
+The unit selector — **pt / px / in / mm** — converts; it doesn't relabel. Templates are stored in points, and the other units re-express that same physical size: 1 inch is 72 pt, 1 mm is about 2.835 pt, and px is treated 1:1 with pt. Switch an A4 page from pt to mm and the fields change from 595.28 × 841.89 to 210.001 × 297 (that stray thousandth is just display rounding) — the page itself hasn't moved a hair. Type a value in any unit and it converts back on entry, so "make it exactly 210 mm wide" is: pick mm, type 210.
 
 Two toggles below the size fields govern what happens to *content* when the size changes:
 
