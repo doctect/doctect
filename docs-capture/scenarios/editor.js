@@ -1,4 +1,4 @@
-import { gotoEditor, newBlankProject, newPlannerProject, drawElement, ACTIVE_PANE, settle, canvasBox, switchToTemplatesMode } from '../lib/app.js';
+import { gotoEditor, newBlankProject, newPlannerProject, drawElement, ACTIVE_PANE, settle, canvasBox, switchToTemplatesMode, selectSidebarNode } from '../lib/app.js';
 
 // EditorToolbar.tsx's own root div carries Tailwind's arbitrary-value class
 // "min-h-[40px]" (py-1 bg-slate-50 border-b ... shadow-sm z-10) -- but so
@@ -260,5 +260,69 @@ export const shots = [
             await t.page.mouse.click(c.x + c.width * 0.42, c.y + c.height * 0.42);
             await settle(t.page, 900);
         }
+    } },
+    { id: 'editor/node-data-fields', kind: 'still', run: async (t) => {
+        await gotoEditor(t); await newPlannerProject(t);
+        // Hierarchy mode auto-expands only the root on mount
+        // (NodeItem.tsx: useState(depth < 1)) -- Quarter 1 (depth 1) and
+        // January (depth 2) both start collapsed, so a day node (depth 3)
+        // isn't in the DOM at all until both ancestors are expanded first,
+        // one chevron click apiece. Same pattern getting-started.js's
+        // planner-month-view shot already uses for Quarter 1 -> January;
+        // this goes one level deeper, to a day node under January.
+        // `div.mr-1` is NodeItem's own expand/collapse icon wrapper --
+        // stopPropagation() on its onClick means clicking it toggles
+        // `expanded` instead of selecting the row underneath it.
+        const quarter1Row = t.page.locator(ACTIVE_PANE).locator('[data-node-id]', { hasText: 'Quarter 1' }).first();
+        await quarter1Row.locator('div.mr-1').click();
+        await settle(t.page, 400);
+        // Only the "January" *month* row matches this text right now --
+        // its own 31 day children aren't rendered yet since January itself
+        // is still collapsed -- so this can't accidentally resolve to one
+        // of them instead.
+        const januaryRow = t.page.locator(ACTIVE_PANE).locator('[data-node-id]', { hasText: 'January' }).first();
+        await januaryRow.locator('div.mr-1').click();
+        await settle(t.page, 400);
+        // selectSidebarNode (docs-capture/lib/app.js) clicks at a
+        // depth-scaled offset from the row's own left edge rather than the
+        // title span's pre-hover center, so it lands correctly even on this
+        // depth-3 row (paddingLeft 44px + 28 = 72, already verified against
+        // the live app per that helper's own HAZARD comment).
+        // services/planner_preset.ts's day nodes are titled
+        // "<Month> <day>, 2026" -- "January 1, 2026" is the very first one
+        // in the preset (id d_71skztfco), with 13 real data fields.
+        await selectSidebarNode(t, 'January 1, 2026');
+        await t.snap(PROPERTIES_PANEL_SELECTOR);
+    } },
+    { id: 'editor/clip-preview-node-switch', kind: 'clip', run: async (t) => {
+        await gotoEditor(t); await newPlannerProject(t); await switchToTemplatesMode(t);
+        // Day View (services/planner_preset.ts's "day" template) has two
+        // independent text elements bound straight off whichever node is
+        // previewing it: gen_d_title is "{{month_short}} {{day_num}}" and
+        // gen_d_w_link is "{{day_short}}" -- so switching the preview node
+        // changes two separate on-canvas strings at once ("Jan 01"/"Thu" ->
+        // "Jan 02"/"Fri"), not just a single title.
+        await t.page.locator(ACTIVE_PANE).getByText('Day View', { exact: true }).click();
+        await settle(t.page, 500);
+        // EditorToolbar.tsx's "Template Preview Node Selector" -- the only
+        // <select> the toolbar itself renders (the font/pattern selects
+        // live in the Properties panel, a different component) -- so no
+        // extra disambiguation beyond the existing TOOLBAR_SELECTOR (itself
+        // already ACTIVE_PANE-scoped) is needed.
+        const preview = t.page.locator(TOOLBAR_SELECTOR).locator('select');
+        // effectivePreviewNodeId (EditorToolbar.tsx ~lines 41-53) falls back
+        // to nodesForCurrentTemplate[0] the first time a template is
+        // selected -- land on January 1, 2026 explicitly rather than assume
+        // it's already there, so the clip's starting frame is deterministic.
+        // (Every day also has a reference twin under its Week node sharing
+        // the exact same title and a copy of the same data -- see this
+        // task's report -- but this real node is defined earlier in
+        // services/planner_preset.ts, so it's still the first DOM <option>
+        // matching this label either way.)
+        await preview.selectOption({ label: 'January 1, 2026' });
+        await settle(t.page, 500);
+        t.beginClip();
+        await preview.selectOption({ label: 'January 2, 2026' });
+        await settle(t.page, 900);
     } },
 ];
