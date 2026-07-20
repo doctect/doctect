@@ -10,6 +10,22 @@ import { startServers } from '../../tutorial/lib/servers.js';
 
 const VIEWPORT = { width: 1600, height: 1000 };
 
+// Tracks whichever sealed servers session is currently alive, so the CLI
+// entry point (run.js) can stop it from a SIGINT/SIGTERM handler — normal
+// execution never reaches runScenario's own finally when the process is
+// killed by a signal (Node's default SIGINT/SIGTERM disposition exits
+// immediately), which would otherwise orphan the api+vite process groups.
+let activeServers = null;
+
+/** Stops the currently-active sealed servers, if any. Safe to call when none
+ *  is active (no-op) or more than once (servers.stop() itself is idempotent). */
+export function stopActiveServers() {
+    if (activeServers) {
+        activeServers.stop();
+        activeServers = null;
+    }
+}
+
 export async function runScenario(name, shots, { outDir }) {
     if (!Array.isArray(shots) || !shots.length) throw new Error(`scenario ${name}: no shots exported`);
     // servers/browser/tmpVideoDir are declared before the try and assigned
@@ -21,6 +37,7 @@ export async function runScenario(name, shots, { outDir }) {
     let tmpVideoDir = null;
     try {
         servers = await startServers(`docs-${name}`);
+        activeServers = servers;
         browser = await chromium.launch();
         tmpVideoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'docs-clip-'));
         for (const shot of shots) {
@@ -107,6 +124,7 @@ export async function runScenario(name, shots, { outDir }) {
     } finally {
         if (browser) await browser.close().catch(() => {});
         if (servers) servers.stop();
+        activeServers = null;
         if (tmpVideoDir) fs.rmSync(tmpVideoDir, { recursive: true, force: true });
     }
 }

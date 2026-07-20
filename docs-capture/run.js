@@ -4,10 +4,28 @@
 import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
-import { runScenario } from './lib/capture.js';
+import { runScenario, stopActiveServers } from './lib/capture.js';
 
 const ROOT = new URL('..', import.meta.url).pathname;
 const DEFAULT_OUT = path.join(ROOT, 'public', 'docs-assets');
+
+// A killed (Ctrl-C'd, or `kill`'d) run must not orphan the sealed api+vite
+// servers: Node's default SIGINT/SIGTERM disposition exits immediately,
+// skipping the in-flight scenario's finally where servers.stop() normally
+// runs. Stop whatever's active, then exit with the conventional
+// 128+signum-ish code (kept as a single 130 for all three, matching the
+// common "interrupted" convention — none of this process's callers inspect
+// the exact code).
+function shutdown(signal) {
+    return () => {
+        console.error(`\n✗ received ${signal} — stopping active sealed servers...`);
+        stopActiveServers();
+        process.exit(130);
+    };
+}
+process.on('SIGINT', shutdown('SIGINT'));
+process.on('SIGTERM', shutdown('SIGTERM'));
+process.on('SIGHUP', shutdown('SIGHUP'));
 
 const args = process.argv.slice(2);
 const outArg = args.find(a => a.startsWith('--out='));
