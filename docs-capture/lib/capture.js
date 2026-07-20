@@ -1,6 +1,9 @@
 // Shot runner: one fresh browser context per shot (clean editor state every
 // time), stills at deviceScaleFactor 2, clips via Playwright video -> ffmpeg
-// animated webp. Sealed servers come from tutorial/lib/servers.js.
+// animated webp. Sealed servers come from tutorial/lib/servers.js. Dialogs
+// (window.prompt/confirm/alert) are auto-accepted with shot.dialogText (or a
+// fixed fallback); t.setDialogText(value) lets a helper retarget a specific
+// dialog's answer mid-shot -- see docs-capture/lib/cloud.js's saveToCloud.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -52,8 +55,16 @@ export async function runScenario(name, shots, { outDir }) {
             });
             const page = await context.newPage();
             // Headless Chromium auto-dismisses window.prompt/confirm, which
-            // silently aborts cloud saves — accept with a stable answer instead.
-            page.on('dialog', d => d.accept(shot.dialogText ?? 'Docs capture').catch(() => {}));
+            // silently aborts cloud saves — accept with a stable answer
+            // instead. Held in a mutable variable, read at fire time (not
+            // captured once into the listener), so a helper can retarget a
+            // specific dialog's answer mid-shot via t.setDialogText() below
+            // -- e.g. docs-capture/lib/cloud.js's saveToCloud uses this so a
+            // distinct commit message per call actually reaches cloud
+            // version history, instead of every prompt in the shot getting
+            // the same fixed shot.dialogText.
+            let dialogAnswer = shot.dialogText ?? 'Docs capture';
+            page.on('dialog', d => d.accept(dialogAnswer).catch(() => {}));
 
             const contextStart = Date.now();
             let snapped = false;
@@ -70,6 +81,16 @@ export async function runScenario(name, shots, { outDir }) {
                     snapped = true;
                 },
                 beginClip: () => { clipStart = Date.now(); },
+                // Sets the answer the next dialog(s) get accepted with, and
+                // returns whatever it was before -- callers that retarget it
+                // mid-shot should restore that return value (typically in a
+                // `finally`) once their own dialog-triggering action is
+                // done, so the override doesn't bleed into the next dialog.
+                setDialogText: (value) => {
+                    const previous = dialogAnswer;
+                    dialogAnswer = value;
+                    return previous;
+                },
             };
 
             try {

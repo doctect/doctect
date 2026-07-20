@@ -18,7 +18,7 @@ export const shots = [
             await gotoEditor(t);
             await newBlankProject(t);
             await drawElement(t, 'r', { x: 0.3, y: 0.3 }, { x: 0.6, y: 0.5 });
-            await saveToCloud(t);
+            await saveToCloud(t, 'Smoke test initial rectangle');
             await publishProject(t, { description: 'Smoke publish', tags: 'smoke' });
             await signOut(t);
 
@@ -26,8 +26,11 @@ export const shots = [
             await openGalleryProject(t, 'Blank Project');
             await forkProject(t);
             await drawElement(t, 'e', { x: 0.5, y: 0.55 }, { x: 0.7, y: 0.7 });
-            await saveToCloud(t);
-            await proposeChanges(t);
+            await saveToCloud(t, 'Smoke test add ellipse accent');
+            // Distinct MR title, verifying that `message` threads through to
+            // the title field (docs-capture/lib/cloud.js's proposeChanges)
+            // and shows up on the resulting MR page.
+            await proposeChanges(t, 'Smoke test: add ellipse accent to header');
             await t.snap(); // whatever page proposeChanges lands on (the MR page)
         },
     },

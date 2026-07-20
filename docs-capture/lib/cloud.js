@@ -101,17 +101,19 @@ export async function saveToCloud(t, commitMessage = 'Docs capture save') {
     // separately because those tests know which state they're in; a reusable
     // helper doesn't, so the substring regex covers either.
     //
-    // NOTE for later gallery tasks: the window.prompt this opens is answered
-    // by the runner's page-level dialog handler (docs-capture/lib/capture.js),
-    // which uses `shot.dialogText` -- there is no plumbing from this
-    // `commitMessage` parameter back to the shot object it came from. If a
-    // scenario needs a specific, human-readable commit message to show up in
-    // a cloud version-history screenshot, set `dialogText` on that shot to
-    // the same string passed here; otherwise every prompt in the shot is
-    // answered with the shot's one dialogText (or capture.js's 'Docs capture'
-    // default).
-    await page.getByRole('button', { name: /save to cloud/i }).click();
-    await settle(page, 2500);
+    // The window.prompt this opens is answered by the runner's page-level
+    // dialog handler (docs-capture/lib/capture.js). Retarget it to
+    // commitMessage for just this save via t.setDialogText(), which hands
+    // back whatever answer was in effect before -- restore that in a
+    // `finally` so a one-off commit message can't bleed into a later dialog
+    // this same shot might trigger (another save, a publish alert, ...).
+    const restoreDialogText = t.setDialogText(commitMessage);
+    try {
+        await page.getByRole('button', { name: /save to cloud/i }).click();
+        await settle(page, 2500);
+    } finally {
+        t.setDialogText(restoreDialogText);
+    }
 }
 
 export async function publishProject(t, { description, tags } = {}) {
@@ -122,12 +124,14 @@ export async function publishProject(t, { description, tags } = {}) {
     await page.getByRole('button', { name: /publish to gallery/i }).click();
     await settle(page, 1200);
 
-    // Neither field has an associated <label> in components/cloud/
-    // PublishModal.tsx (Description's <span> sibling never gets an
-    // htmlFor/id pairing, so getByLabel is not an option) -- fork.spec.js:73
-    // confirms getByPlaceholder is the working selector for Description, and
-    // the Tags input right below it (PublishModal.tsx:181-185) follows the
-    // same pattern.
+    // Both fields DO resolve via getByLabel -- components/cloud/
+    // PublishModal.tsx:176-185 wraps each <input>/<textarea> inside its
+    // <label>, which Playwright's implicit label support handles fine. Using
+    // getByPlaceholder here instead is a deliberate match to proven e2e
+    // precedent: fork.spec.js:73 selects Description via
+    // getByPlaceholder('What is this planner for?'), so the Tags input right
+    // below it (PublishModal.tsx:181-185) follows the same pattern for
+    // consistency within this file.
     await page.getByPlaceholder('What is this planner for?').fill(description ?? '');
     const tagsValue = Array.isArray(tags) ? tags.join(', ') : (tags ?? '');
     if (tagsValue) await page.getByPlaceholder('planner, 2026, remarkable').fill(tagsValue);
@@ -168,7 +172,7 @@ export async function forkProject(t) {
     await settle(page, 1200);
 }
 
-export async function proposeChanges(t, message = 'Improvements from the docs fork') {
+export async function proposeChanges(t, message = 'Docs capture proposal') {
     const { page } = t;
     await page.getByTitle('Cloud').click();
     await settle(page, 700);
@@ -180,12 +184,17 @@ export async function proposeChanges(t, message = 'Improvements from the docs fo
     await page.getByRole('heading', { name: /propose changes to upstream/i }).waitFor({ state: 'visible' });
 
     // Neither field in components/cloud/ProposeChangesModal.tsx has a
-    // <label> either -- same getByPlaceholder pattern as publishProject,
-    // proven by merge_requests.spec.js:135 for the title field. The brief's
-    // signature only exposes `message` (-> the description textarea); the
-    // required title has no parameter, so it gets a fixed, generic value.
-    await page.getByPlaceholder("Title, e.g. 'Add iPad variant'").fill('Docs capture proposal');
-    await page.getByPlaceholder('What changed and why?').fill(message);
+    // <label> -- getByPlaceholder is the only option here, proven by
+    // merge_requests.spec.js:135 for the title field.
+    //
+    // `message` fills the title, not the description: the title is this
+    // modal's only required field (submit() rejects an empty one) and the
+    // one thing that ends up on the resulting MR page's heading, so it's the
+    // natural target for a caller-supplied string -- later gallery tasks
+    // open multiple MRs (e.g. Task 35's second MR) and need each one
+    // individually identifiable on screen. Description is left blank rather
+    // than duplicating the same text into a field the modal doesn't require.
+    await page.getByPlaceholder("Title, e.g. 'Add iPad variant'").fill(message);
     await settle(page, 500);
 
     // components/cloud/ProposeChangesModal.tsx:54; proven by
@@ -209,6 +218,21 @@ export async function signOut(t) {
     // AccountMenu.tsx's sign-out button reads exactly "Sign out" -- proven by
     // AccountMenu.test.tsx's `getByRole('button', { name: 'Sign out' })`.
     await page.getByRole('button', { name: 'Sign out' }).click();
-    await page.waitForURL('**/login**', { timeout: 10000 }).catch(() => {});
+    // Assert the sign-out actually took effect instead of assuming it did.
+    // AccountMenu.tsx's handleSignOut only calls navigate('/login') on its
+    // success path (signOut() -> refresh() -> setOpen(false) -> navigate);
+    // its catch path sets logoutError and leaves the menu open on the
+    // current page instead. That makes arrival at /login the reliable
+    // signed-out signal to wait on -- checked and rejected an
+    // AccountMenu-renders-"Sign in" check first: that text is real
+    // (AccountMenu.tsx's `!user` branch), but it's a transient state on the
+    // page being navigated *away from*, and pages/LoginPage.tsx (the actual
+    // destination) doesn't render AccountMenu at all, so there's no stable
+    // DOM element to land on and check -- confirmed via a failure screenshot
+    // that landed cleanly on /login with no such link anywhere on the page.
+    // No `.catch()` here: a no-op/failed sign-out never reaches /login, so
+    // this throws and fails the helper instead of the caller silently
+    // proceeding while still signed in as the previous user.
+    await page.waitForURL('**/login**', { timeout: 10000 });
     await settle(page, 500);
 }

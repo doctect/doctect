@@ -27,6 +27,15 @@ Stills render at 1600×1000, deviceScaleFactor 2; pass a CSS selector to
 `t.snap()` for element crops. Clips are 12 fps looping webp, scaled to 1200px
 wide; keep them 3–10 s.
 
+`t.setDialogText(value)` retargets the answer for whichever dialog
+(window.prompt/confirm/alert) fires next, and returns whatever the answer
+was before the call. A helper that triggers a dialog mid-shot with its own
+specific text (e.g. `docs-capture/lib/cloud.js`'s `saveToCloud`, so a commit
+message actually shows up in cloud version history instead of every prompt
+in the shot getting the shot's one fixed `dialogText`) should restore that
+returned value afterward — typically in a `finally` — so the override
+doesn't bleed into whatever dialog fires next.
+
 Orphan assets (files no markdown references) are warned about after a full
 default-out run — they never fail a build; the reverse direction (markdown
 referencing a missing file) fails `tests/unit/docsAntiRot.test.ts`.
