@@ -34,66 +34,138 @@ const textOf = (node: React.ReactNode): string => {
 // splitting only the plain-text runs on "|" and "\n" (and passing every
 // other inline node through untouched) preserves that formatting inside
 // cells for free.
+//
+// Known GFM-subset limitations (acceptable for this project's hand-authored
+// docs content, not full GFM): no escaped pipes (`\|`) inside cells; a cell
+// can't contain nested block content; and alignment markers (`:--`, `--:`,
+// `:-:`) are validated (to confirm a row really is a delimiter row) but not
+// applied to the rendered cells - every column renders with the `table`
+// component's default (left) alignment regardless of the marker used.
 type MdNode = { type: string; value?: string; children?: MdNode[]; [key: string]: unknown };
 
 const ALIGN_CELL = /^:?-+:?$/;
 
-function paragraphToTable(children: MdNode[] | undefined): MdNode | null {
-    if (!children) return null;
-    const rows: MdNode[][][] = [[[]]];
-    let sawPipe = false;
-    for (const node of children) {
-        if (node.type === 'text' && typeof node.value === 'string' && /[|\n]/.test(node.value)) {
+// Split a run of inline nodes into row-groups by cutting text-node values on
+// "\n" only - "|" characters are left untouched inside each row-group's text
+// so cell-splitting (below) can be applied, validated, and rejected one row
+// at a time instead of committing this whole paragraph to becoming a table.
+function splitIntoRowGroups(nodes: MdNode[]): MdNode[][] {
+    const rowGroups: MdNode[][] = [[]];
+    for (const node of nodes) {
+        if (node.type === 'text' && typeof node.value === 'string' && node.value.includes('\n')) {
             const lines = node.value.split('\n');
             lines.forEach((line, li) => {
-                if (li > 0) rows.push([[]]);
-                const parts = line.split('|');
-                if (parts.length > 1) sawPipe = true;
-                parts.forEach((part, pi) => {
-                    const row = rows[rows.length - 1];
-                    if (pi > 0) row.push([]);
-                    if (part !== '') row[row.length - 1].push({ type: 'text', value: part });
-                });
+                if (li > 0) rowGroups.push([]);
+                if (line !== '') rowGroups[rowGroups.length - 1].push({ type: 'text', value: line });
             });
         } else {
-            const row = rows[rows.length - 1];
-            row[row.length - 1].push(node);
+            rowGroups[rowGroups.length - 1].push(node);
         }
     }
-    // Not even one "|" seen anywhere - definitely not a table paragraph.
-    if (!sawPipe || rows.length < 2) return null;
+    return rowGroups;
+}
 
-    // Outer pipes are optional in GFM: "| a | b |" splits into an empty
-    // leading/trailing phantom cell we should drop. Also trim the
-    // whitespace GFM trims from each cell's outer edge.
-    const trimmedRows = rows.map((cells) => {
-        let c = cells;
-        if (c.length > 1 && c[0].length === 0) c = c.slice(1);
-        if (c.length > 1 && c[c.length - 1].length === 0) c = c.slice(0, -1);
-        return c.map((cellNodes) => {
-            if (cellNodes.length === 0) return cellNodes;
-            const out = cellNodes.slice();
-            const first = out[0];
-            if (first.type === 'text' && typeof first.value === 'string') out[0] = { ...first, value: first.value.replace(/^\s+/, '') };
-            const last = out[out.length - 1];
-            if (last.type === 'text' && typeof last.value === 'string') out[out.length - 1] = { ...last, value: last.value.replace(/\s+$/, '') };
-            return out;
-        });
+// Split one row's nodes into cells by cutting text-node values on "|".
+function splitRowIntoCells(rowNodes: MdNode[]): MdNode[][] {
+    const cells: MdNode[][] = [[]];
+    for (const node of rowNodes) {
+        if (node.type === 'text' && typeof node.value === 'string' && node.value.includes('|')) {
+            const parts = node.value.split('|');
+            parts.forEach((part, pi) => {
+                if (pi > 0) cells.push([]);
+                if (part !== '') cells[cells.length - 1].push({ type: 'text', value: part });
+            });
+        } else {
+            cells[cells.length - 1].push(node);
+        }
+    }
+    return cells;
+}
+
+// Outer pipes are optional in GFM ("| a | b |" has an empty leading/trailing
+// phantom cell); also trims the whitespace GFM trims from each cell's edge.
+function trimRowEdges(cells: MdNode[][]): MdNode[][] {
+    let c = cells;
+    if (c.length > 1 && c[0].length === 0) c = c.slice(1);
+    if (c.length > 1 && c[c.length - 1].length === 0) c = c.slice(0, -1);
+    return c.map((cellNodes) => {
+        if (cellNodes.length === 0) return cellNodes;
+        const out = cellNodes.slice();
+        const first = out[0];
+        if (first.type === 'text' && typeof first.value === 'string') out[0] = { ...first, value: first.value.replace(/^\s+/, '') };
+        const last = out[out.length - 1];
+        if (last.type === 'text' && typeof last.value === 'string') out[out.length - 1] = { ...last, value: last.value.replace(/\s+$/, '') };
+        return out;
     });
+}
 
-    const [header, sep, ...body] = trimmedRows;
-    if (!header || !sep || sep.length !== header.length) return null;
-    const sepIsAlignmentRow = sep.every((cell) => {
+const toTableRow = (cells: MdNode[][]): MdNode => ({
+    type: 'tableRow',
+    children: cells.map((cellNodes) => ({ type: 'tableCell', children: cellNodes })),
+});
+
+// A candidate body-row line only continues the table if it actually looks
+// like a pipe row - otherwise a plain prose line stuck right after a table
+// with no blank line in between (still the same mdast paragraph) would
+// silently become a spurious 1-cell row instead of falling back to being
+// ordinary paragraph text. "Looks like a pipe row" mirrors GFM: the line
+// must contain at least one "|" (i.e. splitting it produces >=2 raw cells),
+// and the resulting shape must be plausible - either it matches the
+// header's width, or it has at least 2 cells of its own (GFM tolerates
+// rows narrower than the header, padding the rest as empty).
+function looksLikeBodyRow(rawCells: MdNode[][], trimmedCells: MdNode[][], headerWidth: number): boolean {
+    if (rawCells.length < 2) return false; // no "|" at all - definitely prose, not a row
+    return trimmedCells.length === headerWidth || trimmedCells.length >= 2;
+}
+
+// Returns the replacement node(s) for a table-shaped paragraph, or null if
+// it isn't one (caller leaves the original paragraph untouched). When the
+// paragraph starts as a table but trails off into non-row lines (no blank
+// line to end it), those trailing lines come back as a second, ordinary
+// paragraph node rather than being dropped or folded into the table.
+function paragraphToTable(children: MdNode[] | undefined): MdNode[] | null {
+    if (!children) return null;
+    const rowGroups = splitIntoRowGroups(children);
+    if (rowGroups.length < 2) return null;
+
+    const headerCellsRaw = splitRowIntoCells(rowGroups[0]);
+    const sepCellsRaw = splitRowIntoCells(rowGroups[1]);
+    // Neither the header nor the delimiter line has a single "|" - this is
+    // definitely not a table (guards a "Text\n:-:"-shaped paragraph, which
+    // would otherwise slip past the length/alignment checks below as a
+    // spurious 1-column table).
+    if (headerCellsRaw.length < 2 && sepCellsRaw.length < 2) return null;
+
+    const headerCells = trimRowEdges(headerCellsRaw);
+    const sepCells = trimRowEdges(sepCellsRaw);
+    if (headerCells.length !== sepCells.length) return null;
+    const sepIsAlignmentRow = sepCells.every((cell) => {
         if (cell.length !== 1 || cell[0].type !== 'text' || typeof cell[0].value !== 'string') return false;
         return ALIGN_CELL.test(cell[0].value.trim());
     });
     if (!sepIsAlignmentRow) return null;
 
-    const toRow = (cells: MdNode[][]): MdNode => ({
-        type: 'tableRow',
-        children: cells.map((cellNodes) => ({ type: 'tableCell', children: cellNodes })),
-    });
-    return { type: 'table', children: [toRow(header), ...body.map(toRow)] };
+    const bodyRows: MdNode[][][] = [];
+    let stopAt = rowGroups.length; // exclusive end of what the table consumes
+    for (let i = 2; i < rowGroups.length; i++) {
+        const rawCells = splitRowIntoCells(rowGroups[i]);
+        const trimmedCells = trimRowEdges(rawCells);
+        if (!looksLikeBodyRow(rawCells, trimmedCells, headerCells.length)) { stopAt = i; break; }
+        bodyRows.push(trimmedCells);
+    }
+
+    const table: MdNode = { type: 'table', children: [toTableRow(headerCells), ...bodyRows.map(toTableRow)] };
+    if (stopAt >= rowGroups.length) return [table];
+
+    // Rows from here on didn't look like table rows - hand them back as an
+    // ordinary paragraph (rejoined with the newlines the source had)
+    // instead of swallowing them into the table or dropping them.
+    const restNodes: MdNode[] = [];
+    for (let i = stopAt; i < rowGroups.length; i++) {
+        if (i > stopAt) restNodes.push({ type: 'text', value: '\n' });
+        restNodes.push(...rowGroups[i]);
+    }
+    return [table, { type: 'paragraph', children: restNodes }];
 }
 
 // Unified plugin: promote table-shaped paragraphs anywhere in the tree.
@@ -101,13 +173,13 @@ function remarkPipeTables() {
     return (tree: MdNode) => {
         const visit = (node: MdNode) => {
             if (!Array.isArray(node.children)) return;
-            node.children = node.children.map((child) => {
+            node.children = node.children.flatMap((child) => {
                 if (child.type === 'paragraph') {
-                    const table = paragraphToTable(child.children);
-                    if (table) return table;
+                    const replacement = paragraphToTable(child.children);
+                    if (replacement) return replacement;
                 }
                 visit(child);
-                return child;
+                return [child];
             });
         };
         visit(tree);
@@ -152,6 +224,29 @@ const Heading = (Tag: 'h2' | 'h3' | 'h4') => {
     return H;
 };
 
+// The hast node react-markdown passes as a `node` prop to every custom
+// component (documented as `ExtraProps.node` in its own types) - used below
+// to look past react-markdown's own override-function indirection and ask
+// "what markdown element actually produced this child" directly.
+type HastLikeNode = { tagName?: string; type?: string; value?: string; children?: HastLikeNode[] };
+
+// True for a bare image, or a link whose only child is an image (a linked
+// figure: `[![alt](src)](href)`) - the two shapes DocsFigure's `img` override
+// must be unwrapped out of `<p>` for, since a whitespace/plain-text-only
+// gap around the image inside the link (if any) is the only other content
+// a real link-wrapped-image line would have.
+function isImageOrLinkedImage(node: HastLikeNode | undefined): boolean {
+    if (!node) return false;
+    if (node.tagName === 'img') return true;
+    if (node.tagName === 'a') {
+        const meaningfulKids = (node.children ?? []).filter(
+            (k) => !(k.type === 'text' && !(k.value ?? '').trim())
+        );
+        return meaningfulKids.length === 1 && meaningfulKids[0].tagName === 'img';
+    }
+    return false;
+}
+
 const DocsFigure: React.FC<{ src?: string; alt?: string; title?: string }> = ({ src = '', alt = '', title }) => {
     const [open, setOpen] = useState(false);
     const isClip = /\/clip-[^/]+\.webp$/.test(src);
@@ -160,14 +255,23 @@ const DocsFigure: React.FC<{ src?: string; alt?: string; title?: string }> = ({ 
             <div className="relative inline-block max-w-full">
                 <img
                     src={src} alt={alt} loading="lazy"
-                    onClick={() => setOpen(true)}
+                    // A markdown image can itself be wrapped in a link
+                    // ([![alt](src)](href)), which renders as this figure
+                    // nested inside a real <a>/<Link>. Without stopping
+                    // propagation, opening the lightbox here would also let
+                    // the click bubble up and fire the wrapping link's
+                    // navigation.
+                    onClick={(e) => { e.stopPropagation(); e.preventDefault(); setOpen(true); }}
                     className="rounded-xl border border-slate-200 shadow-sm max-w-full cursor-zoom-in"
                 />
                 {isClip && <span className="absolute top-2 right-2 bg-slate-900/70 text-white text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded">clip</span>}
             </div>
             {(title || alt) && <figcaption className="text-sm text-slate-500 mt-2">{title || alt}</figcaption>}
             {open && (
-                <div data-lightbox onClick={() => setOpen(false)}
+                <div data-lightbox
+                    // Same reasoning as the image's onClick above: closing
+                    // the overlay must not also bubble into a wrapping link.
+                    onClick={(e) => { e.stopPropagation(); e.preventDefault(); setOpen(false); }}
                     className="fixed inset-0 z-[100] bg-slate-900/80 flex items-center justify-center p-6 cursor-zoom-out">
                     <img src={src} alt={alt} className="max-w-full max-h-full rounded-lg shadow-2xl" />
                 </div>
@@ -187,23 +291,26 @@ export function DocsMarkdown({ markdown }: { markdown: string }) {
                     h4: Heading('h4'),
                     img: ({ src, alt, title }) => <DocsFigure src={typeof src === 'string' ? src : ''} alt={alt ?? ''} title={title ?? undefined} />,
                     // react-markdown wraps a lone image in <p>; keep <figure> valid by
-                    // unwrapping paragraphs whose only child is our figure.
+                    // unwrapping paragraphs whose only child is our figure - including
+                    // a *linked* figure ([![alt](src)](href)), whose sole child is an
+                    // <a> wrapping the image, not the image directly.
                     //
-                    // Note: the element react-markdown puts here is the `img` override
-                    // function below, not `DocsFigure` itself (that's just what the
-                    // override *returns*), so identity-checking `arr[0].type` against
-                    // `DocsFigure` never matches and this never unwraps - react-markdown
-                    // still hands the original hast node through as a `node` prop, so we
-                    // check its tag name instead, which is precise (only images unwrap,
-                    // not e.g. a standalone-code-only paragraph, which is also a non-DOM
-                    // custom-component child).
+                    // Note: the element react-markdown puts here is the `img`/`a`
+                    // override function below, not `DocsFigure` itself (that's just
+                    // what the override *returns*), so identity-checking `arr[0].type`
+                    // against `DocsFigure` never matches and this never unwraps -
+                    // react-markdown still hands the original hast node through as a
+                    // `node` prop, so we check *that* tree instead, which is precise
+                    // (only an image, or a link whose only child is an image, unwraps -
+                    // not e.g. a standalone-code-only paragraph, which is also a
+                    // non-DOM custom-component child).
                     p: ({ children }) => {
                         const arr = React.Children.toArray(children);
                         const sole = arr.length === 1 ? arr[0] : null;
-                        const soleTag = React.isValidElement(sole)
-                            ? (sole.props as { node?: { tagName?: string } }).node?.tagName
+                        const soleNode = React.isValidElement(sole)
+                            ? (sole.props as { node?: HastLikeNode }).node
                             : undefined;
-                        if (soleTag === 'img') return <>{arr}</>;
+                        if (isImageOrLinkedImage(soleNode)) return <>{arr}</>;
                         return <p>{children}</p>;
                     },
                     blockquote: ({ children }) => {

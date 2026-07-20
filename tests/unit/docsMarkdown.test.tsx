@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import { DocsMarkdown } from '../../components/docs/DocsMarkdown';
 
 const md = (s: string) => render(<MemoryRouter><DocsMarkdown markdown={s} /></MemoryRouter>);
@@ -66,5 +66,41 @@ describe('DocsMarkdown', () => {
   it('wraps tables for horizontal scroll', () => {
     md('| a | b |\n|---|---|\n| 1 | 2 |');
     expect(document.querySelector('.overflow-x-auto table')).toBeTruthy();
+  });
+
+  // Regression: a prose line stuck right after a table (no blank line
+  // separating them, so it's still the same mdast paragraph) must not be
+  // silently absorbed into the table as a spurious 1-cell row.
+  it('does not absorb trailing prose into the table when there is no blank line after it', () => {
+    md('| a | b |\n|---|---|\n| 1 | 2 |\nMore text right after');
+    const table = document.querySelector('table');
+    expect(table).toBeTruthy();
+    expect(table!.querySelectorAll('tbody tr')).toHaveLength(1);
+    expect(table!.querySelectorAll('tbody tr td')).toHaveLength(2);
+    const trailing = screen.getByText('More text right after');
+    expect(trailing).toBeInTheDocument();
+    expect(trailing.tagName.toLowerCase()).toBe('p');
+  });
+
+  // Regression: a linked image ([![alt](src)](href)) is a paragraph whose
+  // sole child is an <a> wrapping an <img>, not a bare <img> - it must still
+  // unwrap out of <p> (invalid nesting otherwise), and clicking the image to
+  // open the lightbox must not also fire the wrapping link's navigation.
+  it('unwraps a linked figure from <p> and does not navigate when the image is clicked', () => {
+    const LocationProbe = () => {
+      const loc = useLocation();
+      return <div data-testid="location">{loc.pathname}</div>;
+    };
+    render(
+      <MemoryRouter initialEntries={['/docs/start']}>
+        <LocationProbe />
+        <DocsMarkdown markdown='[![Toolbar](/docs-assets/editor/toolbar.png "cap")](/docs/editor/toolbar)' />
+      </MemoryRouter>
+    );
+    expect(document.querySelector('p figure')).toBeNull();
+    const img = screen.getByAltText('Toolbar');
+    fireEvent.click(img);
+    expect(document.querySelector('[data-lightbox]')).toBeTruthy();
+    expect(screen.getByTestId('location').textContent).toBe('/docs/start');
   });
 });
