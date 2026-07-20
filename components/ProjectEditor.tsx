@@ -1091,7 +1091,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, project
                                     "text-white bg-blue-600 hover:bg-blue-700 px-2 py-1 rounded-r border-l border-blue-500/50 flex items-center justify-center transition-all disabled:opacity-50 disabled:cursor-not-allowed",
                                     isExporting && "opacity-75 bg-blue-700"
                                 )}
-                                title="Export All Variants (Merged PDF)"
+                                title="Export All Variants (one PDF per variant)"
                             >
                                 <Layers size={14} /> All
                             </button>
