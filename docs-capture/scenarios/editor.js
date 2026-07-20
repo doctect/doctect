@@ -757,4 +757,116 @@ export const shots = [
         await t.page.locator(ACTIVE_PANE).locator(ON_CLICK_SELECT_SELECTOR).selectOption('parent');
         await settle(t.page, 900);
     } },
+    { id: 'editor/add-reference-flow', kind: 'still', run: async (t) => {
+        await gotoEditor(t); await newPlannerProject(t);
+        // Expand the Weeks section first (root's children render collapsed at
+        // depth 1 -- NodeItem.tsx's useState(depth < 1) -- same chevron-click
+        // pattern as editor/node-data-fields above; `div.mr-1` is the row's
+        // own expand-icon wrapper, whose onClick stopPropagation()s so it
+        // toggles instead of selecting). hasText 'Weeks' matches only the
+        // Weeks section row among the eight rows rendered at this point.
+        const scope = t.page.locator(ACTIVE_PANE);
+        await scope.locator('[data-node-id]', { hasText: 'Weeks' }).first()
+            .locator('div.mr-1').click();
+        await settle(t.page, 400);
+        // "Add Reference" is a hover-revealed action: NodeItem.tsx's button
+        // cluster (Edit Title / Add New Page / Link Existing Page) is
+        // `hidden group-hover:flex` -- display:none, zero-width, until the
+        // row itself is really :hover'ed. A locator click straight at the
+        // button would time out on visibility, so move the mouse onto the
+        // row's title zone first (selectSidebarNode's own validated
+        // left-edge math: paddingLeft depth*12+8 = 32 at this depth-2 row,
+        // plus the same 28px clearance = 60 -- move only, no click, since
+        // clicking would merely select the row, which this shot doesn't
+        // need). hasText 'Week 1' also matches Week 10-19 by substring, but
+        // .first() in DOM order is the real Week 1 -- it's the Weeks
+        // node's children[0], rendered before every other week row.
+        const week1Row = scope.locator('[data-node-id]', { hasText: 'Week 1' }).first();
+        const box = await week1Row.boundingBox();
+        await t.page.mouse.move(box.x + 60, box.y + box.height / 2);
+        await settle(t.page, 300);
+        // The revealed cluster's real button title, from NodeItem.tsx line
+        // ~85: "Link Existing Page (Reference)" -- grep-verified unique to
+        // this component. Scoped to the hovered row anyway: every row
+        // carries an identically-titled button, but only the hovered row's
+        // is display:flex right now. Clicking it fires onAddRef ->
+        // ProjectEditor.handleAddReference, which opens NodeSelectorModal
+        // in nodeSelectorMode 'create_reference', titled "Select Reference
+        // Target" (ProjectEditor.tsx ~line 1235). Full-page snap, same
+        // rationale as editor/grid-source-modal: the modal is a fixed
+        // inset-0 overlay, and the dimmed sidebar behind it (Weeks
+        // expanded, Week 1 hovered) is exactly the flow context the
+        // tutorial narrates.
+        await week1Row.locator('button[title="Link Existing Page (Reference)"]').click();
+        await settle(t.page, 600);
+        await t.snap();
+    } },
+    { id: 'editor/week-references-sidebar', kind: 'still', run: async (t) => {
+        await gotoEditor(t); await newPlannerProject(t);
+        // Weeks -> Week 2, both via the same stopPropagation chevron wrapper
+        // as the shot above. Week 2 -- not Week 1 -- because it's the
+        // preset's first *full* week: exactly seven reference children,
+        // January 5 through January 11 (services/planner_preset.ts
+        // w_yx49iuplj), matching the tutorial's "seven italic rows" prose;
+        // Week 1 holds only four (2026 opens on a Thursday). hasText
+        // 'Week 2' also substring-matches Week 20-29, but those render
+        // after it in DOM order, so .first() is the real Week 2.
+        const scope = t.page.locator(ACTIVE_PANE);
+        await scope.locator('[data-node-id]', { hasText: 'Weeks' }).first()
+            .locator('div.mr-1').click();
+        await settle(t.page, 400);
+        await scope.locator('[data-node-id]', { hasText: 'Week 2' }).first()
+            .locator('div.mr-1').click();
+        await settle(t.page, 400);
+        // Crop to the sidebar itself so the seven italic+link-icon reference
+        // rows stay legible: Sidebar.tsx's own root div (line ~53) is the
+        // only element in the app combining border-r with bg-slate-50
+        // (grep-verified; EditorToolbar's bar shares bg-slate-50 but has no
+        // border-r). ACTIVE_PANE-scoped for the usual two-tabs-mounted
+        // reason. Week 2's children sit ~8 rows down -- well inside the
+        // sidebar's unscrolled viewport at this window height, so no
+        // scrolling is needed before the crop.
+        await t.snap(`${ACTIVE_PANE} div.border-r.bg-slate-50`);
+    } },
+    { id: 'editor/clip-referrer-formula', kind: 'clip', run: async (t) => {
+        await gotoEditor(t); await newPlannerProject(t); await switchToTemplatesMode(t);
+        await t.page.locator(ACTIVE_PANE).getByText('Month View', { exact: true }).click();
+        await settle(t.page, 500);
+        // January explicitly (same determinism discipline as this file's
+        // other Month View shots) -- the tutorial's worked example resolves
+        // against it: child 0 of January is January 1, referenced from
+        // Week 1 (ref_egbahioko under w_vjoyf0ivm), so the formula below
+        // must end the clip rendering the literal label "Week 1".
+        const preview = t.page.locator(TOOLBAR_SELECTOR).locator('select');
+        await preview.selectOption({ label: 'January' });
+        await settle(t.page, 500);
+        t.beginClip();
+        // Real settle before the first recorded action -- same empirically
+        // required seek-imprecision guard as clip-grid-cols above.
+        await settle(t.page, 600);
+        // Draw the text box over the note-pattern area in the page's lower
+        // half: template-space ~x224-428, y482-543, inside gen_m_notes2's
+        // decorative hatching (x259-489, y476-669 -- overlap-safe per
+        // clip-grid-cols' own survey of this template) and clear of the
+        // calendar block above (ends ~y466) and the rotated week-label
+        // column (x447+; even rotated, gen_m_w6's bounds stay right of
+        // x462). A freshly drawn element takes the layer's top zIndex, so
+        // it paints over the hatching. drawElement leaves the overlay text
+        // editor open with the caret in it (Canvas.tsx opens it on text
+        // creation -- the exact flow clip-drag-create already records), so
+        // keyboard.type lands in the element's text.
+        await drawElement(t, 't', { x: 0.44, y: 0.71 }, { x: 0.84, y: 0.80 });
+        // The tutorial's worked example, verbatim. While typing, the
+        // overlay shows the raw braces; OverlayTextEditor commits text
+        // live on every keystroke (handleInput -> onChange), and Escape
+        // just ends the edit (onFinish + switch to select) -- so the
+        // committed element re-renders through CanvasElement's
+        // resolveElementPreviewText, which resolves {{child_referrer:...}}
+        // against the January preview node: the final frames must show the
+        // resolved label "Week 1", never raw {{braces}}.
+        await t.page.keyboard.type('{{child_referrer:0:7:week:title}}', { delay: 45 });
+        await settle(t.page, 500);
+        await t.page.keyboard.press('Escape');
+        await settle(t.page, 1200);
+    } },
 ];
