@@ -12,10 +12,17 @@ const VIEWPORT = { width: 1600, height: 1000 };
 
 export async function runScenario(name, shots, { outDir }) {
     if (!Array.isArray(shots) || !shots.length) throw new Error(`scenario ${name}: no shots exported`);
-    const servers = await startServers(`docs-${name}`);
-    const browser = await chromium.launch();
-    const tmpVideoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'docs-clip-'));
+    // servers/browser/tmpVideoDir are declared before the try and assigned
+    // inside it, so if a later setup step throws (e.g. chromium.launch()
+    // fails after startServers() already succeeded), the finally block below
+    // still only tears down what actually got created — nothing leaks.
+    let servers = null;
+    let browser = null;
+    let tmpVideoDir = null;
     try {
+        servers = await startServers(`docs-${name}`);
+        browser = await chromium.launch();
+        tmpVideoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'docs-clip-'));
         for (const shot of shots) {
             const isClip = shot.kind === 'clip';
             const outPath = path.join(outDir, `${shot.id}.${isClip ? 'webp' : 'png'}`);
@@ -63,26 +70,43 @@ export async function runScenario(name, shots, { outDir }) {
                 throw new Error(`[${name}] shot ${shot.id} failed: ${err.message}\n  failure screenshot: ${failPath}`);
             }
 
-            if (isClip) {
-                const video = page.video();
-                await context.close(); // flushes recording
-                const videoPath = await video.path();
-                const offset = Math.max(0, (clipStart - contextStart) / 1000 - 0.2);
-                execFileSync('ffmpeg', [
-                    '-y', '-ss', offset.toFixed(2), '-i', videoPath,
-                    '-vf', 'fps=12,scale=1200:-2:flags=lanczos',
-                    '-loop', '0', '-an', '-c:v', 'libwebp', '-q:v', '70',
-                    outPath,
-                ], { stdio: 'pipe' });
-                fs.unlinkSync(videoPath);
-            } else {
-                await context.close();
+            // Same shot-id error context as the run() catch above, but no
+            // failure screenshot here: for the clip branch the context (and
+            // its page) is already closed by the time ffmpeg can fail, so
+            // there is nothing left to screenshot. ffmpeg's own stderr is
+            // captured and excerpted instead.
+            try {
+                if (isClip) {
+                    const video = page.video();
+                    await context.close(); // flushes recording
+                    const videoPath = await video.path();
+                    const offset = Math.max(0, (clipStart - contextStart) / 1000 - 0.2);
+                    execFileSync('ffmpeg', [
+                        '-y', '-ss', offset.toFixed(2), '-i', videoPath,
+                        '-vf', 'fps=12,scale=1200:-2:flags=lanczos',
+                        '-loop', '0', '-an', '-c:v', 'libwebp', '-q:v', '70',
+                        outPath,
+                    ], { stdio: 'pipe' });
+                    fs.unlinkSync(videoPath);
+                } else {
+                    await context.close();
+                }
+            } catch (err) {
+                await context.close().catch(() => {});
+                const stderrExcerpt = err.stderr && err.stderr.length
+                    ? err.stderr.toString().trim().split('\n').slice(-12).join('\n  ')
+                    : null;
+                const detail = stderrExcerpt
+                    ? `${err.message.split('\n')[0]}\n  ffmpeg stderr (tail):\n  ${stderrExcerpt}`
+                    : err.message;
+                const step = isClip ? 'ffmpeg encode/cleanup' : 'context close';
+                throw new Error(`[${name}] shot ${shot.id} failed: ${step} step failed: ${detail}`);
             }
             console.log(`  ✓ ${shot.kind.padEnd(5)} ${shot.id}`);
         }
     } finally {
-        await browser.close().catch(() => {});
-        servers.stop();
-        fs.rmSync(tmpVideoDir, { recursive: true, force: true });
+        if (browser) await browser.close().catch(() => {});
+        if (servers) servers.stop();
+        if (tmpVideoDir) fs.rmSync(tmpVideoDir, { recursive: true, force: true });
     }
 }

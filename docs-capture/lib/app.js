@@ -20,12 +20,15 @@ export const newBlankProject = (t) => newProjectFromCard(t, 'Start fresh with a 
 export const newPlannerProject = (t) => newProjectFromCard(t, '2026 Planner');
 export const newNotebookProject = (t) => newProjectFromCard(t, 'Simple Notebook');
 
+// Real <button> elements in components/Sidebar.tsx (verified — not relying on
+// DOM order among arbitrary text matches); the generator modal has plain,
+// non-button "Templates"/"Hierarchy" <span>s that this role query can't match.
 export async function switchToTemplatesMode(t) {
-    await t.page.getByText('Templates', { exact: true }).first().click();
+    await t.page.getByRole('button', { name: 'Templates', exact: true }).first().click();
     await settle(t.page, 600);
 }
 export async function switchToHierarchyMode(t) {
-    await t.page.getByText('Hierarchy', { exact: true }).first().click();
+    await t.page.getByRole('button', { name: 'Hierarchy', exact: true }).first().click();
     await settle(t.page, 600);
 }
 

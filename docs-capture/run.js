@@ -2,6 +2,7 @@
 // Default: every scenario in docs-capture/scenarios, out to public/docs-assets.
 // After a default-out run, warns about orphan assets no markdown references.
 import fs from 'node:fs';
+import net from 'node:net';
 import path from 'node:path';
 import { runScenario } from './lib/capture.js';
 
@@ -24,7 +25,32 @@ for (const name of selected) {
     }
 }
 
+// Pre-flight: tutorial/lib/servers.js's vite child can outlive stop() (see
+// README Troubleshooting), leaving :5199/:3001 bound across runs. Check
+// before every scenario and fail fast with guidance instead of a cryptic
+// strictPort error deep inside startServers().
+const isPortFree = (port) => new Promise((resolve) => {
+    const srv = net.createServer();
+    srv.once('error', () => resolve(false));
+    srv.once('listening', () => srv.close(() => resolve(true)));
+    srv.listen(port);
+});
+async function checkPortsFree() {
+    const busy = [];
+    for (const port of [3001, 5199]) {
+        if (!(await isPortFree(port))) busy.push(port);
+    }
+    if (busy.length) {
+        console.error(`✗ port(s) ${busy.join(', ')} already in use — a previous tutorial/docs-capture run likely leaked a process.`);
+        console.error('  Check:  lsof -i :3001 -i :5199   (or: pgrep -f "vite --port 5199")');
+        console.error("  Remedy: kill only processes attributable to this repo's previous runs, then rerun.");
+        console.error('  See docs-capture/README.md → Troubleshooting.');
+        process.exit(1);
+    }
+}
+
 for (const name of selected) {
+    await checkPortsFree();
     console.log(`scenario ${name}`);
     const mod = await import(path.join(scenariosDir, `${name}.js`));
     await runScenario(name, mod.shots, { outDir });

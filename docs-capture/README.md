@@ -30,3 +30,24 @@ wide; keep them 3–10 s.
 Orphan assets (files no markdown references) are warned about after a full
 default-out run — they never fail a build; the reverse direction (markdown
 referencing a missing file) fails `tests/unit/docsAntiRot.test.ts`.
+
+## Troubleshooting
+
+**Symptom:** a scenario fails to start — Vite can't bind `:5199` (`--strictPort`
+error), or the API server on `:3001` never comes up — even though no capture run
+is currently active. `run.js` checks for this before every scenario and exits
+with this same guidance instead of a bare Playwright/Vite stack trace.
+
+**Check:** `lsof -i :3001 -i :5199` (or `pgrep -f "vite --port 5199"` /
+`pgrep -f server/index.js`) to see what's still bound.
+
+**Remedy:** kill only processes you can attribute to a previous tutorial/docs-capture
+run in this repo — the command line will mention this repo's path, e.g.
+`.../node_modules/.bin/vite --port 5199 --strictPort` — then rerun.
+
+**Root cause:** `tutorial/lib/servers.js` spawns Vite via `npx`; its `stop()` kills
+that handle, but `npx` interposes a wrapper process whose actual Vite child
+survives the kill and keeps `:5199` bound. A later `startServers()` call's own
+Vite spawn then silently fails to bind while `:5199` still answers (the stale
+instance), so the leak can go unnoticed rather than error — harmless if the
+frontend source hasn't changed since the leak, misleading otherwise.
