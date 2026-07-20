@@ -60,7 +60,7 @@ The whole recipe, from scratch:
 
 1. Create the container: a new node per week (**Add New Page** on a Weeks section node), using a template with room for seven slots.
 2. Hover the new week row and use **Link Existing Page (Reference)** seven times, picking that week's days in order — Monday first. Order matters: it's the order cells fill, and the order the referrer machinery below scans.
-3. On the week's template, draw a grid with **Source: Current Node** and a **Display Template** of `{{title}}` (or any day field — the target's fields are all visible to the cell).
+3. On the week's template, draw a grid with **Source: Children of Current Page** and a **Display Template** of `{{title}}` (or any day field — the target's fields are all visible to the cell).
 4. There is no step 4. Cells already link to the real day pages, and days added to a different week later can't drift out of sync with their month, because there's only one node per day.
 
 > [!TIP]
