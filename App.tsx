@@ -3,7 +3,7 @@ import { BrowserRouter, Routes, Route, useLocation } from 'react-router-dom';
 import type { Location } from 'react-router-dom';
 import { LandingPage } from './pages/LandingPage';
 import { EditorPage } from './pages/EditorPage';
-import { DocsPage } from './pages/DocsPage';
+import { DocsSection } from './pages/docs/DocsSection';
 import { AnalyticsDashboard } from './pages/AnalyticsDashboard';
 import { LoginPage } from './pages/LoginPage';
 import { GalleryPage } from './pages/GalleryPage';
@@ -39,7 +39,7 @@ function AppRoutes() {
       <Routes location={backgroundLocation || location}>
         <Route path="/" element={<LandingPage />} />
         <Route path="/app" element={<EditorPage />} />
-        <Route path="/docs" element={<DocsPage />} />
+        <Route path="/docs/*" element={<DocsSection />} />
         <Route path="/login" element={<LoginPage />} />
         <Route path="/gallery" element={<GalleryPage />} />
         <Route path="/gallery/:id" element={<GalleryDetailPage />} />

@@ -25,8 +25,8 @@ const NavLink: React.FC<{ to: string; label: string }> = ({ to, label }) => {
  * Shared top bar for all non-editor pages. Sticky + z-50 so the AccountMenu
  * dropdown can never be occluded by page content (the landing page's hero
  * once painted over it — see 2026-07-10 spec §2). shrink-0 because several
- * adopters render this inside a flex-col whose content overflows (e.g.
- * DocsPage) — without it the fixed h-14 gets squashed.
+ * adopters render this inside a flex-col whose content overflows (e.g. the
+ * docs pages) — without it the fixed h-14 gets squashed.
  */
 export const AppHeader: React.FC = () => (
     <header className="h-14 shrink-0 bg-white/90 backdrop-blur border-b border-slate-200 flex items-center justify-between px-6 sticky top-0 z-50">

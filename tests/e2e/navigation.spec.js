@@ -15,8 +15,9 @@ test.describe('Navigation', () => {
         await page.getByRole('link', { name: /Docs/i }).click();
 
         await expect(page).toHaveURL(/.*\/docs/);
-        // Verify docs content loads
-        await expect(page.getByRole('heading', { name: 'Introduction' })).toBeVisible();
+        // Verify the docs section shell loads (learning-path home + at least one track heading)
+        await expect(page.getByRole('heading', { name: 'Documentation', level: 1 })).toBeVisible();
+        await expect(page.getByRole('heading', { name: 'Getting Started' })).toBeVisible();
     });
 
     test('should handle 404 for unknown routes', async ({ page }) => {

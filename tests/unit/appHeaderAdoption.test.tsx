@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Routes, Route } from 'react-router-dom';
 
 vi.mock('../../lib/auth-client', () => ({
     useSession: () => ({ data: null, isPending: false }),
@@ -28,9 +28,13 @@ describe('AppHeader adoption', () => {
         expect(screen.getByRole('link', { name: /^editor$/i })).toBeTruthy();
     });
 
-    it('DocsPage renders the shared header', async () => {
-        const { DocsPage } = await import('../../pages/DocsPage');
-        render(<MemoryRouter><DocsPage /></MemoryRouter>);
+    it('DocsSection renders the shared header', async () => {
+        const { DocsSection } = await import('../../pages/docs/DocsSection');
+        render(
+            <MemoryRouter initialEntries={['/docs']}>
+                <Routes><Route path="/docs/*" element={<DocsSection />} /></Routes>
+            </MemoryRouter>
+        );
         expect(screen.getByRole('link', { name: /^gallery$/i })).toBeTruthy();
         expect(screen.getByRole('link', { name: /^editor$/i })).toBeTruthy();
     });

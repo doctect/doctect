@@ -21,7 +21,7 @@ vi.mock('../../pages/AdminModerationPage', () => ({
 }));
 vi.mock('../../pages/EditorPage', () => ({ EditorPage: () => null }));
 vi.mock('../../pages/LandingPage', () => ({ LandingPage: () => null }));
-vi.mock('../../pages/DocsPage', () => ({ DocsPage: () => null }));
+vi.mock('../../pages/docs/DocsSection', () => ({ DocsSection: () => null }));
 vi.mock('../../pages/AnalyticsDashboard', () => ({ AnalyticsDashboard: () => null }));
 vi.mock('../../pages/LoginPage', () => ({ LoginPage: () => <LoginLocationState /> }));
 vi.mock('../../pages/GalleryPage', () => ({ GalleryPage: () => null }));
