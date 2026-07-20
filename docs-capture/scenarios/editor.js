@@ -325,4 +325,190 @@ export const shots = [
         await preview.selectOption({ label: 'January 2, 2026' });
         await settle(t.page, 900);
     } },
+    { id: 'editor/grid-source-modal', kind: 'still', run: async (t) => {
+        await gotoEditor(t); await newPlannerProject(t);
+        // newPlannerProject lands in Hierarchy mode with the root ("2026
+        // Planner") already selected and its Year View page showing --
+        // documented behavior (getting-started/02's own "Explore the
+        // hierarchy" section), not assumed. Year View's own two grid
+        // elements (services/planner_preset.ts ~lines 38818-38862, "current"
+        // source, dataSliceStart/Count 0/4 and 4/3 of the root's 7 children)
+        // occupy roughly template-space x54-434,y200-465 on this 509x679
+        // page; gen_year_bg is a full-bleed black rect underneath both. This
+        // shot's own new grid is drawn well below that, in the otherwise
+        // empty black lower third of the page, so it can't visually collide
+        // with either existing grid.
+        await drawElement(t, 'g', { x: 0.15, y: 0.72 }, { x: 0.5, y: 0.83 });
+        const scope = t.page.locator(ACTIVE_PANE);
+        // SingleElementEditor.tsx's Grid Configuration Source <select>
+        // (~line 531) is the only <select> in the whole app with an
+        // option value="specific" (grep-verified) -- same has(option[...])
+        // anchor idiom this file's own setPatternFill helper above already
+        // uses for value="pattern"/"dots", just a different option value.
+        // Grid Configuration starts expanded (PropertiesPanel.tsx's
+        // INITIAL_ELEMENT_PROPERTY_SECTIONS sets every section, including
+        // "grid", to true), so no CollapsibleSection click is needed first.
+        await scope.locator('select:has(option[value="specific"])').selectOption('specific');
+        await settle(t.page, 400);
+        // Switching Source to "specific" reveals a dashed button reading
+        // "Select Page..." (SingleElementEditor.tsx ~line 538, unique exact
+        // text -- the unrelated linkTarget==='specific_node' button under
+        // Interaction reads "Select Target Page...", a different string, so
+        // this can't collide with that even on a selection that also had a
+        // link configured, which this one doesn't).
+        await scope.getByText('Select Page...', { exact: true }).click();
+        // NodeSelectorModal (ProjectEditor.tsx ~line 1231-1235) opens
+        // titled "Select Source Node" for nodeSelectorMode==='grid_source'
+        // (the create_reference ternary branch doesn't apply here), tree
+        // rooted at state.rootId with only the root itself expanded by
+        // default (NodeItem's `useState(depth < 1)`) -- so this still lands
+        // showing "2026 Planner" open over its 7 real children (Quarter
+        // 1-4, Weeks, Notes, To-Do Lists) collapsed, with no further clicks.
+        // Full-page snap, not scoped to a selector: the modal is a fixed
+        // inset-0 overlay with its own backdrop-blur, so the dimmed
+        // editor/canvas behind it barely matters -- it's the modal itself
+        // this shot is about.
+        await settle(t.page, 600);
+        await t.snap();
+    } },
+    { id: 'editor/clip-grid-cols', kind: 'clip', run: async (t) => {
+        await gotoEditor(t); await newPlannerProject(t); await switchToTemplatesMode(t);
+        await t.page.locator(ACTIVE_PANE).getByText('Month View', { exact: true }).click();
+        await settle(t.page, 500);
+        // Land on January explicitly (same discipline as the
+        // clip-preview-node-switch shot above) rather than assume it's
+        // already the fallback nodesForCurrentTemplate[0] -- January has 31
+        // real day children either way, which the math below depends on.
+        const preview = t.page.locator(TOOLBAR_SELECTOR).locator('select');
+        await preview.selectOption({ label: 'January' });
+        await settle(t.page, 500);
+        // Month View is dense (calendar grid, day-of-week letters, week
+        // numbers, two note-pattern rects filling most of the bottom half --
+        // services/planner_preset.ts ~lines 39586-39947); origin (40,470)
+        // sits just below the existing calendar/week-label block (which ends
+        // ~y466) and inside the note-pattern area (y476.5-668.8, decorative
+        // hatching only, safe to overlap). Canvas.tsx's grid-creation
+        // formula (tool==='grid' branch, ~line 1379) derives this new grid's
+        // *per-cell* w/h from the drag box using a hardcoded 3-col/2-row
+        // assumption regardless of what Cols is set to afterward:
+        // cellW=(dragW-2*10)/3, cellH=(dragH-1*10)/2. This drag box
+        // (110x50 template px) yields cellW=30, cellH=20.
+        await drawElement(t, 'g', { x: 0.079, y: 0.692 }, { x: 0.295, y: 0.766 });
+        const scope = t.page.locator(ACTIVE_PANE);
+        // Display Template and Cols are both `<label>` + sibling `<input>`
+        // inside the same wrapping <div> (SingleElementEditor.tsx ~lines
+        // 524, 617-622) -- same idiom as this file's setPatternFill "Gap"/
+        // "Weight" locators, one level shallower (direct siblings, not
+        // label + sibling <div>). A bare field name with no "{{" gets
+        // auto-wrapped by both renderers (CanvasElement.tsx, pdfService.ts):
+        // `day_num` here shows each cell's own short day number instead of
+        // the default {{title}} ("January 5, 2026"), which wouldn't fit
+        // legibly in a 30px-wide cell.
+        await scope.locator('label:text-is("Display Template") + input').fill('day_num');
+        await settle(t.page, 400);
+        const colsInput = scope.locator('label:text-is("Cols") + input');
+        // Unrecorded setup: land on Cols=10 (4 rows of a 31-day month,
+        // ~390x110 template px from this element's fixed top-left corner)
+        // BEFORE beginClip() -- getElementBounds (components/canvas/
+        // elementBounds.ts) computes a grid's full footprint as
+        // `cols*cellW + gaps` wide by `ceil(children/cols)*cellH + gaps`
+        // tall, growing only right and down from x/y, so this stays clear
+        // of the calendar above and the page's own 679px bottom edge.
+        await colsInput.fill('10');
+        await settle(t.page, 500);
+        t.beginClip();
+        // A real settle here -- not just the pre-roll lib/capture.js's own
+        // trim (clipStart minus 0.2s) provides -- turned out to matter:
+        // empirically (extracted every frame of an early version of this
+        // clip with anim_dump and diffed the Cols input's own value across
+        // all of them), the whole setup chain above this point takes long
+        // enough before beginClip() that the fast `-ss`-before-`-i` seek
+        // landed at or after the Cols=6 change on every single frame --
+        // "Cols=10" never showed up anywhere in the trimmed output, even
+        // though it was genuinely on screen for the full 500ms right above.
+        // Holding here, mid-recording, well past that seek imprecision,
+        // guarantees several real frames of "Cols=10" survive the trim
+        // before the change below fires.
+        await settle(t.page, 800);
+        // Cols 10 -> 6: same 31 cells, same cellW/cellH, now 6 rows instead
+        // of 4 (~230x170 template px) -- a visibly different shape, still
+        // safely inside the page (470+170=640 < 679).
+        await colsInput.fill('6');
+        await settle(t.page, 900);
+    } },
+    { id: 'editor/grid-table-styling', kind: 'still', run: async (t) => {
+        await gotoEditor(t); await newPlannerProject(t); await switchToTemplatesMode(t);
+        await t.page.locator(ACTIVE_PANE).getByText('Month View', { exact: true }).click();
+        await settle(t.page, 500);
+        const preview = t.page.locator(TOOLBAR_SELECTOR).locator('select');
+        // June 1, 2026 is a real Monday (services/planner_preset.ts's own
+        // June 1 node: "day_name": "Monday", "weekday_num": "1") -- the
+        // calendar grid's offset (gridConfig.offsetField "weekday_num",
+        // offsetAdjustment -1, gen_month_2 ~line 39587) resolves to
+        // weekday_num + adjustment = 1 - 1 = 0, so June's first calendar row
+        // has zero leading blank cells: all seven of row 0's cells are real
+        // days, the cleanest possible Header Row demonstration. (Verified
+        // by direct date arithmetic from Jan 1, 2026 = Thursday, given in
+        // editor/data-binding's own table, and cross-checked directly
+        // against the preset's June 1 node data.)
+        await preview.selectOption({ label: 'June' });
+        await settle(t.page, 500);
+        // Select-mode, not whatever tool drawElement or a prior shot left
+        // active (this shot never calls drawElement, but press('v')
+        // defensively regardless, matching this file's own convention).
+        await t.page.keyboard.press('v');
+        await settle(t.page, 300);
+        // Click inside the *existing* calendar grid (gen_month_2,
+        // template-space roughly x44-462,y81-402 for a 30-day, zero-offset
+        // month) rather than drawing a new one -- it's already there with
+        // 30 real day cells, exactly the "ready-made grid" this tutorial's
+        // "Choosing the source" section already pointed at. hitTestPoint
+        // (services/hitTest.ts) checks a grid's *full* getElementBounds
+        // footprint, not just its one-cell w/h, so any point inside that
+        // rendered area resolves to this element. (0.5, 0.3) is well clear
+        // of the day-of-week letter row above (y60-79) and the rotated
+        // week-number column to the right (x447+).
+        const c = await canvasBox(t.page);
+        await t.page.mouse.click(c.x + c.width * 0.5, c.y + c.height * 0.3);
+        await settle(t.page, 400);
+        const scope = t.page.locator(ACTIVE_PANE);
+        // Header Row / First Column / Alternate Rows / Alternate Columns
+        // each render as one outer box (SingleElementEditor.tsx ~lines
+        // 725-815, all four sharing the exact className "mb-2 p-1.5
+        // bg-white rounded border border-indigo-50") holding two SIBLING
+        // rows: the toggle row (label + button, className "flex items-center
+        // justify-between mb-1") and, once the toggle is on, a second,
+        // conditionally-rendered swatch row (className "flex gap-1
+        // items-center") holding the color input(s) and, for Header
+        // Row/First Column only, a Bold button. Scoping to the outer
+        // box via filter({hasText}) (there are 4 identical "p-1.5" boxes;
+        // only one contains each toggle's own label text) and then to
+        // "div.gap-1.items-center" specifically -- rather than the outer
+        // box's own <button>, which would ambiguously match BOTH the
+        // toggle button and the revealed Bold button -- gets exactly the
+        // swatch row's own controls with no index-guessing.
+        //
+        // Toggling the switch alone stages the row/column but paints it in
+        // the same colors as every other cell (headerRowFill etc. stay
+        // undefined in gridConfig until a swatch is actually touched -- see
+        // CanvasElement.tsx's `if (gc.headerRowFill) cellFill = ...`) --
+        // so every toggle below is paired with at least one swatch fill,
+        // never left as a no-op flip.
+        const headerBox = scope.locator('div.p-1\\.5').filter({ hasText: 'Header Row' });
+        await scope.locator('label:text-is("Header Row") + button').click();
+        await settle(t.page, 300);
+        const headerSwatches = headerBox.locator('div.gap-1.items-center');
+        await headerSwatches.locator('input[type="color"]').nth(0).fill('#1d4ed8'); // fill
+        await settle(t.page, 200);
+        await headerSwatches.locator('input[type="color"]').nth(1).fill('#ffffff'); // text color
+        await settle(t.page, 200);
+        await headerSwatches.locator('button').click(); // Bold
+        await settle(t.page, 300);
+        const altRowsBox = scope.locator('div.p-1\\.5').filter({ hasText: 'Alternate Rows' });
+        await scope.locator('label:text-is("Alternate Rows") + button').click();
+        await settle(t.page, 300);
+        await altRowsBox.locator('div.gap-1.items-center').locator('input[type="color"]').fill('#dbeafe');
+        await settle(t.page, 500);
+        await t.snap();
+    } },
 ];
