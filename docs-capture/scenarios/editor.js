@@ -50,6 +50,23 @@ const PROPERTIES_PANEL_SELECTOR = `${ACTIVE_PANE} [data-prevent-finish-edit="tru
 // two-tabs-mounted reason (see TOOLBAR_SELECTOR above).
 const LAYERS_PANEL_SELECTOR = `${ACTIVE_PANE} [data-testid="layers-panel"]`;
 
+// SingleElementEditor.tsx's grid Offset block (~lines 645-666) -- the
+// "Offset (Skip items)" label plus both its sibling rows (the Static/Dynamic
+// select + static number, and -- only rendered once Dynamic is picked -- the
+// Field Name / +- adjustment row) -- is a single plain `<div>` with no class
+// or test id of its own, so it can't be reached by a class/testid selector
+// the way TOOLBAR_SELECTOR/PROPERTIES_PANEL_SELECTOR/LAYERS_PANEL_SELECTOR
+// above are. Every ancestor div, all the way up to the panel root, also
+// "has" this exact text as a descendant (grep-verified page-unique, so this
+// isn't a false match) -- CSS alone can't express "the *closest* ancestor",
+// only Playwright's own `>> xpath=..` chaining can, by re-scoping evaluation
+// to the label's own parent rather than searching the whole subtree again.
+// Scoped to ACTIVE_PANE first for the usual two-tabs-mounted reason (see
+// TOOLBAR_SELECTOR above), even though in practice this label can only ever
+// render for a *selected grid element* in Templates mode, never in the
+// backgrounded tab's own default blank/unselected state.
+const OFFSET_BLOCK_SELECTOR = `${ACTIVE_PANE} label:has-text("Offset (Skip items)") >> xpath=..`;
+
 // Expands the Layers section in the right column. CollapsibleSection.tsx
 // renders one real <button> per section (title="Layers", aria-expanded,
 // holding a chevron + Layers icon + the literal text "Layers") with the
@@ -509,6 +526,126 @@ export const shots = [
         await settle(t.page, 300);
         await altRowsBox.locator('div.gap-1.items-center').locator('input[type="color"]').fill('#dbeafe');
         await settle(t.page, 500);
+        await t.snap();
+    } },
+    { id: 'editor/grid-offset-config', kind: 'still', run: async (t) => {
+        await gotoEditor(t); await newPlannerProject(t); await switchToTemplatesMode(t);
+        await t.page.locator(ACTIVE_PANE).getByText('Month View', { exact: true }).click();
+        await settle(t.page, 500);
+        // January explicitly (same discipline as this file's other Month
+        // View shots) -- 31 real day children, weekday_num 4 on the 1st,
+        // ties this still to the tutorial's own running "January" example.
+        const preview = t.page.locator(TOOLBAR_SELECTOR).locator('select');
+        await preview.selectOption({ label: 'January' });
+        await settle(t.page, 500);
+        await t.page.keyboard.press('v');
+        await settle(t.page, 300);
+        // Click the *existing* calendar grid (gen_month_2,
+        // services/planner_preset.ts ~line 39587) rather than drawing a new
+        // one -- it already ships with offsetMode "dynamic" (offsetField
+        // "weekday_num", offsetAdjustment -1), so the panel shows the real,
+        // shipped values with no configuration needed at all. Same click
+        // point editor/grid-table-styling above already uses and verified
+        // (that shot's own comment: template-space roughly x44-462,y81-402
+        // for a 30-day, zero-offset month) -- January's 31 days plus its
+        // own 3-cell dynamic offset also lands on 5 rows, so the grid's
+        // rendered footprint covers the same region either month.
+        const c = await canvasBox(t.page);
+        await t.page.mouse.click(c.x + c.width * 0.5, c.y + c.height * 0.3);
+        await settle(t.page, 400);
+        await t.snap(OFFSET_BLOCK_SELECTOR);
+    } },
+    { id: 'editor/clip-dynamic-offset', kind: 'clip', run: async (t) => {
+        await gotoEditor(t); await newPlannerProject(t); await switchToTemplatesMode(t);
+        await t.page.locator(ACTIVE_PANE).getByText('Month View', { exact: true }).click();
+        await settle(t.page, 500);
+        const preview = t.page.locator(TOOLBAR_SELECTOR).locator('select');
+        await preview.selectOption({ label: 'January' });
+        await settle(t.page, 500);
+        await t.page.keyboard.press('v');
+        await settle(t.page, 300);
+        // Same real grid and click point as editor/grid-offset-config above.
+        const c = await canvasBox(t.page);
+        await t.page.mouse.click(c.x + c.width * 0.5, c.y + c.height * 0.3);
+        await settle(t.page, 400);
+        const scope = t.page.locator(ACTIVE_PANE);
+        // Same has(option[...]) idiom this file's setPatternFill/
+        // grid-source-modal shots already use, just this select's own
+        // unique option value (grep-verified: "dynamic" appears on no other
+        // <select> in the whole app).
+        const offsetModeSelect = scope.locator('select:has(option[value="dynamic"])');
+        // Unrecorded setup: flip to Static first, so the clip has a real,
+        // contrasting starting frame -- gen_month_2's offsetStart is unset
+        // (defaults to 0), so Static mode shows zero blank leading cells and
+        // day 1 forced into column 0, exactly the "day 1 != column 1"
+        // problem this tutorial opens with. Recording only the switch BACK
+        // to Dynamic (the fix) mirrors this file's own clip-grid-cols
+        // convention: land on the "before" state unrecorded, beginClip()
+        // right before the change that's actually the point of the shot.
+        await offsetModeSelect.selectOption('static');
+        await settle(t.page, 700);
+        t.beginClip();
+        await offsetModeSelect.selectOption('dynamic');
+        await settle(t.page, 900);
+    } },
+    { id: 'editor/grid-traversal-example', kind: 'still', run: async (t) => {
+        await gotoEditor(t); await newPlannerProject(t); await switchToTemplatesMode(t);
+        await t.page.locator(ACTIVE_PANE).getByText('Quarter View', { exact: true }).click();
+        await settle(t.page, 500);
+        // Quarter 1 explicitly -- its 3 children are January, February,
+        // March in that order (services/planner_preset.ts's own
+        // gen_q_m1_days/gen_q_m2_days/gen_q_m3_days reach them via
+        // traversalPath sliceStart 0/1/2 respectively), matching this
+        // tutorial's own worked Quarter -> Month -> Days table.
+        const preview = t.page.locator(TOOLBAR_SELECTOR).locator('select');
+        await preview.selectOption({ label: 'Quarter 1' });
+        await settle(t.page, 500);
+        await t.page.keyboard.press('v');
+        await settle(t.page, 300);
+        // Select the *existing* real grid (gen_q_m1_days,
+        // services/planner_preset.ts ~line 38921) rather than drawing a
+        // fresh one -- Quarter View's own template is packed edge to edge
+        // top to bottom (title/divider/mini-calendars/day-letters occupy
+        // y0-171; gen_q_g1/g2/g3, three single-column "day list" grids with
+        // the *same* 2-step traversal shape reaching all ~28-31 days of
+        // each month, occupy nearly the entire rest of the page,
+        // y188 down to as far as y653) -- there's no genuinely empty region
+        // left to draw a new, larger grid into without it visually
+        // colliding with real content either way, so this reuses the real
+        // element instead, same principle as editor/grid-table-styling and
+        // editor/grid-offset-config above.
+        //
+        // gen_q_m1_days's own footprint for January (31 days + a 3-cell
+        // dynamic offset = 34 slots, 7 cols, no gaps) is template-space
+        // x50-169,y82-157. Clicking (75,110) -- fractional (0.147,0.162) --
+        // lands inside column 1's populated rows, clear of the taller
+        // decorative separator rects immediately to its right (gen_q_rect1/
+        // gen_q_rect2, x135-169,y65-171) even though those sit at a lower
+        // zIndex (-4 vs this grid's -3) and would lose a hit-test tie there
+        // anyway.
+        const c = await canvasBox(t.page);
+        await t.page.mouse.click(c.x + c.width * 0.147, c.y + c.height * 0.162);
+        await settle(t.page, 400);
+        // gen_q_m1_days ships fully configured already (cols 7, displayField
+        // "day_num", the exact 2-step traversalPath and dynamic weekday_num
+        // offset this tutorial's own JSON block quotes verbatim) -- no
+        // interaction needed beyond selecting it, same "just click the real
+        // thing" pattern as editor/grid-offset-config above.
+        const scope = t.page.locator(ACTIVE_PANE);
+        // Full-page snap (canvas + panel both visible, per the brief), not a
+        // single-element crop -- but PropertiesPanel.tsx's own root div is
+        // independently scrollable (overflow-y-auto), and page.screenshot()
+        // (what a selector-less t.snap() takes) only ever captures whatever
+        // is currently painted in the viewport; unlike locator.screenshot()
+        // (what the other two new shots above use via t.snap(selector)), it
+        // does NOT auto-scroll anything into view first. Deep Traversal
+        // sits well down Grid Configuration's own field list (after
+        // Cols/Gaps/Source), so without this the panel's default
+        // scroll-to-top position would leave it below the fold. Scrolling
+        // it into view as the deliberate last step before snapping puts it
+        // exactly where this shot needs it.
+        await scope.getByText('Deep Traversal', { exact: true }).scrollIntoViewIfNeeded();
+        await settle(t.page, 400);
         await t.snap();
     } },
 ];
