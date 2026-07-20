@@ -209,4 +209,56 @@ export const shots = [
         await scope.locator('button[title="Toggle lock"]').first().click();
         await settle(t.page, 700);
     } },
+    { id: 'editor/select-under-menu', kind: 'still', run: async (t) => {
+        await gotoEditor(t); await newBlankProject(t);
+        // Three same-size rects, each offset by 2% of the canvas so the stack
+        // stays visually tellable apart (staggered corners) despite sharing
+        // the same default fill/stroke -- drawElement leaves the last one
+        // (highest zIndex, per nextZIndexInLayer) selected and on top.
+        for (const pad of [0, 0.02, 0.04]) {
+            await drawElement(t, 'r', { x: 0.3 + pad, y: 0.3 + pad }, { x: 0.55 + pad, y: 0.5 + pad });
+        }
+        // drawElement leaves the rect tool ('r') active -- Canvas.tsx's
+        // handleMouseDown checks for its six shape-tool names (step 2)
+        // *before* the tool==='select' branch (step 3) that owns right-click
+        // resolution, and handleContextMenu's own first line separately bails
+        // with `if (tool !== 'select') return`. Without switching tools back
+        // first, this right-click would fall into creation mode (creating
+        // nothing, since a press-release with no drag is below
+        // MIN_DRAG_THRESHOLD) and the context-menu handler would return
+        // before ever building the stack -- no menu at all. Same fix the
+        // existing clip-align-distribute shot already needs (and applies)
+        // after its own back-to-back drawElement calls, for the same reason.
+        await t.page.keyboard.press('v');
+        await settle(t.page, 300);
+        const c = await canvasBox(t.page);
+        await t.page.mouse.click(c.x + c.width * 0.42, c.y + c.height * 0.42, { button: 'right' });
+        await settle(t.page, 600);
+        await t.snap();
+    } },
+    { id: 'editor/clip-click-cycle', kind: 'clip', run: async (t) => {
+        await gotoEditor(t); await newBlankProject(t);
+        for (const pad of [0, 0.02, 0.04]) {
+            await drawElement(t, 'r', { x: 0.3 + pad, y: 0.3 + pad }, { x: 0.55 + pad, y: 0.5 + pad });
+        }
+        // Same tool-switch as editor/select-under-menu above, and for the
+        // same reason: still on the rect tool after the drawElement loop, and
+        // Canvas.tsx's click-cycle logic (the whole point of this clip) lives
+        // in the tool==='select' branch of handleMouseDown/handleMouseUp.
+        await t.page.keyboard.press('v');
+        await settle(t.page, 300);
+        t.beginClip();
+        const c = await canvasBox(t.page);
+        // The point (0.42, 0.42) sits inside all three rects. The last-drawn
+        // rect is already selected when the clip starts, so this is never a
+        // cold first click: each clean click (no drag) is already "inside"
+        // the 3-member stack, so handleMouseUp's cycle steps the selection
+        // one level down every time -- top -> middle -> bottom -> (wraps)
+        // top -- across exactly these 3 clicks, visibly moving the selection
+        // outline between the three distinct (offset) rects each time.
+        for (let i = 0; i < 3; i++) {
+            await t.page.mouse.click(c.x + c.width * 0.42, c.y + c.height * 0.42);
+            await settle(t.page, 900);
+        }
+    } },
 ];
