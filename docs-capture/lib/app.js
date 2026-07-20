@@ -55,17 +55,69 @@ export async function switchToHierarchyMode(t) {
 // pane instead -- the x<300/y>140 heuristic can't tell panes apart, since
 // both sit at the identical absolute inset-0 box (pages/EditorPage.tsx
 // ~line 357).
-export async function sidebarNodeBox(page, name) {
-    const matches = await page.locator(ACTIVE_PANE).locator(`text=${name}`).all();
-    for (const m of matches) {
-        const box = await m.boundingBox();
-        if (box && box.x < 300 && box.y > 140) return box;
+//
+// Resolves the ROW ([data-node-id] div), not the title text inside it --
+// see the HAZARD comment on selectSidebarNode below for why the row, not
+// the title span, is what must be measured and clicked. `[data-node-id]`
+// only ever marks that row div itself (components/sidebar/NodeItem.tsx: a
+// node's children render as siblings of it, one level up, not inside it),
+// so filtering by hasText here can't accidentally sweep in a descendant's
+// row.
+async function resolveSidebarNodeRow(page, name) {
+    const rows = await page.locator(ACTIVE_PANE).locator('[data-node-id]', { hasText: name }).all();
+    for (const row of rows) {
+        const box = await row.boundingBox();
+        if (box && box.x < 300 && box.y > 140) return { row, box };
     }
     throw new Error(`sidebar node not found: ${name}`);
 }
+
+export async function sidebarNodeBox(page, name) {
+    const { box } = await resolveSidebarNodeRow(page, name);
+    return box;
+}
+
+// HAZARD (fixed here; previously worked around locally in
+// getting-started.js's planner-month-view shot -- see that scenario's git
+// history for the original repro/narrative this replaces). Every
+// non-reference row in components/sidebar/NodeItem.tsx is a flex container:
+// [chevron/spacer icon][optional reference-link icon][title `<span
+// class="truncate flex-1">`][action-button cluster (`hidden
+// group-hover:flex`) holding Edit Title/Add/Link/Duplicate/Delete]. The
+// action-button cluster is `display:none` -- zero width, so the flex-1
+// title span stretches across nearly the *entire* rest of the row -- until
+// the row is actually `:hover`ed, at which point the cluster flips to
+// `display:flex` and the span shrinks to make room. A bounding box measured
+// on the SPAN pre-hover describes that stretched, pre-hover layout only;
+// `page.mouse.click(x, y)` first *moves* the mouse to (x, y) (triggering
+// real :hover and shrinking the span) and only *then* clicks, so a click
+// aimed at that pre-hover span's center lands on whatever the now-revealed
+// buttons put at that now-stale coordinate -- commonly "Edit Title",
+// producing a rename-input state instead of a selection. This is
+// structural to every such row, not node-specific.
+//
+// Fix: click the ROW at a fixed clearance in from its own LEFT edge. The
+// row's left edge -- and the title span's left edge -- never move on
+// hover; only the span's *right* edge and the button cluster's width do.
+// That clearance has to grow with depth, though: NodeItem sets each row's
+// own inline paddingLeft to `depth*12+8`px, followed by a ~22px
+// chevron/spacer icon (14px icon + p-0.5 padding + mr-1 margin) before the
+// title text actually starts -- so a depth-agnostic fixed offset eventually
+// lands back on the icon/padding zone for deep-enough rows (e.g. a
+// depth-3 day node under a month, itself under a quarter, itself under the
+// root). Reading the row's own paddingLeft and adding a fixed clearance
+// past it keeps the click inside the title at any depth; 28px of clearance
+// is chosen so depth 2 reproduces the 60px-from-left-edge offset already
+// validated against the live app (paddingLeft 32px + 28 = 60), and was
+// re-verified at depth 3 (paddingLeft 44px + 28 = 72) with a live probe.
+// Not accounted for: reference rows (`isReference`) render an extra ~16px
+// Link icon before the title, which this clearance doesn't add for -- no
+// current caller selects a reference row, so it's left as a known gap
+// rather than a guessed, unverified fix.
 export async function selectSidebarNode(t, name) {
-    const box = await sidebarNodeBox(t.page, name);
-    await t.page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+    const { row, box } = await resolveSidebarNodeRow(t.page, name);
+    const paddingLeft = await row.evaluate((el) => parseFloat(el.style.paddingLeft) || 0);
+    await t.page.mouse.click(box.x + paddingLeft + 28, box.y + box.height / 2);
     await settle(t.page, 500);
 }
 
