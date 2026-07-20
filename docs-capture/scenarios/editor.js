@@ -869,4 +869,154 @@ export const shots = [
         await t.page.keyboard.press('Escape');
         await settle(t.page, 1200);
     } },
+    { id: 'editor/variant-dropdown', kind: 'still', run: async (t) => {
+        await gotoEditor(t); await newPlannerProject(t); await switchToTemplatesMode(t);
+        // The variant bar only renders in Templates mode (Sidebar.tsx ~line
+        // 76). The planner preset ships in the pre-variants flat "templates"
+        // format (services/planner_preset.json has no `variants` key), so the
+        // v3->v4 migration wraps it into a single variant named "Default" on
+        // load -- and Sidebar.tsx hides the Delete button until a second
+        // variant exists (variantList.length > 1). Duplicate first, so the
+        // still shows the FULL control set the tutorial narrates (dropdown +
+        // rename/duplicate/delete/add), not the one-variant subset:
+        // title="Duplicate Variant" is grep-unique (TemplateItem.tsx's and
+        // NodeItem.tsx's own duplicate buttons are titled just "Duplicate").
+        // handleDuplicateVariant (ProjectEditor.tsx ~line 810) deep-copies
+        // every template and switches to the copy, so the dropdown then reads
+        // "Default (Copy)" -- itself a nice demonstration of what duplicate
+        // produces. No confirm dialog fires on duplicate (only delete has
+        // one).
+        await t.page.locator(`${ACTIVE_PANE} button[title="Duplicate Variant"]`).click();
+        await settle(t.page, 800);
+        // Crop to the sidebar root -- same div.border-r.bg-slate-50 selector
+        // editor/week-references-sidebar above already grep-verified as
+        // unique to Sidebar.tsx (EditorToolbar shares bg-slate-50 but has no
+        // border-r) -- so the variant bar and the copied variant's template
+        // list below it stay legible at display size.
+        await t.snap(`${ACTIVE_PANE} div.border-r.bg-slate-50`);
+    } },
+    { id: 'editor/svg-source-section', kind: 'still', run: async (t) => {
+        await gotoEditor(t); await newBlankProject(t);
+        // EditorToolbar.tsx's SVG menu (~lines 186-231): a FileImage+chevron
+        // button titled "SVG Tools" (grep-unique in the app) opens a
+        // two-item dropdown whose "Insert placeholder SVG" entry (exact
+        // text, also unique -- the other entry is "Import SVG file…", which
+        // would need a real file chooser) calls handleInsertSvgPlaceholder
+        // -> insertSvgElement (ProjectEditor.tsx ~line 740): places
+        // services/svgEditing.ts's PLACEHOLDER_SVG (a 100x100 indigo rounded
+        // square) at (20,20) on the active layer, selects it, and switches
+        // to the Select tool -- so the properties panel is already showing
+        // the element's sections with no further clicks.
+        await t.page.locator(`${ACTIVE_PANE} button[title="SVG Tools"]`).click();
+        await settle(t.page, 300);
+        await t.page.locator(ACTIVE_PANE).getByText('Insert placeholder SVG', { exact: true }).click();
+        await settle(t.page, 600);
+        // SvgSourceSection mounts through CollapsibleSection with
+        // testId="svg-source-section" (grep-unique) and starts expanded
+        // (PropertiesPanel.tsx's INITIAL_ELEMENT_PROPERTY_SECTIONS:
+        // svgSource true), so the placeholder's markup and the KB size
+        // readout are already visible. Crop to the section itself so the
+        // 11px-mono markup stays legible -- same rationale as
+        // LAYERS_PANEL_SELECTOR; t.snap(selector) is locator.screenshot(),
+        // which auto-scrolls its target into view first, so the section
+        // sitting below Geometry/Appearance under the fold is fine.
+        await t.snap(`${ACTIVE_PANE} [data-testid="svg-source-section"]`);
+    } },
+    { id: 'editor/json-inspector', kind: 'still', run: async (t) => {
+        await gotoEditor(t); await newPlannerProject(t);
+        // ProjectEditor.tsx's header-bar JSON button (~line 1060): accessible
+        // name exactly "JSON" (Code icon + text). Every tab's ProjectEditor
+        // renders a JsonModal but only the active tab's isOpen can be true
+        // (showJsonModal lives in each tab's own state) -- the *button* still
+        // needs ACTIVE_PANE scoping, since the backgrounded blank tab has an
+        // identical one.
+        await t.page.locator(ACTIVE_PANE).getByRole('button', { name: 'JSON', exact: true }).click();
+        // Visual mode is the default. The planner is 1733 nodes and the
+        // Nodes section eagerly maps one MainCollectionItem row per node
+        // (components/JsonModal.tsx ~line 360, no virtualization) -- give
+        // that big first render a generous settle.
+        await settle(t.page, 2500);
+        // Expand the first Nodes row so the still demonstrates the tree
+        // *editing* surface (per-property rows), not just a list of
+        // collapsed headers. The planner's rootId is literally "root"
+        // (services/planner_preset.json), so MainCollectionItem's wrapper is
+        // id="item-root"; the variants section's counterpart is
+        // "item-default" (migration names the wrapped variant id "default"),
+        // no collision, and the backgrounded tab's JsonModal renders null --
+        // this id exists exactly once. The clickable header row is the
+        // wrapper's own first child div (MainCollectionItem.tsx ~line 42).
+        await t.page.locator('[id="item-root"] > div').first().click();
+        await settle(t.page, 600);
+        // Full-page snap: the modal is a fixed inset-0 overlay with its own
+        // backdrop blur, same rationale as editor/grid-source-modal. (The
+        // Variants section exists but sits 1700+ rows below the fold -- the
+        // tutorial's figure caption describes the Nodes tree, not both.)
+        await t.snap();
+    } },
+    { id: 'editor/clip-greyscale-toggle', kind: 'clip', run: async (t) => {
+        await gotoEditor(t); await newBlankProject(t);
+        // Neither stock canvas can demonstrate desaturation: a blank page is
+        // white-on-white, and the planner preset is grey/black by design
+        // (its fill survey: #d3d7cf, #000000, #babdb6, #ffffff...). Draw
+        // three rects and fill them saturated blue/green/red so the toggle's
+        // effect is unmissable. All three drags run BEFORE any panel input
+        // is touched: drawElement starts by keyboard.press()ing the tool
+        // key, and ProjectEditor's shortcut handler (~line 150) bails
+        // whenever focus sits in an input/textarea -- which is exactly where
+        // .fill() on the color input below leaves it. Mouse clicks don't
+        // care about focus, so the fill passes are done by re-clicking each
+        // rect with the Select tool instead of interleaving draw and fill.
+        await drawElement(t, 'r', { x: 0.10, y: 0.30 }, { x: 0.30, y: 0.55 });
+        await drawElement(t, 'r', { x: 0.38, y: 0.30 }, { x: 0.58, y: 0.55 });
+        await drawElement(t, 'r', { x: 0.66, y: 0.30 }, { x: 0.86, y: 0.55 });
+        await t.page.keyboard.press('v');
+        await settle(t.page, 300);
+        const c = await canvasBox(t.page);
+        const scope = t.page.locator(ACTIVE_PANE);
+        // SingleElementEditor.tsx's Fill row (~line 896): a w-16 label div
+        // reading exactly "Fill" whose SIBLING div holds the one color
+        // input. Same label+sibling idiom as setPatternFill's "Gap"/"Weight"
+        // above, anchored on the div's text because the Fill row uses a
+        // plain div, not a <label>; "Fill" as exact text matches only this
+        // row (the Stroke row's div reads "Stroke"). Rects don't overlap,
+        // so a single click selects; the rects were drawn left to right and
+        // are re-clicked in the same order, ending on the RED one -- its
+        // blue selection chrome over a red-turned-grey fill is the clearest
+        // possible "content desaturates, chrome doesn't" contrast.
+        const fillInput = scope.locator('div.w-16:text-is("Fill") + div input[type="color"]');
+        const rects = [
+            { cx: 0.20, color: '#2563eb' },
+            { cx: 0.48, color: '#16a34a' },
+            { cx: 0.76, color: '#dc2626' },
+        ];
+        for (const r of rects) {
+            await t.page.mouse.click(c.x + c.width * r.cx, c.y + c.height * 0.425);
+            await settle(t.page, 300);
+            await fillInput.fill(r.color);
+            await settle(t.page, 300);
+        }
+        // The greyscale toggle lives in ProjectEditor's OWN header bar (the
+        // min-h-[40px] bg-white row, NOT EditorToolbar's bg-slate-50 one --
+        // see TOOLBAR_SELECTOR's comment for the two-bars hazard), title
+        // "Greyscale Export: OFF"/"Greyscale Export: ON" depending on state
+        // (ProjectEditor.tsx ~line 1070, grep-unique) -- prefix-match so the
+        // same locator serves every click of the on/off/on sequence below.
+        const greyToggle = scope.locator('button[title^="Greyscale Export"]');
+        t.beginClip();
+        // Real settle before the first recorded action -- same empirically
+        // required seek-imprecision guard as clip-grid-cols above.
+        await settle(t.page, 800);
+        // On -> off -> on: shows the preview is live and reversible (the
+        // page content desaturates via ReadOnlyPagePreview's CSS
+        // grayscale(1) filter; the selection border/handles render outside
+        // that filter wrapper, in the {children} slot, so they stay blue
+        // throughout), and the clip ends in the ON state the tutorial's
+        // "audit the grey version" prose describes.
+        await greyToggle.click();
+        await settle(t.page, 1200);
+        await greyToggle.click();
+        await settle(t.page, 700);
+        await greyToggle.click();
+        await settle(t.page, 1000);
+    } },
 ];
