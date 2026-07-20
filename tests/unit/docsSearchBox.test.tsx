@@ -58,19 +58,47 @@ describe('DocsSearchBox', () => {
 // Regression coverage added after review: the five tests above exercise
 // typing, Escape, "/" focus, a no-matches row, and one Enter-navigation
 // path - but none of them can tell wrapping modulo arithmetic apart from
-// simple clamping (the "path" query's Enter test has only one result, so
-// (0 + 1) % 1 and Math.min(0 + 1, 0) both land on 0), and none exercise
-// mouse interaction (result click, outside click) or the "up to 8" /
-// badge-chip parts of the typing contract at all. Each test below closes
-// one of those gaps and is written so disabling just that behavior (not
-// some other one) breaks only that test.
+// simple clamping, or even from ArrowDown being a complete no-op (the
+// "path" query's Enter test has only one result, so (0 + 1) % 1,
+// Math.min(0 + 1, 0), and "ArrowDown does nothing" all land on the same
+// index 0). They also don't exercise mouse interaction (result click,
+// outside click), the "/" guard's own exclusion clause, the "up to 8" /
+// badge-chip parts of the typing contract, or a whitespace-only query.
+// Each test below closes one of those gaps; where a single test can't
+// fully isolate its claim (a 2-item list makes "moves forward, twice" and
+// "does nothing" coincide after landing back on index 0), a second test
+// pins the piece the first one leaves ambiguous - see the two ArrowDown
+// tests' comments.
 describe('DocsSearchBox — additional contract coverage (regression coverage)', () => {
   // 'body' is the one query where both fixture docs tie in score (each
   // matches only via its own literal "Body." text), so it resolves to
   // exactly two results ordered alphabetically: Dynamic Offset (index 0),
   // then Traversal Path (index 1) - letting a wrap in either direction be
   // read off of which result Enter lands on.
+  it('moves the highlight forward with a single ArrowDown', () => {
+    // Isolates "ArrowDown moves at all" from the wrap test below: a single
+    // press from index 0 must land on index 1 (Traversal Path). A no-op
+    // ArrowDown would leave Enter landing on index 0 (Dynamic Offset)
+    // instead, so this fails on its own if the key is disabled entirely -
+    // unlike the two-press wrap test, which a no-op would pass by
+    // coincidence (see next test's comment).
+    setup();
+    const input = screen.getByRole('combobox');
+    fireEvent.change(input, { target: { value: 'body' } });
+    fireEvent.keyDown(input, { key: 'ArrowDown' }); // 0 (Dynamic Offset) -> 1 (Traversal Path)
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(screen.getByTestId('loc')).toHaveTextContent('/docs/reference/traversal-path');
+  });
+
   it('wraps ArrowDown past the last result back to the first', () => {
+    // On its own, two ArrowDown presses landing back on index 0 is
+    // ambiguous with ArrowDown being a no-op (both never leave index 0).
+    // Combined with the single-press test above - which already proves
+    // one press does move to index 1 - the only way this test's second
+    // press can also land back on index 0 is a genuine wrap, which is what
+    // this pins: a non-wrapping clamp (Math.min(h + 1, results.length - 1))
+    // would instead stay at index 1 (Traversal Path) after the second
+    // press, failing this assertion.
     setup();
     const input = screen.getByRole('combobox');
     fireEvent.change(input, { target: { value: 'body' } });
@@ -81,6 +109,10 @@ describe('DocsSearchBox — additional contract coverage (regression coverage)',
   });
 
   it('wraps ArrowUp from the first result to the last', () => {
+    // Unlike the ArrowDown pair above, one press already fully isolates
+    // this claim: both a no-op and a clamp-at-0 leave Enter on index 0
+    // (Dynamic Offset), so landing on index 1 (Traversal Path) can only
+    // happen if ArrowUp actually wraps.
     setup();
     const input = screen.getByRole('combobox');
     fireEvent.change(input, { target: { value: 'body' } });
@@ -126,5 +158,34 @@ describe('DocsSearchBox — additional contract coverage (regression coverage)',
     );
     fireEvent.change(screen.getByRole('combobox'), { target: { value: 'widget' } });
     expect(screen.getAllByRole('option')).toHaveLength(8);
+  });
+
+  it('does not steal focus on "/" while already typing in another input', () => {
+    // The existing "/" test only exercises the happy path (nothing else
+    // focused); this pins the guard clause itself - without it, "/" would
+    // always preventDefault + steal focus, breaking the literal "/"
+    // character in any other field on the page.
+    render(
+      <MemoryRouter initialEntries={['/docs']}>
+        <input aria-label="Other field" />
+        <DocsSearchBox searchIndex={sIdx} />
+      </MemoryRouter>
+    );
+    const other = screen.getByLabelText('Other field');
+    other.focus();
+    fireEvent.keyDown(window, { key: '/' });
+    expect(other).toHaveFocus();
+    expect(screen.getByRole('combobox')).not.toHaveFocus();
+  });
+
+  it('does not open the dropdown for a whitespace-only query', () => {
+    // Pins the "non-space" half of "typing >= 1 non-space char shows a
+    // dropdown" - searchDocs already returns [] for an all-whitespace
+    // query (see docsSearch.test.ts), so without the .trim().length > 0
+    // guard specifically, this would render the listbox with a "No
+    // matches" row rather than nothing at all.
+    setup();
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: '   ' } });
+    expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
   });
 });
