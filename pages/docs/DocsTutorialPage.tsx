@@ -4,8 +4,7 @@ import { ChevronRight, ArrowLeft, ArrowRight } from 'lucide-react';
 import { docsIndex } from '../../lib/docsContentIndex';
 import { TRACK_LABELS, slugifyHeading } from '../../lib/docsContent';
 import { DocsMarkdown } from '../../components/docs/DocsMarkdown';
-import { DifficultyBadge, tutorialUrl } from './docsUi';
-import { DocsNotFound } from './DocsSection';
+import { DifficultyBadge, tutorialUrl, DocsNotFound } from './docsUi';
 
 export function DocsTutorialPage() {
     const { track = '', slug = '' } = useParams();

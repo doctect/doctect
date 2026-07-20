@@ -1,24 +1,24 @@
 import React from 'react';
-import { Routes, Route, Link } from 'react-router-dom';
+import { Routes, Route } from 'react-router-dom';
 import { DocsLayout } from './DocsLayout';
 import { DocsHomePage } from './DocsHomePage';
 import { DocsTutorialPage } from './DocsTutorialPage';
-
-export function DocsNotFound() {
-    return (
-        <div className="p-14">
-            <h1 className="text-2xl font-bold mb-2">We couldn't find that page</h1>
-            <p className="text-slate-500 mb-4">The link may be outdated.</p>
-            <Link to="/docs" className="text-blue-600 font-medium">Back to the documentation home</Link>
-        </div>
-    );
-}
+import { DocsReferenceIndexPage } from './DocsReferenceIndexPage';
+import { DocsReferenceEntryPage } from './DocsReferenceEntryPage';
+import { DocsNotFound } from './docsUi';
 
 export function DocsSection() {
     return (
         <Routes>
             <Route element={<DocsLayout />}>
                 <Route index element={<DocsHomePage />} />
+                {/* Placed before ":track/:slug" per plan: "/docs/reference" (one
+                    segment) can't match that two-segment pattern at all, so
+                    without its own route it would fall through to the "*"
+                    not-found route; "reference" never gets a chance to be
+                    mismatched as a :track value either way. */}
+                <Route path="reference" element={<DocsReferenceIndexPage />} />
+                <Route path="reference/:slug" element={<DocsReferenceEntryPage />} />
                 <Route path=":track/:slug" element={<DocsTutorialPage />} />
                 <Route path="*" element={<DocsNotFound />} />
             </Route>

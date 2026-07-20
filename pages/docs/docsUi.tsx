@@ -1,4 +1,5 @@
 import React from 'react';
+import { Link } from 'react-router-dom';
 import type { DocDifficulty, DocTrack, DocTutorial } from '../../lib/docsContent';
 
 const DIFF_STYLES: Record<DocDifficulty, string> = {
@@ -19,3 +20,18 @@ export const TRACK_DESCRIPTIONS: Record<DocTrack, string> = {
 };
 
 export const tutorialUrl = (t: DocTutorial): string => `/docs/${t.track}/${t.slug}`;
+
+// Lives here (not DocsSection.tsx, where it originated) so the page
+// components DocsSection routes to (DocsTutorialPage,
+// DocsReferenceEntryPage) can import it without a cycle back through
+// DocsSection - a page importing DocsNotFound from DocsSection previously
+// created exactly that (benign, but needless) import cycle.
+export function DocsNotFound() {
+    return (
+        <div className="p-14">
+            <h1 className="text-2xl font-bold mb-2">We couldn't find that page</h1>
+            <p className="text-slate-500 mb-4">The link may be outdated.</p>
+            <Link to="/docs" className="text-blue-600 font-medium">Back to the documentation home</Link>
+        </div>
+    );
+}
