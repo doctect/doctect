@@ -6,7 +6,7 @@ summary: The mental model — nodes, templates, variants, and data binding — a
 keywords: introduction, concepts, nodes, templates, variants, data binding, interface
 ---
 
-PDF Architect is a visual builder for complex, hyperlinked, multi-page PDF documents — planners, notebooks, itineraries, technical manuals — the kind of document that can run to hundreds of pages while actually being built from only a handful of distinct layouts. Before you touch a single tool, it's worth understanding the four ideas the whole editor is organized around, and taking a first look at where everything lives on screen. This tutorial has no steps to follow; the next one, *Your First Document from a Preset*, is where you'll actually click through a project.
+PDF Architect is a visual builder for complex, hyperlinked, multi-page PDF documents — planners, notebooks, itineraries, recipe collections — the kind of document that can run to hundreds of pages while actually being built from only a handful of distinct layouts. Before you touch a single tool, it's worth understanding the four ideas the whole editor is organized around, and taking a first look at where everything lives on screen. This tutorial has no steps to follow; the next one, *Your First Document from a Preset*, is where you'll actually click through a project.
 
 Here's what that looks like end to end, using one of the built-in presets — the next tutorial walks through the same thing at a slower pace:
 
@@ -16,7 +16,7 @@ Here's what that looks like end to end, using one of the built-in presets — th
 
 Most page-layout tools — Canva, Adobe InDesign, Google Slides — work one page at a time. Duplicate a page to get a second one and you now own two independent copies of everything on it; change your mind about where a header sits and you fix it once per page, by hand, forever.
 
-PDF Architect inverts that relationship. You draw a small number of reusable page **templates**, then build a tree of **nodes** — one per logical page, like a day, a chapter, or a stop on a route — where each node simply points at one of those templates. Edit the template once and every node that uses it changes with it, instantly, everywhere. The built-in **2026 Planner** starter project — the one you'll open in the next tutorial — makes the ratio concrete: it's 1,733 nodes deep (a full year of quarters, months, and weeks, down to individual days, plus journal, notes, and to-do pages) and every single one of those pages is drawn from just ten templates.
+PDF Architect inverts that relationship. You draw a small number of reusable page **templates**, then build a tree of **nodes** — one per logical page, like a day, a chapter, or a stop on a route — where each node simply points at one of those templates. Edit the template once and every node that uses it changes with it, instantly, everywhere. The built-in **2026 Planner** starter project — the one you'll open in the next tutorial — makes the ratio concrete: it's 1,733 nodes total (a full year of quarters, months, and weeks, down to individual days, plus journal, notes, and to-do pages) and every single one of those pages is drawn from just ten templates.
 
 > [!NOTE]
 > Everything above happens entirely in your browser. Projects live in local storage until you explicitly save them, and no account or sign-in is required to design, preview, or export a PDF. An account only matters once you want to save a project to the cloud, publish it to the gallery, or fork someone else's design.
