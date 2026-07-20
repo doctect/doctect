@@ -99,6 +99,11 @@ export async function drawElement(t, toolKey, from, to) {
 }
 
 // Generator helpers; textarea injection pattern from scratch/render_project.mjs.
+// HAZARD (unfixed, no live callers yet): the Generator modal mounts inside each
+// tab's ProjectEditor (per-tab local state), and every open tab's pane stays
+// mounted (see ACTIVE_PANE note above). With 2+ tabs these unscoped queries can
+// hit an inactive pane's button/textareas — scope to ACTIVE_PANE (button) and
+// filter textareas via the active pane before first real use.
 export async function openGenerator(t) {
     await t.page.getByRole('button', { name: /Generator/i }).first().click();
     await settle(t.page, 600);
