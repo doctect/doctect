@@ -67,6 +67,31 @@ const LAYERS_PANEL_SELECTOR = `${ACTIVE_PANE} [data-testid="layers-panel"]`;
 // backgrounded tab's own default blank/unselected state.
 const OFFSET_BLOCK_SELECTOR = `${ACTIVE_PANE} label:has-text("Offset (Skip items)") >> xpath=..`;
 
+// SingleElementEditor.tsx's Interaction section (~line 1332) mounts through
+// CollapsibleSection with testId="interaction-section", which lands as
+// data-testid on the section's own root div (components/CollapsibleSection.tsx
+// line 22 -- grep-verified unique in the app). It starts expanded
+// (PropertiesPanel.tsx's INITIAL_ELEMENT_PROPERTY_SECTIONS line 35:
+// `interaction: true`), so no header toggle is needed before cropping or
+// interacting. It is also the LAST section in the panel -- below Geometry/
+// Appearance/Typography -- so it sits under the panel's fold at the 1000px
+// viewport: the still is fine (t.snap(selector) -> locator.screenshot(),
+// which auto-scrolls its target into view first), but the clip below must
+// scrollIntoViewIfNeeded() explicitly, since video frames only ever show
+// what's actually painted. Scoped to ACTIVE_PANE for the usual
+// two-tabs-mounted reason (see TOOLBAR_SELECTOR above).
+const INTERACTION_SECTION_SELECTOR = `${ACTIVE_PANE} [data-testid="interaction-section"]`;
+
+// The Interaction section's "On Click" <select> (SingleElementEditor.tsx
+// ~line 1344). Anchored by an option value unique to it in the whole app --
+// value="child_referrer" appears on no other <option> anywhere
+// (grep-verified; the other candidates "parent"/"ancestor"/"specific_node"
+// are equally unique, all nine live only on this select) -- same
+// has(option[...]) idiom as setPatternFill/grid-source-modal above. NOT
+// pre-scoped to ACTIVE_PANE: callers compose it under their own
+// ACTIVE_PANE-scoped locator.
+const ON_CLICK_SELECT_SELECTOR = 'select:has(option[value="child_referrer"])';
+
 // Expands the Layers section in the right column. CollapsibleSection.tsx
 // renders one real <button> per section (title="Layers", aria-expanded,
 // holding a chevron + Layers icon + the literal text "Layers") with the
@@ -647,5 +672,89 @@ export const shots = [
         await scope.getByText('Deep Traversal', { exact: true }).scrollIntoViewIfNeeded();
         await settle(t.page, 400);
         await t.snap();
+    } },
+    { id: 'editor/interaction-section', kind: 'still', run: async (t) => {
+        await gotoEditor(t); await newPlannerProject(t); await switchToTemplatesMode(t);
+        await t.page.locator(ACTIVE_PANE).getByText('Day View', { exact: true }).click();
+        await settle(t.page, 500);
+        // January 1, 2026 explicitly (same determinism discipline as
+        // clip-preview-node-switch above; the reference-twin double-match is
+        // resolved the same way -- see that shot's comment). The panel
+        // content this still is about doesn't actually vary by preview node
+        // (the target button reads the LINKED node's title, always "2026
+        // Planner"), but a pinned preview keeps the whole capture
+        // deterministic anyway.
+        const preview = t.page.locator(TOOLBAR_SELECTOR).locator('select');
+        await preview.selectOption({ label: 'January 1, 2026' });
+        await settle(t.page, 500);
+        await t.page.keyboard.press('v');
+        await settle(t.page, 300);
+        // Select the Day View nav bar's year chip (gen_d_year,
+        // services/planner_preset.ts: x189,y0,w99,h40 on the 509x679 day
+        // template) -- it ships with linkTarget "specific_node" / linkValue
+        // "root", so the Interaction section shows a real, shipped hard link
+        // with zero configuration: On Click "Go to Specific Page" plus the
+        // target button reading the picked page's title ("2026 Planner",
+        // per SingleElementEditor.tsx ~line 1390's
+        // `state.nodes[linkValue]?.title`). A *selected* target is the
+        // brief's sanctioned fallback here: the open dropdown itself cannot
+        // be captured, because a native <select> popup is OS-rendered
+        // outside the page compositor -- Playwright screenshots (and its
+        // video) never contain it.
+        //
+        // Click math: fractional canvas coords map 1:1 onto template space
+        // (grid-traversal-example above verified (0.147, 0.162) -> template
+        // (75, 110) on this same 509x679 page size). Chip center x =
+        // 189+99/2 = 238.5 -> 0.469; y = 30 (inside the chip's 0-40 band,
+        // below center to stay clear of nothing above -- the row is clear:
+        // gen_d_title ends at x169, gen_d_quarter starts at x286, and
+        // gen_d_line at y40 is a zero-height line whose bounds only hit at
+        // exactly y=40 (hitTest bounds check with h=0), 10px below this
+        // click.
+        const c = await canvasBox(t.page);
+        await t.page.mouse.click(c.x + c.width * 0.469, c.y + c.height * 0.044);
+        await settle(t.page, 400);
+        await t.snap(INTERACTION_SECTION_SELECTOR);
+    } },
+    { id: 'editor/clip-set-parent-link', kind: 'clip', run: async (t) => {
+        await gotoEditor(t); await newPlannerProject(t); await switchToTemplatesMode(t);
+        await t.page.locator(ACTIVE_PANE).getByText('Day View', { exact: true }).click();
+        await settle(t.page, 500);
+        const preview = t.page.locator(TOOLBAR_SELECTOR).locator('select');
+        await preview.selectOption({ label: 'January 1, 2026' });
+        await settle(t.page, 500);
+        await t.page.keyboard.press('v');
+        await settle(t.page, 300);
+        const c = await canvasBox(t.page);
+        // Record the whole workflow the tutorial narrates -- "select it,
+        // find Interaction, pick Go to Parent Page" -- so the clip starts
+        // with nothing selected (panel showing Template Settings), then:
+        // 1. click the day TITLE (gen_d_title, x30,y0,w139,h40 -> center
+        //    x99.5 -> 0.195; same y band/mapping as the still above; its
+        //    row neighbors are clear of the click: gen_d_prev's triangle
+        //    ends at x26.5 and gen_d_next starts at x162.1, which does
+        //    overlap the title's last 7px at a higher zIndex -- the center
+        //    click is 62px left of that). The title ships with NO link
+        //    (the only nav-bar element that doesn't), so the dropdown
+        //    genuinely changes None -> "Go to Parent Page" instead of
+        //    starting on some other target -- and the change writes a real
+        //    parent back-button, the exact shipped pattern of gen_d_month
+        //    ("{{month_short}}") next to it.
+        // 2. scroll Interaction into view mid-recording (it's below the
+        //    fold; see INTERACTION_SECTION_SELECTOR's comment) -- also
+        //    shows *where* the section lives, which the tutorial's prose
+        //    calls out ("the very last section").
+        // 3. switch On Click to 'parent' via selectOption (no native popup
+        //    ever opens -- it can't be recorded anyway, per the still's
+        //    comment; the <select>'s own displayed value flipping to "Go to
+        //    Parent Page" is the visible change the clip is for).
+        t.beginClip();
+        await settle(t.page, 600);
+        await t.page.mouse.click(c.x + c.width * 0.195, c.y + c.height * 0.044);
+        await settle(t.page, 700);
+        await t.page.locator(INTERACTION_SECTION_SELECTOR).scrollIntoViewIfNeeded();
+        await settle(t.page, 600);
+        await t.page.locator(ACTIVE_PANE).locator(ON_CLICK_SELECT_SELECTOR).selectOption('parent');
+        await settle(t.page, 900);
     } },
 ];
