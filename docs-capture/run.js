@@ -9,6 +9,21 @@ import { runScenario, stopActiveServers } from './lib/capture.js';
 const ROOT = new URL('..', import.meta.url).pathname;
 const DEFAULT_OUT = path.join(ROOT, 'public', 'docs-assets');
 
+// tutorial/lib/servers.js (sealed API+vite boot, not modified by this
+// pipeline) never sets VITE_API_BASE for the vite child it spawns, and this
+// repo has no committed .env (gitignored) to supply it as a fallback the way
+// a normal local checkout would (see .env.example's "Client (Vite)"
+// section). Without it, services/cloudApi.ts's API_BASE defaults to '', so
+// every cloudApi.* call (session check, save/publish/fork/merge-request)
+// becomes a same-origin fetch that vite's dev server answers itself with its
+// SPA-fallback index.html (200 OK, wrong body) instead of proxying to the
+// real API on :3001 -- confirmed via a network trace: `GET /api/me` came
+// back 200 from :5199, not :3001. Symptom in the app: AccountMenu shows
+// "Unable to verify account authority" and CloudMenu's cloud-linked items
+// (Publish/Propose) never appear because the save silently never lands.
+// Respect a real override if one is already set (e.g. a future .env).
+if (!process.env.VITE_API_BASE) process.env.VITE_API_BASE = 'http://localhost:3001';
+
 // A killed (Ctrl-C'd, or `kill`'d) run must not orphan the sealed api+vite
 // servers: Node's default SIGINT/SIGTERM disposition exits immediately,
 // skipping the in-flight scenario's finally where servers.stop() normally
