@@ -1,4 +1,4 @@
-import { gotoEditor, newBlankProject, drawElement, ACTIVE_PANE, settle, canvasBox } from '../lib/app.js';
+import { gotoEditor, newBlankProject, newPlannerProject, drawElement, ACTIVE_PANE, settle, canvasBox, switchToTemplatesMode } from '../lib/app.js';
 
 // EditorToolbar.tsx's own root div carries Tailwind's arbitrary-value class
 // "min-h-[40px]" (py-1 bg-slate-50 border-b ... shadow-sm z-10) -- but so
@@ -40,6 +40,44 @@ const TOOLBAR_SELECTOR = `${ACTIVE_PANE} div.min-h-\\[40px\\].bg-slate-50`;
 // unscoped query's implicit .first() can resolve into the backgrounded tab's
 // panel instead of the one actually on screen.
 const PROPERTIES_PANEL_SELECTOR = `${ACTIVE_PANE} [data-prevent-finish-edit="true"]`;
+
+// LayersPanel.tsx's own root div (~line 114) carries a stable
+// data-testid="layers-panel" -- crops the still to just the panel's own
+// header/filter/rows instead of the full 1600x1000 viewport, so element-row
+// text stays legible at the image's displayed size (same rationale as
+// PROPERTIES_PANEL_SELECTOR above, which crops to a data attribute rather
+// than a class for the same reason). Scoped to ACTIVE_PANE for the usual
+// two-tabs-mounted reason (see TOOLBAR_SELECTOR above).
+const LAYERS_PANEL_SELECTOR = `${ACTIVE_PANE} [data-testid="layers-panel"]`;
+
+// Expands the Layers section in the right column. CollapsibleSection.tsx
+// renders one real <button> per section (title="Layers", aria-expanded,
+// holding a chevron + Layers icon + the literal text "Layers") with the
+// onToggle handler directly on it -- PropertiesPanel.tsx mounts it via
+// `layersSlot` (~line 327), right after Template Settings' own
+// CollapsibleSection closes and right before the Element Properties <h3>,
+// confirming the panel really does sit between those two exactly as the
+// tutorial says.
+//
+// The brief's original guess -- `getByText('Layers', { exact: true
+// }).last()`, unscoped -- predates this repo's ACTIVE_PANE convention and
+// has two independent hazards here: (1) CollapsibleSection's wrapping <div
+// data-testid="layers-section"> has no other content while collapsed, so
+// its own full trimmed text is *also* exactly "Layers" -- a getByText query
+// resolves both that div and the real button as separate matches, which is
+// what the guess's trailing .last() was silently relying on to land on the
+// (later, in document order) button rather than its non-interactive
+// wrapper; and (2) with two tabs mounted (gotoEditor's seeded "Blank
+// Project" plus newPlannerProject's second one), an unscoped .last() also
+// depends on DOM order between the two panes' own "Layers" buttons, not on
+// which pane is actually active on screen. getByRole('button', ...) only
+// ever matches the real <button> (not its wrapper div), and scoping to
+// ACTIVE_PANE removes the second hazard outright, so no positional .last()
+// guess is needed at all.
+async function expandLayersPanel(t) {
+    await t.page.locator(ACTIVE_PANE).getByRole('button', { name: 'Layers', exact: true }).click();
+    await settle(t.page, 500);
+}
 
 // Drives SingleElementEditor.tsx's Fill controls to apply a pattern fill to
 // whichever single element is currently selected. Both <select>s are found
@@ -143,6 +181,32 @@ export const shots = [
         await toolbar.locator('button[title="Align Top"]').click();
         await settle(t.page, 700);
         await toolbar.locator('button[title="Distribute Horizontally"]').click();
+        await settle(t.page, 700);
+    } },
+    { id: 'editor/layers-panel', kind: 'still', run: async (t) => {
+        await gotoEditor(t); await newPlannerProject(t); await switchToTemplatesMode(t);
+        await expandLayersPanel(t);
+        await t.snap(LAYERS_PANEL_SELECTOR);
+    } },
+    { id: 'editor/clip-layer-hide-lock', kind: 'clip', run: async (t) => {
+        await gotoEditor(t); await newPlannerProject(t); await switchToTemplatesMode(t);
+        await expandLayersPanel(t);
+        // Real per-layer button titles from LayersPanel.tsx (~lines 171-178): "Toggle
+        // visibility" and "Toggle lock", not the brief's placeholder guess ("Hide layer").
+        // Grep-verified unique to this component in the whole app, so no scoping beyond
+        // ACTIVE_PANE is strictly required -- but the planner preset (services/planner_preset.json)
+        // defines no `layers` field of its own, so ensureTemplateLayers hands it exactly one
+        // default layer on load; .first() is defensive only, in case that ever changes.
+        const scope = t.page.locator(ACTIVE_PANE);
+        t.beginClip();
+        // Hide (canvas content visibly disappears), show again (reappears), then lock (the
+        // panel's own icon flips Unlock -> Lock) -- demonstrates both halves of the tutorial's
+        // "Hide and lock semantics" section without ending the clip on a blank canvas.
+        await scope.locator('button[title="Toggle visibility"]').first().click();
+        await settle(t.page, 700);
+        await scope.locator('button[title="Toggle visibility"]').first().click();
+        await settle(t.page, 700);
+        await scope.locator('button[title="Toggle lock"]').first().click();
         await settle(t.page, 700);
     } },
 ];
