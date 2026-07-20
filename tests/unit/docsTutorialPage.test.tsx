@@ -11,8 +11,11 @@ import { parseDocsContent } from '../../lib/docsContent';
 const fixtureFiles = vi.hoisted((): Record<string, string> => ({
   '../docs-content/tutorials/getting-started/01-what-is-it.md':
     '---\ntitle: What Is PDF Architect\ndifficulty: beginner\ntime: 5 min\nsummary: The mental model.\n---\n\n## Nodes\n\nIntro.\n',
+  // Three headings (two ## + one nested ###) so TOC tests below can pin
+  // enumeration order, per-anchor slugs, and depth-based indentation - a
+  // single-heading body can't exercise any of those.
   '../docs-content/tutorials/editor/01-canvas-basics.md':
-    '---\ntitle: Canvas Basics\ndifficulty: beginner\ntime: 8 min\nsummary: Tools and navigation.\n---\n\n## Toolbar\n\nBody.\n',
+    '---\ntitle: Canvas Basics\ndifficulty: beginner\ntime: 8 min\nsummary: Tools and navigation.\n---\n\n## Toolbar\n\nBody.\n\n## Second Section\n\nMore body.\n\n### Zoom Detail\n\nDeepest body.\n',
   '../docs-content/tutorials/editor/02-grids.md':
     '---\ntitle: Grids\ndifficulty: intermediate\ntime: 10 min\nsummary: Data grids.\nprerequisites: editor/canvas-basics\n---\n\n## Sources\n\nBody.\n',
   '../docs-content/reference/grid/dynamic-offset.md':
@@ -64,12 +67,28 @@ describe('DocsTutorialPage', () => {
   it('renders next link to the following tutorial in the track', () => {
     at('/docs/editor/canvas-basics');
     const article = screen.getByRole('article');
-    expect(within(article).getByRole('link', { name: /Grids/ })).toHaveAttribute('href', '/docs/editor/grids');
+    // Anchor through the "Next" label itself rather than a name-matching
+    // getByRole - canvas-basics has no prerequisites/prev card today so
+    // "Grids" is currently unique in the article regardless, but pinning
+    // through the label keeps this test meaningful even if that changes,
+    // and matches the prev-card fix below (see FINDING 1 in the report).
+    const nextLink = within(article).getByText('Next').closest('a');
+    expect(nextLink).not.toBeNull();
+    expect(nextLink).toHaveAttribute('href', '/docs/editor/grids');
   });
   it('renders prev link and no next at the end of a track', () => {
     at('/docs/editor/grids');
     const article = screen.getByRole('article');
-    expect(within(article).getAllByRole('link', { name: /Canvas Basics/ }).length).toBeGreaterThan(0);
+    // Regression note (found in review): grids has a *prerequisite* chip
+    // that also links to "Canvas Basics", so a bare
+    // getAllByRole('link', {name: /Canvas Basics/}).length > 0 passes via
+    // that chip alone and pins nothing about the prev card - the entire
+    // `{prev && ...}` block could be deleted and this would still pass.
+    // Anchoring through the "Previous" label's enclosing <a> is unambiguous
+    // (there is exactly one "Previous" label, only the prev card renders it).
+    const prevLink = within(article).getByText('Previous').closest('a');
+    expect(prevLink).not.toBeNull();
+    expect(prevLink).toHaveAttribute('href', '/docs/editor/canvas-basics');
     expect(within(article).queryByText(/^Next$/)).not.toBeInTheDocument();
   });
 
@@ -88,6 +107,22 @@ describe('DocsTutorialPage', () => {
     at('/docs/editor/canvas-basics');
     const toc = screen.getByLabelText('On this page');
     expect(within(toc).getByRole('link', { name: 'Toolbar' })).toHaveAttribute('href', '#toolbar');
+  });
+  it('lists every ## and ### heading in document order, slugified, with ### entries indented', () => {
+    // canvas-basics' fixture body has two ## headings and one nested ###
+    // (see the fixture comment above) specifically so this test can pin
+    // enumeration/order/anchors/indentation together - every other fixture
+    // body has only one heading, which can't exercise any of this.
+    at('/docs/editor/canvas-basics');
+    const toc = screen.getByLabelText('On this page');
+    const links = within(toc).getAllByRole('link');
+    expect(links.map(l => l.textContent)).toEqual(['Toolbar', 'Second Section', 'Zoom Detail']);
+    expect(links.map(l => l.getAttribute('href'))).toEqual(['#toolbar', '#second-section', '#zoom-detail']);
+    // Only the nested ### entry ("Zoom Detail") gets the indent class - the
+    // two top-level ## entries ("Toolbar", "Second Section") do not.
+    expect(links[2].className).toContain('pl-4');
+    expect(links[0].className).not.toContain('pl-4');
+    expect(links[1].className).not.toContain('pl-4');
   });
   it('renders no previous card at the start of a track', () => {
     at('/docs/editor/canvas-basics');
