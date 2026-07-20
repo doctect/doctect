@@ -151,19 +151,30 @@ export async function drawElement(t, toolKey, from, to) {
 }
 
 // Generator helpers; textarea injection pattern from scratch/render_project.mjs.
-// HAZARD (unfixed, no live callers yet): the Generator modal mounts inside each
-// tab's ProjectEditor (per-tab local state), and every open tab's pane stays
-// mounted (see ACTIVE_PANE note above). With 2+ tabs these unscoped queries can
-// hit an inactive pane's button/textareas — scope to ACTIVE_PANE (button) and
-// filter textareas via the active pane before first real use.
+// Scoped to the active pane (fixed here; formerly a HAZARD comment with no live
+// callers): the Generator modal mounts inside each tab's ProjectEditor
+// (per-tab local state, components/ProjectEditor.tsx ~line 1206), and every
+// open tab's pane stays mounted (see ACTIVE_PANE note above) — so the toolbar
+// "Generator" button exists once per tab, and unscoped queries could resolve
+// into an inactive pane's button/textareas. The button query is ACTIVE_PANE-
+// scoped; the textarea query runs inside the active pane element in
+// page.evaluate. The modal's own fixed-position overlay escapes the pane
+// *visually*, but its DOM stays inside the pane subtree (no portal), so
+// pane-scoped queries still reach it.
 export async function openGenerator(t) {
-    await t.page.getByRole('button', { name: /Generator/i }).first().click();
+    // EditorToolbar.tsx ~line 296: purple wand button, accessible name
+    // "Generator" at this 1600px viewport (the span is hidden below lg).
+    await t.page.locator(ACTIVE_PANE).getByRole('button', { name: /Generator/i }).click();
     await settle(t.page, 600);
 }
 export async function pasteGeneratorScripts(t, templatesJs, hierarchyJs) {
     await t.page.evaluate(({ tpl, hier }) => {
         const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
-        const tas = [...document.querySelectorAll('textarea')].filter(e => e.className.includes('caret-white'));
+        const pane = document.querySelector('[data-testid="project-pane"][data-active="true"]');
+        if (!pane) throw new Error('active project pane not found');
+        // Only the generator modal's two SimpleEditors use caret-white
+        // textareas; DOM order is Templates (left) then Hierarchy (right).
+        const tas = [...pane.querySelectorAll('textarea')].filter(e => e.className.includes('caret-white'));
         if (tas.length < 2) throw new Error('generator textareas not found');
         setter.call(tas[0], tpl); tas[0].dispatchEvent(new Event('input', { bubbles: true }));
         setter.call(tas[1], hier); tas[1].dispatchEvent(new Event('input', { bubbles: true }));
@@ -171,6 +182,16 @@ export async function pasteGeneratorScripts(t, templatesJs, hierarchyJs) {
     await settle(t.page, 300);
 }
 export async function runGenerator(t) {
-    await t.page.getByRole('button', { name: /Run Generator/i }).click();
-    await t.page.waitForTimeout(2500);
+    // The modal's run button is labeled "Preview" ("Previewing..." while the
+    // sandbox runs, "View Preview" once a result is ready) — no button in the
+    // app says "Run Generator" (grep-verified; the original unscoped helper
+    // targeted a label that never existed). Exact match so the disabled
+    // "Apply Generated Project" toolbar neighbor can't be swept in, and the
+    // idle-state label can't collide with "View Preview"/"Previewing...".
+    await t.page.locator(ACTIVE_PANE).getByRole('button', { name: 'Preview', exact: true }).click();
+    // Sandbox validation (services/generatorSandbox.ts, 10 s cap) then the
+    // visual preview modal: wait for its title heading instead of a blind
+    // fixed timeout, plus a settle for the ReadOnlyPagePreview canvases.
+    await t.page.waitForSelector(`${ACTIVE_PANE} #generator-preview-title`, { timeout: 20000 });
+    await settle(t.page, 1500);
 }
