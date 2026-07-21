@@ -87,7 +87,7 @@ for (let w = 1; w <= 2; w += 1) {
 
 Note the two id strategies, deliberately mixed. The weeks get hand-written ids (`week_1`, `week_2`) because later code wants to say `nodes.week_1` — predictable ids are for nodes you'll refer to again. The days get `createId('day')` ids because nothing needs to name them; the loop pushes each into `week_1.children` and forgets the id on the spot. Both parts of that push matter — `parentId` pointing up and the parent's `children` listing the child are checked against each other, and validation rejects any tree where they disagree.
 
-Larger scripts stop writing the two-step by hand and wrap it once. Study Compass — the academic success planner from the app's gallery collection — funnels every one of its nodes through a helper that does the bookkeeping and fails loudly:
+Larger scripts stop writing the two-step by hand and wrap it once. Study Compass — the academic success planner from the app's gallery collection — funnels every one of its nodes through a helper that does the bookkeeping and fails loudly (trimmed here; the original also merges an example-page marker into `data`):
 
 ```js
 const addNode = (id, parentId, type, title, data = {}, options = {}) => {
@@ -120,7 +120,7 @@ nodes.week_1.children.forEach((dayId, index) => {
 
 `subtitle` feeds the text element every template in this chapter renders. `weekday_num` feeds something better: the week template's grid declared `offsetMode: 'dynamic', offsetField: 'weekday_num', offsetAdjustment: -1`, so when a week page renders, the grid reads `weekday_num` off its own first day, subtracts one, and indents that many blank cells — Thursday's `'4'` becomes three leading blanks, landing day one in Thursday's column. That's the [dynamic offset machinery](/docs/editor/grids-calendars-and-data-shaping#dynamic-offset-step-by-step) from the Editor track, and the field name matches the `weekday_num` the 2026 Planner's own calendars read. Fields like these — grid offsets, badge labels, anything a template computes *from* — are exactly what belongs in `data`, and a generator can stamp them onto hundreds of nodes for free.
 
-Two rules keep `data` predictable. Validation only insists it's a plain object — but every consumer treats the values as strings, so keep them strings: the planner preset writes `week_num: weekNum.toString()`, and the `String(index + 4)` above is the same habit. And there is no schema — a field no template reads is harmless, and a template reading a field a node lacks renders empty (a dynamic offset whose field is missing quietly falls back to the static offset). Typos in field names fail silently, on both sides.
+Two rules keep `data` predictable. Validation only insists it's a plain object — but every consumer treats the values as strings, so keep them strings: the planner preset stores `week_num: "1"` as a string, the gallery scripts write `String(week).padStart(2, '0')`, and the `String(index + 4)` above is the same habit. And there is no schema — a field no template reads is harmless, and a template reading a field a node lacks renders empty (a dynamic offset whose field is missing quietly falls back to the static offset). Typos in field names fail silently, on both sides.
 
 ## References in code
 
