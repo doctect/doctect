@@ -7,7 +7,7 @@ keywords: gallery, browse, anonymous, search, tags, open in editor, download, zi
 prerequisites: getting-started/first-project-from-preset
 ---
 
-Everything in this tutorial works signed out. That's worth saying up front, because the gallery looks like the kind of feature that would demand an account before letting you touch anything — and it doesn't. Browsing, searching, opening a community project in your own editor, downloading its PDFs, even cloning an old version of it: all of it is open to anyone who clicks **Gallery** in the top bar. The one thing that genuinely needs an account is forking, and this tutorial will point at it exactly once, near the end, so you know where the line sits.
+Everything in this tutorial works signed out. That's worth saying up front, because the gallery looks like the kind of feature that would demand an account before letting you touch anything — and it doesn't. Browsing, searching, opening a community project in your own editor, downloading its PDFs, even cloning an old version of it: all of it is open to anyone who clicks **Gallery** in the top bar. The main things that genuinely need an account are forking and writing reviews, and this tutorial will point at them exactly once, near the end, so you know where the line sits.
 
 Signing up is covered later in this track. For now, stay logged out on purpose — it makes the boundary obvious.
 
@@ -19,7 +19,7 @@ Click **Gallery** in the header (it's there on the landing page, the docs, and t
 
 - **A hero banner** — "Discover planner & notebook templates" — with a row of **tag chips** underneath. Each chip is a real tag someone attached to a published project, with a count of how many projects carry it. Click one and you jump straight to a filtered view of that tag.
 - **A search box**, pinned above the hero, that stays with you as you scroll.
-- **Three curated rows**, each holding up to eight cards: **Top rated** (star icon), **Popular** (flame), and **Recently updated** (clock). Every row ends with a **See all →** link that expands it into a full, pageable grid.
+- **Three curated rows**, each holding up to eight cards: **Top rated** (star icon), **Popular** (flame), and **Recently updated** (clock). Each row's header carries a **See all →** link (top right) that expands it into a full, pageable grid.
 
 Each card shows the project's preview image, name, author, a line of its description, up to three of its tags, and — once anyone has rated it — a star score, plus small fork and download counts along the bottom. The tags on a card are themselves clickable: they filter the gallery rather than opening the project.
 
@@ -30,7 +30,7 @@ Type into the search box and the gallery switches from curated rows to a single 
 Here's the part worth noticing: every filter you apply is written into the page's address. Type "notebook" and the URL becomes `/gallery?q=notebook`. Click the "minimal" tag chip and it's `/gallery?tag=minimal`. Click **See all →** on the Top rated row and it's `/gallery?sort=rating`. These compose — a search within a tag, sorted by rating, pages deep — and the URL keeps up.
 
 > [!TIP]
-> Because filters live in the URL, a filtered view is a link like any other. Bookmark `/gallery?tag=notebook`, or send it to someone, and they land on exactly the grid you were looking at — signed out, no setup. This is also why the browser back button behaves sensibly here: each filter change is a step it can retrace.
+> Because filters live in the URL, a filtered view is a link like any other. Bookmark `/gallery?tag=notebook`, or send it to someone, and they land on exactly the grid you were looking at — signed out, no setup. This is also why the browser back button behaves sensibly here: each tag, sort, or page change is a step it can retrace (typed searches update the address in place rather than piling up a history entry per keystroke).
 
 In the filtered grid you get a few extra controls the curated view doesn't need: a **sort dropdown** (Newest, Popular, Top rated), the active tag shown as a removable chip with an **×**, **Previous / Next** paging at the bottom, and an **← All projects** link that clears everything and returns to the curated rows.
 
