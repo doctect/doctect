@@ -39,7 +39,7 @@ Four fields, with very different audiences:
 | **Password** | Nobody, ideally. |
 
 > [!NOTE]
-> The password rule is checked as you type and again by the server: **at least 12 characters**, using **at least 3 of** these 4 kinds — lowercase, uppercase, digits, symbols. Fall short and the form tells you exactly which condition failed ("Password must be at least 12 characters", "Password must use at least 3 of: lowercase, uppercase, digits, symbols"). A long passphrase with a capital letter and a digit sails through. The rule applies whenever a password is *set* — signing up, changing it, resetting it — never when signing in, so an existing password keeps working until you change it.
+> The password rule is checked before anything is sent, and again by the server: **at least 12 characters**, using **at least 3 of** these 4 kinds — lowercase, uppercase, digits, symbols. Fall short and the form tells you exactly which condition failed ("Password must be at least 12 characters", "Password must use at least 3 of: lowercase, uppercase, digits, symbols"). A long passphrase with a capital letter and a digit sails through. The rule applies whenever a password is *set* — signing up, changing it, resetting it — never when signing in, so an existing password keeps working until you change it.
 
 Prefer not to have a password at all? **Sign in with Google** below the form signs you up and in with one click. Google accounts skip the email-verification step entirely (Google already vouched for the address) — but they skip the username field too, which is exactly why the `/welcome` prompt in the username section below exists.
 

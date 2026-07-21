@@ -14,13 +14,18 @@
 //     (button labels / modal structure, cross-checked against the above)
 import { settle } from './app.js';
 
-const pollVerificationLink = async (servers, tries = 25) => {
+// Poll for a verification link DIFFERENT from `previous`. The API log keeps
+// every link ever sent in this run, and lastVerificationLink() returns the
+// newest one -- so for any account after the first, "any link" would resolve
+// instantly to a STALE token from an earlier signup. Callers snapshot the
+// log's last link before triggering the email, then poll past it.
+const pollVerificationLink = async (servers, previous = null, tries = 50) => {
     for (let i = 0; i < tries; i++) {
         const link = servers.lastVerificationLink();
-        if (link) return link;
+        if (link && link !== previous) return link;
         await new Promise(r => setTimeout(r, 200));
     }
-    throw new Error('no verification link appeared in the API log');
+    throw new Error('no new verification link appeared in the API log');
 };
 
 // `name` isn't part of the exported signature (the gallery tasks only pass
@@ -60,11 +65,14 @@ export async function signUpAndVerify(t, { username, email, password }) {
     await page.getByLabel('Password').fill(password);
 
     // Submit. Now the only "Sign Up"-named control is the submit button (the
-    // toggle reads "Sign In" once isLogin flips) -- helpers.js:121.
+    // toggle reads "Sign In" once isLogin flips) -- helpers.js:121. Snapshot
+    // the log's newest link FIRST so the poll below can't grab an earlier
+    // account's stale token (real race: hit when a run signs up 2+ users).
+    const staleLink = servers.lastVerificationLink();
     await page.getByRole('button', { name: 'Sign Up' }).click();
     await page.getByText(/verify your email/i).waitFor({ state: 'visible', timeout: 15000 });
 
-    const link = await pollVerificationLink(servers);
+    const link = await pollVerificationLink(servers, staleLink);
     await page.goto(link);
     // autoSignInAfterVerification normally lands on /login?verified=1, which
     // client-side redirects to /app -- but if the server side ever decided
