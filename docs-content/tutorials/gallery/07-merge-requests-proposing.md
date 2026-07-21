@@ -34,7 +34,7 @@ Each line is one change, in plain language and colour-coded — additions in gre
 
 ## The diff is live
 
-Here's the rule that surprises everyone. The change list is **not a snapshot taken at the moment you proposed.** It's recomputed, from scratch, every single time the merge request is opened — and always against the upstream's **current** head, never the version you originally forked from.
+Here's the rule that surprises everyone. The change list is **not a snapshot taken at the moment you proposed.** While it's open, it's recomputed, from scratch, every single time the merge request is opened — and always against the upstream's **current** head, never the version you originally forked from. (Once a request is merged or closed, the list freezes — there's nothing left to recompute against.)
 
 > [!NOTE]
 > Your merge request stores two fixed points — the commit you're proposing and the commit you forked from — but never a copy of the upstream itself. The upstream side is read live. So if the owner keeps working after you propose, your merge request quietly re-diffs against their newer version each time anyone views it. Usually that's harmless. But if their new work and yours touch the **same template**, the request flips to **conflicted** on its own, and its status line changes to *"The target project has changed since this was proposed — it can't be merged as-is. Update your fork and propose the changes again."*
