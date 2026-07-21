@@ -22,7 +22,7 @@ Both buttons sit in the same column on any [project page](/docs/gallery/browsing
 | Does it show up in the gallery? | Never — it's only local | Only if *you* publish it yourself |
 | Which version do you get? | The published one on the page | The same published one |
 
-That last row is worth pinning down, because it's the one thing the two share exactly: **both copy the project's *published* commit** — the specific version pinned to the gallery page you're looking at, never the owner's newer private draft. Forking is not "grab the author's latest work in progress"; it's "grab exactly what's on display," the same snapshot Open in editor would give you. (The one exception is forking a project you own — see the tip at the end — where the fork takes your own current head instead.)
+That last row is worth pinning down, because it's the one thing the two share exactly: **both copy the project's *published* commit** — the specific version pinned to the gallery page you're looking at, never the owner's newer private draft. Forking is not "grab the author's latest work in progress"; it's "grab exactly what's on display," the same snapshot Open in editor would give you. That holds even when the project on display is your own: forking your own published project also copies its published commit, not whatever you've since changed in the editor.
 
 The Fork control has three faces, depending on where your account stands. Signed out, it's a plain **Sign in to fork** link. Signed in but without a username yet, it reads **Set a username to fork** and sends you to the [username step](/docs/gallery/accounts-and-usernames#your-username) — forking creates public-adjacent things (a lineage others can see, merge requests you can open), so it needs your public handle first. Only when you're signed in *with* a username does it become the real button:
 
@@ -40,7 +40,7 @@ The whole flow is two clicks and a short wait. The clip below runs it end to end
 
 > **↳ forked from upstream — view source**
 
-That line is the lineage made visible, and it's a **full-page link**, not a menu action — clicking it navigates you to the original's gallery page, so you can always trace a fork back to its source. Just below it sits **Propose changes to upstream…**, the button that turns your edits into a merge request. Both appear only on forks, because both need the "forked from" link a fork records and a plain copy doesn't.
+That line is the lineage made visible, and it's a **full-page link**, not a menu action — clicking it navigates you to the original's gallery page, so you can always trace a fork back to its source. Further down the same menu — past **Publish to gallery…** — sits **Propose changes to upstream…**, the button that turns your edits into a merge request. The lineage link and that Propose button both appear only on forks, because both need the "forked from" link a fork records and a plain copy doesn't.
 
 ## Forks are private
 
@@ -57,4 +57,4 @@ An [Open-in-editor copy](/docs/gallery/browsing-without-an-account#open-in-edito
 So the rule of thumb is simple. Just want the layout to build on privately? **Open in editor** is less to think about. Want to improve *this* project — fix a page, add a variant — and offer that improvement back to its author? **Fork it.** How a fork actually sends those changes upstream, and what the owner sees when it arrives, is a merge request — the subject of the next tutorial.
 
 > [!TIP]
-> Forking your own published project is completely legitimate, and genuinely useful: it gives you a private sandbox that's linked to your public version but can't disturb it. Experiment freely in the fork — try a redesign, break things, throw it away — and your live gallery entry and its reviews stay exactly as they were. (Forking a project you own is the one case that copies your current working head rather than the published commit, so your sandbox starts from your latest, not the last thing you published.)
+> Forking your own published project is completely legitimate, and genuinely useful: it gives you a private sandbox that's linked to your public version but can't disturb it. Experiment freely in the fork — try a redesign, break things, throw it away — and your live gallery entry and its reviews stay exactly as they were. (The sandbox starts from your last *published* commit, the same snapshot anyone else forking it would get — so publish first if you want your newest work in the fork.)
