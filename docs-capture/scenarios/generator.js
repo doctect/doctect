@@ -1,5 +1,5 @@
 import fs from 'node:fs';
-import { gotoEditor, newBlankProject, openGenerator, pasteGeneratorScripts, runGenerator } from '../lib/app.js';
+import { ACTIVE_PANE, gotoEditor, newBlankProject, openGenerator, pasteGeneratorScripts, runGenerator, settle } from '../lib/app.js';
 
 // These two scripts are embedded VERBATIM in
 // docs-content/tutorials/generator/01-generator-basics.md ("A first script")
@@ -34,6 +34,31 @@ function richScripts() {
     return { templates: blocks.slice(0, 5).join('\n'), hierarchy: blocks[5] };
 }
 
+// Tutorial generator/03 ("Hierarchy in Code") follows the same extract-from-
+// markdown pattern: fence 1 is the templates script, fences 2-6 join into one
+// continuous hierarchy script, and fence 7 is a hierarchy script broken on
+// purpose (a typo'd `type`) for the validation-error shot. Display-only
+// snippets in that tutorial use ```js fences precisely so this ```javascript
+// regex never sweeps them into the runnable program.
+const HIER_MD = new URL('../../docs-content/tutorials/generator/03-hierarchy-in-code.md', import.meta.url);
+// The exact line the modal shows for fence 7 (category prefix + the real
+// validateGeneratedProject message). The tutorial quotes it verbatim; the
+// validation-error shot asserts the live alert matches BOTH this string and
+// the markdown, so the doc can never drift from what the app actually says.
+const HIER_EXPECTED_ERROR = "Hierarchy: Node day_1 references unknown template type 'dayly' in variant 'default'.";
+function hierarchyScripts() {
+    const md = fs.readFileSync(HIER_MD, 'utf8');
+    const blocks = [...md.matchAll(/```javascript\r?\n([\s\S]*?)```/g)].map(m => m[1]);
+    if (blocks.length !== 7) throw new Error(`hierarchy-in-code: expected 7 js blocks, found ${blocks.length}`);
+    if (!blocks[0].includes('return t;')) throw new Error('hierarchy-in-code: block 1 must be the templates script');
+    if (!blocks[5].trimEnd().endsWith("return { nodes, rootId: 'root' };")) {
+        throw new Error('hierarchy-in-code: block 6 must end the hierarchy script');
+    }
+    if (!blocks[6].includes("'dayly'")) throw new Error('hierarchy-in-code: block 7 must be the deliberately broken script');
+    if (!md.includes(HIER_EXPECTED_ERROR)) throw new Error('hierarchy-in-code: markdown must quote the on-screen error verbatim');
+    return { templates: blocks[0], hierarchy: blocks.slice(1, 6).join('\n'), broken: blocks[6] };
+}
+
 export const shots = [
     { id: 'generator/modal-two-scripts', kind: 'still', run: async (t) => {
         await gotoEditor(t); await newBlankProject(t); await openGenerator(t);
@@ -57,6 +82,37 @@ export const shots = [
         await gotoEditor(t); await newBlankProject(t); await openGenerator(t);
         await pasteGeneratorScripts(t, templates, hierarchy);
         await runGenerator(t);
+        await t.snap();
+    } },
+    { id: 'generator/hierarchy-script', kind: 'still', run: async (t) => {
+        const { templates, hierarchy } = hierarchyScripts();
+        await gotoEditor(t); await newBlankProject(t); await openGenerator(t);
+        await pasteGeneratorScripts(t, templates, hierarchy);
+        await t.snap();
+        // The still is the pre-run modal, but the tutorial's prose states the
+        // run's exact outcome ("13 nodes, 11 estimated pages") — prove it by
+        // actually running the extracted program after the shot is taken.
+        await runGenerator(t);
+        for (const expected of ['13 nodes', '11 estimated pages']) {
+            await t.page.locator(ACTIVE_PANE).getByText(expected, { exact: false })
+                .waitFor({ timeout: 5000 });
+        }
+    } },
+    { id: 'generator/validation-error', kind: 'still', run: async (t) => {
+        const { templates, broken } = hierarchyScripts();
+        await gotoEditor(t); await newBlankProject(t); await openGenerator(t);
+        await pasteGeneratorScripts(t, templates, broken);
+        // Not runGenerator(): that helper waits for the visual preview, which
+        // never opens on a failed run. Click Preview and wait for the modal's
+        // red role="alert" span instead (HierarchyGeneratorModal.tsx ~2341).
+        await t.page.locator(ACTIVE_PANE).getByRole('button', { name: 'Preview', exact: true }).click();
+        const alert = t.page.locator(`${ACTIVE_PANE} [role="alert"]`);
+        await alert.waitFor({ timeout: 20000 });
+        const text = (await alert.innerText()).trim();
+        if (!text.includes(HIER_EXPECTED_ERROR)) {
+            throw new Error(`validation-error: alert "${text}" != tutorial's quoted "${HIER_EXPECTED_ERROR}"`);
+        }
+        await settle(t.page, 400);
         await t.snap();
     } },
 ];
