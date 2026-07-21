@@ -46,7 +46,7 @@ The first save on a fresh project reads **Save to cloud (new)** — "new" becaus
 One more item appears only on projects you *forked* from someone else's gallery project: a small **↳ forked from upstream — view source** link back to the original, plus **Propose changes to upstream…** for sending your edits back as a merge request. Forks and merge requests get their own tutorials later in this track — for now, just know the menu will tell you when a project has an upstream.
 
 > [!TIP]
-> If you save from two browsers (or two machines) against the same cloud project, the second save may be told: *"Cloud project changed since your last save. Local edits are unchanged."* That's the immutability guarantee protecting you — the cloud won't silently overwrite a version it has that you haven't seen. A **Reload cloud version** button appears right there in the menu: click it to load the cloud's latest into your editor, or keep editing locally and save again once you're sure which version should win.
+> If you save from two browsers (or two machines) against the same cloud project, the second save may be told: *"Cloud project changed since your last save. Local edits are unchanged."* That's the immutability guarantee protecting you — the cloud won't silently overwrite a version it has that you haven't seen. A **Reload cloud version** button appears right there in the menu — and it's the way forward: it replaces what's open in this tab with the cloud's latest, so if your local edits contain anything you want to keep, copy it out first (the [JSON Inspector](/docs/editor/variants-svg-json-export#the-json-inspector) or a quick export both work), reload, re-apply, and save — that lands your version as a new commit on top.
 
 ## Restoring an old version
 

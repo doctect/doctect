@@ -15,7 +15,7 @@ PDF Architect is local-first. Your projects live in your browser, the editor and
 
 What an account adds is precisely the actions that reach beyond your machine:
 
-- **Save to the cloud** — named versions of a project, kept on the server, so you can pick your work up from another browser or machine.
+- **Save to the cloud** — named versions of a project, kept safe on the server as a permanent history you can restore from.
 - **Publish to the gallery** — turn a project into a public page anyone can browse.
 - **Fork** — the copy-with-a-memory of someone else's project (unlike the no-strings **Open in editor** from the last tutorial).
 - **Propose changes** — send a fork's edits back to the original as a merge request.
