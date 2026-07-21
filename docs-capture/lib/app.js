@@ -181,6 +181,30 @@ export async function pasteGeneratorScripts(t, templatesJs, hierarchyJs) {
     }, { tpl: templatesJs, hier: hierarchyJs });
     await settle(t.page, 300);
 }
+// From an open visual preview, apply the generated result as a NEW project.
+// GeneratorVisualPreviewModal.tsx (~line 373): the footer button's exact label
+// is "Create As New Project". Clicking it opens the modal's own React naming
+// dialog (heading "Create Generated Project", input #generated-project-name
+// prefilled "<project> – Generated", submit button "Create Project") — an
+// in-app dialog, NOT window.prompt, so a shot's dialogText never fires here;
+// the input is filled and submitted directly instead. On success the modal
+// chain closes and EditorPage.handleCreateGeneratedProject appends a new
+// project tab and activates it (setActiveProjectId in the same React commit
+// that closes the preview), so once #generator-preview-title detaches,
+// ACTIVE_PANE already resolves to the NEW tab's pane — selectedNodeId starts
+// at the generated root (services/generatedProjectState.ts:25).
+export async function applyGeneratorAsNewProject(t, name = 'Docs Planner') {
+    const pane = t.page.locator(ACTIVE_PANE);
+    await pane.getByRole('button', { name: 'Create As New Project', exact: true }).click();
+    const input = pane.locator('#generated-project-name');
+    await input.waitFor({ timeout: 5000 });
+    await input.fill(name);
+    await pane.getByRole('button', { name: 'Create Project', exact: true }).click();
+    await t.page.waitForSelector('#generator-preview-title', { state: 'detached', timeout: 10000 });
+    await t.page.waitForSelector(`${ACTIVE_PANE} [data-testid="editor-canvas"]`, { timeout: 20000 });
+    await settle(t.page, 1500);
+}
+
 export async function runGenerator(t) {
     // The modal's run button is labeled "Preview" ("Previewing..." while the
     // sandbox runs, "View Preview" once a result is ready) — no button in the
