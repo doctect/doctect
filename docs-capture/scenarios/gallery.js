@@ -102,6 +102,76 @@ async function gotoProjectPage(t) {
     await settle(t.page, 800);
 }
 
+// ---------------------------------------------------------------------------
+// Tutorial 02 (accounts, verification, usernames) additions.
+
+// The API server's fixed origin in a sealed run: tutorial/lib/servers.js
+// always boots it on :3001 (BETTER_AUTH_URL=http://localhost:3001/api/auth)
+// while t.baseUrl is the vite origin on :5199.
+const API_BASE = 'http://localhost:3001';
+
+// A display-only identity for the signup-form still. Deliberately NEVER
+// submitted, so no account row ever exists for it and re-runs can't collide.
+const FORM_DEMO = { name: 'Mira Holloway', username: 'mira_makes', email: 'mira@docs.test' };
+
+// Submitted but never verified: the verify-email-panel still needs a FRESH
+// sign-up whose flow stops at the "Verify your email" panel. Left unverified
+// on purpose -- the signup cap (server/signupCap.js) only counts VERIFIED
+// rows, and no later shot reuses this account.
+const VERIFY_DEMO = { name: 'Demo Docs', username: 'demo_docs', email: 'demo@docs.test', password: 'DocsCapture2026!' };
+
+// Google-style account for the welcome-username still: created via the API
+// WITHOUT a username (the /login sign-up form always collects one, so a
+// form-created user can never see /welcome). This is the exact technique
+// tests/e2e/username_identity.spec.js:113-119 uses -- "this is exactly what
+// Google OAuth sign-in produces in production (no username ever collected)".
+const WELCOME_DEMO = { name: 'Nomad Press', email: 'welcome@docs.test', password: 'DocsCapture2026!' };
+const WELCOME_USERNAME = 'nomad_press';
+
+// The centered auth card on /login and /welcome (pages/LoginPage.tsx:183,
+// pages/WelcomePage.tsx:26 -- both `w-full max-w-md bg-white rounded-lg
+// shadow-md p-8`, the only max-w-md.bg-white element on either page).
+// Cropping to it is what makes the form text legible: at the 1600x1000
+// viewport the card is ~450px of a full-page shot, and the editor wave
+// already established element crops (t.snap(selector)) for exactly this.
+const AUTH_CARD = 'div.max-w-md.bg-white';
+
+// Fill the /login page's sign-up form WITHOUT submitting. Toggle first:
+// in sign-in mode exactly one control is named "Sign Up" (the mode toggle;
+// the submit button reads "Sign In") -- same disambiguation cloud.js's
+// signUpAndVerify documents from tests/e2e/helpers.js:116. "Name" needs
+// exact:true because the "Username" label contains it as a substring.
+async function fillSignupForm(t, { name, username, email, password }) {
+    await t.page.goto(t.baseUrl + '/login');
+    await settle(t.page, 800);
+    await t.page.getByRole('button', { name: 'Sign Up' }).click();
+    // "Create Account" only renders while signups are open (LoginPage.tsx:185
+    // swaps in the waitlist panel when capped) -- a sealed run starts from an
+    // empty DB against the default cap of 500, so this doubles as a guard
+    // that the shot never silently captures the waitlist instead.
+    await t.page.getByRole('heading', { name: 'Create Account' }).waitFor({ timeout: 10000 });
+    await t.page.getByLabel('Name', { exact: true }).fill(name);
+    await t.page.getByLabel('Username').fill(username);
+    await t.page.getByLabel('Email').fill(email);
+    await t.page.getByLabel('Password').fill(password);
+    await settle(t.page, 400);
+}
+
+// Latest verification link that is DIFFERENT from `previous`. cloud.js's own
+// poller just takes the last link in the API log, which is correct for the
+// first account of a run but stale here: by the time the welcome shot signs
+// up, OWNER's (and possibly demo_docs') links are already in the log, so
+// "last link" would resolve instantly to the WRONG user's token. Snapshot
+// the log's last link before the sign-up POST and poll past it.
+async function pollNewVerificationLink(servers, previous, tries = 50) {
+    for (let i = 0; i < tries; i++) {
+        const link = servers.lastVerificationLink();
+        if (link && link !== previous) return link;
+        await new Promise(r => setTimeout(r, 200));
+    }
+    throw new Error('no new verification link appeared in the API log');
+}
+
 export const shots = [
     { id: 'gallery/gallery-home', kind: 'still', run: async (t) => {
         await ensurePublished(t);
@@ -130,5 +200,92 @@ export const shots = [
         await t.page.getByText(COMMIT_V1).waitFor({ timeout: 10000 });
         await settle(t.page, 600);
         await t.snap();
+    } },
+    { id: 'gallery/signup-form', kind: 'still', run: async (t) => {
+        // Signup mode with every field filled, BEFORE submit -- the still
+        // documents the form itself (field set + the "3-30 chars ... Shown
+        // publicly" hint under Username), not the submission. FORM_DEMO is
+        // never submitted, so nothing is created server-side.
+        await fillSignupForm(t, { ...FORM_DEMO, password: 'DocsCapture2026!' });
+        await t.snap(AUTH_CARD);
+    } },
+    { id: 'gallery/verify-email-panel', kind: 'still', run: async (t) => {
+        // A FRESH user's sign-up, stopped at the verify prompt. After the
+        // toggle flip the submit button is the only control named "Sign Up"
+        // (the toggle now reads "Sign In") -- cloud.js signUpAndVerify's own
+        // second-click pattern. onSuccess swaps the card to the "Verify your
+        // email" panel (LoginPage.tsx:200-229); the sealed server's mailer
+        // logs the link instead of delivering (no RESEND_API_KEY), and this
+        // shot deliberately never follows it.
+        await fillSignupForm(t, VERIFY_DEMO);
+        await t.page.getByRole('button', { name: 'Sign Up' }).click();
+        await t.page.getByRole('heading', { name: 'Verify your email' }).waitFor({ timeout: 15000 });
+        await t.page.getByText(/We sent a verification link to/).waitFor({ timeout: 10000 });
+        await settle(t.page, 500);
+        await t.snap(AUTH_CARD);
+    } },
+    { id: 'gallery/welcome-username', kind: 'still', run: async (t) => {
+        // The /welcome onboarding step, captured MID-FLOW: a signed-in
+        // session with no username (the Google/legacy shape), the handle
+        // typed, and the live availability check showing green -- snapped
+        // BEFORE Continue. The sign-up must bypass the /login form (it
+        // always collects a username), so POST the API directly from the
+        // page's request context, same shape as tests/e2e/helpers.js's
+        // apiSignUpAndVerify minus the username field. callbackURL mirrors
+        // LoginPage.tsx:48's verificationCallbackURL so the emailed link
+        // lands back on the vite origin, where autoSignInAfterVerification
+        // leaves the session signed in and LoginPage forwards to /app.
+        const staleLink = t.servers.lastVerificationLink();
+        const res = await t.page.request.post(`${API_BASE}/api/auth/sign-up/email`, {
+            data: { ...WELCOME_DEMO, callbackURL: `${t.baseUrl}/login?verified=1` },
+        });
+        if (!res.ok()) throw new Error(`API sign-up failed: ${res.status()} ${await res.text()}`);
+        const link = await pollNewVerificationLink(t.servers, staleLink);
+        await t.page.goto(link);
+        await t.page.waitForURL((url) => url.pathname === '/app' || url.pathname === '/welcome', { timeout: 20000 });
+        await settle(t.page, 800);
+
+        // Nothing auto-routes a bare /app visit to /welcome (only gated
+        // actions do, via USERNAME_REQUIRED -- hooks/useGalleryDetail.ts:73,
+        // components/cloud/CloudMenu.tsx:60), so go there directly; the
+        // username-less session renders the "Choose a username" card
+        // (pages/WelcomePage.tsx:18 only redirects away when a username
+        // exists).
+        await t.page.goto(t.baseUrl + '/welcome');
+        await t.page.getByRole('heading', { name: 'Choose a username' }).waitFor({ timeout: 15000 });
+        await t.page.getByPlaceholder('e.g. planner_pro').fill(WELCOME_USERNAME);
+        // UsernameForm debounces 300ms then hits isUsernameAvailable; wait
+        // for the exact green hint (components/UsernameForm.tsx:81) so the
+        // still shows the availability pre-check actually working. Exact
+        // text: plain "Available" would also match "✗ Already taken"'s
+        // sibling states in a regression.
+        await t.page.getByText('✓ Available').waitFor({ timeout: 10000 });
+        await settle(t.page, 400);
+        await t.snap(AUTH_CARD);
+    } },
+    { id: 'gallery/account-settings', kind: 'still', run: async (t) => {
+        // OWNER's /account page: username form pre-filled with the public
+        // handle plus the change-password section. ensureUser signs in (or
+        // seeds OWNER on a standalone run) and ends on /app.
+        await ensureUser(t, OWNER);
+        await t.page.goto(t.baseUrl + '/account');
+        await t.page.getByRole('heading', { name: 'Account settings' }).waitFor({ timeout: 15000 });
+        // The username input is state-initialized from the session
+        // (AccountSettingsPage.tsx:126), so assert the actual value -- a
+        // too-early snap with an empty form would still "look" fine.
+        await t.page.waitForFunction(
+            (expected) => document.getElementById('username-form-input')?.value === expected,
+            OWNER.username, { timeout: 10000 },
+        );
+        // "Change password" only mounts after listAccounts resolves with a
+        // credential provider (AccountSettingsPage.tsx:16-36) -- OWNER is an
+        // email+password account, so wait for it; Google-only accounts would
+        // never show it, and that asymmetry is exactly what the tutorial
+        // documents.
+        await t.page.getByRole('heading', { name: 'Change password' }).waitFor({ timeout: 15000 });
+        await settle(t.page, 500);
+        // <main> (max-w-md, AccountSettingsPage.tsx:121) is the whole
+        // settings column; the AppHeader adds nothing this still documents.
+        await t.snap('main');
     } },
 ];
