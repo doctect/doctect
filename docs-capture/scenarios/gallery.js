@@ -288,4 +288,144 @@ export const shots = [
         // settings column; the AppHeader adds nothing this still documents.
         await t.snap('main');
     } },
+    // -----------------------------------------------------------------------
+    // Tutorial 03 (cloud saves & version history) additions. All three shots
+    // run as OWNER; the two editor shots each rename the notebook ROOT before
+    // the first save -- the root's title flows into the tab/project name
+    // (components/ProjectEditor.tsx:67-73 onNameChange fires on root-title
+    // change, immediately, not debounced), and the first cloud save names the
+    // cloud project after project.name (CloudMenu.tsx:52) -- so each shot's
+    // cloud row gets a distinctive name and the my-projects still below lists
+    // three visibly different projects instead of three "My Notebook"s.
+    //
+    // The root is ALREADY selected right after project creation
+    // (services/presets.ts:95 seeds selectedNodeIds=[rootId]), so its Title
+    // input can be filled directly -- no selectSidebarNode needed (whose
+    // y>140 sidebar heuristic could reject the root row anyway: it sits at
+    // the very top of the tree, right at that boundary).
+    //
+    // Timing note shared by both editor shots: ProjectEditor debounces
+    // onStateChange by 1000ms (ProjectEditor.tsx:76-84), and CloudMenu saves
+    // project.initialState -- the debounced copy (CloudMenu.tsx:52-55). Every
+    // edit below is followed by >=1000ms of settles before saveToCloud's own
+    // save-click fires (its menu-open click + settle(700) alone adds ~900ms
+    // on top of each explicit settle), so the flushed state always contains
+    // the edit being saved -- same margin ensurePublished's seeding already
+    // relies on.
+    { id: 'gallery/cloud-menu', kind: 'still', run: async (t) => {
+        // The READY-state menu of a cloud-linked project: Save to cloud +
+        // Version history + Publish to gallery. Both conditional items need
+        // project.cloud set (CloudMenu.tsx:116-133), so save once first.
+        // Full-page snap, not an element crop: the dropdown is absolutely
+        // positioned below the header button, so no single element's
+        // bounding box contains both -- and editor/select-under-menu (the
+        // other open-menu still of this wave) set the full-page precedent.
+        await ensureUser(t, OWNER);
+        await gotoEditor(t);
+        await newNotebookProject(t);
+        await t.page.locator(`${ACTIVE_PANE} label:text-is("Title") + input`).fill('Reading Log');
+        await settle(t.page, 800);
+        await saveToCloud(t, 'First save from the editor');
+        // saveToCloud leaves the menu closed (CloudMenu.tsx:58 setOpen(false)
+        // on success); reopen it for the snap. The three waits double as the
+        // guard that the save really linked the tab: pre-link the label is
+        // "Save to cloud (new)" and the other two items don't render at all,
+        // so `exact` on the first assert can't false-pass on the unlinked
+        // menu.
+        await t.page.getByTitle('Cloud').click();
+        await t.page.getByRole('button', { name: 'Save to cloud', exact: true }).waitFor({ timeout: 10000 });
+        await t.page.getByRole('button', { name: 'Version history' }).waitFor({ timeout: 10000 });
+        await t.page.getByRole('button', { name: /publish to gallery/i }).waitFor({ timeout: 10000 });
+        await settle(t.page, 500);
+        await t.snap();
+    } },
+    { id: 'gallery/clip-restore', kind: 'clip', run: async (t) => {
+        // The restore round-trip the tutorial walks step-by-step: rename a
+        // section (visible in sidebar AND canvas -- the notebook's
+        // section_divider template renders {{title}} centered on the page,
+        // services/notebook_preset.json), save it as commit 2, then restore
+        // commit 1 and watch the rename revert. Commit 1 is saved with the
+        // section SELECTED, and selection is part of AppState -- so the
+        // restored snapshot remounts with the section divider back on the
+        // canvas reading "Project B", no post-restore clicking needed.
+        await ensureUser(t, OWNER);
+        await gotoEditor(t);
+        await newNotebookProject(t);
+        await t.page.locator(`${ACTIVE_PANE} label:text-is("Title") + input`).fill('Sketchbook');
+        await settle(t.page, 800);
+        await selectSidebarNode(t, 'Project B');
+        await saveToCloud(t, 'Set up sections');
+
+        t.beginClip();
+        // Rename on camera: clear the Title input, then real keystrokes so
+        // the sidebar row and the canvas divider visibly change letter by
+        // letter (fill() would jump-cut the text in a single frame).
+        const title = t.page.locator(`${ACTIVE_PANE} label:text-is("Title") + input`);
+        await title.fill('');
+        await t.page.keyboard.type('Ink Studies', { delay: 90 });
+        await settle(t.page, 1100);
+        await saveToCloud(t, 'Rename Project B to Ink Studies');
+
+        await t.page.getByTitle('Cloud').click();
+        await settle(t.page, 600);
+        await t.page.getByRole('button', { name: 'Version history' }).click();
+        await t.page.getByRole('heading', { name: 'Version history' }).waitFor({ timeout: 10000 });
+        // Both commits listed, newest first -- also guards that the rename
+        // actually changed the state: an identical save would have DEDUPED
+        // into commit 1 (server/routes/projects.js:230-234) and left a
+        // one-row history with nothing to restore.
+        await t.page.getByText('Rename Project B to Ink Studies').waitFor({ timeout: 10000 });
+        await t.page.getByText('Set up sections').waitFor({ timeout: 10000 });
+        await settle(t.page, 1200); // a beat on the modal so the two rows are readable
+        // Restore commit 1: scope to its row (HistoryModal.tsx:64 -- the
+        // only .rounded.justify-between div whose text is that message; the
+        // modal header is justify-between too but not .rounded). The
+        // window.confirm this fires (HistoryModal.tsx:31) is auto-accepted
+        // by the runner's dialog handler.
+        await t.page.locator('div.rounded.justify-between', { hasText: 'Set up sections' })
+            .getByRole('button', { name: 'Restore' }).click();
+        // onRestore closes the modal and bumps the project's revision --
+        // the pane remounts on its key (pages/EditorPage.tsx:359) with the
+        // restored snapshot. Wait on the CANVAS text line specifically:
+        // canvas text renders as [data-text-layout-line] spans, so the
+        // divider's restored "Project B" title is a real DOM signal, and
+        // it's exactly the revert the tutorial's clip promises. The ^$
+        // regex keeps the toc grid's "Project B - Page N" lines out, and
+        // .first() guards strict mode in case a future preset ever adds a
+        // second exact "Project B" line (the sidebar row already proved a
+        // plain exact-text wait resolves to 2 elements: sidebar + canvas).
+        await t.page.locator(`${ACTIVE_PANE} [data-text-layout-line]`)
+            .filter({ hasText: /^Project B$/ }).first().waitFor({ timeout: 15000 });
+        await settle(t.page, 1500); // hold the reverted canvas + sidebar as the closing frame
+    } },
+    { id: 'gallery/my-projects', kind: 'still', run: async (t) => {
+        // OWNER's /projects page, deliberately LAST of the wave so the list
+        // shows all three cloud rows created this run with distinct names
+        // and mixed visibility: "My Notebook" (public -- the ensurePublished
+        // seed), "Reading Log" (private, 1 version), "Sketchbook" (private,
+        // 2 versions). Reordering these shots would fail the row waits below
+        // -- that coupling is deliberate, same as later gallery scenarios
+        // depending on this file's earlier seeding.
+        await ensurePublished(t);
+        await ensureUser(t, OWNER);
+        await t.page.goto(t.baseUrl + '/projects');
+        await t.page.getByRole('heading', { name: 'My projects' }).waitFor({ timeout: 15000 });
+        // The storage meter, and the quota figure the tutorial quotes: the
+        // sealed server sets no USER_STORAGE_QUOTA_MB override, so the
+        // default of 50 MB (server/middleware/limits.js:31) must render --
+        // this wait is the anti-rot guard for the doc's "50 MB" claim.
+        await t.page.getByText('of 50.0 MB used').waitFor({ timeout: 15000 });
+        await t.page.getByText(PUBLISHED_NAME).waitFor({ timeout: 10000 });
+        await t.page.getByText('Reading Log').waitFor({ timeout: 10000 });
+        await t.page.getByText('Sketchbook').waitFor({ timeout: 10000 });
+        // One badge of each kind ('public' pill on the seed row, 'private'
+        // on the other two -- .first(): two private rows would trip strict
+        // mode). MyProjectsPage.tsx:80-83.
+        await t.page.getByText('public', { exact: true }).waitFor({ timeout: 10000 });
+        await t.page.getByText('private', { exact: true }).first().waitFor({ timeout: 10000 });
+        await settle(t.page, 600);
+        // <main> is the whole max-w-2xl content column (MyProjectsPage.tsx:48)
+        // -- same crop rationale as gallery/account-settings above.
+        await t.snap('main');
+    } },
 ];
