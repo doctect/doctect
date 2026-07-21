@@ -3,7 +3,6 @@ import { BrowserRouter, Routes, Route, useLocation } from 'react-router-dom';
 import type { Location } from 'react-router-dom';
 import { LandingPage } from './pages/LandingPage';
 import { EditorPage } from './pages/EditorPage';
-import { DocsSection } from './pages/docs/DocsSection';
 import { AnalyticsDashboard } from './pages/AnalyticsDashboard';
 import { LoginPage } from './pages/LoginPage';
 import { GalleryPage } from './pages/GalleryPage';
@@ -20,6 +19,16 @@ import { trackEvent } from './services/analytics';
 import { useSession } from './lib/auth-client';
 import { Navigate } from 'react-router-dom';
 import { useCurrentUser } from './hooks/useCurrentUser';
+
+// Code-split the docs subsystem: its bundled markdown corpus (108 files) and
+// pages are large and only ever needed on /docs/*, so lazy-load them into a
+// separate chunk rather than paying that download+parse on every other route.
+const DocsSection = React.lazy(() =>
+  import('./pages/docs/DocsSection').then(m => ({ default: m.DocsSection })));
+
+const RouteFallback = () => (
+  <div className="p-10 flex justify-center"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" /></div>
+);
 
 function App() {
   return (
@@ -39,7 +48,7 @@ function AppRoutes() {
       <Routes location={backgroundLocation || location}>
         <Route path="/" element={<LandingPage />} />
         <Route path="/app" element={<EditorPage />} />
-        <Route path="/docs/*" element={<DocsSection />} />
+        <Route path="/docs/*" element={<React.Suspense fallback={<RouteFallback />}><DocsSection /></React.Suspense>} />
         <Route path="/login" element={<LoginPage />} />
         <Route path="/gallery" element={<GalleryPage />} />
         <Route path="/gallery/:id" element={<GalleryDetailPage />} />
