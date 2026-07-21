@@ -17,7 +17,7 @@ Two properties of that sentence deserve a closer look. First, it's a *commit* th
 
 | Public once you publish | Stays private |
 | --- | --- |
-| The **entire project state** of the published version — visitors can open it in their editor, download every variant as PDFs, and fork it. The previews are just the shop window. | Cloud saves you never published. A visitor's [Version history](/docs/gallery/browsing-without-an-account#time-travel-public-version-history) lists published versions only; your in-between saves never appear. |
+| The **entire project state** of the published version — visitors can open it in their editor and download every variant as PDFs, and any signed-in visitor can fork it. The previews are just the shop window. | Cloud saves you never published. A visitor's [Version history](/docs/gallery/browsing-without-an-account#time-travel-public-version-history) lists published versions only; your in-between saves never appear. |
 | **Every version you've ever published.** Each publish adds a row to the public history, and visitors can clone any of them — publishing a fix doesn't hide the version with the mistake. | Your other projects. Publishing is strictly per-project. |
 | Saved **generator scripts**, if the project has them — comments included. More below. | Your email and account details. The page credits your [username](/docs/gallery/accounts-and-usernames#your-username) — "by atlas_designs" — and links your public profile, nothing more. |
 
