@@ -172,6 +172,70 @@ async function pollNewVerificationLink(servers, previous, tries = 50) {
     throw new Error('no new verification link appeared in the API log');
 }
 
+// ---------------------------------------------------------------------------
+// Tutorial 04 (publishing) helpers.
+
+// The publish dialog element (PublishModal.tsx:146, role="dialog" -- the only
+// dialog either wizard shot ever mounts). Element crop, same rationale as
+// AUTH_CARD: at the 1600x1000 viewport the 560px-wide modal would be a sliver
+// of a full-page shot.
+const PUBLISH_DIALOG = 'div[role="dialog"]';
+
+const JOURNAL_NAME = 'Travel Journal';
+const JOURNAL_DESCRIPTION = 'A three-section travel journal: packing lists, day-by-day notes, and lined pages for sketches.';
+const JOURNAL_TAGS = 'travel, journal, lined';
+// Checked ON TOP of the pre-selected cover: a section divider and a lined
+// page, so the preview strip shows three distinct page designs (same pair
+// rationale as ensurePublished's PREVIEW_PAGES). Titles need exact:true --
+// "Project A" is a prefix of "Project A - Page 1".
+const JOURNAL_PREVIEW_PAGES = ['Project A', 'Project A - Page 1'];
+
+// Create a fresh notebook, cloud-save it, open the publish wizard, and fill
+// it completely (description + tags + three checked pages), leaving the
+// modal open one click short of publishing. Shared verbatim by both wizard
+// stills so the pair depicts the same publish. Drives the modal directly
+// instead of calling cloud.js's publishProject: that helper's contract is
+// fill-and-complete in one call, while these shots need to stop (and snap)
+// mid-flow -- its selectors are reused here line for line.
+async function openFilledPublishWizard(t) {
+    await ensureUser(t, OWNER);
+    await gotoEditor(t);
+    await newNotebookProject(t);
+    // Root is pre-selected after creation (services/presets.ts:95), so the
+    // Title input is already the root's; >=1000ms settle outlasts
+    // ProjectEditor's onStateChange debounce before the save reads
+    // project.initialState -- both facts documented at the tutorial-03 block.
+    await t.page.locator(`${ACTIVE_PANE} label:text-is("Title") + input`).fill(JOURNAL_NAME);
+    await settle(t.page, 1100);
+    await saveToCloud(t, 'Trip-ready layout');
+
+    // Cloud menu -> "Publish to gallery…" (CloudMenu.tsx:129-132; the item
+    // only renders once the save above cloud-linked the tab).
+    await t.page.getByTitle('Cloud').click();
+    await settle(t.page, 700);
+    await t.page.getByRole('button', { name: /publish to gallery/i }).click();
+    await t.page.getByRole('heading', { name: 'Publish to gallery' }).waitFor({ timeout: 10000 });
+
+    // Same placeholder queries as cloud.js publishProject (proven by
+    // fork.spec.js:73). The checkbox check()s auto-wait for the modal's
+    // disclosure fetch to populate the page list.
+    await t.page.getByPlaceholder('What is this planner for?').fill(JOURNAL_DESCRIPTION);
+    await t.page.getByPlaceholder('planner, 2026, remarkable').fill(JOURNAL_TAGS);
+    for (const pageTitle of JOURNAL_PREVIEW_PAGES) {
+        await t.page.getByRole('checkbox', { name: pageTitle, exact: true }).check();
+    }
+    // Anti-rot for the tutorial's "the first page comes pre-checked" claim
+    // (PublishModal.tsx:68 seeds the selection with computePageOrder's first
+    // page -- the renamed root). Assert, don't check(): silently re-checking
+    // would hide a regression of the default.
+    const cover = t.page.getByRole('checkbox', { name: JOURNAL_NAME, exact: true });
+    await cover.waitFor({ timeout: 10000 });
+    if (!(await cover.isChecked())) {
+        throw new Error('publish wizard no longer pre-selects the first page');
+    }
+    await settle(t.page, 500);
+}
+
 export const shots = [
     { id: 'gallery/gallery-home', kind: 'still', run: async (t) => {
         await ensurePublished(t);
@@ -399,13 +463,17 @@ export const shots = [
         await settle(t.page, 1500); // hold the reverted canvas + sidebar as the closing frame
     } },
     { id: 'gallery/my-projects', kind: 'still', run: async (t) => {
-        // OWNER's /projects page, deliberately LAST of the wave so the list
-        // shows all three cloud rows created this run with distinct names
-        // and mixed visibility: "My Notebook" (public -- the ensurePublished
-        // seed), "Reading Log" (private, 1 version), "Sketchbook" (private,
-        // 2 versions). Reordering these shots would fail the row waits below
-        // -- that coupling is deliberate, same as later gallery scenarios
-        // depending on this file's earlier seeding.
+        // OWNER's /projects page, deliberately AFTER the three shots above
+        // (so the list shows all three cloud rows created this run with
+        // distinct names and mixed visibility: "My Notebook" (public -- the
+        // ensurePublished seed), "Reading Log" (private, 1 version),
+        // "Sketchbook" (private, 2 versions)) and BEFORE the tutorial-04
+        // publish-wizard shots below (which add "Travel Journal" rows,
+        // including a SECOND public one -- the strict-mode exact-'public'
+        // badge wait here allows exactly one match). Reordering these shots
+        // would fail the row waits below -- that coupling is deliberate,
+        // same as later gallery scenarios depending on this file's earlier
+        // seeding.
         await ensurePublished(t);
         await ensureUser(t, OWNER);
         await t.page.goto(t.baseUrl + '/projects');
@@ -427,5 +495,76 @@ export const shots = [
         // <main> is the whole max-w-2xl content column (MyProjectsPage.tsx:48)
         // -- same crop rationale as gallery/account-settings above.
         await t.snap('main');
+    } },
+    // -----------------------------------------------------------------------
+    // Tutorial 04 (publishing) additions: the publish wizard itself, on a
+    // FRESH project so the whole flow runs on camera instead of re-showing
+    // the ensurePublished seed. Both stills stage the identical wizard pass
+    // (same project name, description, tags, page picks) so the tutorial's
+    // two figures read as one continuous walkthrough; only the second shot
+    // actually clicks Publish. The brief suggested a blank-with-elements
+    // project, but a blank project has exactly ONE page (app.js's
+    // newBlankProject card: "single A4 page"), which would collapse the
+    // wizard's defining UI -- the pick-1-of-up-to-4 page list -- into a
+    // single row. The notebook preset gives the picker 13 real rows
+    // (services/notebook_preset.json: cover + 3 sections x (divider + 3
+    // lined pages)) and three visually distinct thumbnails, with zero
+    // canvas-drawing flakiness.
+
+    // Root rename flows into the tab/project name (ProjectEditor.tsx:67-73),
+    // the first cloud save names the cloud project after it (CloudMenu.tsx:52),
+    // and publishing sets published_name = name (server/routes/projects.js:343)
+    // -- so "Travel Journal" is both the wizard's first picker row (the root
+    // page) and what the gallery would show. Distinct from every other name
+    // this run creates (My Notebook / Reading Log / Sketchbook).
+    { id: 'gallery/publish-wizard-meta', kind: 'still', run: async (t) => {
+        // The wizard as the user leaves it just before Publish: description
+        // and tags typed, three pages checked, no thumbnails yet (previews
+        // only exist after Publish is clicked -- see the -pages shot).
+        await openFilledPublishWizard(t);
+        await t.snap(PUBLISH_DIALOG);
+    } },
+    { id: 'gallery/publish-wizard-pages', kind: 'still', run: async (t) => {
+        await openFilledPublishWizard(t);
+
+        // The rendered-thumbnails stage only exists DURING a publish:
+        // PublishModal.tsx:96-105 renders previews client-side
+        // (generateThumbnails: jsPDF -> pdf.js raster -> WebP), setPreviews()s
+        // them, then uploads -- and on success CloudMenu closes the modal and
+        // alerts (CloudMenu.tsx:161). Snapping "after previews render" by
+        // timing alone would race the upload on a localhost server, so HOLD
+        // the publish POST at the network layer: the modal sits stably in its
+        // uploading phase -- previews strip visible, button reading
+        // "Publishing…" -- for as long as the snap needs, then the release
+        // lets the same publish complete for real (end-to-end proof the
+        // server accepted our rendered thumbnails).
+        let releasePublish;
+        const gate = new Promise((resolve) => { releasePublish = resolve; });
+        await t.page.route('**/api/projects/*/publish', async (route) => {
+            await gate;
+            await route.continue();
+        });
+
+        await t.page.getByRole('button', { name: 'Publish', exact: true }).click();
+        // All three previews (pre-checked cover + the two JOURNAL_PREVIEW_PAGES)
+        // rendered AND decoded -- <img alt="Preview N"> per PublishModal.tsx:199;
+        // scoped inside the dialog so no other page image can satisfy it. The
+        // count also guards the three-page selection end to end: fewer checked
+        // boxes would render fewer previews, not fail earlier.
+        await t.page.waitForFunction((sel) => {
+            const imgs = [...document.querySelectorAll(`${sel} img[alt^="Preview "]`)];
+            return imgs.length === 3 && imgs.every(i => i.complete && i.naturalWidth > 0);
+        }, PUBLISH_DIALOG, { timeout: 30000 });
+        await settle(t.page, 400);
+        await t.snap(PUBLISH_DIALOG);
+
+        releasePublish();
+        // Completion signal: the modal heading unmounts (same done-signal as
+        // cloud.js's publishProject); the success alert is auto-accepted by
+        // the runner's dialog handler. This publish makes OWNER's second
+        // public project -- fine against MAX_PUBLIC_PROJECTS_PER_USER's
+        // default of 20 (server/middleware/limits.js:34).
+        await t.page.getByRole('heading', { name: 'Publish to gallery' }).waitFor({ state: 'hidden', timeout: 20000 });
+        await t.page.unroute('**/api/projects/*/publish');
     } },
 ];
