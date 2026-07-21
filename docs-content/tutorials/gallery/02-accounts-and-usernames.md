@@ -51,7 +51,7 @@ Submit the form and you won't be signed in — not yet. You'll get this panel in
 
 ![The Verify your email panel, telling the user a verification link was sent to their address, with a Resend email button](/docs-assets/gallery/verify-email-panel.png "Signed up, not yet signed in — the account wakes up when you click the emailed link")
 
-A verification link is on its way to your address, and the account stays dormant until you click it. There's no code to copy — the link is the whole ceremony. Click it and three things happen at once: the address is confirmed, you're **signed in automatically**, and you land back in the app with a green "Email verified — you're signed in" banner, continuing to wherever you were originally headed.
+A [verification link](/docs/reference/email-verification) is on its way to your address, and the account stays dormant until you click it. There's no code to copy — the link is the whole ceremony. Click it and three things happen at once: the address is confirmed, you're **signed in automatically**, and you land back in the app with a green "Email verified — you're signed in" banner, continuing to wherever you were originally headed.
 
 Until then, the account genuinely won't sign in — the same **Verify your email** panel appears if you try. Some fine print that's useful to know:
 
@@ -70,7 +70,7 @@ Everything public in PDF Architect happens under a handle that *isn't* your real
 
 That's why the five account actions from the first section — cloud save, publish, fork, propose changes, review — **require a username before they work**, and the server enforces it, not just the buttons: without one, any of those requests is refused with "Set a public username before using cloud/gallery features." A publish with no author line, or an anonymous review, just isn't a thing the system can represent. Browsing, downloading, and opening projects in your editor stay username-free, exactly as in the last tutorial.
 
-The rules are simple: **3–30 characters, using letters, numbers, and underscores** — no spaces, no hyphens. Capitals are accepted but usernames are kept lowercase, so `Planner_Pro` and `planner_pro` are the same handle. It doesn't have to be your real name, and — worth internalizing early — **it isn't permanent**; you can change it any time in Account settings.
+The rules are simple: [**3–30 characters, using letters, numbers, and underscores**](/docs/reference/username) — no spaces, no hyphens. Capitals are accepted but usernames are kept lowercase, so `Planner_Pro` and `planner_pro` are the same handle. It doesn't have to be your real name, and — worth internalizing early — **it isn't permanent**; you can change it any time in Account settings.
 
 If you signed up with the email form, you already chose one — the form required it, so you may never see the prompt below. But sign in with Google (which never asks) and the app has a signed-in user with no public handle. The moment such an account heads for any of the five gated actions — the cloud menu shows **Set a username to use cloud features**, a project page shows **Set a username to fork** or **to review**, the account menu shows **Set username** — it's routed to the `/welcome` page:
 

@@ -11,7 +11,7 @@ The previous tutorial named the four ideas this editor is built on — nodes, te
 
 ## Create the project
 
-Open PDF Architect and go to the editor. If this is a fresh browser, a single tab named "Blank Project" is already sitting there waiting for you — every first visit gets one automatically. To start something new alongside it, click the **+** at the end of the tab bar (hover it and the tooltip confirms: "New Project").
+Open PDF Architect and go to the editor. If this is a fresh browser, a single tab named "Blank Project" is already sitting there waiting for you — every first visit gets one automatically. To start something new alongside it, click the **+** at the end of the [tab bar](/docs/reference/project-tabs) (hover it and the tooltip confirms: "New Project").
 
 ![The New Project modal, open on its three built-in preset cards](/docs-assets/getting-started/new-project-modal.png "Blank Project, Simple Notebook, and 2026 Planner — the three built-in starting points")
 
@@ -56,7 +56,7 @@ Above the canvas, in Templates mode only, sits a **Preview:** selector — a dro
 
 ## Export a PDF
 
-Back at the top of the editor — the same row as Undo/Redo and the JSON button — three controls sit together: a greyscale toggle, **Export PDF**, and **Export All Variants**. Export PDF renders whichever variant is currently active — for this project, fresh out of the preset, that's the only variant it has, named "Default" — and downloads it immediately. The greyscale toggle right next to it (hover it and the tooltip flips between "Greyscale Export: ON" and "OFF") applies to that same export.
+Back at the top of the editor — the same row as Undo/Redo and the JSON button — three controls sit together: a [greyscale toggle](/docs/reference/greyscale-export), [**Export PDF**](/docs/reference/export-pdf), and **Export All Variants**. Export PDF renders whichever variant is currently active — for this project, fresh out of the preset, that's the only variant it has, named "Default" — and downloads it immediately. The greyscale toggle right next to it (hover it and the tooltip flips between "Greyscale Export: ON" and "OFF") applies to that same export.
 
 Export All Variants sits right after it, and right now it's greyed out: it only turns on once a project has more than one variant, and the 2026 Planner preset starts with exactly one. Add a second variant later — the same **+** in the Templates-mode variant switcher from the previous tutorial — and this button re-enables; click it then and it downloads one PDF per variant, one after another, rather than a single combined file.
 

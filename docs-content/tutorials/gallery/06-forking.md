@@ -7,7 +7,7 @@ keywords: fork, open in editor, upstream, private, lineage, copy
 prerequisites: gallery/cloud-saves-and-history
 ---
 
-Back in [the first gallery tutorial](/docs/gallery/browsing-without-an-account#open-in-editor-yours-instantly) you learned that **Open in editor** hands you a no-strings copy of any published project — and that a second button, one that only appears once you sign in, does something more. This is that button. Forking makes a copy too, but a copy that *remembers where it came from*: a private project in your own cloud account, tied by a lineage link back to the original, and — unlike an Open-in-editor copy — able to send its changes back upstream. This tutorial is about choosing between the two, and what a fork sets up that a plain copy can't.
+Back in [the first gallery tutorial](/docs/gallery/browsing-without-an-account#open-in-editor-yours-instantly) you learned that **Open in editor** hands you a no-strings copy of any published project — and that a second button, one that only appears once you sign in, does something more. This is that button. [Forking](/docs/reference/fork) makes a copy too, but a copy that *remembers where it came from*: a private project in your own cloud account, tied by a lineage link back to the original, and — unlike an Open-in-editor copy — able to send its changes back upstream. This tutorial is about choosing between the two, and what a fork sets up that a plain copy can't.
 
 ## Two ways to take a copy
 

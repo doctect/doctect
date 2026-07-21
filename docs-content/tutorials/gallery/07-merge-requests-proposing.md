@@ -7,7 +7,7 @@ keywords: merge request, propose, upstream, diff, before after, contribution
 prerequisites: gallery/forking
 ---
 
-A [fork](/docs/gallery/forking) remembers where it came from, and that memory buys you the one thing an [Open-in-editor copy](/docs/gallery/browsing-without-an-account) never gets: a way to send your work *back*. Once you've improved a forked project — fixed a page, recoloured a cover, added a variant — you can offer that improvement to the original's owner as a **merge request**: a titled proposal, carrying a reviewable diff, that they can merge into their project or turn down. This tutorial walks the proposing side end to end — how to open one, what the owner sees when it lands, and the one non-obvious rule that trips up everyone the first time: the diff is never a frozen snapshot.
+A [fork](/docs/gallery/forking) remembers where it came from, and that memory buys you the one thing an [Open-in-editor copy](/docs/gallery/browsing-without-an-account) never gets: a way to send your work *back*. Once you've improved a forked project — fixed a page, recoloured a cover, added a variant — you can offer that improvement to the original's owner as a [**merge request**](/docs/reference/merge-request): a titled proposal, carrying a reviewable diff, that they can merge into their project or turn down. This tutorial walks the proposing side end to end — how to open one, what the owner sees when it lands, and the one non-obvious rule that trips up everyone the first time: the diff is never a frozen snapshot.
 
 ## From fork to proposal
 

@@ -29,8 +29,8 @@ Four concepts cover everything below: the sidebar, the canvas, the properties pa
 | --- | --- |
 | **Node** | One logical page in your document's hierarchy — a day, a chapter, a stop on a route. Carries a title, a set of custom data fields, and an ordered list of child nodes. No visual information at all. |
 | **Template** | A reusable visual layout: shapes, text, grids, arranged once. A node applies a template by matching its `type` field to that template's `id` — many nodes can share the same one. |
-| **Data binding** | Placeholders like `{{title}}` inside a template's text resolve against whichever node is currently rendering it, so identical text on the template prints differently on every page. |
-| **Variant** | A parallel set of templates sized for a different device or paper (a reMarkable versus an iPad, say), sharing the exact same node hierarchy and data. |
+| **[Data binding](/docs/reference/data-binding)** | Placeholders like `{{title}}` inside a template's text resolve against whichever node is currently rendering it, so identical text on the template prints differently on every page. |
+| **[Variant](/docs/reference/variants)** | A parallel set of templates sized for a different device or paper (a reMarkable versus an iPad, say), sharing the exact same node hierarchy and data. |
 
 Data binding is the least visual of the four, so it's worth one concrete example. Open any day node's properties in the 2026 Planner and you'll find data fields like `day_short: Thu` and `month_short: Jan`. The Day View template's own header text is nothing more than `{{month_short}} {{day_num}}` — on the node for January 1st that resolves to "Jan 01"; the very next node renders the identical template as "Jan 02". Nothing in the template changed — only the node's data did. Even a node's title is available this way: the Month View template's header is just `{{title}}`, so that one template prints "January" on one page and "February" on the next.
 

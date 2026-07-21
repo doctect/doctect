@@ -17,16 +17,16 @@ Every project — blank or not — opens with the same tool palette running acro
 
 | Tool | Key | Draws |
 | --- | --- | --- |
-| Select | `kbd:V` | Nothing — it's the pointer: click, drag-select, resize, and move whatever's already there. |
+| [Select](/docs/reference/select-and-hand-tools) | `kbd:V` | Nothing — it's the pointer: click, drag-select, resize, and move whatever's already there. |
 | Pan | `kbd:H` | Nothing — drag the canvas around without touching an element. |
-| Text Box | `kbd:T` | A text element. |
-| Rectangle | `kbd:R` | A rectangle. |
+| [Text Box](/docs/reference/text-tool) | `kbd:T` | A text element. |
+| [Rectangle](/docs/reference/shape-tools) | `kbd:R` | A rectangle. |
 | Circle/Ellipse | `kbd:E` | A circle or ellipse. |
 | Triangle | `kbd:Y` | A triangle. |
 | Line | `kbd:L` | A straight line. |
 | Data Grid | `kbd:G` | A repeating grid bound to a list of nodes — its own tutorial later in this track. |
 
-Each shortcut is a single bare key — no `kbd:Ctrl` needed, and pressing one does nothing while you're typing in a text field, so it never fights with normal typing.
+Each shortcut is a [single bare key](/docs/reference/tool-shortcuts) — no `kbd:Ctrl` needed, and pressing one does nothing while you're typing in a text field, so it never fights with normal typing.
 
 Past the divider sits one more control with no shortcut: an **SVG Tools** button opening a two-item menu, *Import SVG file…* to bring in your own artwork, or *Insert placeholder SVG* to drop in a stand-in shape. The rest of the bar — the magnet and grid icons, and the zoom controls — gets its own explanation in the next section; Save Preset and Generator, further along the same row, belong to later tutorials.
 
@@ -51,7 +51,7 @@ Ordinary scrolling — mouse wheel or trackpad, no key held — just scrolls the
 
 The **−** / **+** buttons at the right of the toolbar do the same zoom, in fixed 10-percentage-point steps, with the current value shown between them. Every new project — blank page or preset — opens at 80%.
 
-The two icons just left of the zoom controls are **Snap to Grid** (the magnet) and **Show Grid**. They're independent, with one exception: turning Snap on always turns Show Grid on with it, so you can actually see the grid you just started snapping to. Turning Snap back off doesn't hide the grid again — it stays exactly as visible as you left it.
+The two icons just left of the zoom controls are [**Snap to Grid**](/docs/reference/snap-to-grid) (the magnet) and **Show Grid**. They're independent, with one exception: turning Snap on always turns Show Grid on with it, so you can actually see the grid you just started snapping to. Turning Snap back off doesn't hide the grid again — it stays exactly as visible as you left it.
 
 > [!TIP]
 > The grid you're snapping to isn't a fixed size. It's 10pt normally, 5pt once you're zoomed past 150%, and 1pt past 400% — so snap keeps getting finer as you zoom in for detail work, instead of fighting you with the same coarse grid at every zoom level.
@@ -64,7 +64,7 @@ The **Select** tool (`kbd:V`) is the default, and clicking any shape with it sel
 
 That handle set is the same on every non-line shape: eight resize handles (the four corners plus the midpoint of each edge), a small round pivot point sitting in the middle — drag it to move the point the shape resizes and rotates around — and a rotate handle on a short stalk above the shape. Lines get two handles instead, one at each end, since "resize" for a line just means moving an endpoint.
 
-Click empty canvas to deselect everything. Click-and-drag across empty canvas instead, and you get a **marquee**: a selection box that, on release, selects every shape it touches even partially — drag it in whichever direction is convenient, corner to corner. Shift-click a shape to add it to whatever's already selected, and shift-click a selected shape again to drop it back out. Once two or more shapes are selected this way, the toolbar grows a row of alignment and distribution buttons — enough to be worth knowing exists, even though lining shapes up is its own later tutorial.
+Click empty canvas to deselect everything. Click-and-drag across empty canvas instead, and you get a **marquee**: a selection box that, on release, selects every shape it touches even partially — drag it in whichever direction is convenient, corner to corner. Shift-click a shape to add it to whatever's already selected, and shift-click a selected shape again to drop it back out. Once two or more shapes are selected this way, the toolbar grows a row of [alignment and distribution buttons](/docs/reference/alignment-tools) — enough to be worth knowing exists, even though lining shapes up is its own later tutorial.
 
 > [!TIP]
 > Holding `kbd:Ctrl` (`kbd:Cmd` on a Mac) when you start dragging an already-selected shape peels off a copy on the spot and drags *that*, leaving the original exactly where it was — a quick, mouse-only duplicate that doesn't need `kbd:Ctrl+D`.
@@ -77,10 +77,10 @@ Every shortcut below (and every tool key above) is suppressed while your cursor 
 
 | Action | Shortcut | What happens |
 | --- | --- | --- |
-| Undo | `kbd:Ctrl+Z` | Steps back through your recent changes. |
+| [Undo](/docs/reference/undo-redo) | `kbd:Ctrl+Z` | Steps back through your recent changes. |
 | Redo | `kbd:Ctrl+Shift+Z` or `kbd:Ctrl+Y` | Either one re-applies whatever Undo just stepped back from. |
-| Delete | `kbd:Delete` or `kbd:Backspace` | Removes the selected element(s) on the canvas. With nothing selected there, it falls through to the sidebar instead — a confirmation prompt first for a selected node, immediately (but still undoable) for a selected template. |
-| Copy | `kbd:Ctrl+C` | Copies the selected element(s) to an in-app clipboard — not your OS clipboard, so it won't survive a page reload or paste into another program. |
+| [Delete](/docs/reference/delete-and-nudge) | `kbd:Delete` or `kbd:Backspace` | Removes the selected element(s) on the canvas. With nothing selected there, it falls through to the sidebar instead — a confirmation prompt first for a selected node, immediately (but still undoable) for a selected template. |
+| [Copy](/docs/reference/clipboard-shortcuts) | `kbd:Ctrl+C` | Copies the selected element(s) to an in-app clipboard — not your OS clipboard, so it won't survive a page reload or paste into another program. |
 | Cut | `kbd:Ctrl+X` | Copies, then deletes, the selected element(s). |
 | Paste | `kbd:Ctrl+V` or `kbd:Ctrl+P` | Pastes the in-app clipboard, offset 20pt down and right of the original so the copy is easy to spot, and selects it. Nothing copied yet? `kbd:Ctrl+P` falls through to your browser's own Print dialog instead. |
 | Duplicate | `kbd:Ctrl+D` | The same 20pt-offset copy as Paste, in one step, for the selected element(s) — or, with no element selected, the selected node(s) in Hierarchy mode or template(s) in Templates mode. |

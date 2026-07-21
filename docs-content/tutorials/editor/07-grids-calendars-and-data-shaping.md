@@ -7,7 +7,7 @@ keywords: calendar, offset, dynamic offset, dayOfWeekNum, slice, traversal, mont
 prerequisites: editor/grids-basics-and-styling
 ---
 
-[Grids I](/docs/editor/grids-basics-and-styling) covered a grid's everyday shape: pick a source, set a column count, make it look like a table. That's the whole story for a nav-menu strip or a short list of links. It isn't the whole story for the 2026 Planner's own calendars — Month View's full month grid, Quarter View's three mini calendars, and others besides, every one of them a grid you've been looking at since [Your First Document from a Preset](/docs/getting-started/first-project-from-preset) — because a calendar has a constraint a nav menu never does: day 1 has to land under the *correct* day-of-week column, and that column is a different one every month. This tutorial covers what closes that gap: a dynamic offset that computes where day 1 belongs instead of a hand-typed number, a data slice that trims a child list down to a window, and a traversal path that reaches a grid's grandchildren instead of stopping at its direct children — the real mechanism behind those calendars, walked through with their actual, shipped configuration.
+[Grids I](/docs/editor/grids-basics-and-styling) covered a grid's everyday shape: pick a source, set a column count, make it look like a table. That's the whole story for a nav-menu strip or a short list of links. It isn't the whole story for the 2026 Planner's own calendars — Month View's full month grid, Quarter View's three mini calendars, and others besides, every one of them a grid you've been looking at since [Your First Document from a Preset](/docs/getting-started/first-project-from-preset) — because a calendar has a constraint a nav menu never does: day 1 has to land under the *correct* day-of-week column, and that column is a different one every month. This tutorial covers what closes that gap: a [dynamic offset](/docs/reference/dynamic-offset) that computes where day 1 belongs instead of a hand-typed number, a data slice that trims a child list down to a window, and a traversal path that reaches a grid's grandchildren instead of stopping at its direct children — the real mechanism behind those calendars, walked through with their actual, shipped configuration.
 
 ## The calendar problem
 
@@ -19,9 +19,9 @@ Computing that number instead of retyping a different magic value onto every mon
 
 ## Dynamic offset, step by step
 
-Select that same January calendar on the canvas (`kbd:V` for Select, then click it) and open **Element Properties → Grid Configuration**. Below **Display Template** sits a row labeled **Offset (Skip items)**, with a small **(Advance)** note beside it: a number box, then a mode dropdown reading **Static** or **Dynamic (Field)**. Switching to Dynamic reveals two more boxes underneath — **Field Name** and a narrow **+/-** box.
+Select that same January calendar on the canvas (`kbd:V` for Select, then click it) and open **Element Properties → Grid Configuration**. Below **Display Template** sits a row labeled **Offset (Skip items)**, with a small **(Advance)** note beside it: a number box, then a mode dropdown reading **Static** or **Dynamic (Field)**. Switching to Dynamic reveals two more boxes underneath — **Field Name** and a narrow [**+/-** box](/docs/reference/offset-adjustment).
 
-**Static** is the simple half: the number box is how many empty cells to insert before the first real item, unconditionally, every time. That's the right tool for something whose blank-cell count never changes — a menu grid that always needs to skip one fixed slot, say.
+[**Static**](/docs/reference/static-offset) is the simple half: the number box is how many empty cells to insert before the first real item, unconditionally, every time. That's the right tool for something whose blank-cell count never changes — a menu grid that always needs to skip one fixed slot, say.
 
 A calendar's blank-cell count isn't fixed like that — it's a different number every month. This is the January calendar's real, shipped configuration, unchanged:
 
@@ -66,7 +66,7 @@ Every cell after the first shifts too, not just day 1 — an offset moves the *e
 
 ## Slicing children into rows
 
-Not every grid wants everything its source has to offer. Directly below **Deep Traversal** — and above **Display Template** — sits **Final Data Subset**: two boxes captioned **Start Index** and **Count**, placeholder text `Start (0)` and `Count (All)` showing what an empty box already defaults to. These map straight onto `dataSliceStart` and `dataSliceCount`: skip the first `Start Index` children, then take at most `Count` of whatever's left (leave `Count` blank and it takes all of them).
+Not every grid wants everything its source has to offer. Directly below **Deep Traversal** — and above **Display Template** — sits [**Final Data Subset**](/docs/reference/data-slicing): two boxes captioned **Start Index** and **Count**, placeholder text `Start (0)` and `Count (All)` showing what an empty box already defaults to. These map straight onto `dataSliceStart` and `dataSliceCount`: skip the first `Start Index` children, then take at most `Count` of whatever's left (leave `Count` blank and it takes all of them).
 
 You've already seen this in action without the mechanism being named. [Grids I](/docs/editor/grids-basics-and-styling) opened by pointing out that the Year View page carries two separate grids, both reading the exact same seven children off the Planner's own root — one showing "Quarter 1" through "Quarter 4," the other showing "Weeks," "Notes," and "To-Do Lists." Here's how one root's seven children becomes two different, non-overlapping windows, in the shipped preset's own real numbers:
 
@@ -82,7 +82,7 @@ Same source, same seven children, two disjoint slices of the same list.
 
 ## Traversal: grids over grandchildren
 
-Every grid so far has drawn from its source's *direct* children. **Deep Traversal**, just above Final Data Subset in the same panel, is for reaching further down: one **+ Add Level** click per generation you want to descend, each level adding a row with its own **Start**/**Count** pair. Leave it empty — the panel's own placeholder text reads "Direct children only" — and a grid behaves exactly like every grid up to this point.
+Every grid so far has drawn from its source's *direct* children. [**Deep Traversal**](/docs/reference/traversal-path), just above Final Data Subset in the same panel, is for reaching further down: one **+ Add Level** click per generation you want to descend, each level adding a row with its own **Start**/**Count** pair. Leave it empty — the panel's own placeholder text reads "Direct children only" — and a grid behaves exactly like every grid up to this point.
 
 Add a level, and the rule is: take every node currently in play, fetch *its* children, slice them with that level's own Start/Count, and pool the results from every one of those parents together before handing the combined list to the next level (if there is one). One level reaches children, same as no traversal path at all — the difference only shows up at two levels or more, because the second level's slice runs once *per node* the first level produced, not once overall.
 

@@ -17,7 +17,7 @@ Click **Gallery** in the header (it's there on the landing page, the docs, and t
 
 ![The gallery landing view, signed out: hero banner with tag chips, and the Top rated row of project cards](/docs-assets/gallery/gallery-home.png "No account, no prompt — the full gallery, with curated rows below the hero")
 
-- **A hero banner** — "Discover planner & notebook templates" — with a row of **tag chips** underneath. Each chip is a real tag someone attached to a published project, with a count of how many projects carry it. Click one and you jump straight to a filtered view of that tag.
+- **A hero banner** — "Discover planner & notebook templates" — with a row of [**tag chips**](/docs/reference/gallery-tags) underneath. Each chip is a real tag someone attached to a published project, with a count of how many projects carry it. Click one and you jump straight to a filtered view of that tag.
 - **A search box**, pinned above the hero, that stays with you as you scroll.
 - **Three curated rows**, each holding up to eight cards: **Top rated** (star icon), **Popular** (flame), and **Recently updated** (clock). Each row's header carries a **See all →** link (top right) that expands it into a full, pageable grid.
 
@@ -54,7 +54,7 @@ A project page collects everything its owner chose to publish:
 | **Fork and download counts** | Small live tallies of how often this project has been forked and downloaded. |
 | **Report** | A quiet link at the bottom of the actions. It asks for a reason and sends the project to the moderators — also available signed out. |
 
-And then there's the column of action buttons — **Open in editor**, **Download all variants (.zip)**, **Version history** — which the next three sections take one at a time. Signed out, a fourth line reads "Sign in to fork"; that's the one locked door, and we'll get to it.
+And then there's the column of action buttons — [**Open in editor**](/docs/reference/open-in-editor), [**Download all variants (.zip)**](/docs/reference/download-all-variants), **Version history** — which the next three sections take one at a time. Signed out, a fourth line reads "Sign in to fork"; that's the one locked door, and we'll get to it.
 
 ## Open in Editor — yours, instantly
 
@@ -62,7 +62,7 @@ And then there's the column of action buttons — **Open in editor**, **Download
 
 The important word is *yours*. What lands in your editor is a **copy with no strings attached**: it lives in your browser like any local project, and it keeps **no link back to the original**. Edit every page, delete half the hierarchy, export PDFs — the published project never knows, and nothing you do can touch it. There is deliberately no "update from the original" or "send changes back" on a copy like this.
 
-That last part is the difference between opening and *forking*. A fork — the signed-in feature — creates a copy that **remembers where it came from**: it carries a "forked from" line, and it can propose its changes back to the original for the owner to review. Forking, and the merge requests it unlocks, get their own tutorials later in this track. If you just want the design, **Open in editor** is the whole story.
+That last part is the difference between opening and [*forking*](/docs/reference/fork). A fork — the signed-in feature — creates a copy that **remembers where it came from**: it carries a "forked from" line, and it can propose its changes back to the original for the owner to review. Forking, and the merge requests it unlocks, get their own tutorials later in this track. If you just want the design, **Open in editor** is the whole story.
 
 ## Download all variants
 

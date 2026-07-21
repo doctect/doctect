@@ -11,7 +11,7 @@ The tutorials so far have stayed inside one page size, one project tab, and the 
 
 ## Variants: one hierarchy, many devices
 
-A variant is a complete, independent set of templates for one target page size. The project keeps exactly one node hierarchy — one tree of pages, one set of data fields, built the way [Data Binding](/docs/editor/data-binding) describes — and each variant re-expresses how those same pages *look*: its own copy of every template, usually at a different size. Edit a template in one variant and no other variant moves; add or rename a node and every variant sees it, because nodes aren't per-variant at all.
+A [variant](/docs/reference/variants) is a complete, independent set of templates for one target page size. The project keeps exactly one node hierarchy — one tree of pages, one set of data fields, built the way [Data Binding](/docs/editor/data-binding) describes — and each variant re-expresses how those same pages *look*: its own copy of every template, usually at a different size. Edit a template in one variant and no other variant moves; add or rename a node and every variant sees it, because nodes aren't per-variant at all.
 
 The controls live at the top of the sidebar's **Templates** mode, in the tinted bar above the template list: a dropdown naming the active variant, then pencil (rename, inline — Enter commits, Escape cancels), copy (duplicate), trash (delete — only shown once a second variant exists, and the last one can never be deleted), and **+** (new variant).
 
@@ -33,7 +33,7 @@ Switching variants in the dropdown also switches which template is selected — 
 
 Select any template in Templates mode and the right panel's **Template Settings** section holds the page size controls: a preset dropdown (A4, Letter, Legal, A5, then e-ink devices grouped by screen size — reMarkable, Boox, Supernote, Kindle Scribe), Width and Height inputs with a unit selector, and Portrait/Landscape buttons that swap the two.
 
-The unit selector — **pt / px / in / mm** — converts; it doesn't relabel. Templates are stored in points, and the other units re-express that same physical size: 1 inch is 72 pt, 1 mm is about 2.835 pt, and px is treated 1:1 with pt. Switch an A4 page from pt to mm and the fields change from 595.28 × 841.89 to 210.001 × 297 (that stray thousandth is just display rounding) — the page itself hasn't moved a hair. Type a value in any unit and it converts back on entry, so "make it exactly 210 mm wide" is: pick mm, type 210.
+The [unit selector](/docs/reference/unit-selector) — **pt / px / in / mm** — converts; it doesn't relabel. Templates are stored in points, and the other units re-express that same physical size: 1 inch is 72 pt, 1 mm is about 2.835 pt, and px is treated 1:1 with pt. Switch an A4 page from pt to mm and the fields change from 595.28 × 841.89 to 210.001 × 297 (that stray thousandth is just display rounding) — the page itself hasn't moved a hair. Type a value in any unit and it converts back on entry, so "make it exactly 210 mm wide" is: pick mm, type 210.
 
 Two toggles below the size fields govern what happens to *content* when the size changes:
 
@@ -44,7 +44,7 @@ These same two toggles appear in the New Variant dialog, doing the same job on e
 
 ## SVG artwork
 
-Vector artwork enters through the toolbar: after the shape tools from [Canvas Basics](/docs/editor/canvas-basics) sits an image icon with a small chevron — the SVG menu, with two entries. **Import SVG file…** opens a file picker; the file's own size (from its `viewBox`, or width/height attributes) sets the element's shape, scaled down if needed so it lands fitting comfortably within the page. **Insert placeholder SVG** skips the file dialog and drops a small indigo rounded square — a stub whose whole purpose is to be rewritten in the source editor below. Either way the new element arrives selected, on the active layer from [Layers](/docs/editor/layers), with the Select tool ready.
+Vector artwork enters through the toolbar: after the shape tools from [Canvas Basics](/docs/editor/canvas-basics) sits an image icon with a small chevron — the SVG menu, with two entries. [**Import SVG file…**](/docs/reference/svg-import) opens a file picker; the file's own size (from its `viewBox`, or width/height attributes) sets the element's shape, scaled down if needed so it lands fitting comfortably within the page. **Insert placeholder SVG** skips the file dialog and drops a small indigo rounded square — a stub whose whole purpose is to be rewritten in the source editor below. Either way the new element arrives selected, on the active layer from [Layers](/docs/editor/layers), with the Select tool ready.
 
 An SVG element is a first-class citizen: move it, resize it, rotate it, restack it, copy and paste it, exactly like a rectangle. What no other element has is the **SVG Source** section in its properties panel — the raw markup in an editable text area:
 
@@ -62,7 +62,7 @@ On export, SVG elements are re-emitted as true vectors in the PDF — paths stay
 
 ## The JSON inspector
 
-Everything the editor edits — nodes, variants, templates, every element — is one JSON document, and the **JSON** button in the editor's top bar (next to Undo/Redo) opens it directly. The Project JSON Editor has two modes, switchable from its header.
+Everything the editor edits — nodes, variants, templates, every element — is one JSON document, and the [**JSON** button](/docs/reference/json-inspector) in the editor's top bar (next to Undo/Redo) opens it directly. The Project JSON Editor has two modes, switchable from its header.
 
 **Visual mode** is a browsable tree, organized the way the project actually is: a **Nodes** section (with an Add Node button), a **Variants** section (Add Variant, plus a per-variant Add Template, with the active variant badged), and everything else under Other Settings. Expand any item to edit its values in place, add properties, or delete entries — useful for surgical edits the panels don't expose, like fixing a typo'd data field key.
 
@@ -79,18 +79,18 @@ Nothing you do in either mode touches the open project until you commit it. Edit
 
 ## Presets and project tabs
 
-When a project's layouts are worth reusing — your grid system, your fonts, your nav bar from [Linking](/docs/editor/linking) — save the whole thing as a starting point. **Save Preset**, the amber button at the toolbar's right end, asks for a name and description, then files the current project as a card in the **New Project** dialog, right alongside the built-ins you met in [Your First Document from a Preset](/docs/getting-started/first-project-from-preset). Every project created from it is a deep, independent copy — migrated forward automatically if the app's format has moved on since you saved — so nothing you do in the new project can reach back into the preset, or into any sibling created from it.
+When a project's layouts are worth reusing — your grid system, your fonts, your nav bar from [Linking](/docs/editor/linking) — save the whole thing as a starting point. [**Save Preset**](/docs/reference/save-preset), the amber button at the toolbar's right end, asks for a name and description, then files the current project as a card in the **New Project** dialog, right alongside the built-ins you met in [Your First Document from a Preset](/docs/getting-started/first-project-from-preset). Every project created from it is a deep, independent copy — migrated forward automatically if the app's format has moved on since you saved — so nothing you do in the new project can reach back into the preset, or into any sibling created from it.
 
 > [!NOTE]
 > Custom presets live in this browser's local storage: they survive reloads, but they don't follow you to another machine and they vanish with cleared site data. To move a design between machines or people, export the project itself as JSON — the inspector's Text mode, or the download offered when closing a tab — and import it on the other side.
 
-New Project is also where the **tab bar** comes in: every open project is a tab across the top, and the **+** at the end of the strip opens that same dialog. Tabs are fully live — every open project stays mounted, so switching tabs is instant and loses nothing: undo history, zoom, active tool, and selection are all exactly where you left them when you come back. A tab's title is the project's root page title — rename the root node in Hierarchy mode and the tab renames itself. Open projects autosave to the browser and are restored on the next visit.
+New Project is also where the [**tab bar**](/docs/reference/project-tabs) comes in: every open project is a tab across the top, and the **+** at the end of the strip opens that same dialog. Tabs are fully live — every open project stays mounted, so switching tabs is instant and loses nothing: undo history, zoom, active tool, and selection are all exactly where you left them when you come back. A tab's title is the project's root page title — rename the root node in Hierarchy mode and the tab renames itself. Open projects autosave to the browser and are restored on the next visit.
 
 Hovering a tab reveals its close button. Closing asks first, and the dialog's **Save and Close** option downloads the project as a JSON file on the way out — worth taking, since closing removes the project from the browser's storage. Closing the last tab leaves you with a fresh blank project rather than an empty window.
 
 ## Exporting
 
-The export controls sit at the top bar's right end: a contrast-circle **greyscale toggle**, then a split button — **Export PDF**, and a narrower **All** half beside it.
+The export controls sit at the top bar's right end: a contrast-circle [**greyscale toggle**](/docs/reference/greyscale-export), then a split button — [**Export PDF**](/docs/reference/export-pdf), and a narrower **All** half beside it.
 
 **Export PDF** prints the *active variant*: one PDF page per node in hierarchy order, rendered through that variant's templates, with the internal links from [Linking](/docs/editor/linking) baked in as real PDF navigation. [Reference nodes](/docs/editor/references-and-referrer-formulas) are skipped, as that tutorial explains — one page per real node. The button reads "Generating…" while it works, and the downloaded file is tagged with the variant's name.
 

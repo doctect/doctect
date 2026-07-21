@@ -11,7 +11,7 @@ Your project is [saved to the cloud](/docs/gallery/cloud-saves-and-history) — 
 
 ## What publishing means
 
-Publishing takes your project's **latest cloud commit** and pins it as the public version. The gallery gains a card; the card opens into [a project page](/docs/gallery/browsing-without-an-account#a-project-page) with your previews, description, tags, and action buttons. From that moment the page is live for everyone — no account needed to view it.
+[Publishing](/docs/reference/publish-and-unpublish) takes your project's **latest cloud commit** and pins it as the public version. The gallery gains a card; the card opens into [a project page](/docs/gallery/browsing-without-an-account#a-project-page) with your previews, description, tags, and action buttons. From that moment the page is live for everyone — no account needed to view it.
 
 Two properties of that sentence deserve a closer look. First, it's a *commit* that gets published, not a live feed: cloud saves you make afterwards stay private until you run the wizard again, so you can keep working in the open project without the public page moving under your visitors. Second, "public" is bigger than the previews. Here is the full inventory:
 

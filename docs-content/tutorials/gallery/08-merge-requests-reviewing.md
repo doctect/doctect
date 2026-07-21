@@ -44,7 +44,7 @@ So if the fork recoloured the cover and you, meanwhile, rewrote a completely dif
 
 ## Conflicts, precisely
 
-A conflict means the fork and the upstream both changed the **same unit** to **different values** since the fork branched. PDF Architect diffs at the granularity of *variants*, *templates*, the *page hierarchy*, and the *generator* — so "same unit" is precise, not fuzzy. Independent changes to different units merge cleanly; only genuine overlap conflicts.
+A [conflict](/docs/reference/merge-conflict) means the fork and the upstream both changed the **same unit** to **different values** since the fork branched. PDF Architect diffs at the granularity of *variants*, *templates*, the *page hierarchy*, and the *generator* — so "same unit" is precise, not fuzzy. Independent changes to different units merge cleanly; only genuine overlap conflicts.
 
 | The fork changed… | …and the owner independently changed… | Result |
 | --- | --- | --- |

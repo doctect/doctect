@@ -11,7 +11,7 @@ prerequisites: generator/generator-basics
 
 ## The template contract
 
-The templates script must `return` a plain object whose values are templates. Each template needs four fields — `id` and `name` (both strings), `width` and `height` (positive numbers, in points) — plus an `elements` array, and optionally a `layers` array:
+The [templates script](/docs/reference/templates-script) must `return` a plain object whose values are templates. Each template needs four fields — `id` and `name` (both strings), `width` and `height` (positive numbers, in points) — plus an `elements` array, and optionally a `layers` array:
 
 ```javascript
 const t = {};   // the map this script returns — one entry per template
@@ -42,7 +42,7 @@ One template can also be many: instead of a flat map, return `{ variants: { pape
 
 ## Geometry and constants
 
-Four page-size constants are in scope as bare identifiers, and nothing stops you computing with them (`A4_WIDTH / 2`, `H - 60`):
+[Four page-size constants](/docs/reference/generator-constants) are in scope as bare identifiers, and nothing stops you computing with them (`A4_WIDTH / 2`, `H - 60`):
 
 | Constant | Value | What it measures |
 | --- | --- | --- |

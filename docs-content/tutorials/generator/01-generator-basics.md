@@ -19,15 +19,15 @@ That's the trade the generator offers: anything repetitive, dated, numbered, or 
 
 ## The two scripts
 
-Open any project and click the purple **Generator** button in the editor toolbar (its tooltip reads "Generate Hierarchy via Script"). The **Hierarchy Generator** modal opens on two side-by-side code editors, and the split between them is the whole mental model:
+Open any project and click the purple [**Generator** button](/docs/reference/generator-overview) in the editor toolbar (its tooltip reads "Generate Hierarchy via Script"). The **Hierarchy Generator** modal opens on two side-by-side code editors, and the split between them is the whole mental model:
 
 ![The Hierarchy Generator modal with the Define Templates and Build Hierarchy panels side by side, a preset selector, and the Preview button](/docs-assets/generator/modal-two-scripts.png "Two scripts, one project: layouts on the left, pages on the right")
 
-**1. Define Templates**, on the left, is a script that must `return` a plain object mapping template ids to template objects — each with an `id`, a `name`, a `width` and `height`, and an `elements` array of the same rects, text boxes, grids, and SVG shapes you've been editing in [Element Properties](/docs/editor/elements-and-properties) all along. Four page-size constants are pre-injected as bare identifiers: `RM_PP_WIDTH` (509) and `RM_PP_HEIGHT` (679) for reMarkable Paper Pro, `A4_WIDTH` (595.28) and `A4_HEIGHT` (841.89) for A4. A template can also return a full multi-device structure — `{ variants, activeVariantId }` — but a flat map is automatically wrapped in a single variant named Default, so you can ignore [variants](/docs/editor/variants-svg-json-export) entirely until you need them.
+[**1. Define Templates**](/docs/reference/templates-script), on the left, is a script that must `return` a plain object mapping template ids to template objects — each with an `id`, a `name`, a `width` and `height`, and an `elements` array of the same rects, text boxes, grids, and SVG shapes you've been editing in [Element Properties](/docs/editor/elements-and-properties) all along. Four page-size constants are pre-injected as bare identifiers: `RM_PP_WIDTH` (509) and `RM_PP_HEIGHT` (679) for reMarkable Paper Pro, `A4_WIDTH` (595.28) and `A4_HEIGHT` (841.89) for A4. A template can also return a full multi-device structure — `{ variants, activeVariantId }` — but a flat map is automatically wrapped in a single variant named Default, so you can ignore [variants](/docs/editor/variants-svg-json-export) entirely until you need them.
 
-**2. Build Hierarchy**, on the right, is a second, independent script that must `return { nodes, rootId }`: an object of node objects keyed by id, plus the id of the root. Each node is exactly what Hierarchy mode shows in the sidebar — `id`, `parentId` (`null` for the root), a `type` naming which template renders it, a `title`, a `data` object of the fields your `{{placeholders}}` bind against, and a `children` array of ids. Two helpers are pre-injected here: `templates`, the (already normalized) object your first script returned, and `createId('prefix')`, which mints unique node ids.
+[**2. Build Hierarchy**](/docs/reference/hierarchy-script), on the right, is a second, independent script that must `return { nodes, rootId }`: an object of node objects keyed by id, plus the id of the root. Each node is exactly what Hierarchy mode shows in the sidebar — `id`, `parentId` (`null` for the root), a `type` naming which template renders it, a `title`, a `data` object of the fields your `{{placeholders}}` bind against, and a `children` array of ids. Two helpers are pre-injected here: `templates`, the (already normalized) object your first script returned, and `createId('prefix')`, which mints unique node ids.
 
-The two scripts run as separate functions with separate scopes — the size constants don't exist in the hierarchy script, and `createId` doesn't exist in the templates script. Template ids are stable strings you choose yourself, because the hierarchy's `type` fields have to name them.
+The two scripts run as separate functions with separate scopes — the [size constants](/docs/reference/generator-constants) don't exist in the hierarchy script, and `createId` doesn't exist in the templates script. Template ids are stable strings you choose yourself, because the hierarchy's `type` fields have to name them.
 
 > [!TIP]
 > A template's `elements` can be an empty array `[]`. That's a deliberate workflow, not a degenerate case: generate the *structure* — hundreds of pages, correct data fields, working links — and design each template visually afterwards on the canvas. And if you'd rather not write either script by hand, the **LLM Helper & Schema Documentation** panel at the bottom of the modal contains a copy-paste prompt that teaches any chatbot the full schema, plus a reference table of every template and node property.
@@ -41,7 +41,7 @@ The green **Preview** button runs both scripts. What it will never do is touch y
 > [!NOTE]
 > Your code executes in a disposable sandbox, not in the app: a hidden iframe whose Content-Security-Policy allows no network at all, running the scripts inside a throwaway Web Worker where `fetch`, `XMLHttpRequest`, `WebSocket`, `localStorage`, `indexedDB`, and friends are explicitly blanked out. Each run gets a fresh sandbox, torn down afterwards. Execution is capped at a fixed **10 seconds** — an infinite loop fails with "Generator exceeded the 10000 ms execution limit" rather than freezing the app — each script may be at most 512 KiB (1 MiB combined), and the returned values must be plain JSON data: no functions, no cycles, nothing clever.
 
-While the sandbox works, the button reads **Previewing...**. If either script throws, returns the wrong shape, or points a node at a template id that doesn't exist, the error appears in red next to the button and nothing else happens — fix the script and press **Preview** again. On success, the **Generated Project Preview** opens:
+While the sandbox works, the button reads **Previewing...**. If either script throws, returns the wrong shape, or points a node at a template id that doesn't exist, the error appears in red next to the button and nothing else happens — fix the script and press **Preview** again. On success, the [**Generated Project Preview**](/docs/reference/generator-preview) opens:
 
 ![The Generated Project Preview showing variant and node counts, a variant tab, and a rendered template card with its usage count](/docs-assets/generator/visual-preview.png "One card per template, rendered against a real generated page — counts across the top, apply buttons below")
 
@@ -51,7 +51,7 @@ Two things make this loop cheap to iterate. **Back to Scripts** (or `kbd:Escape`
 
 ## Applying the result
 
-The preview's footer offers the only two ways a generated project ever reaches real state:
+The preview's footer offers the [only two ways a generated project ever reaches real state](/docs/reference/generator-apply-modes):
 
 **Create As New Project** asks for a name — a small dialog with a **Project name** field, prefilled with "*your project* – Generated" — and **Create Project** opens the result as a brand-new tab in the project bar. The project you ran the generator from is untouched. This is the safe default, and the right choice for the first script below: run it from a blank project and the blank stays blank.
 
@@ -61,7 +61,7 @@ The preview's footer offers the only two ways a generated project ever reaches r
 
 ## Scripts travel with the project
 
-Applying a generated project saves more than the result. Both scripts — verbatim — plus a timestamp are stored *with* the project as its generator provenance, and they travel everywhere the project does: local saves, downloaded project files, cloud saves, and forks of your published work. Reopen the Generator modal in such a project and the **Preset:** selector offers **Current saved source**, with a "Saved Generator" marker in the toolbar — so the code that built a document is never lost, even someone else's document you forked from the gallery.
+Applying a generated project saves more than the result. Both scripts — verbatim — plus a timestamp are stored *with* the project as its [generator provenance](/docs/reference/generator-provenance), and they travel everywhere the project does: local saves, downloaded project files, cloud saves, and forks of your published work. Reopen the Generator modal in such a project and the **Preset:** selector offers **Current saved source**, with a "Saved Generator" marker in the toolbar — so the code that built a document is never lost, even someone else's document you forked from the gallery.
 
 Two rules keep that safe and predictable:
 

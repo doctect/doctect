@@ -13,7 +13,7 @@ The one-sentence summary, before the details: **anyone can read reviews, signed 
 
 ## Rating a project
 
-Scroll down any project page and you'll find the **Reviews** section. If you're signed in with a username — and the project isn't yours — it starts with a small form: **Rate this project**, a row of five stars, and an optional text box.
+Scroll down any project page and you'll find the [**Reviews** section](/docs/reference/ratings-and-reviews). If you're signed in with a username — and the project isn't yours — it starts with a small form: **Rate this project**, a row of five stars, and an optional text box.
 
 Click a star to set your rating, 1 to 5. The stars are the one required part: **Save review** stays disabled until you've picked a rating, while the text box is exactly what its placeholder says — "Share what you think (optional)". A rating with no words is a perfectly good review.
 
@@ -46,7 +46,7 @@ Expectations, honestly set: reporting sends the review to a human, full stop. Yo
 
 ## Author profiles
 
-Usernames aren't just signatures — every one of them is a link. The "by atlas_designs" on a gallery card, the author line on a project page, the name on a review: all of them lead to that person's public profile at `/u/` followed by their username.
+Usernames aren't just signatures — every one of them is a link. The "by atlas_designs" on a gallery card, the author line on a project page, the name on a review: all of them lead to that person's [public profile](/docs/reference/profile-page) at `/u/` followed by their username.
 
 ![The public profile page for atlas_designs: username, join date, and a grid of published project cards](/docs-assets/gallery/profile-page.png "A profile is exactly three things: the handle, the join date, and the published work")
 

@@ -17,13 +17,13 @@ Every template carries a list of layers, normally invisible unless the panel bel
 
 ## The panel
 
-Find it in the right column, between **Template Settings** above and **Element Properties** below — collapsed by default under its own **Layers** header. Click that header to expand it.
+Find it in the right column, between **Template Settings** above and **Element Properties** below — collapsed by default under its own [**Layers** header](/docs/reference/layers-panel). Click that header to expand it.
 
 ![The Layers panel expanded, showing the header row, filter box, and one layer with its element rows underneath](/docs-assets/editor/layers-panel.png "The Layers panel: header controls, filter/move-to row, then one row per layer with its elements nested underneath")
 
 | Control | What it does |
 | --- | --- |
-| **+** (top right of the header) | Adds a new, empty layer on top of everything else and makes it the active layer. |
+| **+** (top right of the header) | Adds a new, empty layer on top of everything else and makes it the [active layer](/docs/reference/active-layer). |
 | **Filter elements…** | Narrows every layer's element rows at once to ones whose label or type matches what you type. |
 | **Move to…** (appears once something's selected) | Retags the current selection onto a different layer in one step. |
 | Grip handle | Drag a layer to a new position relative to the others — see Ordering, below. |
@@ -40,7 +40,7 @@ That "active layer" click matters beyond the highlight: the next shape or text b
 
 The eye and the lock both act on an entire layer at once, never on just your current selection — and they mean two different things.
 
-**Hide** removes every element on that layer from three places simultaneously: the canvas, the exported PDF, and — because a thumbnail is literally a rendered page of that same PDF — every thumbnail the gallery ever shows for this project too. All three go through one function, `sortElementsForRender` (in `services/layers.ts`): it drops anything sitting on a hidden layer, then sorts whatever's left by layer order and Z-Index. Canvas rendering, PDF export, and thumbnail generation all call that same function directly, so there's no separate "thumbnail visibility" or "export visibility" that could fall out of sync with what the eye icon shows in the panel.
+[**Hide**](/docs/reference/layer-visibility-and-lock) removes every element on that layer from three places simultaneously: the canvas, the exported PDF, and — because a thumbnail is literally a rendered page of that same PDF — every thumbnail the gallery ever shows for this project too. All three go through one function, `sortElementsForRender` (in `services/layers.ts`): it drops anything sitting on a hidden layer, then sorts whatever's left by layer order and Z-Index. Canvas rendering, PDF export, and thumbnail generation all call that same function directly, so there's no separate "thumbnail visibility" or "export visibility" that could fall out of sync with what the eye icon shows in the panel.
 
 Hiding a layer doesn't touch its element rows in the panel — they stay listed, just dimmed, and reappear exactly as they were the moment you click the eye back on.
 
@@ -56,7 +56,7 @@ Hiding a layer doesn't touch its element rows in the panel — they stay listed,
 
 ## Ordering
 
-Every element's final stacking position comes from two steps, and mixing them up is the single most common confusion about layers: **layer order always wins first.** Picture layers as separate transparent sheets stacked on a table. Every element on a higher sheet renders in front of every element on a lower sheet, full stop — regardless of either element's own [Z-Index](/docs/editor/elements-and-properties#rotation-opacity-stacking). Z-Index only breaks ties *within one sheet*; it has no way to reach across to a different one.
+Every element's final stacking position comes from two steps, and mixing them up is the single most common confusion about layers: **[layer order](/docs/reference/layer-order) always wins first.** Picture layers as separate transparent sheets stacked on a table. Every element on a higher sheet renders in front of every element on a lower sheet, full stop — regardless of either element's own [Z-Index](/docs/editor/elements-and-properties#rotation-opacity-stacking). Z-Index only breaks ties *within one sheet*; it has no way to reach across to a different one.
 
 Concretely: an element with Z-Index 999 on the back layer still renders behind an element with Z-Index 0 on the front layer. Raising the back-layer element's Z-Index further changes nothing about that — it can climb to the top of its own layer, but it can never climb off it.
 

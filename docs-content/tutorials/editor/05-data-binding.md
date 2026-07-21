@@ -11,7 +11,7 @@ Canvas Basics covered every tool for putting a shape or a text box onto a page, 
 
 ## One template, many pages
 
-The 2026 Planner preset has 365 day nodes — one for every date in the year — and every single one renders through the exact same Day View template: one title box, one quarter chip, one month chip, one day-of-week chip, two link labels, laid out exactly once. Nobody built 365 near-identical pages by hand. What makes that one layout print "Jan 01" and "Thu" on one page, and a completely different pair of words on the next day's page, is data binding: a placeholder living inside the template's own text, resolved fresh against whichever node happens to be rendering that copy of the template right now.
+The 2026 Planner preset has 365 day nodes — one for every date in the year — and every single one renders through the exact same Day View template: one title box, one quarter chip, one month chip, one day-of-week chip, two link labels, laid out exactly once. Nobody built 365 near-identical pages by hand. What makes that one layout print "Jan 01" and "Thu" on one page, and a completely different pair of words on the next day's page, is [data binding](/docs/reference/data-binding): a placeholder living inside the template's own text, resolved fresh against whichever node happens to be rendering that copy of the template right now.
 
 The rest of this tutorial makes that mechanism concrete: how to write a placeholder yourself, how to give a node a field to bind that the preset doesn't already ship, where the fields the preset *does* ship actually come from, and exactly what a placeholder shows when it points at nothing.
 
@@ -24,7 +24,7 @@ That's the entire mechanism. There's no separate "binding" field anywhere in the
 > [!TIP]
 > Just below that same text box sits a small **Reset to Title** link. One click types `{{title}}` for you, for whenever that's exactly what you want and typing four braces feels like overkill.
 
-Now use the toolbar's own **Preview:** selector — the same one from Your First Document from a Preset — to switch which day it's showing, from "January 1, 2026" to "January 2, 2026". Watch the canvas, not the dropdown.
+Now use the toolbar's own [**Preview:** selector](/docs/reference/preview-node) — the same one from Your First Document from a Preset — to switch which day it's showing, from "January 1, 2026" to "January 2, 2026". Watch the canvas, not the dropdown.
 
 ![The Day View template canvas switching from Jan 01 and Thu to Jan 02 and Fri as the toolbar Preview selector moves from one day node to the next](/docs-assets/editor/clip-preview-node-switch.webp "Same template, same text box — a different preview node prints different text")
 
@@ -34,7 +34,7 @@ None of this edits anything, either. The Preview: selector only decides which no
 
 ## Custom data fields
 
-Placeholders aren't limited to whatever fields the preset happened to ship. Switch the sidebar back to **Hierarchy**, expand **Quarter 1** → **January** the same way you did in Your First Document from a Preset, and click **January 1, 2026** itself. **Node Properties**, in the right column, shows this node's **Title**, its **Assigned Template**, and a **Data Fields** list — thirteen of them already, each with its own value box and a small **✕** to delete it.
+Placeholders aren't limited to whatever fields the preset happened to ship. Switch the sidebar back to **Hierarchy**, expand **Quarter 1** → **January** the same way you did in Your First Document from a Preset, and click **January 1, 2026** itself. **Node Properties**, in the right column, shows this node's **Title**, its **Assigned Template**, and a [**Data Fields** list](/docs/reference/node-data-fields) — thirteen of them already, each with its own value box and a small **✕** to delete it.
 
 ![Node Properties panel for the January 1, 2026 day node, showing Title, Assigned Template, and thirteen real data fields each with its own value box and delete button](/docs-assets/editor/node-data-fields.png "Every one of a day node's built-in fields, laid out the same way a field you add yourself would be")
 

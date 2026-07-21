@@ -11,11 +11,11 @@ You have [an account and a username](/docs/gallery/accounts-and-usernames). This
 
 ## Explicit saves, immutable commits
 
-The single most important thing to understand about cloud saves is what they *aren't*: they aren't sync. Nothing watches your editing, nothing uploads in the background, and closing the tab sends nothing anywhere. Your project lives in your browser, exactly as it has since [your first project](/docs/getting-started/first-project-from-preset), until the moment you open the **Cloud** menu and click **Save to cloud** — and what that sends is a snapshot of that moment, not a live connection.
+The single most important thing to understand about cloud saves is what they *aren't*: they aren't sync. Nothing watches your editing, nothing uploads in the background, and closing the tab sends nothing anywhere. Your project lives in your browser, exactly as it has since [your first project](/docs/getting-started/first-project-from-preset), until the moment you open the **Cloud** menu and click [**Save to cloud**](/docs/reference/cloud-save) — and what that sends is a snapshot of that moment, not a live connection.
 
 Each save asks you one question: *"Describe this save (commit message)"* — it suggests "Initial save" the first time and "Update" after that, but a message in your own words ("Added the habit tracker", "Fixed the cover font") is what makes the history readable later. Press Cancel and nothing is saved at all; leave the message empty and it's recorded as "Update".
 
-Every save becomes a **commit**: a complete, immutable snapshot of the whole project with your message and a timestamp. Immutable is the load-bearing word — a new save never modifies or overwrites a previous commit, it stacks a new one on top and moves the project's "latest" pointer (you'll see it labeled **HEAD** in the history) to it. Your project's cloud history only ever grows forward, which is exactly what makes the restore section below safe.
+Every save becomes a [**commit**](/docs/reference/commit): a complete, immutable snapshot of the whole project with your message and a timestamp. Immutable is the load-bearing word — a new save never modifies or overwrites a previous commit, it stacks a new one on top and moves the project's "latest" pointer (you'll see it labeled **HEAD** in the history) to it. Your project's cloud history only ever grows forward, which is exactly what makes the restore section below safe.
 
 Two consequences of that design are worth knowing up front:
 
@@ -40,7 +40,7 @@ The first save on a fresh project reads **Save to cloud (new)** — "new" becaus
 ![The editor with the Cloud menu open, showing Save to cloud, Version history, and Publish to gallery for a cloud-linked project](/docs-assets/gallery/cloud-menu.png "One save in, the menu is fully unlocked: save again, browse history, or publish")
 
 - **Save to cloud** — another snapshot, another commit message, another row in the history.
-- **Version history** — the list of every commit, with **Restore** on each. The next section is all about it.
+- [**Version history**](/docs/reference/version-history-restore) — the list of every commit, with **Restore** on each. The next section is all about it.
 - **Publish to gallery…** — turns a commit into a public gallery page. That's the next tutorial's whole subject.
 
 One more item appears only on projects you *forked* from someone else's gallery project: a small **↳ forked from upstream — view source** link back to the original, plus **Propose changes to upstream…** for sending your edits back as a merge request. Forks and merge requests get their own tutorials later in this track — for now, just know the menu will tell you when a project has an upstream.
@@ -66,7 +66,7 @@ Two honest caveats. First, the confirm dialog means what it says: whatever was i
 
 ## My Projects
 
-Saved projects need a home page, and it's the **My projects** entry in your account menu (top-right), or `/projects` directly:
+Saved projects need a home page, and it's the [**My projects**](/docs/reference/my-projects) entry in your account menu (top-right), or `/projects` directly:
 
 ![The My projects page: storage usage bar, then one row per cloud project with visibility, size, version count, and a delete button](/docs-assets/gallery/my-projects.png "Every cloud project you own — public or private — with the storage meter on top")
 

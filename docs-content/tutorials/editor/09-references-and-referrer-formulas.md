@@ -70,9 +70,9 @@ The whole recipe, from scratch:
 
 Getting *into* a day from the week spread is free — the grid cells do it. Getting *back out* is the referrer family from [Linking](/docs/editor/linking), and both members are shipped in the planner.
 
-On the day page itself, "back to my week" is **Go to Referrer (Backlink)**. Day View's day-of-week chip — the text element reading `{{day_short}}` in the nav bar — carries exactly this target and nothing else: no value fields. It finds the first node in the project whose `referenceId` points at the rendering day and links to that node's *parent* — the week page the reference sits on. "First" is worth a beat of honesty: it means first in the order nodes were created, so if a day is ever referenced from two places, which one wins is a matter of project history, not configuration. The planner never feels this — each day has exactly one reference, its week's — but it's the reason the second family member exists.
+On the day page itself, "back to my week" is [**Go to Referrer (Backlink)**](/docs/reference/link-referrer). Day View's day-of-week chip — the text element reading `{{day_short}}` in the nav bar — carries exactly this target and nothing else: no value fields. It finds the first node in the project whose `referenceId` points at the rendering day and links to that node's *parent* — the week page the reference sits on. "First" is worth a beat of honesty: it means first in the order nodes were created, so if a day is ever referenced from two places, which one wins is a matter of project history, not configuration. The planner never feels this — each day has exactly one reference, its week's — but it's the reason the second family member exists.
 
-**Go to Child's Referrer** is the same question asked from one level up — not "who references me?" but "who references my *children*?" — and it comes with real controls. Put it on a month's template and configure it in the **Interaction** section:
+[**Go to Child's Referrer**](/docs/reference/link-child-referrer) is the same question asked from one level up — not "who references me?" but "who references my *children*?" — and it comes with real controls. Put it on a month's template and configure it in the **Interaction** section:
 
 - **Start Index** — which child to ask about first, 0-based. Leave it blank and the search starts at child 0.
 - **Count / Direction** — how many children to try if the first has no referrer, and which way to walk: `7` scans forward seven children, `-7` scans backward seven. One exporter nuance, stated exactly: this field is consulted **only when a Start Index is actually set**; with both blank, the search tries child 0 once and stops.
@@ -86,7 +86,7 @@ Both number fields accept arithmetic over the rendering node's own data — the 
 
 First, the case where no formula is needed. A page's data context isn't just its own fields and its ancestors' — **referrers and their ancestors join it too**. A day page can bind `{{week_num}}` or `{{week_name}}` directly: the day's referrer sits under Week 1, so Week 1's fields are in scope, and the binding resolves with no configuration at all. That's the quiet payoff of the reference: pointing at a page *donates context to it*.
 
-The month page gets no such donation. Weeks don't reference the *month* — they reference its children — so nothing week-shaped is anywhere in a month page's context, and `{{week_name}}` on Month View resolves to nothing. Labeling the calendar's rows needs an explicit query, and that query is the `child_referrer` formula, typed into any text box or grid Display Template like any other placeholder:
+The month page gets no such donation. Weeks don't reference the *month* — they reference its children — so nothing week-shaped is anywhere in a month page's context, and `{{week_name}}` on Month View resolves to nothing. Labeling the calendar's rows needs an explicit query, and that query is the [`child_referrer` formula](/docs/reference/child-referrer-formula), typed into any text box or grid Display Template like any other placeholder:
 
 ```
 {{child_referrer:StartIndex:Count:TypeFilter:FieldName}}

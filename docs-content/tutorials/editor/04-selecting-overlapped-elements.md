@@ -30,7 +30,7 @@ For a single selected element, that same press also arms the cycling: let go rig
 
 ## Alt-click and shift variants
 
-A click-cycle needs that priming first click before it starts stepping, and it only ever tracks one stack at a time. `kbd:Alt+Click` (`kbd:Option+Click` on a Mac) skips both limits: Alt-click any element, stacked or not, and you land on the topmost one at that exact point immediately — no priming click required. Alt-click that same point again and you're one level deeper right away, wrapping at the bottom exactly like the plain cycle does.
+A click-cycle needs that priming first click before it starts stepping, and it only ever tracks one stack at a time. `kbd:Alt+Click` (`kbd:Option+Click` on a Mac) skips both limits: [Alt-click](/docs/reference/stack-selection-shortcuts) any element, stacked or not, and you land on the topmost one at that exact point immediately — no priming click required. Alt-click that same point again and you're one level deeper right away, wrapping at the bottom exactly like the plain cycle does.
 
 > [!NOTE]
 > Alt-click resolves the instant you press — it doesn't arm a drag the way a plain press on a selected element does. Moving the mouse afterward, still held down, does nothing. Let go, then click normally (no `kbd:Alt`) and drag from there if you want to move whatever just got selected.
