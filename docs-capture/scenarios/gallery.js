@@ -91,13 +91,20 @@ async function waitThumbnailsLoaded(t) {
 // pages/GalleryDetailPage.tsx -- and the standalone page is what these
 // shots document. `a[href^="/gallery/"]` (trailing slash) can't match the
 // header's own /gallery nav link.
-async function gotoProjectPage(t) {
+//
+// Targets the card by NAME (hasText), not `.first()`: from the
+// publish-wizard-pages shot onward the gallery holds a SECOND public
+// project ("Travel Journal"), so the first card link on the home rows is
+// ambiguous for any later shot. hasText matches the card's own title div
+// inside the <a> (ProjectCard.tsx:20); .first() still applies because the
+// same card can appear in up to three curated rows at once.
+async function gotoProjectPage(t, name = PUBLISHED_NAME) {
     await t.page.goto(t.baseUrl + '/gallery');
-    const cardLink = t.page.locator('a[href^="/gallery/"]').first();
+    const cardLink = t.page.locator('a[href^="/gallery/"]', { hasText: name }).first();
     await cardLink.waitFor({ timeout: 20000 });
     const href = await cardLink.getAttribute('href');
     await t.page.goto(t.baseUrl + href);
-    await t.page.getByRole('heading', { name: PUBLISHED_NAME }).waitFor({ timeout: 20000 });
+    await t.page.getByRole('heading', { name }).waitFor({ timeout: 20000 });
     await waitThumbnailsLoaded(t);
     await settle(t.page, 800);
 }
@@ -235,6 +242,17 @@ async function openFilledPublishWizard(t) {
     }
     await settle(t.page, 500);
 }
+
+// ---------------------------------------------------------------------------
+// Tutorial 05 (ratings, reviews, profiles) helpers.
+
+// FORKER's review of OWNER's seeded notebook. Short on purpose: the review
+// card renders it whitespace-preserved at max-w-lg (ReviewsSection.tsx:106),
+// and one line keeps the element-cropped still compact. After a save it
+// appears TWICE -- the form's textarea (getByText matches textarea values
+// too, learned from a strict-mode violation) and the published card's <p>
+// -- so the round-trip wait below scopes to the paragraph.
+const REVIEW_BODY = 'Clean layout, and the section dividers are exactly what I needed.';
 
 export const shots = [
     { id: 'gallery/gallery-home', kind: 'still', run: async (t) => {
@@ -566,5 +584,102 @@ export const shots = [
         // default of 20 (server/middleware/limits.js:34).
         await t.page.getByRole('heading', { name: 'Publish to gallery' }).waitFor({ state: 'hidden', timeout: 20000 });
         await t.page.unroute('**/api/projects/*/publish');
+    } },
+    // -----------------------------------------------------------------------
+    // Tutorial 05 (ratings, reviews, profiles) additions. First use of FORKER
+    // in the wave: ensureUser creates the account through the sign-up form on
+    // first run (the verification-link poller is snapshot-and-poll-past, so
+    // OWNER's earlier links in the API log can't be mistaken for FORKER's).
+    { id: 'gallery/reviews-section', kind: 'still', run: async (t) => {
+        // FORKER (signed in, has a username, NOT the owner) on OWNER's "My
+        // Notebook" page: writes a 4-star review through the UI, then snaps
+        // the Reviews section showing the pre-filled "Your review" form AND
+        // the published review card below it -- the tutorial's one-review-
+        // per-person figure.
+        await ensurePublished(t);
+        await ensureUser(t, FORKER);
+        await gotoProjectPage(t);
+
+        // The form only mounts once the session fetch resolves a username'd
+        // non-owner (ReviewsSection.tsx:49 canWrite); "Rate this project" is
+        // its no-review-yet heading, so this wait also proves FORKER has no
+        // earlier review (each scenario run boots a fresh sealed server).
+        await t.page.getByText('Rate this project').waitFor({ timeout: 15000 });
+
+        // Anti-rot for the tutorial's "Save review stays disabled until
+        // you've picked a rating" claim (ReviewsSection.tsx:75
+        // `disabled={saving || rating === 0}`). Assert, don't skip: a
+        // regression to save-with-zero-stars must fail the shot.
+        const saveBtn = t.page.getByRole('button', { name: 'Save review' });
+        if (!(await saveBtn.isDisabled())) {
+            throw new Error('Save review is no longer disabled at zero stars');
+        }
+
+        // Set the rating VIA KEYBOARD -- the exact roving-tabindex arrow-key
+        // path the tutorial's NOTE documents (StarRating.tsx:39-54: one tab
+        // stop, ArrowRight/Up raises, focus follows selection). With no
+        // rating yet, star 1 is the tabbable stop; four ArrowRights step the
+        // value 0->1->2->3->4. The aria-checked assert below fails the shot
+        // if the radiogroup semantics ever regress to plain buttons.
+        await t.page.getByRole('radio', { name: '1 star', exact: true }).focus();
+        for (let i = 0; i < 4; i++) await t.page.keyboard.press('ArrowRight');
+        const fourStars = t.page.getByRole('radio', { name: '4 stars' });
+        if ((await fourStars.getAttribute('aria-checked')) !== 'true') {
+            throw new Error('arrow keys no longer drive the star rating radiogroup');
+        }
+
+        await t.page.getByPlaceholder('Share what you think (optional)').fill(REVIEW_BODY);
+        await settle(t.page, 300);
+        await saveBtn.click();
+
+        // Saved: the hook refetches reviews + project (useGalleryDetail.ts
+        // refreshAfterReviewChange), flipping the form heading to "Your
+        // review" with a Delete button (edit/delete-own claims), publishing
+        // the review card (author link + body), and recomputing the live SQL
+        // AVG -- "4.0 (1)" renders in BOTH the page header and the Reviews
+        // heading (hence .first()), which is the anti-rot guard for the
+        // tutorial's computed-fresh-never-drifts claim.
+        await t.page.getByText('Your review').waitFor({ timeout: 15000 });
+        await t.page.getByRole('button', { name: 'Delete review' }).waitFor({ timeout: 10000 });
+        await t.page.getByRole('link', { name: FORKER.username }).waitFor({ timeout: 10000 });
+        // The published card's copy specifically -- the form's textarea also
+        // getByText-matches this string (see REVIEW_BODY note above).
+        await t.page.locator('p', { hasText: REVIEW_BODY }).waitFor({ timeout: 10000 });
+        await t.page.getByText('4.0 (1)').first().waitFor({ timeout: 10000 });
+        await settle(t.page, 600);
+
+        // Element crop: the ReviewsSection root is the standalone detail
+        // page's only div.mt-10 (ReviewsSection.tsx:52) -- heading + average,
+        // form, and review card in one legible figure, same crop rationale
+        // as AUTH_CARD. Playwright scrolls the element into view itself.
+        await t.snap('div.mt-10');
+    } },
+    { id: 'gallery/profile-page', kind: 'still', run: async (t) => {
+        // OWNER's public profile at /u/atlas_designs, viewed SIGNED OUT
+        // (ensurePublished ends on /login): profiles are a public surface,
+        // and the anonymous view is exactly what the tutorial documents. In
+        // a full-wave run the grid shows both of OWNER's published projects
+        // (My Notebook + the wizard shots' Travel Journal); standalone runs
+        // seed only My Notebook, so that's the one card this waits on.
+        await ensurePublished(t);
+
+        // API-level anti-rot for the tutorial's 404 claim: an unknown handle
+        // must return "User not found" (server/routes/me.js:20), not an
+        // empty profile. Request-context call -- no page navigation happens.
+        const res = await t.page.request.get(`${API_BASE}/api/users/no_such_user_docs`);
+        if (res.status() !== 404) {
+            throw new Error(`unknown profile returned ${res.status()}, expected 404`);
+        }
+
+        await t.page.goto(t.baseUrl + '/u/' + OWNER.username);
+        await t.page.getByRole('heading', { name: OWNER.username }).waitFor({ timeout: 20000 });
+        // The three things a profile exposes (pages/ProfilePage.tsx:30-38,
+        // server/routes/me.js:33 -- username, createdAt, published projects
+        // only): the join date line plus the seeded published card.
+        await t.page.getByText(/^Joined /).waitFor({ timeout: 10000 });
+        await t.page.getByText(PUBLISHED_NAME).waitFor({ timeout: 10000 });
+        await waitThumbnailsLoaded(t);
+        await settle(t.page, 800);
+        await t.snap();
     } },
 ];
