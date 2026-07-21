@@ -1,5 +1,5 @@
 import fs from 'node:fs';
-import { ACTIVE_PANE, applyGeneratorAsNewProject, gotoEditor, newBlankProject, openGenerator, pasteGeneratorScripts, runGenerator, settle } from '../lib/app.js';
+import { ACTIVE_PANE, applyGeneratorAsNewProject, expandSidebarNode, gotoEditor, newBlankProject, openGenerator, pasteGeneratorScripts, runGenerator, settle } from '../lib/app.js';
 
 // These two scripts are embedded VERBATIM in
 // docs-content/tutorials/generator/01-generator-basics.md ("A first script")
@@ -85,6 +85,21 @@ function plannerScripts() {
         throw new Error('dated-planner: hierarchy must end with the return');
     }
     return { templates: blocks[5], hierarchy: blocks[6] };
+}
+
+// Tutorial generator/05 ("Advanced Generator Patterns") mines the eight
+// flagship gallery samples; its captures paste 05-seasonal-kitchen's SHIPPED
+// pair, read from disk at run time. The tutorial's excerpts are trimmed from
+// these same two files, so these shots running the real scripts through the
+// real sandbox is what keeps the chapter honest. (That tutorial's fences are
+// display-only ```js blocks by design — nothing extracts from its markdown,
+// and tests/unit/docsGeneratorFences.test.ts deliberately doesn't pin it.)
+const KITCHEN_DIR = new URL('../../gallery-samples/05-seasonal-kitchen/', import.meta.url);
+function kitchenScripts() {
+    return {
+        templates: fs.readFileSync(new URL('templates.js', KITCHEN_DIR), 'utf8'),
+        hierarchy: fs.readFileSync(new URL('hierarchy.js', KITCHEN_DIR), 'utf8'),
+    };
 }
 
 export const shots = [
@@ -179,5 +194,45 @@ export const shots = [
         await pasteGeneratorScripts(t, templates, hierarchy);
         await settle(t.page, 900);                    // pasted scripts visible
         await runGenerator(t);                        // Preview -> Previewing... -> preview modal
+    } },
+    { id: 'generator/sample-preview', kind: 'still', run: async (t) => {
+        const { templates, hierarchy } = kitchenScripts();
+        await gotoEditor(t); await newBlankProject(t); await openGenerator(t);
+        await pasteGeneratorScripts(t, templates, hierarchy);
+        await runGenerator(t);
+        // The tutorial states this run's exact outcome — one card per design,
+        // 51 reference nodes that never print. Assert the live header agrees
+        // before snapping, same discipline as planner-preview above.
+        for (const expected of ['9 templates', '144 nodes', '93 estimated pages']) {
+            await t.page.locator(ACTIVE_PANE).getByText(expected, { exact: false })
+                .waitFor({ timeout: 5000 });
+        }
+        await t.snap();
+    } },
+    { id: 'generator/sample-hierarchy', kind: 'still', run: async (t) => {
+        const { templates, hierarchy } = kitchenScripts();
+        await gotoEditor(t); await newBlankProject(t); await openGenerator(t);
+        await pasteGeneratorScripts(t, templates, hierarchy);
+        await runGenerator(t);
+        await applyGeneratorAsNewProject(t, 'Seasonal Kitchen');
+        // The new tab opens on the generated root — the cover. Expand the hub
+        // spine so the sidebar shows the tree the tutorial narrates: Start
+        // Here forking into the guided Autumn workspace and the blank
+        // workspace with its recipe library, plan index, and pantry.
+        await expandSidebarNode(t, 'Start Here');
+        await expandSidebarNode(t, 'My Seasonal Kitchen');
+        await expandSidebarNode(t, 'My Recipe Library');
+        // Both branches of the fork, and a leaf of each expanded bank, must
+        // actually be on screen: guided side, blank banks, a category shelf.
+        for (const expected of ['An Autumn Table', 'Meal Plans 01-12', 'Winter Pantry']) {
+            await t.page.locator(ACTIVE_PANE).getByText(expected, { exact: false })
+                .first().waitFor({ timeout: 5000 });
+        }
+        // Park the mouse on the inert app header: the last chevron click left
+        // its row :hover'ed, which reveals the action-button cluster and
+        // truncates the row title (see selectSidebarNode's HAZARD note).
+        await t.page.mouse.move(0, 0);
+        await settle(t.page, 800);
+        await t.snap();
     } },
 ];

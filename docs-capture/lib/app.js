@@ -121,6 +121,20 @@ export async function selectSidebarNode(t, name) {
     await settle(t.page, 500);
 }
 
+// Expand a sidebar row's children by clicking its chevron toggle — the row's
+// FIRST child div (components/sidebar/NodeItem.tsx: the chevron wrapper is
+// the row's first element, and its onClick stopPropagation()s, so this never
+// also selects the node). Every row below the root starts collapsed
+// (NodeItem's `useState(depth < 1)`), so a scenario that wants the tree
+// visible expands it explicitly, one named row at a time. Only meaningful for
+// rows that have children — on a childless row the same wrapper holds an
+// inert 14px spacer and the click is a harmless no-op.
+export async function expandSidebarNode(t, name) {
+    const { row } = await resolveSidebarNodeRow(t.page, name);
+    await row.locator('> div').first().click();
+    await settle(t.page, 400);
+}
+
 // Scoped to ACTIVE_PANE: empirically confirmed (see
 // .superpowers/sdd/task-11-report.md's fix section) that opacity:0 does NOT
 // make an element non-":visible" to Playwright, so with 2+ tabs open, both
