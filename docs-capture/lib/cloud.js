@@ -88,6 +88,58 @@ export async function signUpAndVerify(t, { username, email, password }) {
     }
 }
 
+// Sign an EXISTING account in through the /login form. pages/LoginPage.tsx
+// opens in sign-in mode (isLogin=true), so only Email + Password need
+// filling; both resolve via getByLabel (same <label htmlFor> + <input id>
+// pairing as the sign-up fields above). The submit button needs
+// `exact: true`: the page also renders "Sign in with Google" (different
+// case + suffix, so a case-sensitive whole-string match can't hit it) and
+// the mode-toggle button, which reads "Sign Up" while in sign-in mode.
+//
+// Success is navigation: handleSubmit's onSuccess runs
+// navigate(from ?? '/app'), and a direct /login visit carries no state.from,
+// so /app is the only success destination. Failure (wrong password, no such
+// account) renders LoginPage's error box (`div.bg-red-50`, its only
+// bg-red-50 element) and stays on /login. Both outcomes are raced so a
+// failed sign-in is detected in ~1-2s instead of eating the full
+// waitForURL timeout -- ensureUser below calls this speculatively at the
+// top of every gallery shot, where the failure path is the *expected*
+// first-run outcome. Each promise carries its own .catch so whichever
+// loses the race can time out later without an unhandled rejection.
+export async function signIn(t, { email, password }) {
+    const { page } = t;
+    await page.goto(`${t.baseUrl}/login`);
+    await settle(page, 800);
+    await page.getByLabel('Email').fill(email);
+    await page.getByLabel('Password').fill(password);
+    await page.getByRole('button', { name: 'Sign In', exact: true }).click();
+
+    const success = page.waitForURL('**/app**', { timeout: 15000 })
+        .then(() => 'signed-in').catch(() => 'no-navigation');
+    const failure = page.locator('div.bg-red-50').first().waitFor({ state: 'visible', timeout: 15000 })
+        .then(() => 'rejected').catch(() => 'no-error-box');
+    const outcome = await Promise.race([success, failure]);
+    if (outcome !== 'signed-in') {
+        throw new Error(`sign-in as ${email} did not reach /app (outcome: ${outcome})`);
+    }
+    // Same landing wait as forkProject: /app still has to mount the editor.
+    await page.waitForSelector('[data-testid="editor-canvas"]', { timeout: 20000 });
+    await settle(page, 800);
+}
+
+// Sign `user` in, creating + verifying the account first if it doesn't
+// exist yet. Gallery scenarios seed persistent accounts once per sealed
+// server but run every shot in a fresh signed-out context, so each shot
+// re-authenticates through here: first shot of a run takes the
+// signUpAndVerify path, every later shot the (much faster) signIn path.
+export async function ensureUser(t, user) {
+    try {
+        await signIn(t, user);
+    } catch {
+        await signUpAndVerify(t, user);
+    }
+}
+
 export async function saveToCloud(t, commitMessage = 'Docs capture save') {
     const { page } = t;
     // getByTitle('Cloud'), not a role/text guess: this is the exact query
@@ -116,7 +168,7 @@ export async function saveToCloud(t, commitMessage = 'Docs capture save') {
     }
 }
 
-export async function publishProject(t, { description, tags } = {}) {
+export async function publishProject(t, { description, tags, previewPages } = {}) {
     const { page } = t;
     await page.getByTitle('Cloud').click();
     await settle(page, 700);
@@ -135,6 +187,21 @@ export async function publishProject(t, { description, tags } = {}) {
     await page.getByPlaceholder('What is this planner for?').fill(description ?? '');
     const tagsValue = Array.isArray(tags) ? tags.join(', ') : (tags ?? '');
     if (tagsValue) await page.getByPlaceholder('planner, 2026, remarkable').fill(tagsValue);
+
+    // Optional extra "Preview pages" to publish beyond the modal's default
+    // (PublishModal.tsx:68 pre-selects only the first page in
+    // computePageOrder -- the project root). Each entry is a page TITLE:
+    // the picker renders one implicitly-labeled checkbox per page
+    // (PublishModal.tsx:189-194, <label><input type=checkbox><span>title),
+    // so getByRole('checkbox', { name }) resolves it once the modal's
+    // disclosure fetch populates the list (check() auto-waits for that).
+    // `exact: true` matters -- default role-name matching is substring, and
+    // notebook page titles nest ("Project A" is a prefix of
+    // "Project A - Page 1"). check() (not click()) keeps this idempotent
+    // if a caller ever lists the already-selected first page.
+    for (const pageTitle of previewPages ?? []) {
+        await page.getByRole('checkbox', { name: pageTitle, exact: true }).check();
+    }
     await settle(page, 500);
 
     // Idle-state label is exactly "Publish" (PublishModal.tsx:209) --
