@@ -4,7 +4,7 @@
 // context, so each shot re-authenticates via ensureUser and re-checks the
 // seed via ensurePublished before doing its own signed-out work.
 import { gotoEditor, newNotebookProject, selectSidebarNode, settle, ACTIVE_PANE } from '../lib/app.js';
-import { ensureUser, saveToCloud, publishProject, signOut } from '../lib/cloud.js';
+import { ensureUser, saveToCloud, publishProject, signOut, forkProject } from '../lib/cloud.js';
 
 // Module-level users shared by the whole gallery wave (later scenarios fork
 // the OWNER's published project as FORKER). Usernames use underscores, not
@@ -681,5 +681,72 @@ export const shots = [
         await waitThumbnailsLoaded(t);
         await settle(t.page, 800);
         await t.snap();
+    } },
+    // -----------------------------------------------------------------------
+    // Tutorial 06 (forking) additions. Both shots put FORKER (signed in, has a
+    // username, NOT the owner) on OWNER's public "My Notebook" page. The clip
+    // creates FORKER's PRIVATE fork of that project -- the persisted fork the
+    // merge-request tutorials (07-08) build their propose/merge flows on. No
+    // double-fork guard is needed here the way ensurePublished guards its seed:
+    // ensurePublished re-runs at the top of every shot, whereas this fork
+    // happens in exactly ONE shot, once per run, and every run boots a fresh
+    // sealed server (capture.js startServers/stop per scenario) -- so a re-run
+    // starts from an empty DB, never a second fork stacked on the first.
+    { id: 'gallery/fork-button', kind: 'still', run: async (t) => {
+        // The ready-state Fork control: FORKER has a username, so
+        // GalleryDetailBody renders the actual "Fork this project" BUTTON
+        // (GalleryDetailBody.tsx:72-75), not the "Sign in to fork" /
+        // "Set a username to fork" LINKS the signed-out / no-username states
+        // render (GalleryDetailBody.tsx:67-71). Waiting on the button as a
+        // button (getByRole) is the anti-rot guard for the tutorial's 3-state
+        // claim -- a regression that turned the ready state back into a link
+        // would fail this wait rather than silently snapping the wrong state.
+        await ensurePublished(t);
+        await ensureUser(t, FORKER);
+        await gotoProjectPage(t);
+        await t.page.getByRole('button', { name: 'Fork this project' }).waitFor({ timeout: 15000 });
+        await settle(t.page, 400);
+        // Element crop to the action-button column (GalleryDetailBody.tsx:54 --
+        // the standalone detail page's only div.max-w-xs; the other match in
+        // the codebase, NewProjectModal.tsx:118, never mounts here). Shows
+        // Open in editor + Download + Version history + Fork this project
+        // stacked together -- the tutorial's decision-table protagonists in one
+        // legible figure, same crop rationale as AUTH_CARD / div.mt-10 above.
+        await t.snap('div.max-w-xs');
+    } },
+    { id: 'gallery/clip-fork-flow', kind: 'clip', run: async (t) => {
+        // The fork round-trip the tutorial walks: from OWNER's public project
+        // page, click Fork, land in the editor on the new private fork, open
+        // the Cloud menu, and reveal the "↳ forked from upstream" link that
+        // only forks show. The clip MUST end on that indicator.
+        await ensurePublished(t);
+        await ensureUser(t, FORKER);
+        await gotoProjectPage(t);
+        // Same ready-state guard as the still, so the clip can't begin on a
+        // signed-out/no-username page where the Fork button isn't a button.
+        await t.page.getByRole('button', { name: 'Fork this project' }).waitFor({ timeout: 15000 });
+
+        t.beginClip();
+        // forkProject clicks "Fork this project", then waits for /app + the
+        // real editor canvas (hooks/useGalleryDetail.ts fork() stages the
+        // forked state WITH cloud linkage -- cloud:{projectId,lastSyncedCommitId}
+        // -- then navigate('/app')). That linkage is what makes the indicator
+        // below appear: an unlinked Open-in-editor copy never would.
+        await forkProject(t);
+
+        // Cloud menu -> the forked-from indicator. getByTitle('Cloud') is the
+        // exact toggle query the whole cloud wave uses (CloudMenu.tsx:97,
+        // title="Cloud"). The indicator is a full-page <Link> reading
+        // "↳ forked from upstream — view source" (CloudMenu.tsx:122-127),
+        // rendered only once CloudMenu's own getProject fetch resolves the
+        // fork's forkedFromProjectId (CloudMenu.tsx:40-44) -- waitFor
+        // auto-waits for that async fetch, and is the anti-rot guard for the
+        // indicator's exact text AND the "clip ends on the indicator"
+        // requirement. link role (not button): a plain "Propose changes"
+        // regression that dropped the link would fail this specifically.
+        await t.page.getByTitle('Cloud').click();
+        await settle(t.page, 700);
+        await t.page.getByRole('link', { name: /forked from upstream/i }).waitFor({ state: 'visible', timeout: 15000 });
+        await settle(t.page, 1800); // hold the open menu + lineage link as the closing frames
     } },
 ];
