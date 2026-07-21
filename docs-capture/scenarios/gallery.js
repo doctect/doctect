@@ -3,8 +3,8 @@
 // server (one per scenario run) but every shot starts in a fresh signed-out
 // context, so each shot re-authenticates via ensureUser and re-checks the
 // seed via ensurePublished before doing its own signed-out work.
-import { gotoEditor, newNotebookProject, selectSidebarNode, settle, ACTIVE_PANE } from '../lib/app.js';
-import { ensureUser, saveToCloud, publishProject, signOut, forkProject } from '../lib/cloud.js';
+import { gotoEditor, newNotebookProject, selectSidebarNode, settle, ACTIVE_PANE, switchToTemplatesMode, canvasBox } from '../lib/app.js';
+import { ensureUser, saveToCloud, publishProject, signOut, forkProject, proposeChanges } from '../lib/cloud.js';
 
 // Module-level users shared by the whole gallery wave (later scenarios fork
 // the OWNER's published project as FORKER). Usernames use underscores, not
@@ -253,6 +253,141 @@ async function openFilledPublishWizard(t) {
 // too, learned from a strict-mode violation) and the published card's <p>
 // -- so the round-trip wait below scopes to the paragraph.
 const REVIEW_BODY = 'Clean layout, and the section dividers are exactly what I needed.';
+
+// ---------------------------------------------------------------------------
+// Tutorial 07 (merge requests: proposing) helpers. Both shots put FORKER on
+// their OWN private fork of "My Notebook" -- the one Tutorial 06's
+// clip-fork-flow created earlier in this same sealed run -- recolour its
+// cover, save, and propose the change upstream to OWNER. They share the whole
+// fork -> recolour -> save prelude so the pair reads as one continuous
+// proposal; only mr-author-view actually submits it.
+
+// The proposal's title + commit message, kept distinctive and human-readable
+// so Tutorial 08 (the reviewing side) can find THIS merge request by name, and
+// so the author-view still's heading reads like a real proposal.
+const FORK_COMMIT_MSG = 'Recolour the notebook cover to teal';
+const MR_TITLE = 'Recolour the cover to teal';
+// Description is the propose-modal still's only extra copy: the shared
+// proposeChanges helper fills the required title alone (ProposeChangesModal's
+// description is optional, and duplicating it into an MR that carries no
+// description elsewhere adds nothing), so this exists purely to make that one
+// figure read like a complete proposal.
+const MR_DESCRIPTION = 'The slate cover felt a bit heavy — this swaps it for a calmer teal, nothing else.';
+
+// A teal unmistakably unlike the notebook preset's slate cover
+// (services/notebook_preset.json's notebook_cover "bg" rect ships #334155), so
+// the change list shows a real modification and the before/after preview
+// renders two visibly different covers.
+const FORK_COVER_FILL = '#0e7490';
+
+// The ProposeChangesModal card (components/cloud/ProposeChangesModal.tsx:32):
+// its w-[440px] width is grep-unique in the whole app, so this crops to the
+// modal itself (title + description fields + the save-first reminder) and
+// leaves the dimmed editor behind it out -- same element-crop rationale as
+// PUBLISH_DIALOG above. Bracket-escaped per CSS's literal-"[" rule, exactly as
+// editor.js's TOOLBAR_SELECTOR escapes min-h-[40px].
+const PROPOSE_MODAL = 'div.w-\\[440px\\]';
+
+// Sign FORKER in and open their private fork of PUBLISHED_NAME in the editor,
+// cloud-linked and ready to edit. REUSES an existing fork (the only project in
+// FORKER's account carrying an upstream lineage -- FORKER forks nothing else in
+// this wave) by re-staging it exactly the way the gallery Fork button does
+// (hooks/useGalleryDetail.ts fork(): fetch the head commit's state, stageImport
+// it WITH cloud linkage, let /app consume it -- services/importProject.ts +
+// pages/EditorPage.tsx:131), so a full run never stacks a second fork on
+// Tutorial 06's. Falls back to the real Fork button only when no fork exists
+// yet (a standalone run of just these shots). The API reads go through the
+// page's own fetch (credentials:'include'), identical to every cloudApi call
+// the app makes, so auth is whatever the signed-in session already is.
+async function ensureForkOpen(t) {
+    await ensurePublished(t);       // upstream seeded + left signed out
+    await ensureUser(t, FORKER);    // FORKER signed in, lands on /app
+
+    const projects = await t.page.evaluate(async (base) => {
+        const r = await fetch(base + '/api/projects', { credentials: 'include', headers: { 'Content-Type': 'application/json' } });
+        if (!r.ok) throw new Error('listing FORKER projects failed: ' + r.status);
+        return (await r.json()).projects;
+    }, API_BASE);
+    const fork = projects.find(p => p.forkedFromProjectId);
+
+    if (fork) {
+        // Re-open the existing fork: pull its head commit's state and stage it
+        // with the same { projectId, lastSyncedCommitId } cloud linkage the
+        // fork flow records -- that linkage is what later makes CloudMenu show
+        // "Propose changes to upstream" (CloudMenu.tsx:134, gated on the
+        // fetched cloud project's forkedFromProjectId).
+        const commit = await t.page.evaluate(async ({ base, pid, cid }) => {
+            const r = await fetch(`${base}/api/projects/${pid}/commits/${cid}`, { credentials: 'include', headers: { 'Content-Type': 'application/json' } });
+            if (!r.ok) throw new Error('fetching fork head failed: ' + r.status);
+            return (await r.json()).commit;
+        }, { base: API_BASE, pid: fork.id, cid: fork.headCommitId });
+        await t.page.evaluate(({ name, state, pid, cid }) => {
+            localStorage.setItem('hype_import_pending', JSON.stringify({
+                name, state, cloud: { projectId: pid, lastSyncedCommitId: cid },
+            }));
+        }, { name: fork.name, state: commit.state, pid: fork.id, cid: fork.headCommitId });
+        await gotoEditor(t); // a fresh /app load consumes the staged import
+    } else {
+        // No fork yet -- create one through the gallery Fork button (the exact
+        // path Tutorial 06 uses), which lands in the editor cloud-linked.
+        await gotoProjectPage(t);
+        await t.page.getByRole('button', { name: 'Fork this project' }).waitFor({ timeout: 15000 });
+        await forkProject(t);
+    }
+    // The fork opens as a SECOND tab alongside the seeded Blank Project and is
+    // the active one (consumeImport/fork both setActiveProjectId to it) -- wait
+    // for that second tab so ACTIVE_PANE resolves to the fork before any edit,
+    // the same 2-tabs-exist guard merge_requests.spec.js:115 uses after a fork.
+    await t.page.getByTitle('Close Project').nth(1).waitFor({ timeout: 15000 });
+    await settle(t.page, 500);
+}
+
+// Recolour the fork's notebook cover -- one clean, unmistakable template edit.
+// Templates mode so the change targets the SHARED notebook_cover template
+// directly (picked by name, independent of whichever page the fork happens to
+// open selected); the full-bleed "bg" rect is then selected by clicking low on
+// the cover, below its white title band, where nothing else overlaps it.
+// Produces exactly one change-list row ("~ Template modified: default/
+// notebook_cover") plus a dramatic before/after, and is a no-op-safe repeat:
+// the second shot re-applies the identical teal, which the server dedupes on
+// save (server/routes/projects.js's commits POST returns deduped:true, 200).
+async function recolorForkCover(t) {
+    await switchToTemplatesMode(t);
+    // The notebook's three templates list by name in Templates mode;
+    // "Notebook Cover" is the preset's cover (services/notebook_preset.json),
+    // grep-unique text (the root NODE is titled "My Notebook", not this).
+    await t.page.locator(ACTIVE_PANE).getByText('Notebook Cover', { exact: true }).click();
+    await settle(t.page, 600);
+    // Select the full-bleed background rect (id "bg", zIndex 0, 0,0->509,679).
+    // Fractional canvas coords map 1:1 onto the 509x679 template (proven by
+    // editor.js's Templates-mode grid clicks), so (0.5, 0.72) -> template
+    // (~254, ~489): clear of the white label band (y100-220) and the title
+    // text above it, so the topmost element there is bg alone.
+    await t.page.keyboard.press('v');
+    await settle(t.page, 200);
+    const c = await canvasBox(t.page);
+    await t.page.mouse.click(c.x + c.width * 0.5, c.y + c.height * 0.72);
+    await settle(t.page, 500);
+    // SingleElementEditor's solid Fill row: a w-16 label div reading exactly
+    // "Fill" whose sibling div holds the one color input -- the exact recolour
+    // path editor.js's clip-greyscale-toggle drives.
+    const fill = t.page.locator(`${ACTIVE_PANE} div.w-16:text-is("Fill") + div input[type="color"]`);
+    await fill.fill(FORK_COVER_FILL);
+    await settle(t.page, 400);
+    // Wrong-element / missed-click guard: a click that selected nothing leaves
+    // no Fill input (the fill above throws), and one that hit a different
+    // element reads back a different value -- so confirm the teal landed on a
+    // cover element before it's ever saved and proposed.
+    const applied = (await fill.inputValue()).toLowerCase();
+    if (applied !== FORK_COVER_FILL) {
+        throw new Error(`cover recolour did not take — Fill reads ${applied}, expected ${FORK_COVER_FILL}`);
+    }
+    // Outlast ProjectEditor's 1000ms onStateChange debounce (ProjectEditor.tsx
+    // :76-84) so the template edit is flushed into project.initialState before
+    // the caller's saveToCloud reads it -- the same margin the tutorial-03
+    // editor shots rely on.
+    await settle(t.page, 1100);
+}
 
 export const shots = [
     { id: 'gallery/gallery-home', kind: 'still', run: async (t) => {
@@ -748,5 +883,69 @@ export const shots = [
         await settle(t.page, 700);
         await t.page.getByRole('link', { name: /forked from upstream/i }).waitFor({ state: 'visible', timeout: 15000 });
         await settle(t.page, 1800); // hold the open menu + lineage link as the closing frames
+    } },
+    // -----------------------------------------------------------------------
+    // Tutorial 07 (merge requests: proposing) additions. FORKER edits their
+    // private fork, saves, and proposes the change upstream. Both shots reuse
+    // the same fork (Tutorial 06's) via ensureForkOpen and run the identical
+    // recolour+save prelude; only mr-author-view submits, creating the single
+    // clean, named merge request Tutorial 08 reviews and merges.
+    { id: 'gallery/propose-changes-modal', kind: 'still', run: async (t) => {
+        // The fork, cover recoloured and SAVED, with the Propose modal open and
+        // filled -- stopped one click short of Create merge request (this still
+        // documents the modal itself; mr-author-view below actually submits).
+        await ensureForkOpen(t);
+        await recolorForkCover(t);
+        await saveToCloud(t, FORK_COMMIT_MSG);
+
+        // Cloud menu -> Propose changes to upstream (only forks show it, gated
+        // on the linked cloud project's forkedFromProjectId -- CloudMenu.tsx
+        // :134). saveToCloud closed the menu on success, so reopen it.
+        await t.page.getByTitle('Cloud').click();
+        await settle(t.page, 700);
+        await t.page.getByRole('button', { name: /propose changes to upstream/i }).click();
+        await t.page.getByRole('heading', { name: /propose changes to upstream/i }).waitFor({ timeout: 10000 });
+        // Neither field has a <label> (ProposeChangesModal.tsx) -- getByPlaceholder
+        // is the only handle, same as cloud.js's proposeChanges. Fill BOTH here
+        // (the shared helper fills only the required title) so the figure shows
+        // a complete, realistic proposal.
+        await t.page.getByPlaceholder("Title, e.g. 'Add iPad variant'").fill(MR_TITLE);
+        await t.page.getByPlaceholder('What changed and why?').fill(MR_DESCRIPTION);
+        await settle(t.page, 500);
+        await t.snap(PROPOSE_MODAL);
+    } },
+    { id: 'gallery/mr-author-view', kind: 'still', run: async (t) => {
+        // The merge request page as its AUTHOR, right after submitting: the
+        // structured change list (one real template modification), the author
+        // status guidance, and a rendered before/after of the recoloured cover.
+        await ensureForkOpen(t);
+        await recolorForkCover(t);
+        await saveToCloud(t, FORK_COMMIT_MSG);
+        await proposeChanges(t, MR_TITLE); // fills the title, submits, lands on /mr/:id
+
+        // The page is server-computed live on every view (server/routes/
+        // mergeRequests.js GET /:id recomputes the diff) -- these waits double
+        // as anti-rot for the tutorial's core claims: the structured (not-JSON)
+        // change list shows the real template modification, the status is
+        // "open", and the author guidance sentence is exactly this.
+        await t.page.getByRole('heading', { name: MR_TITLE }).waitFor({ timeout: 15000 });
+        await t.page.getByText('open', { exact: true }).waitFor({ timeout: 10000 });
+        await t.page.getByText('~ Template modified: default/notebook_cover').waitFor({ timeout: 10000 });
+        await t.page.getByText('Waiting for the project owner to review this merge request.').waitFor({ timeout: 10000 });
+
+        // Render the before/after preview so the figure shows the change, not
+        // just its label -- the exact button + decode wait merge_requests.spec.js
+        // :161-163 proves works (generateThumbnails: jsPDF -> pdf.js raster).
+        // before = upstream's slate cover, after = the fork's teal one.
+        await t.page.getByRole('button', { name: /render before\/after preview/i }).click();
+        await t.page.waitForFunction(() => {
+            const imgs = [...document.querySelectorAll('img[alt="before"], img[alt="after"]')];
+            return imgs.length === 2 && imgs.every(i => i.complete && i.naturalWidth > 0);
+        }, { timeout: 30000 });
+        await settle(t.page, 500);
+        // Crop to the MergeRequestPage content column (its <main>, max-w-3xl) --
+        // heading + status + guidance + the whole Proposed-changes card in one
+        // legible figure; the AppHeader above adds nothing this still documents.
+        await t.snap('main');
     } },
 ];
