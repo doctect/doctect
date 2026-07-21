@@ -342,16 +342,18 @@ async function ensureForkOpen(t) {
     await settle(t.page, 500);
 }
 
-// Recolour the fork's notebook cover -- one clean, unmistakable template edit.
-// Templates mode so the change targets the SHARED notebook_cover template
-// directly (picked by name, independent of whichever page the fork happens to
-// open selected); the full-bleed "bg" rect is then selected by clicking low on
-// the cover, below its white title band, where nothing else overlaps it.
-// Produces exactly one change-list row ("~ Template modified: default/
-// notebook_cover") plus a dramatic before/after, and is a no-op-safe repeat:
-// the second shot re-applies the identical teal, which the server dedupes on
-// save (server/routes/projects.js's commits POST returns deduped:true, 200).
-async function recolorForkCover(t) {
+// Recolour the OPEN notebook's cover to `fill` -- one clean, unmistakable
+// template edit, on whichever notebook (fork or upstream) is active. Templates
+// mode so the change targets the SHARED notebook_cover template directly
+// (picked by name, independent of whichever page happens to open selected);
+// the full-bleed "bg" rect is then selected by clicking low on the cover,
+// below its white title band, where nothing else overlaps it. Produces exactly
+// one change-list row ("~ Template modified: default/notebook_cover") plus a
+// dramatic before/after, and is a no-op-safe repeat: re-applying the identical
+// colour dedupes on save (server/routes/projects.js's commits POST returns
+// deduped:true, 200), while a DIFFERENT colour on the same template is exactly
+// what makes an upstream-vs-fork conflict (Tutorial 08's mr-conflict shot).
+async function recolorCoverTo(t, fill) {
     await switchToTemplatesMode(t);
     // The notebook's three templates list by name in Templates mode;
     // "Notebook Cover" is the preset's cover (services/notebook_preset.json),
@@ -371,22 +373,117 @@ async function recolorForkCover(t) {
     // SingleElementEditor's solid Fill row: a w-16 label div reading exactly
     // "Fill" whose sibling div holds the one color input -- the exact recolour
     // path editor.js's clip-greyscale-toggle drives.
-    const fill = t.page.locator(`${ACTIVE_PANE} div.w-16:text-is("Fill") + div input[type="color"]`);
-    await fill.fill(FORK_COVER_FILL);
+    const input = t.page.locator(`${ACTIVE_PANE} div.w-16:text-is("Fill") + div input[type="color"]`);
+    await input.fill(fill);
     await settle(t.page, 400);
     // Wrong-element / missed-click guard: a click that selected nothing leaves
     // no Fill input (the fill above throws), and one that hit a different
-    // element reads back a different value -- so confirm the teal landed on a
+    // element reads back a different value -- so confirm the colour landed on a
     // cover element before it's ever saved and proposed.
-    const applied = (await fill.inputValue()).toLowerCase();
-    if (applied !== FORK_COVER_FILL) {
-        throw new Error(`cover recolour did not take — Fill reads ${applied}, expected ${FORK_COVER_FILL}`);
+    const applied = (await input.inputValue()).toLowerCase();
+    if (applied !== fill) {
+        throw new Error(`cover recolour did not take — Fill reads ${applied}, expected ${fill}`);
     }
     // Outlast ProjectEditor's 1000ms onStateChange debounce (ProjectEditor.tsx
     // :76-84) so the template edit is flushed into project.initialState before
     // the caller's saveToCloud reads it -- the same margin the tutorial-03
     // editor shots rely on.
     await settle(t.page, 1100);
+}
+// The fork's teal recolour, unchanged from Tutorial 06/07's usage.
+async function recolorForkCover(t) {
+    return recolorCoverTo(t, FORK_COVER_FILL);
+}
+
+// ---------------------------------------------------------------------------
+// Tutorial 08 (merge requests: reviewing, merging, conflicts) helpers. These
+// shots put OWNER on the RECEIVING side of Tutorial 07's proposal: review +
+// merge the open request, then build and show a real conflict. Ordering within
+// a run matters (shared per-run server DB): mr-owner-review (view, no consume)
+// -> clip-merge (merges + consumes the open MR) -> mr-conflict (dirties the
+// upstream, which would break the two above -- so it runs LAST).
+
+// OWNER's independent recolour of the SAME cover template the fork changed to
+// teal. A warm amber, unmistakably different from both the preset slate
+// (#334155) and the fork's teal (#0e7490) -- that difference on one shared
+// template is exactly the threeWayDiff "changed on both sides" conflict.
+const OWNER_COVER_FILL = '#b45309';
+// The conflict shot proposes its OWN request (a full run has already merged
+// MR_TITLE by the time this runs), so it carries a distinct title -- no
+// collision with the merged one, and it reads sensibly on the conflict figure.
+const CONFLICT_MR_TITLE = 'Give the cover a teal refresh';
+const OWNER_DIRTY_COMMIT_MSG = 'Warm the cover up to amber';
+
+// The /mr/:id the page is currently on -> the id. Thrown-on-miss so a caller
+// that expected a proposal to have landed fails loudly, not silently.
+const mrIdFromUrl = (t) => {
+    const m = new URL(t.page.url()).pathname.match(/\/mr\/([^/]+)/);
+    if (!m) throw new Error(`expected an /mr/:id URL, got ${t.page.url()}`);
+    return m[1];
+};
+
+// The id of FORKER's existing OPEN merge request titled `title`, or null. Reads
+// through the page's own credentialed fetch (FORKER must be signed in), same
+// shape as ensureForkOpen's project listing. Used to REUSE Tutorial 07's MR
+// instead of stacking duplicate rows in the owner's per-project list.
+async function findOpenMrId(t, title) {
+    const mrs = await t.page.evaluate(async (base) => {
+        const r = await fetch(base + '/api/merge-requests/mine', { credentials: 'include', headers: { 'Content-Type': 'application/json' } });
+        if (!r.ok) throw new Error('listing FORKER merge requests failed: ' + r.status);
+        return (await r.json()).mergeRequests;
+    }, API_BASE);
+    const hit = mrs.find(mr => mr.title === title && mr.status === 'open');
+    return hit ? hit.id : null;
+}
+
+// Guarantee an OPEN, mergeable "Recolour the cover to teal" request from
+// FORKER's fork to OWNER's "My Notebook" exists, and return its id. In a full
+// run Tutorial 07's mr-author-view already created it, so this REUSES it (found
+// via /api/merge-requests/mine) rather than stacking a second identical row --
+// keeping the owner's discovery list a single unambiguous link. On a standalone
+// run it proposes a fresh one. Leaves FORKER signed in; callers switch to OWNER
+// via signOut + ensureUser.
+async function ensureOpenCoverMr(t) {
+    await ensureForkOpen(t);              // FORKER signed in, fork open (created if needed)
+    await recolorForkCover(t);            // teal (dedupes if an earlier shot already set it)
+    await saveToCloud(t, FORK_COMMIT_MSG);
+    const existing = await findOpenMrId(t, MR_TITLE);
+    if (existing) return existing;
+    await proposeChanges(t, MR_TITLE);    // fills the title, submits, lands on /mr/:id
+    return mrIdFromUrl(t);
+}
+
+// Open OWNER's OWN "My Notebook" -- the upstream the merge request targets --
+// in the editor, cloud-linked, so a recolour + saveToCloud lands a new commit
+// on THAT project and moves its head (making the fork's still-teal proposal
+// conflict). PRECONDITION: OWNER is signed in. Re-stages the project exactly
+// the way the gallery fork/open path stages an import (localStorage
+// hype_import_pending WITH cloud linkage) -- identical to ensureForkOpen's
+// reuse branch, so the save updates the project rather than forking a detached
+// copy. Targets the non-fork project named PUBLISHED_NAME (OWNER forks nothing
+// in this wave, so that's unique).
+async function ensureOwnerProjectOpen(t) {
+    const project = await t.page.evaluate(async ({ base, name }) => {
+        const r = await fetch(base + '/api/projects', { credentials: 'include', headers: { 'Content-Type': 'application/json' } });
+        if (!r.ok) throw new Error('listing OWNER projects failed: ' + r.status);
+        return (await r.json()).projects.find(p => p.name === name && !p.forkedFromProjectId);
+    }, { base: API_BASE, name: PUBLISHED_NAME });
+    if (!project) throw new Error(`OWNER has no non-fork project named "${PUBLISHED_NAME}"`);
+    const commit = await t.page.evaluate(async ({ base, pid, cid }) => {
+        const r = await fetch(`${base}/api/projects/${pid}/commits/${cid}`, { credentials: 'include', headers: { 'Content-Type': 'application/json' } });
+        if (!r.ok) throw new Error('fetching OWNER project head failed: ' + r.status);
+        return (await r.json()).commit;
+    }, { base: API_BASE, pid: project.id, cid: project.headCommitId });
+    await t.page.evaluate(({ name, state, pid, cid }) => {
+        localStorage.setItem('hype_import_pending', JSON.stringify({
+            name, state, cloud: { projectId: pid, lastSyncedCommitId: cid },
+        }));
+    }, { name: project.name, state: commit.state, pid: project.id, cid: project.headCommitId });
+    await gotoEditor(t); // a fresh /app load consumes the staged import
+    // Second tab = the staged upstream, active (consumeImport sets it active) --
+    // same 2-tabs guard ensureForkOpen uses so ACTIVE_PANE resolves to it.
+    await t.page.getByTitle('Close Project').nth(1).waitFor({ timeout: 15000 });
+    await settle(t.page, 500);
 }
 
 export const shots = [
@@ -946,6 +1043,133 @@ export const shots = [
         // Crop to the MergeRequestPage content column (its <main>, max-w-3xl) --
         // heading + status + guidance + the whole Proposed-changes card in one
         // legible figure; the AppHeader above adds nothing this still documents.
+        await t.snap('main');
+    } },
+    // -----------------------------------------------------------------------
+    // Tutorial 08 (merge requests: reviewing, merging, conflicts) additions.
+    // OWNER receives Tutorial 07's proposal: reviews it, merges it, then a real
+    // conflict is constructed and shown. Order is load-bearing (shared per-run
+    // DB): review (no consume) -> merge (consumes the open MR) -> conflict
+    // (dirties the upstream, so it runs LAST).
+    { id: 'gallery/mr-owner-review', kind: 'still', run: async (t) => {
+        // The OWNER's side of the SAME request Tutorial 07 proposed, reached the
+        // way an owner really finds it: the per-project "Merge requests" list on
+        // their gallery page, then the review page itself -- with the owner
+        // guidance line, a rendered before/after, and the Merge button that only
+        // the owner (not the author) gets. Reuses the open MR; viewing it never
+        // consumes it, so clip-merge below can still merge it.
+        await ensureOpenCoverMr(t);   // as FORKER (reuses Tutorial 07's MR, or creates one)
+        await signOut(t);
+        await ensureUser(t, OWNER);
+
+        // Discovery surface: the owner's own project page shows an owner-only
+        // "Merge requests" section (GalleryDetailBody.tsx:81, isOwner &&
+        // mrs.length) -- proven by merge_requests.spec.js:157-159. Click the row
+        // (a Link named by the MR title) to land on /mr/:id, exercising and
+        // documenting the real path in.
+        await gotoProjectPage(t);
+        await t.page.getByRole('heading', { name: 'Merge requests' }).waitFor({ timeout: 15000 });
+        await t.page.getByRole('link', { name: new RegExp(MR_TITLE) }).click();
+        await t.page.waitForURL('**/mr/**', { timeout: 15000 });
+
+        // Owner-specific review page. The guidance line and the Merge button are
+        // the anti-rot for the tutorial's "what the owner gets" claims (the
+        // author sees neither); status stays open (viewing never merges/closes).
+        // Guidance string is verbatim from MergeRequestPage.tsx:22.
+        await t.page.getByRole('heading', { name: MR_TITLE }).waitFor({ timeout: 15000 });
+        await t.page.getByText('open', { exact: true }).waitFor({ timeout: 10000 });
+        await t.page.getByText('You own the target project — review the changes below, then merge or close.').waitFor({ timeout: 10000 });
+        await t.page.getByText('~ Template modified: default/notebook_cover').waitFor({ timeout: 10000 });
+        await t.page.getByRole('button', { name: 'Merge', exact: true }).waitFor({ timeout: 10000 });
+
+        // Render the before/after so the figure shows the change, not just its
+        // label -- same decode wait as mr-author-view / merge_requests.spec.js.
+        await t.page.getByRole('button', { name: /render before\/after preview/i }).click();
+        await t.page.waitForFunction(() => {
+            const imgs = [...document.querySelectorAll('img[alt="before"], img[alt="after"]')];
+            return imgs.length === 2 && imgs.every(i => i.complete && i.naturalWidth > 0);
+        }, { timeout: 30000 });
+        await settle(t.page, 500);
+        await t.snap('main');
+    } },
+    { id: 'gallery/clip-merge', kind: 'clip', run: async (t) => {
+        // The owner merges the open request and watches the result land as a
+        // commit. Reuses the open MR (mr-owner-review left it open), then: click
+        // Merge -> merged state -> the "Merge: ..." commit at the head of the
+        // project's own version history. CONSUMES the MR (it becomes merged).
+        const mrId = await ensureOpenCoverMr(t);   // as FORKER
+        await signOut(t);
+        await ensureUser(t, OWNER);
+        await t.page.goto(t.baseUrl + `/mr/${mrId}`);
+        // Guard the pre-merge state: owner + open => Merge button present
+        // (MergeRequestPage.tsx:163 renders it only for isOwner && open).
+        await t.page.getByRole('button', { name: 'Merge', exact: true }).waitFor({ timeout: 15000 });
+        await settle(t.page, 700); // fully settle the loaded MR page before recording opens
+
+        t.beginClip();
+        await settle(t.page, 1000); // open on the reviewable MR + its Merge button (the click target)
+        // Merge: the window.confirm ("A new version will be created.") is
+        // auto-accepted by the runner's dialog handler (capture.js:67). On
+        // success load() refetches -> status merged, guidance changes, Merge
+        // button gone -- proven by merge_requests.spec.js:170-172.
+        await t.page.getByRole('button', { name: 'Merge', exact: true }).click();
+        await t.page.getByText('merged', { exact: true }).waitFor({ timeout: 15000 });
+        await t.page.getByText('This merge request was merged into the target project.').waitFor({ timeout: 10000 });
+        await settle(t.page, 1400); // hold on the merged success state
+
+        // The change landed as an ordinary commit in OWNER's project history.
+        // Their gallery-page Version history modal lists ALL commits for the
+        // owner (server/routes/projects.js:264 -- isOwner drops the
+        // published-only filter), so the merge commit is HEAD. Message:
+        // `Merge: <title> (from @author)` (mergeRequests.js:248).
+        await gotoProjectPage(t);
+        await t.page.getByRole('button', { name: 'Version history' }).click();
+        await t.page.getByRole('heading', { name: 'Version history' }).waitFor({ timeout: 10000 });
+        await t.page.getByText(new RegExp(`Merge: ${MR_TITLE}`)).waitFor({ timeout: 10000 });
+        await settle(t.page, 1800); // hold on the merge commit in history as the closing frames
+    } },
+    { id: 'gallery/mr-conflict', kind: 'still', run: async (t) => {
+        // A REAL conflict, built the way the tutorial describes: FORKER proposes
+        // the teal cover, then OWNER independently recolours the SAME cover
+        // template to a DIFFERENT colour (amber) and saves -- moving the
+        // upstream head. The live diff (recomputed on every view) then flags the
+        // template as changed on both sides, flips the request to conflicted,
+        // and withholds Merge. Runs LAST: dirtying the upstream would conflict
+        // the open MR the two shots above rely on.
+
+        // 1) FORKER: fork teal, saved, proposed as a SEPARATE request (distinct
+        //    title -- a full run has already merged MR_TITLE by clip-merge).
+        await ensureForkOpen(t);
+        await recolorForkCover(t);                  // teal (dedupes if already teal)
+        await saveToCloud(t, FORK_COMMIT_MSG);
+        await proposeChanges(t, CONFLICT_MR_TITLE); // new MR, lands on /mr/:id
+        const mrId = mrIdFromUrl(t);
+
+        // 2) OWNER: open the upstream "My Notebook" cloud-linked and recolour the
+        //    same cover template to amber, then save -> upstream head moves.
+        await signOut(t);
+        await ensureUser(t, OWNER);
+        await ensureOwnerProjectOpen(t);
+        await recolorCoverTo(t, OWNER_COVER_FILL);  // amber, unmistakably != teal/slate
+        await saveToCloud(t, OWNER_DIRTY_COMMIT_MSG);
+
+        // 3) OWNER: reopen the request. The GET recomputes the diff against the
+        //    now-amber head (mergeRequests.js:184-191), flips it to conflicted,
+        //    and renders the red Conflicts banner naming the shared template.
+        //    Conflicted status + conflicted guidance (verbatim from
+        //    MergeRequestPage.tsx:25) + the withheld Merge button are the
+        //    anti-rot for the tutorial's "merge is refused" claim.
+        await t.page.goto(t.baseUrl + `/mr/${mrId}`);
+        await t.page.getByText('conflicted', { exact: true }).waitFor({ timeout: 15000 });
+        await t.page.getByText(/was changed on both sides/).waitFor({ timeout: 10000 });
+        await t.page.getByText("The target project has changed since this was proposed — it can't be merged as-is. Update your fork and propose the changes again.").waitFor({ timeout: 10000 });
+        // Merge is refused in the UI: no Merge button on a conflicted request
+        // (only Close). A regression that re-enabled it fails this count check.
+        if (await t.page.getByRole('button', { name: 'Merge', exact: true }).count() !== 0) {
+            throw new Error('conflicted MR still shows a Merge button — UI merge-refusal regression');
+        }
+        await t.page.getByRole('button', { name: 'Close', exact: true }).waitFor({ timeout: 10000 });
+        await settle(t.page, 500);
         await t.snap('main');
     } },
 ];
