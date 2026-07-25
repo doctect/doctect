@@ -128,6 +128,7 @@ describe('publishing', () => {
     // bad entries are arity-correct arrays.
     it.each([
         ['a string instead of an array', [PNG_1X1, PNG_1X1], 'ab'],
+        ['a non-string entry', [PNG_1X1], [123]],
         ['an empty string entry', [PNG_1X1], ['']],
         ['an entry over 200 chars', [PNG_1X1], ['x'.repeat(201)]],
     ])('rejects previewNodeIds with %s', async (_case, thumbnails, previewNodeIds) => {

@@ -351,6 +351,22 @@ export const parseTagList = (tags) => {
     return JSON.stringify(tags);
 };
 
+// The whole validated field set both listing writers accept, so publish and the
+// listing edit can never drift apart. Returns { error } on bad input, otherwise
+// { previews, tags, description } where a field the caller omitted comes back as
+// `null` (previews) or `undefined` (description). The two routes read an omission
+// differently: publish rewrites the listing wholesale, so it demands a preview set
+// and treats a missing description as empty; the edit route keeps whatever is
+// already published.
+const parseListingFields = (body) => {
+    const previewSet = parsePreviewSet(body);
+    if (previewSet.error) return { error: previewSet.error };
+    const tags = parseTagList(body?.tags);
+    if (tags === null) return { error: 'tags must be up to 10 strings of max 30 chars' };
+    const description = body?.description === undefined ? undefined : String(body.description).slice(0, 2000);
+    return { previews: previewSet.previews, tags, description };
+};
+
 export const replaceThumbnails = async (projectId, previews, txQuery) => {
     await txQuery('DELETE FROM thumbnails WHERE project_id = $1', [projectId]);
     for (let i = 0; i < previews.length; i++) {
@@ -363,16 +379,13 @@ export const replaceThumbnails = async (projectId, previews, txQuery) => {
 router.post('/api/projects/:id/publish', requireAuth, requireUsername, loadProject(true), async (req, res) => {
     const expectedHead = expectedHeadFromRequest(req, res);
     if (expectedHead === null) return;
-    const previewSet = parsePreviewSet(req.body);
-    if (previewSet.error) return res.status(400).json({ error: previewSet.error });
-    if (!previewSet.previews) {
+    const listing = parseListingFields(req.body);
+    if (listing.error) return res.status(400).json({ error: listing.error });
+    if (!listing.previews) {
         return res.status(400).json({ error: PREVIEW_COUNT_ERROR });
     }
-    const parsedTags = parseTagList(req.body?.tags);
-    if (parsedTags === null) {
-        return res.status(400).json({ error: 'tags must be up to 10 strings of max 30 chars' });
-    }
-    const d = String(req.body?.description ?? '').slice(0, 2000);
+    const parsedTags = listing.tags;
+    const d = listing.description ?? '';
 
     let published;
     try {
@@ -401,7 +414,7 @@ router.post('/api/projects/:id/publish', requireAuth, requireUsername, loadProje
                 [current[0].id, expectedHead]
             );
 
-            await replaceThumbnails(current[0].id, previewSet.previews, txQuery);
+            await replaceThumbnails(current[0].id, listing.previews, txQuery);
             const thumbnailRows = await txQuery('SELECT id FROM thumbnails WHERE project_id = $1 ORDER BY position', [current[0].id]);
             return { row: updated[0], thumbnailIds: thumbnailRows.map(item => item.id) };
         });
@@ -427,33 +440,41 @@ router.patch('/api/projects/:id/publication', requireAuth, userWriteLimiter, loa
     const notPublished = () => res.status(409).json({ error: 'Project is not published.', code: 'NOT_PUBLISHED' });
     if (req.project.visibility !== 'public' || !req.project.published_commit_id) return notPublished();
 
-    const previewSet = parsePreviewSet(req.body);
-    if (previewSet.error) return res.status(400).json({ error: previewSet.error });
-    const parsedTags = parseTagList(req.body?.tags);
-    if (parsedTags === null) {
-        return res.status(400).json({ error: 'tags must be up to 10 strings of max 30 chars' });
-    }
-    const d = String(req.body?.description ?? '').slice(0, 2000);
+    const listing = parseListingFields(req.body);
+    if (listing.error) return res.status(400).json({ error: listing.error });
 
     const updated = await withTransaction(async txQuery => {
         const [current] = await lockProjectRows([req.project.id], txQuery);
         if (!current || current.owner_id !== req.user.id) return null;
         if (current.visibility !== 'public' || !current.published_commit_id) return null;
 
-        // $1/$3 and $2/$4 carry the same value under distinct placeholders: the SQLite
-        // adapter rewrites $n positionally, so reusing one would mis-bind.
+        // An omitted description keeps the published one, exactly as an omitted
+        // thumbnails set keeps the published previews — this route must never lose
+        // public data a caller did not mention. Placeholders are positional (the
+        // SQLite adapter rewrites $n by position), so every value takes its own
+        // number even when two columns carry the same one; numbering from the push
+        // keeps the two in step.
+        const params = [];
+        const assign = (column, value) => `${column} = $${params.push(value)}`;
+        const assignments = [assign('published_tags', listing.tags), assign('tags', listing.tags)];
+        if (listing.description !== undefined) {
+            assignments.push(
+                assign('published_description', listing.description),
+                assign('description', listing.description));
+        }
         const rows = await txQuery(
-            `UPDATE projects SET published_description = $1, published_tags = $2,
-                 description = $3, tags = $4, updated_at = CURRENT_TIMESTAMP
-             WHERE id = $5 RETURNING *`,
-            [d, parsedTags, d, parsedTags, current.id]
+            `UPDATE projects SET ${assignments.join(', ')}, updated_at = CURRENT_TIMESTAMP
+             WHERE id = $${params.push(current.id)} RETURNING *`,
+            params
         );
-        if (previewSet.previews) await replaceThumbnails(current.id, previewSet.previews, txQuery);
-        return rows[0];
+        if (listing.previews) await replaceThumbnails(current.id, listing.previews, txQuery);
+        const thumbnailRows = await txQuery(
+            'SELECT id FROM thumbnails WHERE project_id = $1 ORDER BY position', [current.id]);
+        return { row: rows[0], thumbnailIds: thumbnailRows.map(item => item.id) };
     });
 
     if (!updated) return notPublished();
-    res.json({ project: { ...projectDto(updated), thumbnailIds: await getThumbnailIds(updated.id) } });
+    res.json({ project: { ...projectDto(updated.row), thumbnailIds: updated.thumbnailIds } });
 });
 
 router.post('/api/projects/:id/unpublish', requireAuth, loadProject(true), async (req, res) => {

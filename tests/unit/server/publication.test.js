@@ -28,6 +28,11 @@ vi.mock('../../../server/db.js', async importOriginal => {
 
 let app, cookie, otherCookie, query;
 
+// SQLite's CURRENT_TIMESTAMP has whole-second resolution, so comparing published_at
+// against its own pre-edit value cannot tell "never written" from "rewritten inside
+// the same second". Tests pin this instead: only leaving the column alone preserves it.
+const PUBLISHED_AT_SENTINEL = '2000-01-01 00:00:00';
+
 const publishedProject = async (name) => {
     const created = await request(app).post('/api/projects').set('Cookie', cookie)
         .send({ name, state: minimalState('root') });
@@ -59,6 +64,7 @@ beforeAll(async () => {
 describe('PATCH /api/projects/:id/publication', () => {
     it('updates description, tags and previews without moving the published version', async () => {
         const id = await publishedProject('Editable Listing');
+        await query('UPDATE projects SET published_at = $1 WHERE id = $2', [PUBLISHED_AT_SENTINEL, id]);
         const before = await projectRow(id);
 
         const res = await editListing(id, {
@@ -76,7 +82,7 @@ describe('PATCH /api/projects/:id/publication', () => {
         expect(JSON.parse(after.published_tags)).toEqual(['edited', 'tags']);
         expect(after.published_commit_id).toBe(before.published_commit_id);
         expect(after.published_name).toBe(before.published_name);
-        expect(after.published_at).toEqual(before.published_at);
+        expect(after.published_at).toBe(PUBLISHED_AT_SENTINEL);
 
         const detail = await request(app).get(`/api/gallery/${id}`);
         expect(detail.body.project.tags).toEqual(['edited', 'tags']);
@@ -94,6 +100,20 @@ describe('PATCH /api/projects/:id/publication', () => {
         const after = await query(
             'SELECT id, position, node_id FROM thumbnails WHERE project_id = $1 ORDER BY position', [id]);
         expect(after).toEqual(before);
+    });
+
+    it('keeps the published description when it is omitted, and clears it only when sent empty', async () => {
+        const id = await publishedProject('Description Omitted');
+
+        const kept = await editListing(id, { tags: ['kept'] });
+        expect(kept.status).toBe(200);
+        expect(kept.body.project.description).toBe('original description');
+        expect((await projectRow(id)).published_description).toBe('original description');
+
+        const cleared = await editListing(id, { description: '', tags: ['kept'] });
+        expect(cleared.status).toBe(200);
+        expect(cleared.body.project.description).toBe('');
+        expect((await projectRow(id)).published_description).toBe('');
     });
 
     it('rejects an empty thumbnails array rather than wiping the previews', async () => {
@@ -163,7 +183,7 @@ describe('PATCH /api/projects/:id/publication', () => {
         expect(res.body.code).toBe('NOT_PUBLISHED');
     });
 
-    it('404s for a non-owner and for an anonymous caller', async () => {
+    it('404s for a non-owner and 401s for an anonymous caller', async () => {
         const id = await publishedProject('Not Yours');
         const stranger = await editListing(id, { description: 'hijack', tags: [] }, otherCookie);
         expect(stranger.status).toBe(404);
