@@ -116,6 +116,17 @@ describe('PATCH /api/projects/:id/publication', () => {
         expect((await projectRow(id)).published_description).toBe('');
     });
 
+    // `form.description || null` and cleared optional fields both send a JSON null, so
+    // this is an ordinary payload — and it must not land the word "null" on a live listing.
+    it('treats a null description as an explicit clear', async () => {
+        const id = await publishedProject('Null Description');
+
+        const res = await editListing(id, { description: null, tags: ['kept'] });
+
+        expect(res.status).toBe(200);
+        expect((await projectRow(id)).published_description).toBe('');
+    });
+
     it('rejects an empty thumbnails array rather than wiping the previews', async () => {
         const id = await publishedProject('Empty Previews');
         const res = await editListing(id, { description: 'x', tags: [], thumbnails: [] });

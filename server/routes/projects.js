@@ -357,13 +357,16 @@ export const parseTagList = (tags) => {
 // `null` (previews) or `undefined` (description). The two routes read an omission
 // differently: publish rewrites the listing wholesale, so it demands a preview set
 // and treats a missing description as empty; the edit route keeps whatever is
-// already published.
+// already published. `undefined` is the ONLY omission marker: an explicit JSON
+// null was sent, so it clears the description rather than storing String(null).
 const parseListingFields = (body) => {
     const previewSet = parsePreviewSet(body);
     if (previewSet.error) return { error: previewSet.error };
     const tags = parseTagList(body?.tags);
     if (tags === null) return { error: 'tags must be up to 10 strings of max 30 chars' };
-    const description = body?.description === undefined ? undefined : String(body.description).slice(0, 2000);
+    const description = body?.description === undefined
+        ? undefined
+        : String(body.description ?? '').slice(0, 2000);
     return { previews: previewSet.previews, tags, description };
 };
 
@@ -462,11 +465,16 @@ router.patch('/api/projects/:id/publication', requireAuth, userWriteLimiter, loa
                 assign('published_description', listing.description),
                 assign('description', listing.description));
         }
+        // Part of the list, not concatenated after it: an empty assignment list would
+        // otherwise emit `SET , updated_at = …`, which does not parse.
+        assignments.push('updated_at = CURRENT_TIMESTAMP');
         const rows = await txQuery(
-            `UPDATE projects SET ${assignments.join(', ')}, updated_at = CURRENT_TIMESTAMP
+            `UPDATE projects SET ${assignments.join(', ')}
              WHERE id = $${params.push(current.id)} RETURNING *`,
             params
         );
+        if (!rows[0]) return null;
+
         if (listing.previews) await replaceThumbnails(current.id, listing.previews, txQuery);
         const thumbnailRows = await txQuery(
             'SELECT id FROM thumbnails WHERE project_id = $1 ORDER BY position', [current.id]);

@@ -124,8 +124,8 @@ describe('publishing', () => {
 
     // Each value is chosen to slip past the checks the other cases cover, so every row
     // pins one validator clause: the string is length-2 to clear the arity check (and
-    // would reach `.some` on a non-array without the Array.isArray guard), and the two
-    // bad entries are arity-correct arrays.
+    // would reach `.some` on a non-array without the Array.isArray guard), and the three
+    // bad entries are arity-correct arrays whose element trips exactly one per-entry check.
     it.each([
         ['a string instead of an array', [PNG_1X1, PNG_1X1], 'ab'],
         ['a non-string entry', [PNG_1X1], [123]],
@@ -134,6 +134,12 @@ describe('publishing', () => {
     ])('rejects previewNodeIds with %s', async (_case, thumbnails, previewNodeIds) => {
         const res = await publish({ description: 'x', tags: [], thumbnails, previewNodeIds });
         expect(res.status).toBe(400);
+    });
+
+    it('publishes a null description as empty, not as the word "null"', async () => {
+        const res = await publish({ description: null, tags: [], thumbnails: [PNG_1X1] });
+        expect(res.status).toBe(200);
+        expect(res.body.project.description).toBe('');
     });
 
     it('requires the inspected project head', async () => {
