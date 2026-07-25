@@ -2,6 +2,9 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PublishModal } from '../../components/cloud/PublishModal';
 import { ApiError, cloudApi } from '../../services/cloudApi';
+// Type-only (erased at compile time, so it does not defeat the vi.mock below): pins these
+// stubs to the renderer's real return shape instead of a hand-copied guess.
+import type { RenderedPreview } from '../../services/thumbnailService';
 
 const computePageOrder = vi.hoisted(() => vi.fn((projectState: any) => [projectState.rootId]));
 vi.mock('../../services/pdfService', () => ({ computePageOrder }));
@@ -125,7 +128,7 @@ describe('PublishModal generator source warning', () => {
     });
 
     it('publishes normally after cloud disclosure loads', async () => {
-        generateThumbnails.mockResolvedValue(['data:image/png;base64,preview']);
+        generateThumbnails.mockResolvedValue([{ nodeId: 'root', dataUrl: 'data:image/png;base64,preview' }]);
         const publish = vi.spyOn(cloudApi, 'publish').mockResolvedValue({} as any);
         const props = renderModal(false);
         const button = screen.getByRole('button', { name: 'Publish' });
@@ -145,7 +148,7 @@ describe('PublishModal generator source warning', () => {
         vi.spyOn(cloudApi, 'getCommit').mockResolvedValue({
             id: 'head-1', message: 'Head', createdAt: '2026-07-14T12:40:00.000Z', state: cloudHeadState,
         });
-        generateThumbnails.mockResolvedValue(['data:image/png;base64,preview']);
+        generateThumbnails.mockResolvedValue([{ nodeId: 'cloud', dataUrl: 'data:image/png;base64,preview' }]);
         vi.spyOn(cloudApi, 'publish').mockResolvedValue({} as any);
         renderModal(false);
 
@@ -170,7 +173,7 @@ describe('PublishModal generator source warning', () => {
             createdAt: '2026-07-14T12:40:00.000Z',
             state: commitId === 'head-2' ? { ...state, generator } : state,
         }));
-        generateThumbnails.mockResolvedValue(['data:image/png;base64,preview']);
+        generateThumbnails.mockResolvedValue([{ nodeId: 'root', dataUrl: 'data:image/png;base64,preview' }]);
         const publish = vi.spyOn(cloudApi, 'publish').mockRejectedValue(
             new ApiError(409, 'Project changed since disclosure was inspected.', 'PROJECT_HEAD_CHANGED'),
         );
@@ -221,7 +224,7 @@ describe('PublishModal generator source warning', () => {
             createdAt: '2026-07-14T12:40:00.000Z',
             state: projectId === 'cloud-1' ? { ...state, generator } : nextState,
         }));
-        generateThumbnails.mockResolvedValue(['data:image/png;base64,old-preview']);
+        generateThumbnails.mockResolvedValue([{ nodeId: 'root', dataUrl: 'data:image/png;base64,old-preview' }]);
         vi.spyOn(cloudApi, 'publish').mockRejectedValue(new Error('Old project publish failed'));
         const { rerender } = render(modal('cloud-1'));
         const publishButton = screen.getByRole('button', { name: 'Publish' });
@@ -251,7 +254,7 @@ describe('PublishModal generator source warning', () => {
     });
 
     it('does not let an operation started for the old project publish after rerender', async () => {
-        const thumbnails = deferred<string[]>();
+        const thumbnails = deferred<RenderedPreview[]>();
         generateThumbnails.mockReturnValue(thumbnails.promise);
         const publish = vi.spyOn(cloudApi, 'publish').mockResolvedValue({} as any);
         const { rerender } = render(modal('cloud-1'));
@@ -261,7 +264,7 @@ describe('PublishModal generator source warning', () => {
         await waitFor(() => expect(generateThumbnails).toHaveBeenCalledOnce());
 
         rerender(modal('cloud-2'));
-        thumbnails.resolve(['data:image/png;base64,preview']);
+        thumbnails.resolve([{ nodeId: 'root', dataUrl: 'data:image/png;base64,preview' }]);
 
         await waitFor(() => expect(screen.getByRole('button', { name: 'Publish' })).toBeDisabled());
         expect(publish).not.toHaveBeenCalled();

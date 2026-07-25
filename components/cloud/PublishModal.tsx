@@ -97,11 +97,14 @@ export function PublishModal({ project, cloudProjectId, onClose, onPublished }: 
             setPhase('rendering');
             const thumbs = await generateThumbnails(inspected.state, selected, inspected.state.activeVariantId);
             if (currentProjectId.current !== cloudProjectId) return;
-            setPreviews(thumbs);
+            // The renderer returns { nodeId, dataUrl } pairs; the preview strip and the publish
+            // payload both want bare images, so unwrap once and use the same array for both.
+            const dataUrls = thumbs.map(t => t.dataUrl);
+            setPreviews(dataUrls);
             if (thumbs.length === 0) throw new Error('Could not render previews');
             setPhase('uploading');
             const tags = tagsText.split(',').map(t => t.trim().toLowerCase()).filter(Boolean).slice(0, 10);
-            await cloudApi.publish(cloudProjectId, inspected.headCommitId, { description, tags, thumbnails: thumbs });
+            await cloudApi.publish(cloudProjectId, inspected.headCommitId, { description, tags, thumbnails: dataUrls });
             if (currentProjectId.current === cloudProjectId) onPublished();
         } catch (e) {
             if (currentProjectId.current !== cloudProjectId) return;

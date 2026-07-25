@@ -42,6 +42,10 @@ describe('generateThumbnails', () => {
     it('drops unknown pages without shifting the remaining pairings', async () => {
         const out = await generateThumbnails(state, ['b', 'not-a-page', 'c']);
         expect(out.map(o => o.nodeId)).toEqual(['b', 'c']);
+        // The other half of the alignment: each surviving pair must also have rasterized the page
+        // its nodeId names. 'b' and 'c' are at order indices 1 and 2, so 1-based pages 2 and 3 --
+        // an implementation that skipped the unknown id but kept counting would fetch 2 and 4.
+        expect(getPage.mock.calls.flat()).toEqual([2, 3]);
     });
 
     it('renders at most six pages', async () => {
