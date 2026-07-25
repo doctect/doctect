@@ -11,7 +11,9 @@ vi.mock('../../lib/auth-client', () => ({
 
 // See tests/unit/MergeRequestPage.test.tsx for why thumbnailService must be stubbed here too
 // (pdfjs-dist touches DOMMatrix at module-evaluation time, which jsdom doesn't provide).
-vi.mock('../../services/thumbnailService', () => ({ generateThumbnails: vi.fn() }));
+// Resolves to the real contract's shape (an array of { nodeId, dataUrl } pairs) rather than
+// undefined, so the stub can't drift from generateThumbnails' signature.
+vi.mock('../../services/thumbnailService', () => ({ generateThumbnails: vi.fn(async () => []) }));
 
 const emptyChangeSet = {
     variantsAdded: [], variantsRemoved: [], variantsRenamed: {},

@@ -8,22 +8,34 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
 
 const MAX_THUMB_WIDTH = 480;
 
+export const MAX_PREVIEWS = 6;
+
+export interface RenderedPreview {
+    nodeId: string;
+    dataUrl: string;
+}
+
 /**
- * Renders up to 4 pages of the project to compressed image data URLs.
+ * Renders up to 6 pages of the project to compressed image data URLs.
  * WebP where the browser supports canvas.toDataURL('image/webp'), else PNG.
+ *
+ * Returns page/image PAIRS, not bare images: the loop below skips any node id
+ * missing from the page order or any canvas without a 2d context, so a caller
+ * zipping its own selection against a bare image array would mislabel every
+ * preview after the first skip.
  */
 export async function generateThumbnails(
     state: AppState,
     nodeIds: string[],
     variantId?: string
-): Promise<string[]> {
+): Promise<RenderedPreview[]> {
     const data = (await generatePDF(state, { variantId, output: 'arraybuffer' })) as ArrayBuffer;
     const order = computePageOrder(state);
     const loadingTask = pdfjsLib.getDocument({ data });
     const pdf = await loadingTask.promise;
-    const out: string[] = [];
+    const out: RenderedPreview[] = [];
     try {
-        for (const nodeId of nodeIds.slice(0, 4)) {
+        for (const nodeId of nodeIds.slice(0, MAX_PREVIEWS)) {
             const idx = order.indexOf(nodeId);
             if (idx === -1) continue;
             const page = await pdf.getPage(idx + 1);
@@ -39,7 +51,10 @@ export async function generateThumbnails(
             ctx.fillRect(0, 0, canvas.width, canvas.height);
             await page.render({ canvas, canvasContext: ctx, viewport }).promise;
             const webp = canvas.toDataURL('image/webp', 0.8);
-            out.push(webp.startsWith('data:image/webp') ? webp : canvas.toDataURL('image/png'));
+            out.push({
+                nodeId,
+                dataUrl: webp.startsWith('data:image/webp') ? webp : canvas.toDataURL('image/png'),
+            });
         }
     } finally {
         // `destroy()` lives on the loading task (terminates the worker); the

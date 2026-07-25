@@ -148,7 +148,7 @@ describe('MergeRequestPage preview state loading', () => {
     beforeEach(() => {
         vi.restoreAllMocks();
         generateThumbnails.mockReset();
-        generateThumbnails.mockResolvedValue(['data:image/png;base64,preview']);
+        generateThumbnails.mockResolvedValue([{ nodeId: 'page-1', dataUrl: 'data:image/png;base64,preview' }]);
         mockUseSession.mockReturnValue({ data: { user: { id: 'owner-id' } } });
     });
 
