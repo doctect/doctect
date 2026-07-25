@@ -2,7 +2,7 @@
 // @vitest-environment node
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import request from 'supertest';
-import { initTestApp, signUpUser, minimalState, saveProjectCommit } from './helpers.js';
+import { initTestApp, signUpUser, minimalState, saveProjectCommit, PNG_1X1 } from './helpers.js';
 
 let app;
 beforeAll(async () => {
@@ -30,5 +30,27 @@ describe('per-user write rate limit', () => {
         const other = await request(app).post('/api/projects').set('Cookie', calm)
             .send({ name: 'Calm', state: minimalState('calm') });
         expect(other.status).toBe(201);
+    });
+
+    it('counts listing edits against the same per-user write budget', async () => {
+        const editor = await signUpUser(app, { email: 'editor@test.dev', username: 'editor_u' });
+        const created = await request(app).post('/api/projects').set('Cookie', editor)
+            .send({ name: 'Listing Budget', state: minimalState('root') });        // write 1
+        expect(created.status).toBe(201);
+        const id = created.body.project.id;
+
+        const published = await request(app).post(`/api/projects/${id}/publish`).set('Cookie', editor)
+            .set('If-Match', `"${created.body.project.headCommitId}"`)
+            .send({ description: 'x', tags: [], thumbnails: [PNG_1X1] });
+        expect(published.status).toBe(200);   // publish carries no limiter today
+
+        const first = await request(app).patch(`/api/projects/${id}/publication`)
+            .set('Cookie', editor).send({ description: 'edit one', tags: [] });     // write 2
+        expect(first.status).toBe(200);
+
+        const second = await request(app).patch(`/api/projects/${id}/publication`)
+            .set('Cookie', editor).send({ description: 'edit two', tags: [] });     // write 3 — over
+        expect(second.status).toBe(429);
+        expect(second.body.code).toBe('RATE_LIMITED');
     });
 });

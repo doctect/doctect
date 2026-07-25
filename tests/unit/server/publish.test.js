@@ -122,6 +122,19 @@ describe('publishing', () => {
         expect(res.status).toBe(400);
     });
 
+    // Each value is chosen to slip past the checks the other cases cover, so every row
+    // pins one validator clause: the string is length-2 to clear the arity check (and
+    // would reach `.some` on a non-array without the Array.isArray guard), and the two
+    // bad entries are arity-correct arrays.
+    it.each([
+        ['a string instead of an array', [PNG_1X1, PNG_1X1], 'ab'],
+        ['an empty string entry', [PNG_1X1], ['']],
+        ['an entry over 200 chars', [PNG_1X1], ['x'.repeat(201)]],
+    ])('rejects previewNodeIds with %s', async (_case, thumbnails, previewNodeIds) => {
+        const res = await publish({ description: 'x', tags: [], thumbnails, previewNodeIds });
+        expect(res.status).toBe(400);
+    });
+
     it('requires the inspected project head', async () => {
         const res = await request(app).post(`/api/projects/${projectId}/publish`).set('Cookie', cookie)
             .send({ description: 'x', tags: [], thumbnails: [PNG_1X1] });
@@ -212,7 +225,6 @@ describe('publishing', () => {
 
     it('serializes concurrent first publishes under the per-owner allowance', async () => {
         const previousLimit = process.env.MAX_PUBLIC_PROJECTS_PER_USER;
-        const { query } = await import('../../../server/db.js');
         const currentPublic = await query(`SELECT COUNT(*) AS n FROM projects WHERE owner_id = (
             SELECT id FROM "user" WHERE email = $1
         ) AND visibility = 'public'`, ['pub@test.dev']);
@@ -275,7 +287,6 @@ describe('publishing', () => {
             .send({ description: 'replacement', tags: ['replacement'], thumbnails: [PNG_1X1] });
 
         expect(failed.status).toBe(500);
-        const { query } = await import('../../../server/db.js');
         const project = await query('SELECT visibility, description, tags FROM projects WHERE id = $1', [rollbackProjectId]);
         const thumbnails = await query('SELECT id FROM thumbnails WHERE project_id = $1 ORDER BY position', [rollbackProjectId]);
         expect(project[0]).toMatchObject({ visibility: 'private', description: 'existing', tags: '["existing"]' });

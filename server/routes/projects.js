@@ -313,6 +313,7 @@ export const getThumbnailIds = async (projectId) => {
 };
 
 export const MAX_PREVIEWS = 6;
+const PREVIEW_COUNT_ERROR = `thumbnails must contain 1-${MAX_PREVIEWS} images`;
 
 // Shared by the publish route and the listing-edit route so their validation can
 // never drift. Returns { error } on bad input, { previews: null } when the caller
@@ -320,9 +321,15 @@ export const MAX_PREVIEWS = 6;
 // previews alone"; publish rejects it), or the parsed set otherwise.
 export const parsePreviewSet = (body) => {
     const { thumbnails, previewNodeIds } = body || {};
-    if (thumbnails === undefined) return { previews: null };
+    if (thumbnails === undefined) {
+        // Node ids label the images they arrive with; there is no path that re-tags
+        // previews already stored. Accepting them alone would make the edit route
+        // answer 200 to a request it silently ignored.
+        if (previewNodeIds !== undefined) return { error: 'previewNodeIds requires thumbnails' };
+        return { previews: null };
+    }
     if (!Array.isArray(thumbnails) || thumbnails.length < 1 || thumbnails.length > MAX_PREVIEWS) {
-        return { error: `thumbnails must contain 1-${MAX_PREVIEWS} images` };
+        return { error: PREVIEW_COUNT_ERROR };
     }
     const parsed = thumbnails.map(parseThumbnail);
     if (parsed.some(p => p === null)) {
@@ -359,7 +366,7 @@ router.post('/api/projects/:id/publish', requireAuth, requireUsername, loadProje
     const previewSet = parsePreviewSet(req.body);
     if (previewSet.error) return res.status(400).json({ error: previewSet.error });
     if (!previewSet.previews) {
-        return res.status(400).json({ error: `thumbnails must contain 1-${MAX_PREVIEWS} images` });
+        return res.status(400).json({ error: PREVIEW_COUNT_ERROR });
     }
     const parsedTags = parseTagList(req.body?.tags);
     if (parsedTags === null) {
@@ -407,6 +414,46 @@ router.post('/api/projects/:id/publish', requireAuth, requireUsername, loadProje
         return res.status(409).json({ error: 'Project head changed since it was inspected.', code: 'PROJECT_HEAD_CHANGED' });
     }
     res.json({ project: { ...projectDto(published.row), thumbnailIds: published.thumbnailIds } });
+});
+
+// Edits the public listing only. Deliberately never writes published_commit_id
+// (the public version is changed by publishing, not by editing its description),
+// published_name (a copy of the project name), or published_at (it drives the
+// gallery's "recently updated" sort, so a tag edit must not re-rank the project).
+// No requireUsername: the established rule gates routes that attach NEW content
+// to the gallery as the acting user, not routes acting on content the caller
+// already owns — and publishing already required a username.
+router.patch('/api/projects/:id/publication', requireAuth, userWriteLimiter, loadProject(true), async (req, res) => {
+    const notPublished = () => res.status(409).json({ error: 'Project is not published.', code: 'NOT_PUBLISHED' });
+    if (req.project.visibility !== 'public' || !req.project.published_commit_id) return notPublished();
+
+    const previewSet = parsePreviewSet(req.body);
+    if (previewSet.error) return res.status(400).json({ error: previewSet.error });
+    const parsedTags = parseTagList(req.body?.tags);
+    if (parsedTags === null) {
+        return res.status(400).json({ error: 'tags must be up to 10 strings of max 30 chars' });
+    }
+    const d = String(req.body?.description ?? '').slice(0, 2000);
+
+    const updated = await withTransaction(async txQuery => {
+        const [current] = await lockProjectRows([req.project.id], txQuery);
+        if (!current || current.owner_id !== req.user.id) return null;
+        if (current.visibility !== 'public' || !current.published_commit_id) return null;
+
+        // $1/$3 and $2/$4 carry the same value under distinct placeholders: the SQLite
+        // adapter rewrites $n positionally, so reusing one would mis-bind.
+        const rows = await txQuery(
+            `UPDATE projects SET published_description = $1, published_tags = $2,
+                 description = $3, tags = $4, updated_at = CURRENT_TIMESTAMP
+             WHERE id = $5 RETURNING *`,
+            [d, parsedTags, d, parsedTags, current.id]
+        );
+        if (previewSet.previews) await replaceThumbnails(current.id, previewSet.previews, txQuery);
+        return rows[0];
+    });
+
+    if (!updated) return notPublished();
+    res.json({ project: { ...projectDto(updated), thumbnailIds: await getThumbnailIds(updated.id) } });
 });
 
 router.post('/api/projects/:id/unpublish', requireAuth, loadProject(true), async (req, res) => {
