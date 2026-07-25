@@ -211,7 +211,7 @@ export const cloudApi = {
     getCommit: async (projectId: string, commitId: string) =>
         (await api<{ commit: { id: string; message: string; createdAt: string; state: any } }>(`/api/projects/${projectId}/commits/${commitId}`)).commit,
 
-    publish: (projectId: string, expectedHead: string, args: { description: string; tags: string[]; thumbnails: string[] }) =>
+    publish: (projectId: string, expectedHead: string, args: { description: string; tags: string[]; thumbnails: string[]; previewNodeIds?: string[] }) =>
         api<{ project: CloudProject & { thumbnailIds: string[] } }>(`/api/projects/${projectId}/publish`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'If-Match': `"${expectedHead}"` },

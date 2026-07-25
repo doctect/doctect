@@ -200,7 +200,7 @@ export async function publishProject(t, { description, tags, previewPages } = {}
     // (PublishModal.tsx:68 pre-selects only the first page in
     // computePageOrder -- the project root). Each entry is a page TITLE:
     // the picker renders one implicitly-labeled checkbox per page
-    // (PublishModal.tsx:189-194, <label><input type=checkbox><span>title),
+    // (PreviewPagePicker.tsx, <label><input type=checkbox><span>title),
     // so getByRole('checkbox', { name }) resolves it once the modal's
     // disclosure fetch populates the list (check() auto-waits for that).
     // `exact: true` matters -- default role-name matching is substring, and

@@ -3,6 +3,7 @@ import { X, Globe, Loader } from 'lucide-react';
 import { cloudApi, ApiError } from '../../services/cloudApi';
 import { computePageOrder } from '../../services/pdfService';
 import { generateThumbnails } from '../../services/thumbnailService';
+import { PreviewPagePicker } from './PreviewPagePicker';
 import type { Project } from '../../pages/EditorPage';
 
 interface PublishModalProps {
@@ -84,10 +85,6 @@ export function PublishModal({ project, cloudProjectId, onClose, onPublished }: 
         return order.slice(0, 100).map(id => ({ id, title: disclosure.state.nodes[id]?.title || id }));
     }, [cloudProjectId, disclosure]);
 
-    const toggle = (id: string) => {
-        setSelected(prev => prev.includes(id) ? prev.filter(x => x !== id) : (prev.length >= 4 ? prev : [...prev, id]));
-    };
-
     const publish = async () => {
         const inspected = disclosure.status === 'ready' && disclosure.projectId === cloudProjectId ? disclosure : null;
         if (!inspected || currentProjectId.current !== cloudProjectId) return;
@@ -95,16 +92,19 @@ export function PublishModal({ project, cloudProjectId, onClose, onPublished }: 
         setError(null);
         try {
             setPhase('rendering');
-            const thumbs = await generateThumbnails(inspected.state, selected, inspected.state.activeVariantId);
+            const rendered = await generateThumbnails(inspected.state, selected, inspected.state.activeVariantId);
             if (currentProjectId.current !== cloudProjectId) return;
-            // The renderer returns { nodeId, dataUrl } pairs; the preview strip and the publish
-            // payload both want bare images, so unwrap once and use the same array for both.
-            const dataUrls = thumbs.map(t => t.dataUrl);
-            setPreviews(dataUrls);
-            if (thumbs.length === 0) throw new Error('Could not render previews');
+            setPreviews(rendered.map(r => r.dataUrl));
+            if (rendered.length === 0) throw new Error('Could not render previews');
             setPhase('uploading');
             const tags = tagsText.split(',').map(t => t.trim().toLowerCase()).filter(Boolean).slice(0, 10);
-            await cloudApi.publish(cloudProjectId, inspected.headCommitId, { description, tags, thumbnails: dataUrls });
+            // The renderer skips pages it cannot render, so each image is published with the
+            // page it actually came from rather than with the selection the user made.
+            await cloudApi.publish(cloudProjectId, inspected.headCommitId, {
+                description, tags,
+                thumbnails: rendered.map(r => r.dataUrl),
+                previewNodeIds: rendered.map(r => r.nodeId),
+            });
             if (currentProjectId.current === cloudProjectId) onPublished();
         } catch (e) {
             if (currentProjectId.current !== cloudProjectId) return;
@@ -186,17 +186,7 @@ export function PublishModal({ project, cloudProjectId, onClose, onPublished }: 
                         <input value={tagsText} onChange={e => setTagsText(e.target.value)}
                             className="mt-1 w-full border rounded p-2 text-xs" placeholder="planner, 2026, remarkable" />
                     </label>
-                    <div>
-                        <span className="text-xs font-medium text-slate-600">Preview pages (up to 4)</span>
-                        <div className="mt-1 max-h-40 overflow-y-auto border rounded divide-y">
-                            {pages.map(p => (
-                                <label key={p.id} className="flex items-center gap-2 px-2 py-1.5 text-xs hover:bg-slate-50 cursor-pointer">
-                                    <input type="checkbox" checked={selected.includes(p.id)} onChange={() => toggle(p.id)} />
-                                    <span className="truncate">{p.title}</span>
-                                </label>
-                            ))}
-                        </div>
-                    </div>
+                    <PreviewPagePicker pages={pages} selected={selected} onChange={setSelected} />
                     {previews.length > 0 && (
                         <div className="flex gap-2">
                             {previews.map((src, i) => <img key={i} src={src} alt={`Preview ${i + 1}`} className="h-24 border rounded" />)}

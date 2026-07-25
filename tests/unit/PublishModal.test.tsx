@@ -9,7 +9,17 @@ import type { RenderedPreview } from '../../services/thumbnailService';
 const computePageOrder = vi.hoisted(() => vi.fn((projectState: any) => [projectState.rootId]));
 vi.mock('../../services/pdfService', () => ({ computePageOrder }));
 const generateThumbnails = vi.hoisted(() => vi.fn());
-vi.mock('../../services/thumbnailService', () => ({ generateThumbnails }));
+// thumbnailService loads pdfjs-dist at module scope, which touches DOMMatrix and crashes under
+// jsdom -- hence the pdfjs stubs, copied from tests/unit/thumbnailService.test.ts. With those in
+// place the module itself is safe to load, so only generateThumbnails is replaced: MAX_PREVIEWS
+// (which PreviewPagePicker enforces) stays the REAL constant, so a change to the cap fails the
+// selection test below instead of silently passing against a hand-copied 6.
+vi.mock('pdfjs-dist', () => ({ GlobalWorkerOptions: {}, getDocument: vi.fn() }));
+vi.mock('pdfjs-dist/build/pdf.worker.min.mjs?url', () => ({ default: 'worker-url' }));
+vi.mock('../../services/thumbnailService', async importOriginal => ({
+    ...await importOriginal<typeof import('../../services/thumbnailService')>(),
+    generateThumbnails,
+}));
 
 const generator = {
     formatVersion: 1 as const,
@@ -140,6 +150,7 @@ describe('PublishModal generator source warning', () => {
             description: '',
             tags: [],
             thumbnails: ['data:image/png;base64,preview'],
+            previewNodeIds: ['root'],
         }));
         expect(props.onPublished).toHaveBeenCalledOnce();
     });
@@ -314,5 +325,39 @@ describe('PublishModal generator source warning', () => {
         result.unmount();
         expect(trigger).toHaveFocus();
         trigger.remove();
+    });
+});
+
+describe('PublishModal preview selection', () => {
+    beforeEach(() => {
+        vi.restoreAllMocks();
+        vi.spyOn(cloudApi, 'getProject').mockResolvedValue(cloudProject);
+        vi.spyOn(cloudApi, 'getCommit').mockResolvedValue({
+            id: 'head-1', message: 'm', createdAt: '', state,
+        } as any);
+        computePageOrder.mockImplementation(() => ['p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7']);
+    });
+
+    it('caps the selection at six pages and sends each preview with its page', async () => {
+        const publishSpy = vi.spyOn(cloudApi, 'publish').mockResolvedValue({} as any);
+        generateThumbnails.mockImplementation(async (_s: any, ids: string[]) =>
+            ids.map(id => ({ nodeId: id, dataUrl: `data:image/webp;base64,${id}` })));
+
+        render(<PublishModal
+            project={{ id: 'local-1', name: 'Project', initialState: state as any }}
+            cloudProjectId="cloud-1" onClose={vi.fn()} onPublished={vi.fn()} />);
+
+        const boxes = await screen.findAllByRole('checkbox');
+        expect(boxes.length).toBe(7);
+        // p1 is preselected by the modal; tick p2..p7 and expect the 7th to be refused.
+        for (const box of boxes.slice(1)) fireEvent.click(box);
+        expect(boxes.filter(b => (b as HTMLInputElement).checked).length).toBe(6);
+
+        fireEvent.click(screen.getByRole('button', { name: /^publish$/i }));
+
+        await waitFor(() => expect(publishSpy).toHaveBeenCalled());
+        const [, , args] = publishSpy.mock.calls[0];
+        expect(args.thumbnails.length).toBe(6);
+        expect(args.previewNodeIds).toEqual(['p1', 'p2', 'p3', 'p4', 'p5', 'p6']);
     });
 });
