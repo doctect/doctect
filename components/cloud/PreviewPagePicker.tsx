@@ -1,5 +1,5 @@
 import React from 'react';
-import { MAX_PREVIEWS } from '../../services/thumbnailService';
+import { MAX_PREVIEWS } from '../../constants/previews';
 
 export interface PreviewPage {
     id: string;
@@ -13,8 +13,12 @@ interface PreviewPagePickerProps {
 }
 
 /**
- * The one place the 1-MAX_PREVIEWS rule is implemented. Selection order is
+ * The one place the MAX_PREVIEWS upper bound is implemented. Selection order is
  * publish order, and position 0 is the image the gallery card shows.
+ *
+ * The matching lower bound is NOT here: a picker with nothing ticked is a legal
+ * intermediate state while the user re-picks. Each host enforces "at least one"
+ * when it submits -- see PublishModal's `selected.length === 0` guard.
  */
 export function PreviewPagePicker({ pages, selected, onChange }: PreviewPagePickerProps) {
     const toggle = (id: string) => {

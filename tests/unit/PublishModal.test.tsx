@@ -9,17 +9,11 @@ import type { RenderedPreview } from '../../services/thumbnailService';
 const computePageOrder = vi.hoisted(() => vi.fn((projectState: any) => [projectState.rootId]));
 vi.mock('../../services/pdfService', () => ({ computePageOrder }));
 const generateThumbnails = vi.hoisted(() => vi.fn());
-// thumbnailService loads pdfjs-dist at module scope, which touches DOMMatrix and crashes under
-// jsdom -- hence the pdfjs stubs, copied from tests/unit/thumbnailService.test.ts. With those in
-// place the module itself is safe to load, so only generateThumbnails is replaced: MAX_PREVIEWS
-// (which PreviewPagePicker enforces) stays the REAL constant, so a change to the cap fails the
-// selection test below instead of silently passing against a hand-copied 6.
-vi.mock('pdfjs-dist', () => ({ GlobalWorkerOptions: {}, getDocument: vi.fn() }));
-vi.mock('pdfjs-dist/build/pdf.worker.min.mjs?url', () => ({ default: 'worker-url' }));
-vi.mock('../../services/thumbnailService', async importOriginal => ({
-    ...await importOriginal<typeof import('../../services/thumbnailService')>(),
-    generateThumbnails,
-}));
+// Stubbed wholesale because the real module loads pdfjs-dist at module scope, which touches
+// DOMMatrix and crashes under jsdom. Nothing is lost by that here: MAX_PREVIEWS -- the cap
+// PreviewPagePicker enforces, and the one the selection test below asserts -- lives in
+// constants/previews, which is NOT mocked, so that test binds to the shipped value.
+vi.mock('../../services/thumbnailService', () => ({ generateThumbnails }));
 
 const generator = {
     formatVersion: 1 as const,
@@ -331,6 +325,7 @@ describe('PublishModal generator source warning', () => {
 describe('PublishModal preview selection', () => {
     beforeEach(() => {
         vi.restoreAllMocks();
+        generateThumbnails.mockReset();
         vi.spyOn(cloudApi, 'getProject').mockResolvedValue(cloudProject);
         vi.spyOn(cloudApi, 'getCommit').mockResolvedValue({
             id: 'head-1', message: 'm', createdAt: '', state,
@@ -359,5 +354,31 @@ describe('PublishModal preview selection', () => {
         const [, , args] = publishSpy.mock.calls[0];
         expect(args.thumbnails.length).toBe(6);
         expect(args.previewNodeIds).toEqual(['p1', 'p2', 'p3', 'p4', 'p5', 'p6']);
+    });
+
+    it('labels each preview with the page it rendered from, not the page that was picked', async () => {
+        const publishSpy = vi.spyOn(cloudApi, 'publish').mockResolvedValue({} as any);
+        // The renderer drops any page it cannot rasterize, so what comes back is not always one
+        // image per selected page. Publishing `selected` alongside these images would caption p4
+        // with p3's title -- and every preview after the skip with the wrong page.
+        generateThumbnails.mockImplementation(async (_s: any, ids: string[]) =>
+            ids.filter(id => id !== 'p3').map(id => ({ nodeId: id, dataUrl: `data:image/webp;base64,${id}` })));
+
+        render(<PublishModal
+            project={{ id: 'local-1', name: 'Project', initialState: state as any }}
+            cloudProjectId="cloud-1" onClose={vi.fn()} onPublished={vi.fn()} />);
+
+        const boxes = await screen.findAllByRole('checkbox');
+        // p1 is preselected; add p2, p3 (the page the renderer will skip) and p4.
+        for (const box of boxes.slice(1, 4)) fireEvent.click(box);
+        fireEvent.click(screen.getByRole('button', { name: /^publish$/i }));
+
+        await waitFor(() => expect(publishSpy).toHaveBeenCalled());
+        expect(generateThumbnails).toHaveBeenCalledWith(state, ['p1', 'p2', 'p3', 'p4'], 'default');
+        const [, , args] = publishSpy.mock.calls[0];
+        expect(args.previewNodeIds).toEqual(['p1', 'p2', 'p4']);
+        expect(args.thumbnails).toEqual([
+            'data:image/webp;base64,p1', 'data:image/webp;base64,p2', 'data:image/webp;base64,p4',
+        ]);
     });
 });

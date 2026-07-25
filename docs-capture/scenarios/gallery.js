@@ -232,7 +232,7 @@ async function openFilledPublishWizard(t) {
         await t.page.getByRole('checkbox', { name: pageTitle, exact: true }).check();
     }
     // Anti-rot for the tutorial's "the first page comes pre-checked" claim
-    // (PublishModal.tsx:68 seeds the selection with computePageOrder's first
+    // (PublishModal.tsx seeds the selection with computePageOrder's first
     // page -- the renamed root). Assert, don't check(): silently re-checking
     // would hide a regression of the default.
     const cover = t.page.getByRole('checkbox', { name: JOURNAL_NAME, exact: true });
@@ -778,7 +778,7 @@ export const shots = [
         await openFilledPublishWizard(t);
 
         // The rendered-thumbnails stage only exists DURING a publish:
-        // PublishModal.tsx:96-105 renders previews client-side
+        // PublishModal.tsx's publish() renders previews client-side
         // (generateThumbnails: jsPDF -> pdf.js raster -> WebP), setPreviews()s
         // them, then uploads -- and on success CloudMenu closes the modal and
         // alerts (CloudMenu.tsx:161). Snapping "after previews render" by

@@ -1,4 +1,5 @@
 import { AppState } from '../types';
+import { MAX_PREVIEWS } from '../constants/previews';
 import { generatePDF, computePageOrder } from './pdfService';
 import * as pdfjsLib from 'pdfjs-dist';
 // Vite resolves the worker as an asset URL:
@@ -8,7 +9,9 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
 
 const MAX_THUMB_WIDTH = 480;
 
-export const MAX_PREVIEWS = 6;
+// Re-exported so the renderer's cap and the picker's cap stay visibly the same constant;
+// import it from ../constants/previews unless you already depend on this module.
+export { MAX_PREVIEWS };
 
 export interface RenderedPreview {
     nodeId: string;
