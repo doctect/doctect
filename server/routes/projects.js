@@ -312,21 +312,60 @@ export const getThumbnailIds = async (projectId) => {
     return rows.map(r => r.id);
 };
 
-router.post('/api/projects/:id/publish', requireAuth, requireUsername, loadProject(true), async (req, res) => {
-    const expectedHead = expectedHeadFromRequest(req, res);
-    if (expectedHead === null) return;
-    const { description, tags, thumbnails } = req.body || {};
-    if (!Array.isArray(thumbnails) || thumbnails.length < 1 || thumbnails.length > 4) {
-        return res.status(400).json({ error: 'thumbnails must contain 1-4 images' });
+export const MAX_PREVIEWS = 6;
+
+// Shared by the publish route and the listing-edit route so their validation can
+// never drift. Returns { error } on bad input, { previews: null } when the caller
+// omitted `thumbnails` entirely (the edit route reads that as "leave the existing
+// previews alone"; publish rejects it), or the parsed set otherwise.
+export const parsePreviewSet = (body) => {
+    const { thumbnails, previewNodeIds } = body || {};
+    if (thumbnails === undefined) return { previews: null };
+    if (!Array.isArray(thumbnails) || thumbnails.length < 1 || thumbnails.length > MAX_PREVIEWS) {
+        return { error: `thumbnails must contain 1-${MAX_PREVIEWS} images` };
     }
     const parsed = thumbnails.map(parseThumbnail);
     if (parsed.some(p => p === null)) {
-        return res.status(400).json({ error: 'thumbnails must be valid webp/png data URLs under 300KB' });
+        return { error: 'thumbnails must be valid webp/png data URLs under 300KB' };
     }
+    if (previewNodeIds !== undefined
+        && (!Array.isArray(previewNodeIds)
+            || previewNodeIds.length !== thumbnails.length
+            || previewNodeIds.some(x => typeof x !== 'string' || x.length === 0 || x.length > 200))) {
+        return { error: 'previewNodeIds must be one non-empty string per thumbnail (max 200 chars)' };
+    }
+    return { previews: parsed.map((p, i) => ({ ...p, nodeId: previewNodeIds?.[i] ?? null })) };
+};
+
+export const parseTagList = (tags) => {
     if (!Array.isArray(tags) || tags.length > 10 || tags.some(x => typeof x !== 'string' || x.length > 30)) {
+        return null;
+    }
+    return JSON.stringify(tags);
+};
+
+export const replaceThumbnails = async (projectId, previews, txQuery) => {
+    await txQuery('DELETE FROM thumbnails WHERE project_id = $1', [projectId]);
+    for (let i = 0; i < previews.length; i++) {
+        await txQuery(
+            'INSERT INTO thumbnails (id, project_id, position, mime, image, node_id) VALUES ($1, $2, $3, $4, $5, $6)',
+            [randomUUID(), projectId, i, previews[i].mime, previews[i].buf, previews[i].nodeId]);
+    }
+};
+
+router.post('/api/projects/:id/publish', requireAuth, requireUsername, loadProject(true), async (req, res) => {
+    const expectedHead = expectedHeadFromRequest(req, res);
+    if (expectedHead === null) return;
+    const previewSet = parsePreviewSet(req.body);
+    if (previewSet.error) return res.status(400).json({ error: previewSet.error });
+    if (!previewSet.previews) {
+        return res.status(400).json({ error: `thumbnails must contain 1-${MAX_PREVIEWS} images` });
+    }
+    const parsedTags = parseTagList(req.body?.tags);
+    if (parsedTags === null) {
         return res.status(400).json({ error: 'tags must be up to 10 strings of max 30 chars' });
     }
-    const d = String(description ?? '').slice(0, 2000);
+    const d = String(req.body?.description ?? '').slice(0, 2000);
 
     let published;
     try {
@@ -345,7 +384,7 @@ router.post('/api/projects/:id/publish', requireAuth, requireUsername, loadProje
                      updated_at = CURRENT_TIMESTAMP
                  WHERE id = $6 AND head_commit_id = $7
                  RETURNING *`,
-                [expectedHead, d, JSON.stringify(tags), d, JSON.stringify(tags), current[0].id, expectedHead]
+                [expectedHead, d, parsedTags, d, parsedTags, current[0].id, expectedHead]
             );
             if (!updated[0]) return null;
 
@@ -355,11 +394,7 @@ router.post('/api/projects/:id/publish', requireAuth, requireUsername, loadProje
                 [current[0].id, expectedHead]
             );
 
-            await txQuery('DELETE FROM thumbnails WHERE project_id = $1', [current[0].id]);
-            for (let i = 0; i < parsed.length; i++) {
-                await txQuery('INSERT INTO thumbnails (id, project_id, position, mime, image) VALUES ($1, $2, $3, $4, $5)',
-                    [randomUUID(), current[0].id, i, parsed[i].mime, parsed[i].buf]);
-            }
+            await replaceThumbnails(current[0].id, previewSet.previews, txQuery);
             const thumbnailRows = await txQuery('SELECT id FROM thumbnails WHERE project_id = $1 ORDER BY position', [current[0].id]);
             return { row: updated[0], thumbnailIds: thumbnailRows.map(item => item.id) };
         });

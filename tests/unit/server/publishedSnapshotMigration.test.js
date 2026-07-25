@@ -81,6 +81,16 @@ beforeAll(async () => {
         id TEXT PRIMARY KEY,
         project_id TEXT NOT NULL
     )`);
+    // The ledger above claims 005_thumbnails_reports is applied, so the physical
+    // schema must carry its table for later migrations that alter it.
+    await query(`CREATE TABLE thumbnails (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        position INTEGER NOT NULL DEFAULT 0,
+        mime TEXT NOT NULL,
+        image BLOB NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )`);
     await query('INSERT INTO projects (id, name, description, tags, visibility, head_commit_id) VALUES ($1, $2, $3, $4, $5, $6)',
         ['public-project', 'Public name', 'Public description', '["public"]', 'public', 'public-head']);
     await query('INSERT INTO projects (id, name, description, tags, visibility, head_commit_id) VALUES ($1, $2, $3, $4, $5, $6)',

@@ -526,4 +526,13 @@ export const migrations = [
         `
         // sqlite: same DDL works on better-sqlite3 (TIMESTAMP degrades to TEXT affinity)
     },
+    {
+        id: '016_thumbnail_node_id',
+        pg: `
+            ALTER TABLE thumbnails ADD COLUMN IF NOT EXISTS node_id TEXT
+        `,
+        sqlite: `
+            ALTER TABLE thumbnails ADD COLUMN node_id TEXT
+        `
+    },
 ];

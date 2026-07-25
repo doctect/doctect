@@ -37,9 +37,10 @@ vi.mock('../../../server/db.js', async importOriginal => {
     };
 });
 
-let app, cookie, projectId;
+let app, cookie, projectId, query;
 beforeAll(async () => {
     app = await initTestApp();
+    ({ query } = await import('../../../server/db.js'));
     cookie = await signUpUser(app, { email: 'pub@test.dev', username: 'publisher' });
     const res = await request(app).post('/api/projects').set('Cookie', cookie)
         .send({ name: 'Gallery Planner', state: minimalState() });
@@ -81,8 +82,43 @@ describe('publishing', () => {
         expect(res.status).toBe(400);
     });
 
-    it('rejects more than 4 thumbnails', async () => {
-        const res = await publish({ description: 'x', tags: [], thumbnails: [PNG_1X1, PNG_1X1, PNG_1X1, PNG_1X1, PNG_1X1] });
+    it('accepts six thumbnails', async () => {
+        const six = [PNG_1X1, PNG_1X1, PNG_1X1, PNG_1X1, PNG_1X1, PNG_1X1];
+        const res = await publish({ description: 'x', tags: [], thumbnails: six });
+        expect(res.status).toBe(200);
+        expect(res.body.project.thumbnailIds.length).toBe(6);
+    });
+
+    it('rejects more than six thumbnails', async () => {
+        const seven = [PNG_1X1, PNG_1X1, PNG_1X1, PNG_1X1, PNG_1X1, PNG_1X1, PNG_1X1];
+        const res = await publish({ description: 'x', tags: [], thumbnails: seven });
+        expect(res.status).toBe(400);
+    });
+
+    it('records the source page of each preview, and null when not supplied', async () => {
+        const withIds = await publish({
+            description: 'x', tags: [],
+            thumbnails: [PNG_1X1, PNG_1X1],
+            previewNodeIds: ['root', 'root'],
+        });
+        expect(withIds.status).toBe(200);
+        const tagged = await query(
+            'SELECT node_id FROM thumbnails WHERE project_id = $1 ORDER BY position', [projectId]);
+        expect(tagged.map(r => r.node_id)).toEqual(['root', 'root']);
+
+        const withoutIds = await publish({ description: 'x', tags: [], thumbnails: [PNG_1X1] });
+        expect(withoutIds.status).toBe(200);
+        const untagged = await query(
+            'SELECT node_id FROM thumbnails WHERE project_id = $1 ORDER BY position', [projectId]);
+        expect(untagged.map(r => r.node_id)).toEqual([null]);
+    });
+
+    it('rejects previewNodeIds that do not pair one-to-one with thumbnails', async () => {
+        const res = await publish({
+            description: 'x', tags: [],
+            thumbnails: [PNG_1X1, PNG_1X1],
+            previewNodeIds: ['root'],
+        });
         expect(res.status).toBe(400);
     });
 
