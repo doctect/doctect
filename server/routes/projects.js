@@ -463,9 +463,10 @@ router.post('/api/projects/:id/publish', requireAuth, requireUsername, loadProje
 // inside the same second remains indistinguishable. That is the one residual here.
 //
 // Two concurrent EDITS still last-write-wins, and that is intended: an edit never moves
-// published_commit_id, so both carry the same valid token. Both are the same owner editing
-// their own metadata, and the loser loses only text it just typed — not, as above, a mixture
-// of two publishes shown to the public.
+// published_commit_id and never moves published_at either (both are on the never-written list
+// above), so both halves of the token survive an edit and both writers carry the same valid
+// one. Both are the same owner editing their own metadata, and the loser loses only text it
+// just typed — not, as above, a mixture of two publishes shown to the public.
 router.patch('/api/projects/:id/publication', requireAuth, userWriteLimiter, loadProject(true), async (req, res) => {
     const notPublished = () => res.status(409).json({ error: 'Project is not published.', code: 'NOT_PUBLISHED' });
     // Ahead of the If-Match parse on purpose: "you never published this" is the more useful

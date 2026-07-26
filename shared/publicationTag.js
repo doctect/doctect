@@ -29,6 +29,27 @@
 // '~' separates the halves because encodeURIComponent leaves it unescaped while neither half
 // can contain one: commit ids are UUIDs (hex and hyphens) and timestamps carry only digits,
 // '-', ':', ' ', '.', 'T', 'Z' and '+'.
+//
+// DEPLOYMENT NOTE, Postgres only: on Postgres this token depends on the Node process's TZ, not
+// only on what the row contains. published_at is declared TIMESTAMP — `timestamp without time
+// zone` — so the wire text carries no offset, and pg's parser (postgres-date, registered for
+// OID 1114 in pg-types/lib/textParsers.js) falls to `new Date(year, month, day, ...)`, the
+// multi-argument constructor, which reads its components in the process's LOCAL zone.
+// Verified by parsing the identical wire text '2026-07-26 06:10:02' under three zones:
+//   TZ=UTC              -> 2026-07-26T06:10:02.000Z
+//   TZ=America/New_York -> 2026-07-26T10:10:02.000Z
+//   TZ=Asia/Kolkata     -> 2026-07-26T00:40:02.000Z
+// So two app instances deployed with different TZ derive different tokens from one identical
+// row: a GET served by one and a PATCH served by the other would 409 every edit. It fails
+// CLOSED — an owner sees "reopen to edit the current version", never a corrupted listing — and
+// TZ=UTC is the usual container default, so this is a note rather than a defect. It cannot
+// arise on SQLite, where the driver returns the raw string and String() is the identity.
+// Keep every instance on one TZ (UTC), or migrate these columns to a zone-aware, sub-second
+// timestamp: TIMESTAMPTZ makes Postgres send an offset, which sends the parser down its UTC
+// branch and removes the dependence entirely. That same migration is the one that would close
+// the same-second residual above — though on SQLite it would also need CURRENT_TIMESTAMP
+// replaced with a sub-second default, since the whole-second resolution is that default's
+// format rather than the column's type.
 export const publicationTag = (publishedCommitId, publishedAt) =>
     `${publishedCommitId}~${encodeURIComponent(
         publishedAt instanceof Date ? publishedAt.toISOString() : String(publishedAt),
