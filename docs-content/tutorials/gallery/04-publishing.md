@@ -21,7 +21,7 @@ Two properties of that sentence deserve a closer look. First, it's a *commit* th
 | **Every version you've ever published.** Each publish adds a row to the public history, and visitors can clone any of them — publishing a fix doesn't hide the version with the mistake. | Your other projects. Publishing is strictly per-project. |
 | Saved **generator scripts**, if the project has them — comments included. More below. | Your email and account details. The page credits your [username](/docs/gallery/accounts-and-usernames#your-username) — "by atlas_designs" — and links your public profile, nothing more. |
 
-The published name is the project's name at the moment you publish — rename the tab later and the gallery keeps the old name until your next publish. Republishing updates the whole page at once: your new commit, name, description, tags, and previews replace the old ones in a single step. The three pieces that are pure presentation — description, tags, and which pages are used as previews — can also be changed on their own without republishing anything — [further down](/docs/gallery/publishing#fixing-a-listing-after-the-fact).
+The published name is the project's name at the moment you publish — rename the tab later and the gallery keeps the old name until your next publish. Republishing updates the whole page at once: your new commit, name, description, tags, and previews replace the old ones in a single step. But the three pieces that are pure presentation (the description, the tags, and which pages are used as previews) can also be changed on their own, without republishing anything, and [a later section of this tutorial](/docs/gallery/publishing#fixing-a-listing-after-the-fact) is about doing exactly that.
 
 ## The wizard, step by step
 

@@ -16,7 +16,7 @@ Proposing is a single menu item, but the *order* of the steps around it matters 
 1. **Fork the project** (if you haven't already) and open your fork in the editor. Every proposal starts from a fork — the [lineage link](/docs/gallery/forking#forking-step-by-step) a fork records is what tells PDF Architect where "upstream" even is. A plain copy has nowhere to propose *to*.
 2. **Make your changes** in the editor, exactly as you would on any project.
 3. **Save to cloud.** This is the step people skip — read the warning below before you don't. Give the commit a clear message; it's the version your proposal will carry.
-4. **Open the Cloud menu** (the cloud icon, top-right) and choose **Propose changes to upstream…** — the item that only forks show, sitting just below *Publish to gallery…*.
+4. **Open the Cloud menu** (the cloud icon, top-right) and choose **Propose changes to upstream…** — the item that only forks show, further down the menu below *Publish to gallery…*.
 5. **Fill in the proposal and submit.** A short modal asks for a **title** (required — it's what the owner sees in their incoming-requests list) and an optional **description** for the *why*. **Create merge request** sends it and drops you straight onto the merge request's own page.
 
 > [!WARNING]
