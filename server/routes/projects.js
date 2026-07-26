@@ -432,16 +432,42 @@ router.post('/api/projects/:id/publish', requireAuth, requireUsername, loadProje
     res.json({ project: { ...projectDto(published.row), thumbnailIds: published.thumbnailIds } });
 });
 
-// Edits the public listing only. Deliberately never writes published_commit_id
-// (the public version is changed by publishing, not by editing its description),
-// published_name (a copy of the project name), or published_at (it drives the
-// gallery's "recently updated" sort, so a tag edit must not re-rank the project).
+// Edits the listing's metadata. Writes the published_* columns AND mirrors tags and
+// description onto the draft columns, so a later publish (which copies the draft columns
+// forward) does not silently revert the edit. PATCH /api/projects/:id writes those same two
+// draft columns and has no client caller today; if one ever appears, these two routes are
+// writing the same columns and will need reconciling.
+//
+// Deliberately never writes published_commit_id (the public version is changed by publishing,
+// not by editing its description), published_name (a copy of the project name), or
+// published_at (it drives the gallery's "recently updated" sort, so a tag edit must not
+// re-rank the project).
+//
 // No requireUsername: the established rule gates routes that attach NEW content
 // to the gallery as the acting user, not routes acting on content the caller
 // already owns — and publishing already required a username.
+//
+// If-Match carries the published_commit_id the client loaded, matching publish's idiom, and a
+// mismatch is refused. The race it closes: the Cloud menu offers "Edit gallery listing…" and
+// "Publish to gallery…" side by side, so an owner can open the dialog, publish a new version,
+// then save the still-open dialog — writing the pre-publish description and tags over the
+// just-published ones while the untouched selection omits `thumbnails` and leaves the
+// post-publish previews standing. published_commit_id is the token rather than published_at
+// because SQLite's CURRENT_TIMESTAMP is second-resolution and cannot discriminate a publish
+// that landed in the same second.
+//
+// Two concurrent EDITS still last-write-wins, and that is intended: an edit never moves
+// published_commit_id, so both carry the same valid token. Both are the same owner editing
+// their own metadata, and the loser loses only text it just typed — not, as above, a mixture
+// of two publishes shown to the public.
 router.patch('/api/projects/:id/publication', requireAuth, userWriteLimiter, loadProject(true), async (req, res) => {
     const notPublished = () => res.status(409).json({ error: 'Project is not published.', code: 'NOT_PUBLISHED' });
+    // Ahead of the If-Match parse on purpose: "you never published this" is the more useful
+    // answer to give a caller than "you omitted a header", and it is the truer one.
     if (req.project.visibility !== 'public' || !req.project.published_commit_id) return notPublished();
+
+    const expectedPublication = expectedHeadFromRequest(req, res);
+    if (expectedPublication === null) return;
 
     const listing = parseListingFields(req.body);
     if (listing.error) return res.status(400).json({ error: listing.error });
@@ -450,6 +476,9 @@ router.patch('/api/projects/:id/publication', requireAuth, userWriteLimiter, loa
         const [current] = await lockProjectRows([req.project.id], txQuery);
         if (!current || current.owner_id !== req.user.id) return null;
         if (current.visibility !== 'public' || !current.published_commit_id) return null;
+        // Compared under the row lock, next to the checks it belongs with: a publish that
+        // commits between loadProject and here is exactly the case being caught.
+        if (current.published_commit_id !== expectedPublication) return 'stale';
 
         // An omitted description keeps the published one, exactly as an omitted
         // thumbnails set keeps the published previews — this route must never lose
@@ -481,6 +510,12 @@ router.patch('/api/projects/:id/publication', requireAuth, userWriteLimiter, loa
         return { row: rows[0], thumbnailIds: thumbnailRows.map(item => item.id) };
     });
 
+    if (updated === 'stale') {
+        return res.status(409).json({
+            error: 'This listing was republished after you loaded it.',
+            code: 'PUBLICATION_CHANGED',
+        });
+    }
     if (!updated) return notPublished();
     res.json({ project: { ...projectDto(updated.row), thumbnailIds: updated.thumbnailIds } });
 });

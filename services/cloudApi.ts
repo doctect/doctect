@@ -224,12 +224,16 @@ export const cloudApi = {
 
     // Metadata-only. Never moves the published commit — see the route comment in
     // server/routes/projects.js. `thumbnails` omitted means "keep the current previews".
-    updatePublication: (projectId: string, args: {
+    // `expectedPublication` is the published_commit_id the caller loaded (GalleryDetail exposes
+    // it as headCommitId); the route 409s with code PUBLICATION_CHANGED if a publish has moved
+    // the listing on since, rather than writing pre-publish text over a newer listing.
+    updatePublication: (projectId: string, expectedPublication: string, args: {
         description: string; tags: string[];
         thumbnails?: string[]; previewNodeIds?: string[];
     }) =>
         api<{ project: CloudProject & { thumbnailIds: string[] } }>(`/api/projects/${projectId}/publication`, {
             method: 'PATCH',
+            headers: { 'Content-Type': 'application/json', 'If-Match': `"${expectedPublication}"` },
             body: JSON.stringify(args),
         }),
 

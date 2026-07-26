@@ -71,7 +71,9 @@ describe('EditListingModal', () => {
 
         await waitFor(() => expect(onSaved).toHaveBeenCalled());
         expect(generateThumbnails).not.toHaveBeenCalled();
-        expect(save).toHaveBeenCalledWith('proj-1', {
+        // The published commit the dialog loaded travels with the save: the route refuses the
+        // write if a publish has moved the listing on since.
+        expect(save).toHaveBeenCalledWith('proj-1', 'commit-1', {
             description: 'old description', tags: ['fresh', 'tags'],
             thumbnails: undefined, previewNodeIds: undefined,
         });
@@ -93,7 +95,7 @@ describe('EditListingModal', () => {
         fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
 
         await waitFor(() => expect(save).toHaveBeenCalled());
-        expect(save.mock.calls[0][1]).toEqual({
+        expect(save.mock.calls[0][2]).toEqual({
             description: 'old description', tags: ['old'],
             thumbnails: ['data:image/webp;base64,p2', 'data:image/webp;base64,p3'],
             previewNodeIds: ['p2', 'p3'],
@@ -122,7 +124,7 @@ describe('EditListingModal', () => {
 
         await waitFor(() => expect(save).toHaveBeenCalled());
         expect(generateThumbnails).toHaveBeenCalledWith(state, ['p1', 'p2', 'p3'], 'default');
-        expect(save.mock.calls[0][1]).toMatchObject({
+        expect(save.mock.calls[0][2]).toMatchObject({
             thumbnails: [
                 'data:image/webp;base64,p3', 'data:image/webp;base64,p2', 'data:image/webp;base64,p1',
             ],
@@ -167,7 +169,7 @@ describe('EditListingModal', () => {
 
         await waitFor(() => expect(save).toHaveBeenCalled());
         expect(generateThumbnails).not.toHaveBeenCalled();
-        expect(save.mock.calls[0][1].thumbnails).toBeUndefined();
+        expect(save.mock.calls[0][2].thumbnails).toBeUndefined();
     });
 
     it('surfaces a rejected save and leaves the form usable', async () => {
@@ -181,6 +183,26 @@ describe('EditListingModal', () => {
         fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
 
         expect(await screen.findByRole('alert')).toHaveTextContent('Only the owner can edit this listing.');
+        expect(onSaved).not.toHaveBeenCalled();
+        expect(screen.getByRole('button', { name: /save changes/i })).toBeEnabled();
+    });
+
+    // The server's own message names the cause but not the cure, and "reload the page" is the
+    // wrong cure here: the dialog snapshots the listing at load, so only reopening it picks up
+    // what was republished. The owner has to be told that, or they will just press Save again.
+    it('tells the owner to reopen the dialog when the listing was republished under it', async () => {
+        vi.spyOn(cloudApi, 'galleryDetail').mockResolvedValue(
+            listing([{ id: 't1', nodeId: 'p2' }]));
+        vi.spyOn(cloudApi, 'updatePublication').mockRejectedValue(
+            new ApiError(409, 'This listing was republished after you loaded it.', 'PUBLICATION_CHANGED'));
+        const { onSaved } = renderModal();
+
+        await screen.findByDisplayValue('old description');
+        fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+
+        const alert = await screen.findByRole('alert');
+        expect(alert).toHaveTextContent(/republished/i);
+        expect(alert).toHaveTextContent(/reopen/i);
         expect(onSaved).not.toHaveBeenCalled();
         expect(screen.getByRole('button', { name: /save changes/i })).toBeEnabled();
     });

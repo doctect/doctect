@@ -44,12 +44,18 @@ describe('per-user write rate limit', () => {
             .send({ description: 'x', tags: [], thumbnails: [PNG_1X1] });
         expect(published.status).toBe(200);   // publish carries no limiter today
 
+        // The listing edit carries the published_commit_id it was loaded against, which here is
+        // the head that was just published from.
+        const publishedCommit = created.body.project.headCommitId;
+
         const first = await request(app).patch(`/api/projects/${id}/publication`)
-            .set('Cookie', editor).send({ description: 'edit one', tags: [] });     // write 2
+            .set('Cookie', editor).set('If-Match', `"${publishedCommit}"`)
+            .send({ description: 'edit one', tags: [] });                           // write 2
         expect(first.status).toBe(200);
 
         const second = await request(app).patch(`/api/projects/${id}/publication`)
-            .set('Cookie', editor).send({ description: 'edit two', tags: [] });     // write 3 — over
+            .set('Cookie', editor).set('If-Match', `"${publishedCommit}"`)
+            .send({ description: 'edit two', tags: [] });                           // write 3 — over
         expect(second.status).toBe(429);
         expect(second.body.code).toBe('RATE_LIMITED');
     });

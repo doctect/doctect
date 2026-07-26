@@ -2,7 +2,7 @@
 // @vitest-environment node
 import { describe, it, expect, beforeAll, vi } from 'vitest';
 import request from 'supertest';
-import { initTestApp, signUpUser, minimalState, PNG_1X1 } from './helpers.js';
+import { initTestApp, signUpUser, minimalState, PNG_1X1, saveProjectCommit } from './helpers.js';
 
 // Lets one test fail a preview insert mid-replacement, to prove the edit runs inside
 // a transaction: a partial replacement would leave a live public listing showing
@@ -49,10 +49,17 @@ const publishedProject = async (name) => {
 
 const projectRow = async (id) => (await query('SELECT * FROM projects WHERE id = $1', [id]))[0];
 
-const editListing = (id, body, cookieOverride) => request(app)
-    .patch(`/api/projects/${id}/publication`)
-    .set('Cookie', cookieOverride ?? cookie)
-    .send(body);
+// An edit carries the published_commit_id it was loaded against, so the helper looks the
+// current one up unless a test pins a stale value with `ifMatch`. `ifMatch: null` omits the
+// header; so does an unpublished project, which has no token to send.
+const editListing = async (id, body, opts = {}) => {
+    const token = 'ifMatch' in opts ? opts.ifMatch : (await projectRow(id))?.published_commit_id;
+    const req = request(app)
+        .patch(`/api/projects/${id}/publication`)
+        .set('Cookie', opts.cookie ?? cookie);
+    if (token) req.set('If-Match', `"${token}"`);
+    return req.send(body);
+};
 
 beforeAll(async () => {
     app = await initTestApp();
@@ -194,9 +201,63 @@ describe('PATCH /api/projects/:id/publication', () => {
         expect(res.body.code).toBe('NOT_PUBLISHED');
     });
 
+    // The Cloud menu offers "Edit gallery listing…" and "Publish to gallery…" side by side, so
+    // this order of events costs nothing to reach: open the dialog, publish a new version, then
+    // save the dialog that is still open. Without a precondition the PATCH lands the PRE-publish
+    // description and tags on top of the just-published ones, while an untouched selection omits
+    // `thumbnails` and leaves the POST-publish previews in place — one live listing whose text
+    // and images come from two different publishes, reported to the owner as a success.
+    it('409s on a published_commit_id that a republish has moved on from, and 200s on the current one', async () => {
+        const id = await publishedProject('Republished Mid Edit');
+        const staleToken = (await projectRow(id)).published_commit_id;
+
+        // A different title, so the commit route's state-hash dedupe does not hand back the
+        // existing head and leave published_commit_id where it was.
+        const commit = await saveProjectCommit(app, cookie, id, {
+            state: minimalState('Second Version'), message: 'second version',
+        });
+        const republish = await request(app).post(`/api/projects/${id}/publish`).set('Cookie', cookie)
+            .set('If-Match', `"${commit.body.commit.id}"`)
+            .send({
+                description: 'republished description', tags: ['republished'],
+                thumbnails: [PNG_1X1], previewNodeIds: ['root'],
+            });
+        expect(republish.status).toBe(200);
+        expect((await projectRow(id)).published_commit_id).not.toBe(staleToken);
+
+        const stale = await editListing(id, {
+            description: 'pre-publish description', tags: ['pre-publish'],
+        }, { ifMatch: staleToken });
+
+        expect(stale.status).toBe(409);
+        expect(stale.body.code).toBe('PUBLICATION_CHANGED');
+        // Nothing written: the republished text is exactly what a visitor still sees.
+        const afterRefusal = await projectRow(id);
+        expect(afterRefusal.published_description).toBe('republished description');
+        expect(JSON.parse(afterRefusal.published_tags)).toEqual(['republished']);
+
+        // Reopening the dialog reloads the listing, so the same edit with the current token
+        // is the recovery path — and it has to work.
+        const fresh = await editListing(id, {
+            description: 'edited after reopening', tags: ['reopened'],
+        });
+        expect(fresh.status).toBe(200);
+        expect((await projectRow(id)).published_description).toBe('edited after reopening');
+    });
+
+    it('428s when no published_commit_id is sent at all', async () => {
+        const id = await publishedProject('No Precondition');
+
+        const res = await editListing(id, { description: 'x', tags: [] }, { ifMatch: null });
+
+        expect(res.status).toBe(428);
+        expect(res.body.code).toBe('PROJECT_HEAD_REQUIRED');
+        expect((await projectRow(id)).published_description).toBe('original description');
+    });
+
     it('404s for a non-owner and 401s for an anonymous caller', async () => {
         const id = await publishedProject('Not Yours');
-        const stranger = await editListing(id, { description: 'hijack', tags: [] }, otherCookie);
+        const stranger = await editListing(id, { description: 'hijack', tags: [] }, { cookie: otherCookie });
         expect(stranger.status).toBe(404);
 
         const anon = await request(app).patch(`/api/projects/${id}/publication`)

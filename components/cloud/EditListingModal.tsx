@@ -21,11 +21,24 @@ interface EditListingModalProps {
 
 type LoadState =
     | { status: 'loading' }
-    | { status: 'ready'; listing: GalleryDetail; state: AppState; initialSelection: string[] }
+    // publishedCommitId is GalleryDetail.headCommitId, held separately because it is only
+    // known to be non-null once the load has passed its own check — and it is the precondition
+    // the save is refused without.
+    | {
+        status: 'ready'; listing: GalleryDetail; state: AppState;
+        initialSelection: string[]; publishedCommitId: string;
+    }
     | { status: 'error'; message: string };
 
 const sameSelection = (a: string[], b: string[]) =>
     a.length === b.length && a.every((id, i) => id === b[i]);
+
+// The route's own message names the cause; only the client can name the cure, because the
+// cure is a UI action. Reloading the page is NOT it: the dialog snapshots the listing at
+// load, so its fields still hold the pre-publish text until it is reopened.
+const REPUBLISHED_MESSAGE =
+    'This listing was republished while you were editing it, so nothing was saved. '
+    + 'Close and reopen this dialog to edit the current version.';
 
 export function EditListingModal({ projectId, onClose, onSaved }: EditListingModalProps) {
     const [load, setLoad] = useState<LoadState>({ status: 'loading' });
@@ -67,6 +80,7 @@ export function EditListingModal({ projectId, onClose, onSaved }: EditListingMod
                     listing,
                     state: commit.state as AppState,
                     initialSelection,
+                    publishedCommitId: listing.headCommitId,
                 });
                 setDescription(listing.description);
                 setTagsText(listing.tags.join(', '));
@@ -127,10 +141,12 @@ export function EditListingModal({ projectId, onClose, onSaved }: EditListingMod
                 previewNodeIds = rendered.map(r => r.nodeId);
             }
             setPhase('saving');
-            await cloudApi.updatePublication(projectId, { description, tags, thumbnails, previewNodeIds });
+            await cloudApi.updatePublication(projectId, load.publishedCommitId,
+                { description, tags, thumbnails, previewNodeIds });
             saved = true;
         } catch (e) {
-            setError(e instanceof ApiError ? e.message : (e as Error).message || 'Could not save this listing.');
+            if (e instanceof ApiError && e.code === 'PUBLICATION_CHANGED') setError(REPUBLISHED_MESSAGE);
+            else setError(e instanceof ApiError ? e.message : (e as Error).message || 'Could not save this listing.');
         } finally {
             // Interactive again either way: a rejected save has to leave a usable button behind,
             // and a successful one must not flash a dead one in the tick before the host closes.
