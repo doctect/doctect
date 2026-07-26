@@ -108,9 +108,21 @@ export function EditListingModal({ projectId, onClose, onSaved }: EditListingMod
                 }
                 setPhase('rendering');
                 const rendered = await generateThumbnails(load.state, selected, load.state.activeVariantId);
-                if (rendered.length === 0) throw new Error('Could not render previews');
-                // The renderer skips pages it cannot render, so each image is sent with the page
-                // it actually came from rather than with the selection the user made.
+                // The same short-render guard PublishModal uses, and it matters more here:
+                // replaceThumbnails deletes the whole published set before inserting the new
+                // one in a single transaction, and nothing snapshots thumbnails anywhere --
+                // project_publications records only (project_id, commit_id, published_at). A
+                // short render would therefore destroy live public images that were correct,
+                // with no server-side copy to restore from. Subsumes the fully-empty case:
+                // `selected` is non-empty by the check above. Thrown before the PATCH, so the
+                // description and tags are untouched too.
+                if (rendered.length !== selected.length) {
+                    throw new Error(
+                        `Only ${rendered.length} of ${selected.length} previews rendered. Nothing was changed — try again.`,
+                    );
+                }
+                // Sent from the returned pairs, never zipped against `selected`: the renderer
+                // is the authority on which page produced which image.
                 thumbnails = rendered.map(r => r.dataUrl);
                 previewNodeIds = rendered.map(r => r.nodeId);
             }

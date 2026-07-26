@@ -358,27 +358,57 @@ describe('PublishModal preview selection', () => {
 
     it('labels each preview with the page it rendered from, not the page that was picked', async () => {
         const publishSpy = vi.spyOn(cloudApi, 'publish').mockResolvedValue({} as any);
-        // The renderer drops any page it cannot rasterize, so what comes back is not always one
-        // image per selected page. Publishing `selected` alongside these images would caption p4
-        // with p3's title -- and every preview after the skip with the wrong page.
+        // generateThumbnails returns page/image PAIRS, and those pairs -- not `selected` --
+        // are what says which page produced which image. The renderer skipping a page is the
+        // divergence that originally made that visible; it no longer reaches the upload, since
+        // the modal's count guard refuses a short render outright (covered by the next test).
+        // So this stands the pairs' order apart from the selection's instead: a caller zipping
+        // `selected` against a bare image list would caption every one of these with the wrong
+        // page, exactly as it would have after a skip.
         generateThumbnails.mockImplementation(async (_s: any, ids: string[]) =>
-            ids.filter(id => id !== 'p3').map(id => ({ nodeId: id, dataUrl: `data:image/webp;base64,${id}` })));
+            [...ids].reverse().map(id => ({ nodeId: id, dataUrl: `data:image/webp;base64,${id}` })));
 
         render(<PublishModal
             project={{ id: 'local-1', name: 'Project', initialState: state as any }}
             cloudProjectId="cloud-1" onClose={vi.fn()} onPublished={vi.fn()} />);
 
         const boxes = await screen.findAllByRole('checkbox');
-        // p1 is preselected; add p2, p3 (the page the renderer will skip) and p4.
+        // p1 is preselected; add p2, p3 and p4.
         for (const box of boxes.slice(1, 4)) fireEvent.click(box);
         fireEvent.click(screen.getByRole('button', { name: /^publish$/i }));
 
         await waitFor(() => expect(publishSpy).toHaveBeenCalled());
         expect(generateThumbnails).toHaveBeenCalledWith(state, ['p1', 'p2', 'p3', 'p4'], 'default');
         const [, , args] = publishSpy.mock.calls[0];
-        expect(args.previewNodeIds).toEqual(['p1', 'p2', 'p4']);
+        expect(args.previewNodeIds).toEqual(['p4', 'p3', 'p2', 'p1']);
         expect(args.thumbnails).toEqual([
-            'data:image/webp;base64,p1', 'data:image/webp;base64,p2', 'data:image/webp;base64,p4',
+            'data:image/webp;base64,p4', 'data:image/webp;base64,p3',
+            'data:image/webp;base64,p2', 'data:image/webp;base64,p1',
         ]);
+    });
+
+    it('refuses a partial render instead of publishing fewer previews than were picked', async () => {
+        const publishSpy = vi.spyOn(cloudApi, 'publish').mockResolvedValue({} as any);
+        const onPublished = vi.fn();
+        // Shipping whatever came back would put a listing live one preview short of what the
+        // owner picked, with nothing anywhere to say so: the images are internally coherent,
+        // the server accepts them, and reopening the editor re-ticks the reduced set.
+        generateThumbnails.mockImplementation(async (_s: any, ids: string[]) =>
+            ids.filter(id => id !== 'p3').map(id => ({ nodeId: id, dataUrl: `data:image/webp;base64,${id}` })));
+
+        render(<PublishModal
+            project={{ id: 'local-1', name: 'Project', initialState: state as any }}
+            cloudProjectId="cloud-1" onClose={vi.fn()} onPublished={onPublished} />);
+
+        const boxes = await screen.findAllByRole('checkbox');
+        // p1 is preselected; add p2, p3 (the page the renderer will skip) and p4.
+        for (const box of boxes.slice(1, 4)) fireEvent.click(box);
+        fireEvent.click(screen.getByRole('button', { name: /^publish$/i }));
+
+        expect(await screen.findByRole('alert')).toHaveTextContent(
+            'Only 3 of 4 previews rendered. Nothing was published — try again.');
+        expect(publishSpy).not.toHaveBeenCalled();
+        expect(onPublished).not.toHaveBeenCalled();
+        expect(screen.getByRole('button', { name: /^publish$/i })).toBeEnabled();
     });
 });

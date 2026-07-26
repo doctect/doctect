@@ -104,24 +104,53 @@ describe('EditListingModal', () => {
         vi.spyOn(cloudApi, 'galleryDetail').mockResolvedValue(
             listing([{ id: 't1', nodeId: 'p1' }]));
         const save = vi.spyOn(cloudApi, 'updatePublication').mockResolvedValue({} as any);
-        // The renderer drops any page it cannot rasterize, so what comes back is not always one
-        // image per selected page. Sending `selected` alongside these images would record p3's
-        // image as having come from p2 -- and every preview after a skip with the wrong page.
+        // generateThumbnails returns page/image PAIRS, and those pairs -- not `selected` -- are
+        // what says which page produced which image. The renderer skipping a page is the
+        // divergence that originally made that visible; it no longer reaches the PATCH, since
+        // the modal's count guard refuses a short render outright (covered by the next test).
+        // So this stands the pairs' order apart from the selection's instead: a caller zipping
+        // `selected` against a bare image list would record every one of these images as having
+        // come from the wrong page, exactly as it would have after a skip.
         generateThumbnails.mockImplementation(async (_s: any, ids: string[]): Promise<RenderedPreview[]> =>
-            ids.filter(id => id !== 'p2').map(id => ({ nodeId: id, dataUrl: `data:image/webp;base64,${id}` })));
+            [...ids].reverse().map(id => ({ nodeId: id, dataUrl: `data:image/webp;base64,${id}` })));
         renderModal();
 
         const boxes = await screen.findAllByRole('checkbox');
-        fireEvent.click(boxes[1]);   // add "Week", the page the renderer will skip
+        fireEvent.click(boxes[1]);   // add "Week"
         fireEvent.click(boxes[2]);   // add "Notes"
         fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
 
         await waitFor(() => expect(save).toHaveBeenCalled());
         expect(generateThumbnails).toHaveBeenCalledWith(state, ['p1', 'p2', 'p3'], 'default');
         expect(save.mock.calls[0][1]).toMatchObject({
-            thumbnails: ['data:image/webp;base64,p1', 'data:image/webp;base64,p3'],
-            previewNodeIds: ['p1', 'p3'],
+            thumbnails: [
+                'data:image/webp;base64,p3', 'data:image/webp;base64,p2', 'data:image/webp;base64,p1',
+            ],
+            previewNodeIds: ['p3', 'p2', 'p1'],
         });
+    });
+
+    it('refuses a partial render instead of replacing live previews with fewer', async () => {
+        vi.spyOn(cloudApi, 'galleryDetail').mockResolvedValue(
+            listing([{ id: 't1', nodeId: 'p1' }]));
+        const save = vi.spyOn(cloudApi, 'updatePublication').mockResolvedValue({} as any);
+        // Sending whatever came back would be worse here than on publish: replaceThumbnails
+        // deletes the whole published set before inserting, in one transaction, and nothing
+        // snapshots thumbnails -- so a short render destroys live public images for good.
+        generateThumbnails.mockImplementation(async (_s: any, ids: string[]): Promise<RenderedPreview[]> =>
+            ids.filter(id => id !== 'p2').map(id => ({ nodeId: id, dataUrl: `data:image/webp;base64,${id}` })));
+        const { onSaved } = renderModal();
+
+        const boxes = await screen.findAllByRole('checkbox');
+        fireEvent.click(boxes[1]);   // add "Week", the page the renderer will skip
+        fireEvent.click(boxes[2]);   // add "Notes"
+        fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+
+        expect(await screen.findByRole('alert')).toHaveTextContent(
+            'Only 2 of 3 previews rendered. Nothing was changed — try again.');
+        expect(save).not.toHaveBeenCalled();
+        expect(onSaved).not.toHaveBeenCalled();
+        expect(screen.getByRole('button', { name: /save changes/i })).toBeEnabled();
     });
 
     it('opens a legacy listing unchecked and keeps its previews when left alone', async () => {

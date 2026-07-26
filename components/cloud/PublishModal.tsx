@@ -95,11 +95,24 @@ export function PublishModal({ project, cloudProjectId, onClose, onPublished }: 
             const rendered = await generateThumbnails(inspected.state, selected, inspected.state.activeVariantId);
             if (currentProjectId.current !== cloudProjectId) return;
             setPreviews(rendered.map(r => r.dataUrl));
-            if (rendered.length === 0) throw new Error('Could not render previews');
+            // A short render is refused rather than published. The renderer skips pages it
+            // cannot rasterize, and a smaller set is coherent everywhere downstream -- the
+            // server accepts it, the gallery lays it out, and the editor reopens pre-ticked
+            // on it -- so the owner's only signal would be counting images on their own
+            // listing. Subsumes the fully-empty case: `selected` is already known non-empty
+            // from the check above, so an empty render is just this mismatch with 0. Thrown
+            // before the POST, so nothing has been published; only this dialog's own preview
+            // strip has been filled in with what did render. EditListingModal carries the same
+            // guard, where a short render would additionally destroy live public images.
+            if (rendered.length !== selected.length) {
+                throw new Error(
+                    `Only ${rendered.length} of ${selected.length} previews rendered. Nothing was published — try again.`,
+                );
+            }
             setPhase('uploading');
             const tags = tagsText.split(',').map(t => t.trim().toLowerCase()).filter(Boolean).slice(0, 10);
-            // The renderer skips pages it cannot render, so each image is published with the
-            // page it actually came from rather than with the selection the user made.
+            // Sent from the returned pairs, never zipped against `selected`: the renderer is
+            // the authority on which page produced which image.
             await cloudApi.publish(cloudProjectId, inspected.headCommitId, {
                 description, tags,
                 thumbnails: rendered.map(r => r.dataUrl),
