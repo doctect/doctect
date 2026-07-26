@@ -10,8 +10,11 @@ interface EditListingModalProps {
     projectId: string;
     onClose: () => void;
     /**
-     * Fired once the listing has been written. The dialog does not close itself and is left
-     * usable, so a host is free to refetch behind it or to unmount it from here.
+     * Fired once the listing has been written. The dialog does not close itself, so the host
+     * must close or remount it from here. Keeping it mounted for a second save is NOT
+     * supported: the initial selection it diffs against is captured at load and never
+     * refreshed, so the next save would read an untouched selection as changed and re-render
+     * and re-upload every preview -- the exact cost a tags-only edit exists to avoid.
      */
     onSaved: () => void;
 }
@@ -117,8 +120,8 @@ export function EditListingModal({ projectId, onClose, onSaved }: EditListingMod
         } catch (e) {
             setError(e instanceof ApiError ? e.message : (e as Error).message || 'Could not save this listing.');
         } finally {
-            // Interactive again either way. A host is free to keep the dialog open after a save
-            // (to refetch the listing behind it, say) and must not inherit a dead button for it.
+            // Interactive again either way: a rejected save has to leave a usable button behind,
+            // and a successful one must not flash a dead one in the tick before the host closes.
             setPhase('form');
         }
         // Outside the try on purpose: a host callback that navigates or refetches and throws is
@@ -142,7 +145,10 @@ export function EditListingModal({ projectId, onClose, onSaved }: EditListingMod
         }
         const first = focusable[0];
         const last = focusable[focusable.length - 1];
-        if (event.shiftKey && document.activeElement === first) {
+        // `event.currentTarget` covers the dialog container itself, which is where mount focus
+        // lands: it is neither `first` nor `last`, so without it the first Shift+Tab of the
+        // dialog's life falls straight out to whatever precedes the modal in document order.
+        if (event.shiftKey && (document.activeElement === first || document.activeElement === event.currentTarget)) {
             event.preventDefault();
             last.focus();
         } else if (!event.shiftKey && document.activeElement === last) {

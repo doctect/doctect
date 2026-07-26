@@ -1,8 +1,9 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { GitFork, Download, Flag, ExternalLink, History } from 'lucide-react';
+import { GitFork, Download, Flag, ExternalLink, History, Pencil } from 'lucide-react';
 import { API_BASE } from '../../services/cloudApi';
 import { HistoryModal } from '../cloud/HistoryModal';
+import { LazyEditListingModal } from '../cloud/LazyEditListingModal';
 import { UseGalleryDetailResult } from '../../hooks/useGalleryDetail';
 import { GalleryLink } from './GalleryLink';
 import { ProjectDescription } from './ProjectDescription';
@@ -17,6 +18,7 @@ export function GalleryDetailBody({ detail }: { detail: UseGalleryDetailResult }
         showHistory, setShowHistory, onCloneHistoryVersion,
         reviews, myReview, saveReview, deleteMyReview, reportReview,
     } = detail;
+    const [editing, setEditing] = useState(false);
     if (!project) return null;
 
     return (
@@ -64,6 +66,12 @@ export function GalleryDetailBody({ detail }: { detail: UseGalleryDetailResult }
                         className="flex items-center justify-center gap-1.5 border border-slate-300 rounded-lg px-4 py-2 text-sm font-medium text-slate-700 disabled:opacity-50">
                         <History size={14} /> Version history
                     </button>
+                    {isOwner && (
+                        <button onClick={() => setEditing(true)} disabled={busy !== null}
+                            className="flex items-center justify-center gap-1.5 border border-slate-300 rounded-lg px-4 py-2 text-sm font-medium text-slate-700 disabled:opacity-50">
+                            <Pencil size={14} /> Edit listing
+                        </button>
+                    )}
                     {!session?.user ? (
                         <Link to="/login" state={{ from: fromPath }} className="text-center text-xs text-slate-500 hover:text-blue-600">Sign in to fork</Link>
                     ) : !session.user.username ? (
@@ -110,6 +118,16 @@ export function GalleryDetailBody({ detail }: { detail: UseGalleryDetailResult }
                     mode="clone"
                     onClone={onCloneHistoryVersion}
                     onClose={() => setShowHistory(false)}
+                />
+            )}
+            {editing && (
+                <LazyEditListingModal
+                    projectId={project.id}
+                    onClose={() => setEditing(false)}
+                    // A full reload is the honest refresh here: useGalleryDetail fetches once per
+                    // id and exposes no refetch handle, and this body also renders inside
+                    // GalleryDetailModal, where a router navigation would close the overlay.
+                    onSaved={() => { setEditing(false); window.location.reload(); }}
                 />
             )}
         </>

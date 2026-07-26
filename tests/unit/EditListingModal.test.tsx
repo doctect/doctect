@@ -75,7 +75,8 @@ describe('EditListingModal', () => {
             description: 'old description', tags: ['fresh', 'tags'],
             thumbnails: undefined, previewNodeIds: undefined,
         });
-        // A host that refetches and keeps the dialog open must not inherit a dead button.
+        // Hosts close on save, but they close from within onSaved -- so the button must already
+        // be live again by then rather than left dead for the tick before the dialog goes away.
         expect(screen.getByRole('button', { name: /save changes/i })).toBeEnabled();
     });
 
@@ -190,6 +191,22 @@ describe('EditListingModal', () => {
         expect(close).toHaveFocus();
 
         close.focus();
+        fireEvent.keyDown(dialog, { key: 'Tab', shiftKey: true });
+        expect(save).toHaveFocus();
+    });
+
+    it('contains Shift+Tab fired from the dialog itself, before focus reaches a child', async () => {
+        vi.spyOn(cloudApi, 'galleryDetail').mockResolvedValue(
+            listing([{ id: 't1', nodeId: 'p2' }]));
+        renderModal();
+        await screen.findByDisplayValue('old description');
+        const dialog = screen.getByRole('dialog');
+        const save = screen.getByRole('button', { name: /save changes/i });
+
+        // Mount focus lands on the container, which is neither the first nor the last focusable
+        // child -- so a trap that only reacts to those two lets the very first Shift+Tab fall
+        // out of the dialog and into whatever precedes it in document order.
+        expect(dialog).toHaveFocus();
         fireEvent.keyDown(dialog, { key: 'Tab', shiftKey: true });
         expect(save).toHaveFocus();
     });

@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Trash2, Globe, Lock } from 'lucide-react';
+import { Trash2, Globe, Lock, Pencil } from 'lucide-react';
 import { cloudApi, MyProject, StorageUsage } from '../services/cloudApi';
 import { AppHeader } from '../components/AppHeader';
+import { LazyEditListingModal } from '../components/cloud/LazyEditListingModal';
 
 const formatMB = (bytes: number) => `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 
@@ -10,6 +11,7 @@ export function MyProjectsPage() {
     const [usage, setUsage] = useState<StorageUsage | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [deletingId, setDeletingId] = useState<string | null>(null);
+    const [editingId, setEditingId] = useState<string | null>(null);
 
     const load = useCallback(async () => {
         try {
@@ -86,6 +88,14 @@ export function MyProjectsPage() {
                                         {formatMB(p.storedBytes)} · {p.commitCount} versions · updated {new Date(p.updatedAt).toLocaleDateString()}
                                     </div>
                                 </div>
+                                {p.visibility === 'public' && (
+                                    <button
+                                        onClick={() => setEditingId(p.id)}
+                                        className="flex items-center gap-1 text-xs text-slate-600 hover:text-blue-700"
+                                    >
+                                        <Pencil size={12} /> Edit listing
+                                    </button>
+                                )}
                                 <button
                                     onClick={() => onDelete(p)}
                                     disabled={deletingId === p.id}
@@ -98,6 +108,13 @@ export function MyProjectsPage() {
                     </ul>
                 )}
             </main>
+            {editingId && (
+                <LazyEditListingModal
+                    projectId={editingId}
+                    onClose={() => setEditingId(null)}
+                    onSaved={() => { setEditingId(null); load(); }}
+                />
+            )}
         </div>
     );
 }

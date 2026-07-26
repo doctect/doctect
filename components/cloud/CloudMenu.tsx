@@ -1,12 +1,13 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { Cloud, History, UploadCloud, Globe, GitPullRequest } from 'lucide-react';
+import { Cloud, History, UploadCloud, Globe, GitPullRequest, Pencil } from 'lucide-react';
 import { useSession } from '../../lib/auth-client';
 import { cloudApi, ApiError, CloudProject } from '../../services/cloudApi';
 import { AppState } from '../../types';
 import { HistoryModal } from './HistoryModal';
 import { PublishModal } from './PublishModal';
 import { ProposeChangesModal } from './ProposeChangesModal';
+import { LazyEditListingModal } from './LazyEditListingModal';
 import type { Project } from '../../pages/EditorPage';
 
 interface CloudMenuProps {
@@ -22,6 +23,7 @@ export function CloudMenu({ project, onLinkCloud, onRestoreState }: CloudMenuPro
     const [error, setError] = useState<string | null>(null);
     const [showHistory, setShowHistory] = useState(false);
     const [showPublish, setShowPublish] = useState(false);
+    const [showEditListing, setShowEditListing] = useState(false);
     const [showPropose, setShowPropose] = useState(false);
     const [cloudProject, setCloudProject] = useState<CloudProject | null>(null);
     const [saveConflict, setSaveConflict] = useState(false);
@@ -131,6 +133,12 @@ export function CloudMenu({ project, onLinkCloud, onRestoreState }: CloudMenuPro
                                     <Globe size={12} /> Publish to gallery…
                                 </button>
                             )}
+                            {cloudProject?.visibility === 'public' && (
+                                <button onClick={() => { setShowEditListing(true); setOpen(false); }}
+                                    className="w-full text-left flex items-center gap-1.5 px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50">
+                                    <Pencil size={12} /> Edit gallery listing…
+                                </button>
+                            )}
                             {cloudProject?.forkedFromProjectId && (
                                 <button onClick={() => { setShowPropose(true); setOpen(false); }}
                                     className="w-full text-left flex items-center gap-1.5 px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50">
@@ -159,6 +167,18 @@ export function CloudMenu({ project, onLinkCloud, onRestoreState }: CloudMenuPro
                 <PublishModal project={project} cloudProjectId={project.cloud.projectId}
                     onClose={() => setShowPublish(false)}
                     onPublished={() => { setShowPublish(false); window.alert('Published! View it in the Gallery.'); }} />
+            )}
+            {showEditListing && project.cloud && (
+                <LazyEditListingModal projectId={project.cloud.projectId}
+                    onClose={() => setShowEditListing(false)}
+                    onSaved={() => {
+                        setShowEditListing(false);
+                        // Dropping the cached project makes the menu refetch on its next open, so
+                        // a listing edited and then unpublished elsewhere cannot keep offering
+                        // this item from stale state.
+                        setCloudProject(null);
+                        window.alert('Listing updated. Your published version is unchanged.');
+                    }} />
             )}
             {showPropose && project.cloud && (
                 <ProposeChangesModal sourceProjectId={project.cloud.projectId} onClose={() => setShowPropose(false)} />
