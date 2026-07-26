@@ -75,6 +75,8 @@ describe('EditListingModal', () => {
             description: 'old description', tags: ['fresh', 'tags'],
             thumbnails: undefined, previewNodeIds: undefined,
         });
+        // A host that refetches and keeps the dialog open must not inherit a dead button.
+        expect(screen.getByRole('button', { name: /save changes/i })).toBeEnabled();
     });
 
     it('re-renders and sends previews when the selection changes', async () => {
@@ -136,6 +138,60 @@ describe('EditListingModal', () => {
         await waitFor(() => expect(save).toHaveBeenCalled());
         expect(generateThumbnails).not.toHaveBeenCalled();
         expect(save.mock.calls[0][1].thumbnails).toBeUndefined();
+    });
+
+    it('surfaces a rejected save and leaves the form usable', async () => {
+        vi.spyOn(cloudApi, 'galleryDetail').mockResolvedValue(
+            listing([{ id: 't1', nodeId: 'p2' }]));
+        vi.spyOn(cloudApi, 'updatePublication').mockRejectedValue(
+            new ApiError(403, 'Only the owner can edit this listing.'));
+        const { onSaved } = renderModal();
+
+        await screen.findByDisplayValue('old description');
+        fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+
+        expect(await screen.findByRole('alert')).toHaveTextContent('Only the owner can edit this listing.');
+        expect(onSaved).not.toHaveBeenCalled();
+        expect(screen.getByRole('button', { name: /save changes/i })).toBeEnabled();
+    });
+
+    it('takes focus on mount so Escape closes it, and gives focus back on unmount', async () => {
+        vi.spyOn(cloudApi, 'galleryDetail').mockResolvedValue(
+            listing([{ id: 't1', nodeId: 'p2' }]));
+        const trigger = document.createElement('button');
+        document.body.appendChild(trigger);
+        trigger.focus();
+        const { onClose, unmount } = renderModal();
+
+        // Dispatched at whatever actually holds focus rather than at the dialog: a keydown
+        // handler bound to a container only ever sees keys that bubble from inside it, so
+        // firing at the dialog itself would pass even with nothing in the dialog focused.
+        expect(screen.getByRole('dialog')).toHaveFocus();
+        fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
+        expect(onClose).toHaveBeenCalledOnce();
+
+        await screen.findByDisplayValue('old description');
+        unmount();
+        expect(trigger).toHaveFocus();
+        trigger.remove();
+    });
+
+    it('contains Tab focus within the dialog', async () => {
+        vi.spyOn(cloudApi, 'galleryDetail').mockResolvedValue(
+            listing([{ id: 't1', nodeId: 'p2' }]));
+        renderModal();
+        await screen.findByDisplayValue('old description');
+        const dialog = screen.getByRole('dialog');
+        const close = screen.getByRole('button', { name: 'Close edit listing dialog' });
+        const save = screen.getByRole('button', { name: /save changes/i });
+
+        save.focus();
+        fireEvent.keyDown(dialog, { key: 'Tab' });
+        expect(close).toHaveFocus();
+
+        close.focus();
+        fireEvent.keyDown(dialog, { key: 'Tab', shiftKey: true });
+        expect(save).toHaveFocus();
     });
 
     it('shows a failed load, keeps saving disabled, and reloads on retry', async () => {

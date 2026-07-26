@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { X, Pencil, Loader } from 'lucide-react';
 import { API_BASE, ApiError, cloudApi, GalleryDetail } from '../../services/cloudApi';
 import { computePageOrder } from '../../services/pdfService';
@@ -9,6 +9,10 @@ import type { AppState } from '../../types';
 interface EditListingModalProps {
     projectId: string;
     onClose: () => void;
+    /**
+     * Fired once the listing has been written. The dialog does not close itself and is left
+     * usable, so a host is free to refetch behind it or to unmount it from here.
+     */
     onSaved: () => void;
 }
 
@@ -28,6 +32,17 @@ export function EditListingModal({ projectId, onClose, onSaved }: EditListingMod
     const [phase, setPhase] = useState<'form' | 'rendering' | 'saving'>('form');
     const [error, setError] = useState<string | null>(null);
     const [attempt, setAttempt] = useState(0);
+    const dialogRef = useRef<HTMLDivElement>(null);
+    const previousFocus = useRef<HTMLElement | null>(null);
+
+    // The dialog itself takes focus rather than a field, because the form does not exist yet
+    // while the listing loads -- and without focus inside it, the Escape handler below would
+    // never see a keydown to act on.
+    useEffect(() => {
+        previousFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+        dialogRef.current?.focus();
+        return () => previousFocus.current?.focus();
+    }, []);
 
     useEffect(() => {
         let cancelled = false;
@@ -76,6 +91,7 @@ export function EditListingModal({ projectId, onClose, onSaved }: EditListingMod
         if (load.status !== 'ready') return;
         setError(null);
         const tags = tagsText.split(',').map(t => t.trim().toLowerCase()).filter(Boolean).slice(0, 10);
+        let saved = false;
         try {
             // Left alone, the published previews are left alone: an untouched selection sends no
             // thumbnails at all, which the route reads as "keep them" -- so a tag fix costs no
@@ -97,24 +113,48 @@ export function EditListingModal({ projectId, onClose, onSaved }: EditListingMod
             }
             setPhase('saving');
             await cloudApi.updatePublication(projectId, { description, tags, thumbnails, previewNodeIds });
-            onSaved();
+            saved = true;
         } catch (e) {
             setError(e instanceof ApiError ? e.message : (e as Error).message || 'Could not save this listing.');
+        } finally {
+            // Interactive again either way. A host is free to keep the dialog open after a save
+            // (to refetch the listing behind it, say) and must not inherit a dead button for it.
             setPhase('form');
         }
+        // Outside the try on purpose: a host callback that navigates or refetches and throws is
+        // not a failed save, and must not be reported as one after the PATCH already landed.
+        if (saved) onSaved();
     };
 
     const handleDialogKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
         if (event.key === 'Escape') {
             event.preventDefault();
             onClose();
+            return;
+        }
+        if (event.key !== 'Tab') return;
+        const focusable = Array.from(event.currentTarget.querySelectorAll<HTMLElement>(
+            'button:not([disabled]), textarea:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ));
+        if (focusable.length === 0) {
+            event.preventDefault();
+            return;
+        }
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (event.shiftKey && document.activeElement === first) {
+            event.preventDefault();
+            last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+            event.preventDefault();
+            first.focus();
         }
     };
 
     return (
         <div className="fixed inset-0 bg-black/40 z-[100] flex items-center justify-center" onClick={onClose}>
-            <div role="dialog" aria-modal="true" aria-labelledby="edit-listing-title"
-                className="bg-white rounded-xl shadow-2xl w-[560px] max-h-[80vh] flex flex-col"
+            <div ref={dialogRef} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby="edit-listing-title"
+                className="bg-white rounded-xl shadow-2xl w-[560px] max-h-[80vh] flex flex-col outline-none"
                 onClick={e => e.stopPropagation()} onKeyDown={handleDialogKeyDown}>
                 <div className="flex items-center justify-between px-4 py-3 border-b">
                     <h2 id="edit-listing-title" className="font-semibold text-slate-800 text-sm flex items-center gap-1.5">
