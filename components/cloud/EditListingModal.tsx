@@ -144,6 +144,12 @@ export function EditListingModal({ projectId, onClose, onSaved }: EditListingMod
     const handleDialogKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
         if (event.key === 'Escape') {
             event.preventDefault();
+            // Stops the NATIVE event too (React's stopPropagation forwards to it), which is
+            // what actually matters: React's delegated listener sits on the app root, so
+            // without this the key carries on up to `document` -- where GalleryDetailModal
+            // has an Escape handler that calls navigate(-1). One press would then close this
+            // dialog AND navigate the gallery page away, taking the unsaved edits with it.
+            event.stopPropagation();
             onClose();
             return;
         }
