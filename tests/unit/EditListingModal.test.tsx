@@ -30,7 +30,7 @@ const state = {
 const listing = (previews: GalleryPreview[]): GalleryDetail => ({
     id: 'proj-1', name: 'Planner', description: 'old description', tags: ['old'],
     author: 'someone', ownerId: 'user-1', forkCount: 0, downloadCount: 0,
-    updatedAt: '', headCommitId: 'commit-1', thumbnailIds: previews.map(p => p.id),
+    updatedAt: '2026-05-01 09:00:00', headCommitId: 'commit-1', thumbnailIds: previews.map(p => p.id),
     previews, forkedFrom: null, ratingAvg: null, ratingCount: 0,
 });
 
@@ -71,9 +71,10 @@ describe('EditListingModal', () => {
 
         await waitFor(() => expect(onSaved).toHaveBeenCalled());
         expect(generateThumbnails).not.toHaveBeenCalled();
-        // The published commit the dialog loaded travels with the save: the route refuses the
-        // write if a publish has moved the listing on since.
-        expect(save).toHaveBeenCalledWith('proj-1', 'commit-1', {
+        // The listing identity the dialog loaded travels with the save -- both halves, so a
+        // republish of the same commit is caught too. The route refuses the write if the
+        // listing has moved on since.
+        expect(save).toHaveBeenCalledWith('proj-1', { headCommitId: 'commit-1', updatedAt: '2026-05-01 09:00:00' }, {
             description: 'old description', tags: ['fresh', 'tags'],
             thumbnails: undefined, previewNodeIds: undefined,
         });

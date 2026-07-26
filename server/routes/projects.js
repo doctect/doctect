@@ -6,6 +6,7 @@ import { validateAppState } from '../validateAppState.js';
 import { encodeState, decodeStateRow } from '../stateCodec.js';
 import { assertStorageAllowance, assertProjectAllowance, assertPublishAllowance, sendLimitError, userWriteLimiter, userStorageQuotaBytes } from '../middleware/limits.js';
 import { lockProjectRows } from '../projectLocks.js';
+import { publicationTag } from '../../shared/publicationTag.js';
 
 const router = Router();
 
@@ -447,14 +448,19 @@ router.post('/api/projects/:id/publish', requireAuth, requireUsername, loadProje
 // to the gallery as the acting user, not routes acting on content the caller
 // already owns — and publishing already required a username.
 //
-// If-Match carries the published_commit_id the client loaded, matching publish's idiom, and a
-// mismatch is refused. The race it closes: the Cloud menu offers "Edit gallery listing…" and
-// "Publish to gallery…" side by side, so an owner can open the dialog, publish a new version,
-// then save the still-open dialog — writing the pre-publish description and tags over the
-// just-published ones while the untouched selection omits `thumbnails` and leaves the
-// post-publish previews standing. published_commit_id is the token rather than published_at
-// because SQLite's CURRENT_TIMESTAMP is second-resolution and cannot discriminate a publish
-// that landed in the same second.
+// If-Match carries a token identifying the LISTING the client loaded — not merely the version
+// it was published from — matching publish's idiom, and a mismatch is refused. The race it
+// closes: the Cloud menu offers "Edit gallery listing…" and "Publish to gallery…" side by
+// side, so an owner can open the dialog, publish, then save the still-open dialog — writing
+// the pre-publish description and tags over the just-published ones while the untouched
+// selection omits `thumbnails` and leaves the post-publish previews standing.
+//
+// The token is composite (see shared/publicationTag.js) because publish does not require the
+// head to have moved: republishing an unchanged commit rewrites the description, tags,
+// previews and published_at while published_commit_id stays identical, so a commit-only token
+// would still match and let exactly that mixture through. published_at is the second factor
+// and never the sole one — SQLite's CURRENT_TIMESTAMP is second-resolution, so a republish
+// inside the same second remains indistinguishable. That is the one residual here.
 //
 // Two concurrent EDITS still last-write-wins, and that is intended: an edit never moves
 // published_commit_id, so both carry the same valid token. Both are the same owner editing
@@ -477,8 +483,12 @@ router.patch('/api/projects/:id/publication', requireAuth, userWriteLimiter, loa
         if (!current || current.owner_id !== req.user.id) return null;
         if (current.visibility !== 'public' || !current.published_commit_id) return null;
         // Compared under the row lock, next to the checks it belongs with: a publish that
-        // commits between loadProject and here is exactly the case being caught.
-        if (current.published_commit_id !== expectedPublication) return 'stale';
+        // commits between loadProject and here is exactly the case being caught. Built from
+        // the locked row rather than parsed out of the header, so there is no delimiter to
+        // disagree about — the two sides either produce the same string or they do not.
+        if (publicationTag(current.published_commit_id, current.published_at) !== expectedPublication) {
+            return 'stale';
+        }
 
         // An omitted description keeps the published one, exactly as an omitted
         // thumbnails set keeps the published previews — this route must never lose

@@ -3,6 +3,7 @@
 import { describe, it, expect, beforeAll, vi } from 'vitest';
 import request from 'supertest';
 import { initTestApp, signUpUser, minimalState, PNG_1X1, saveProjectCommit } from './helpers.js';
+import { publicationTag } from '../../../shared/publicationTag.js';
 
 // Lets one test fail a preview insert mid-replacement, to prove the edit runs inside
 // a transaction: a partial replacement would leave a live public listing showing
@@ -49,11 +50,17 @@ const publishedProject = async (name) => {
 
 const projectRow = async (id) => (await query('SELECT * FROM projects WHERE id = $1', [id]))[0];
 
-// An edit carries the published_commit_id it was loaded against, so the helper looks the
-// current one up unless a test pins a stale value with `ifMatch`. `ifMatch: null` omits the
-// header; so does an unpublished project, which has no token to send.
+// An edit carries a token for the listing it was loaded against — the published commit AND
+// the moment it was published — so the helper builds the current one unless a test pins a
+// stale value with `ifMatch`. `ifMatch: null` omits the header; so does an unpublished
+// project, which has no listing to identify.
+const currentTag = async (id) => {
+    const row = await projectRow(id);
+    return row?.published_commit_id ? publicationTag(row.published_commit_id, row.published_at) : null;
+};
+
 const editListing = async (id, body, opts = {}) => {
-    const token = 'ifMatch' in opts ? opts.ifMatch : (await projectRow(id))?.published_commit_id;
+    const token = 'ifMatch' in opts ? opts.ifMatch : await currentTag(id);
     const req = request(app)
         .patch(`/api/projects/${id}/publication`)
         .set('Cookie', opts.cookie ?? cookie);
@@ -209,7 +216,7 @@ describe('PATCH /api/projects/:id/publication', () => {
     // and images come from two different publishes, reported to the owner as a success.
     it('409s on a published_commit_id that a republish has moved on from, and 200s on the current one', async () => {
         const id = await publishedProject('Republished Mid Edit');
-        const staleToken = (await projectRow(id)).published_commit_id;
+        const staleToken = await currentTag(id);
 
         // A different title, so the commit route's state-hash dedupe does not hand back the
         // existing head and leave published_commit_id where it was.
@@ -223,7 +230,7 @@ describe('PATCH /api/projects/:id/publication', () => {
                 thumbnails: [PNG_1X1], previewNodeIds: ['root'],
             });
         expect(republish.status).toBe(200);
-        expect((await projectRow(id)).published_commit_id).not.toBe(staleToken);
+        expect(await currentTag(id)).not.toBe(staleToken);
 
         const stale = await editListing(id, {
             description: 'pre-publish description', tags: ['pre-publish'],
@@ -243,6 +250,43 @@ describe('PATCH /api/projects/:id/publication', () => {
         });
         expect(fresh.status).toBe(200);
         expect((await projectRow(id)).published_description).toBe('edited after reopening');
+    });
+
+    // Publishing does not require the head to have moved — POST /publish gates only on
+    // head_commit_id — so a republish of the UNCHANGED commit rewrites the description, tags,
+    // previews and published_at while published_commit_id stays exactly where it was. A token
+    // made of the commit alone still matches, and the same mixed listing gets through: text
+    // from before the republish, previews from after. The docs list "republish over it" as a
+    // way to change a listing, so this is a lever an owner is told about.
+    it('409s when a same-head republish rewrote the listing without moving the commit', async () => {
+        const id = await publishedProject('Republished In Place');
+        // published_at is pinned first so the republish's CURRENT_TIMESTAMP is certainly a
+        // different value. SQLite's is second-resolution: a republish landing inside the same
+        // second still cannot be told apart, which is the residual this precondition leaves.
+        await query('UPDATE projects SET published_at = $1 WHERE id = $2', [PUBLISHED_AT_SENTINEL, id]);
+        const before = await projectRow(id);
+        const staleToken = publicationTag(before.published_commit_id, before.published_at);
+
+        const republish = await request(app).post(`/api/projects/${id}/publish`).set('Cookie', cookie)
+            .set('If-Match', `"${before.head_commit_id}"`)
+            .send({
+                description: 'republished in place', tags: ['republished'],
+                thumbnails: [PNG_1X1], previewNodeIds: ['root'],
+            });
+        expect(republish.status).toBe(200);
+        const after = await projectRow(id);
+        expect(after.published_commit_id).toBe(before.published_commit_id);   // the point
+        expect(after.published_at).not.toBe(before.published_at);
+
+        const stale = await editListing(id, {
+            description: 'pre-publish description', tags: ['pre-publish'],
+        }, { ifMatch: staleToken });
+
+        expect(stale.status).toBe(409);
+        expect(stale.body.code).toBe('PUBLICATION_CHANGED');
+        const afterRefusal = await projectRow(id);
+        expect(afterRefusal.published_description).toBe('republished in place');
+        expect(JSON.parse(afterRefusal.published_tags)).toEqual(['republished']);
     });
 
     it('428s when no published_commit_id is sent at all', async () => {

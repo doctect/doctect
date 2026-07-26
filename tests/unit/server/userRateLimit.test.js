@@ -3,6 +3,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import request from 'supertest';
 import { initTestApp, signUpUser, minimalState, saveProjectCommit, PNG_1X1 } from './helpers.js';
+import { publicationTag } from '../../../shared/publicationTag.js';
 
 let app;
 beforeAll(async () => {
@@ -44,17 +45,19 @@ describe('per-user write rate limit', () => {
             .send({ description: 'x', tags: [], thumbnails: [PNG_1X1] });
         expect(published.status).toBe(200);   // publish carries no limiter today
 
-        // The listing edit carries the published_commit_id it was loaded against, which here is
-        // the head that was just published from.
-        const publishedCommit = created.body.project.headCommitId;
+        // The listing edit carries a token for the listing it was loaded against. Built from
+        // the gallery DTO exactly as the client builds it: headCommitId is published_commit_id
+        // and updatedAt is published_at. A GET costs no write budget.
+        const loaded = (await request(app).get(`/api/gallery/${id}`)).body.project;
+        const tag = publicationTag(loaded.headCommitId, loaded.updatedAt);
 
         const first = await request(app).patch(`/api/projects/${id}/publication`)
-            .set('Cookie', editor).set('If-Match', `"${publishedCommit}"`)
+            .set('Cookie', editor).set('If-Match', `"${tag}"`)
             .send({ description: 'edit one', tags: [] });                           // write 2
         expect(first.status).toBe(200);
 
         const second = await request(app).patch(`/api/projects/${id}/publication`)
-            .set('Cookie', editor).set('If-Match', `"${publishedCommit}"`)
+            .set('Cookie', editor).set('If-Match', `"${tag}"`)
             .send({ description: 'edit two', tags: [] });                           // write 3 — over
         expect(second.status).toBe(429);
         expect(second.body.code).toBe('RATE_LIMITED');

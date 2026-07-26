@@ -1,4 +1,5 @@
 import { AppState } from '../types';
+import { publicationTag } from '../shared/publicationTag.js';
 
 export const API_BASE: string = (import.meta as any).env?.VITE_API_BASE || '';
 
@@ -224,16 +225,26 @@ export const cloudApi = {
 
     // Metadata-only. Never moves the published commit — see the route comment in
     // server/routes/projects.js. `thumbnails` omitted means "keep the current previews".
-    // `expectedPublication` is the published_commit_id the caller loaded (GalleryDetail exposes
-    // it as headCommitId); the route 409s with code PUBLICATION_CHANGED if a publish has moved
-    // the listing on since, rather than writing pre-publish text over a newer listing.
-    updatePublication: (projectId: string, expectedPublication: string, args: {
-        description: string; tags: string[];
-        thumbnails?: string[]; previewNodeIds?: string[];
-    }) =>
+    // `loaded` is the listing the caller is editing, taken straight off GalleryDetail, which
+    // exposes published_commit_id as `headCommitId` and published_at as `updatedAt`. Both
+    // halves travel: republishing an unchanged commit moves only the second one. The route
+    // 409s with code PUBLICATION_CHANGED if the listing moved on, rather than writing
+    // pre-publish text over a newer one. Assembled here, once, via the shared formatter, so
+    // no caller can get the format wrong.
+    updatePublication: (
+        projectId: string,
+        loaded: { headCommitId: string; updatedAt: string },
+        args: {
+            description: string; tags: string[];
+            thumbnails?: string[]; previewNodeIds?: string[];
+        },
+    ) =>
         api<{ project: CloudProject & { thumbnailIds: string[] } }>(`/api/projects/${projectId}/publication`, {
             method: 'PATCH',
-            headers: { 'Content-Type': 'application/json', 'If-Match': `"${expectedPublication}"` },
+            headers: {
+                'Content-Type': 'application/json',
+                'If-Match': `"${publicationTag(loaded.headCommitId, loaded.updatedAt)}"`,
+            },
             body: JSON.stringify(args),
         }),
 

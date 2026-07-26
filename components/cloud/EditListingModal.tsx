@@ -21,12 +21,14 @@ interface EditListingModalProps {
 
 type LoadState =
     | { status: 'loading' }
-    // publishedCommitId is GalleryDetail.headCommitId, held separately because it is only
-    // known to be non-null once the load has passed its own check — and it is the precondition
-    // the save is refused without.
+    // `loaded` is the listing identity the save is refused without: GalleryDetail's
+    // headCommitId (published_commit_id) and updatedAt (published_at). Held as its own field
+    // because headCommitId is only known to be non-null once the load has passed its check,
+    // and snapshotted here so it always describes the listing whose text is in the form —
+    // never a newer one.
     | {
         status: 'ready'; listing: GalleryDetail; state: AppState;
-        initialSelection: string[]; publishedCommitId: string;
+        initialSelection: string[]; loaded: { headCommitId: string; updatedAt: string };
     }
     | { status: 'error'; message: string };
 
@@ -80,7 +82,7 @@ export function EditListingModal({ projectId, onClose, onSaved }: EditListingMod
                     listing,
                     state: commit.state as AppState,
                     initialSelection,
-                    publishedCommitId: listing.headCommitId,
+                    loaded: { headCommitId: listing.headCommitId, updatedAt: listing.updatedAt },
                 });
                 setDescription(listing.description);
                 setTagsText(listing.tags.join(', '));
@@ -141,7 +143,7 @@ export function EditListingModal({ projectId, onClose, onSaved }: EditListingMod
                 previewNodeIds = rendered.map(r => r.nodeId);
             }
             setPhase('saving');
-            await cloudApi.updatePublication(projectId, load.publishedCommitId,
+            await cloudApi.updatePublication(projectId, load.loaded,
                 { description, tags, thumbnails, previewNodeIds });
             saved = true;
         } catch (e) {
