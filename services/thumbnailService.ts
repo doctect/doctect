@@ -9,10 +9,6 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
 
 const MAX_THUMB_WIDTH = 480;
 
-// Re-exported so the renderer's cap and the picker's cap stay visibly the same constant;
-// import it from ../constants/previews unless you already depend on this module.
-export { MAX_PREVIEWS };
-
 export interface RenderedPreview {
     nodeId: string;
     dataUrl: string;
