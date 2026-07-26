@@ -63,7 +63,7 @@ describe('LazyEditListingModal', () => {
         // travel to the app-level ErrorBoundary and replace the entire app over one dialog.
         await mount(p);
 
-        expect(await screen.findByRole('alert')).toHaveTextContent(/could not be loaded/i);
+        expect(await screen.findByRole('alert')).toHaveTextContent(/stopped working/i);
         fireEvent.click(screen.getByRole('button', { name: /close/i }));
         expect(p.onClose).toHaveBeenCalledOnce();
     });

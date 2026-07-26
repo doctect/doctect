@@ -65,9 +65,13 @@ function ChunkErrorOverlay({ error, onClose }: { error: Error; onClose: () => vo
             <div role="alert" onClick={e => e.stopPropagation()}
                 className="bg-white rounded-xl shadow-2xl w-[420px] p-5 text-sm text-slate-700">
                 <h2 className="font-semibold text-slate-800 mb-1">Edit gallery listing</h2>
-                <p>The listing editor could not be loaded. This usually means the app was updated while
-                    this page was open — reloading picks up the new version. Nothing about your listing
-                    has changed.</p>
+                {/* Deliberately not "could not be loaded": this boundary wraps the Suspense, so it
+                    also catches a runtime error thrown by the dialog once it has already loaded.
+                    Naming a cause it cannot actually distinguish would misdirect. Reloading is
+                    still the right first move either way, and the reassurance that nothing was
+                    written holds for both. */}
+                <p>The listing editor stopped working. Reloading usually clears it — often the app was
+                    updated while this page was open. Nothing about your listing has changed.</p>
                 <p className="text-xs text-slate-400 mt-2 font-mono break-words">{error.message}</p>
                 <div className="flex justify-end gap-2 mt-4">
                     <button type="button" onClick={onClose} className="text-xs px-3 py-1.5 rounded border text-slate-600">Close</button>
