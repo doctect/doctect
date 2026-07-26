@@ -41,7 +41,7 @@ const item: GalleryItem = {
     ratingAvg: null, ratingCount: 0,
 };
 const detail: GalleryDetail = {
-    ...item, ownerId: 'owner-1', headCommitId: 'commit-1', thumbnailIds: [], forkedFrom: null,
+    ...item, ownerId: 'owner-1', headCommitId: 'commit-1', thumbnailIds: [], previews: [], forkedFrom: null,
 };
 
 describe('gallery card click opens an overlay modal; direct hits still get the full page', () => {

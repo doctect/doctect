@@ -13,7 +13,8 @@ vi.mock('../../lib/auth-client', () => ({
 // render), which statically imports pdfjs-dist -- pdfjs-dist touches DOMMatrix (a real-browser
 // API) at module-evaluation time, which jsdom doesn't provide. Same gap already documented and
 // worked around in tests/unit/CloudMenu.test.tsx (CloudMenu -> PublishModal -> thumbnailService).
-// Preview tests assert this boundary's arguments; thumbnail rasterization remains covered by its own suite.
+// Preview tests assert this boundary's arguments and that the returned pair's dataUrl reaches the
+// <img>; thumbnail rasterization itself remains covered by tests/unit/thumbnailService.test.ts.
 const generateThumbnails = vi.hoisted(() => vi.fn());
 vi.mock('../../services/thumbnailService', () => ({ generateThumbnails }));
 
@@ -148,7 +149,7 @@ describe('MergeRequestPage preview state loading', () => {
     beforeEach(() => {
         vi.restoreAllMocks();
         generateThumbnails.mockReset();
-        generateThumbnails.mockResolvedValue(['data:image/png;base64,preview']);
+        generateThumbnails.mockResolvedValue([{ nodeId: 'page-1', dataUrl: 'data:image/png;base64,preview' }]);
         mockUseSession.mockReturnValue({ data: { user: { id: 'owner-id' } } });
     });
 
@@ -188,5 +189,22 @@ describe('MergeRequestPage preview state loading', () => {
         expect(previewElement(normalizedTarget, 'target-grid')).toMatchObject({ textOverflow: 'clip', textWrap: false });
         expect(sourceState).toEqual(sourceBefore);
         expect(targetState).toEqual(targetBefore);
+    });
+
+    it('renders the dataUrl half of each returned pair as the before/after image source', async () => {
+        vi.spyOn(cloudApi, 'getMr').mockResolvedValue({
+            ...makeDetail(),
+            sourceState: previewState('source'),
+            targetState: previewState('target'),
+        } as any);
+        renderAt();
+
+        fireEvent.click(await screen.findByRole('button', { name: 'Render before/after preview' }));
+
+        // Pins the `?.dataUrl` unwrap. Passing the { nodeId, dataUrl } pair straight through would
+        // render src="[object Object]" -- broken previews that every other assertion here, which
+        // only inspects generateThumbnails' arguments, would happily let through.
+        expect(await screen.findByAltText('before')).toHaveAttribute('src', 'data:image/png;base64,preview');
+        expect(screen.getByAltText('after')).toHaveAttribute('src', 'data:image/png;base64,preview');
     });
 });

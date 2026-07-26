@@ -1,4 +1,5 @@
 import { AppState } from '../types';
+import { publicationTag } from '../shared/publicationTag.js';
 
 export const API_BASE: string = (import.meta as any).env?.VITE_API_BASE || '';
 
@@ -147,8 +148,12 @@ export interface GalleryItem {
     forkCount: number; downloadCount: number; updatedAt: string; thumbnailId: string | null;
     ratingAvg: number | null; ratingCount: number;
 }
+// `nodeId` is null for every preview published before the source page was recorded,
+// so it cannot be relied on to identify the page an existing image came from.
+export interface GalleryPreview { id: string; nodeId: string | null; }
 export interface GalleryDetail extends Omit<GalleryItem, 'thumbnailId'> {
     ownerId: string; headCommitId: string | null; thumbnailIds: string[];
+    previews: GalleryPreview[];
     forkedFrom: { projectId: string; name: string; author: string } | null;
 }
 
@@ -211,10 +216,35 @@ export const cloudApi = {
     getCommit: async (projectId: string, commitId: string) =>
         (await api<{ commit: { id: string; message: string; createdAt: string; state: any } }>(`/api/projects/${projectId}/commits/${commitId}`)).commit,
 
-    publish: (projectId: string, expectedHead: string, args: { description: string; tags: string[]; thumbnails: string[] }) =>
+    publish: (projectId: string, expectedHead: string, args: { description: string; tags: string[]; thumbnails: string[]; previewNodeIds?: string[] }) =>
         api<{ project: CloudProject & { thumbnailIds: string[] } }>(`/api/projects/${projectId}/publish`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'If-Match': `"${expectedHead}"` },
+            body: JSON.stringify(args),
+        }),
+
+    // Metadata-only. Never moves the published commit — see the route comment in
+    // server/routes/projects.js. `thumbnails` omitted means "keep the current previews".
+    // `loaded` is the listing the caller is editing, taken straight off GalleryDetail, which
+    // exposes published_commit_id as `headCommitId` and published_at as `updatedAt`. Both
+    // halves travel: republishing an unchanged commit moves only the second one. The route
+    // 409s with code PUBLICATION_CHANGED if the listing moved on, rather than writing
+    // pre-publish text over a newer one. Assembled here, once, via the shared formatter, so
+    // no caller can get the format wrong.
+    updatePublication: (
+        projectId: string,
+        loaded: { headCommitId: string; updatedAt: string },
+        args: {
+            description: string; tags: string[];
+            thumbnails?: string[]; previewNodeIds?: string[];
+        },
+    ) =>
+        api<{ project: CloudProject & { thumbnailIds: string[] } }>(`/api/projects/${projectId}/publication`, {
+            method: 'PATCH',
+            headers: {
+                'Content-Type': 'application/json',
+                'If-Match': `"${publicationTag(loaded.headCommitId, loaded.updatedAt)}"`,
+            },
             body: JSON.stringify(args),
         }),
 

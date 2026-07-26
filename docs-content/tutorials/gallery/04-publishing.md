@@ -2,8 +2,8 @@
 title: Publishing to the Gallery
 difficulty: intermediate
 time: 8 min
-summary: The publish wizard — preview pages, live thumbnails, tags that people actually search — and what publishing exposes.
-keywords: publish, unpublish, wizard, thumbnails, tags, description, public
+summary: The publish wizard — preview pages, live thumbnails, tags that people actually search — what publishing exposes, and how to fix a listing afterwards without republishing.
+keywords: publish, unpublish, wizard, thumbnails, tags, description, public, edit listing, edit gallery listing
 prerequisites: gallery/cloud-saves-and-history
 ---
 
@@ -21,7 +21,7 @@ Two properties of that sentence deserve a closer look. First, it's a *commit* th
 | **Every version you've ever published.** Each publish adds a row to the public history, and visitors can clone any of them — publishing a fix doesn't hide the version with the mistake. | Your other projects. Publishing is strictly per-project. |
 | Saved **generator scripts**, if the project has them — comments included. More below. | Your email and account details. The page credits your [username](/docs/gallery/accounts-and-usernames#your-username) — "by atlas_designs" — and links your public profile, nothing more. |
 
-The published name is the project's name at the moment you publish — rename the tab later and the gallery keeps the old name until your next publish. And everything on the public page updates only through the wizard: republish and your new commit, name, description, tags, and previews replace the old ones in one step.
+The published name is the project's name at the moment you publish — rename the tab later and the gallery keeps the old name until your next publish. Republishing updates the whole page at once: your new commit, name, description, tags, and previews replace the old ones in a single step. But the three pieces that are pure presentation (the description, the tags, and which pages are used as previews) can also be changed on their own, without republishing anything, and [a later section of this tutorial](/docs/gallery/publishing#fixing-a-listing-after-the-fact) is about doing exactly that.
 
 ## The wizard, step by step
 
@@ -31,11 +31,11 @@ Three decisions, top to bottom:
 
 - **Description** — up to 2,000 characters, and it's markdown: headings, lists, links, and inline code all render on the project page (raw HTML deliberately stays plain text). One catch: the gallery *card* shows your first couple of lines as written, syntax and all, so lead with a plain sentence and save the formatting for further down.
 - **Tags** — comma-separated, lowercased automatically. They power search and filtering; the next section is about writing ones that work.
-- **Preview pages** — pick **1 to 4** pages from the list (the first page comes pre-checked; the picker lists the first 100 pages of the document order). These become the preview stack on your project page, and the first page in your selection is the card image — the single picture that has to earn the click in a grid of other projects.
+- **Preview pages** — pick **1 to 6** pages from the list (the first page comes pre-checked; the picker lists the first 100 pages of the document order). These become the preview stack on your project page, and the first page in your selection is the card image — the single picture that has to earn the click in a grid of other projects.
 
 ![The publish wizard filled in: description and tags written, three preview pages checked in the page list](/docs-assets/gallery/publish-wizard-meta.png "One dialog, three decisions — description, tags, and which pages face the public")
 
-Click **Publish** and the wizard renders your previews right in the browser: it generates the real PDF of the published version (in whichever variant was active when you saved), rasters your chosen pages at preview width, and compresses each to a small WebP image. The finished thumbnails appear in the dialog while it uploads — what you see in that strip is pixel-for-pixel what visitors get. The server accepts 1–4 of them, checks each really is an image, and caps them at 300 KB apiece; then the page goes live and the editor confirms with *"Published! View it in the Gallery."*
+Click **Publish** and the wizard renders your previews right in the browser: it generates the real PDF of the published version (in whichever variant was active when you saved), rasters your chosen pages at preview width, and compresses each to a small WebP image. The finished thumbnails appear in the dialog while it uploads — what you see in that strip is pixel-for-pixel what visitors get. The server accepts 1–6 of them, checks each really is an image, and caps them at 300 KB apiece; then the page goes live and the editor confirms with *"Published! View it in the Gallery."*
 
 ![The publish wizard mid-publish: rendered preview thumbnails shown beneath the page list while the upload finishes](/docs-assets/gallery/publish-wizard-pages.png "The previews render in your browser before upload — this strip is exactly what the gallery will show")
 
@@ -56,16 +56,28 @@ If the version you're publishing carries [saved generator source](/docs/generato
 > [!WARNING]
 > Review your scripts the way you'd review anything before posting it: API keys or URLs pasted in for testing, client names in comments, a stray `// TODO` with someone's contact details. And remember the second row of the exposure table — every *published* version stays publicly cloneable, so a secret in a published script isn't retracted by publishing a cleaned-up commit on top. Scrub first, publish second.
 
+## Fixing a listing after the fact
+
+Tags go stale, descriptions grow typos, and the page you picked as a cover is rarely the best one you had. None of that needs a republish. Open your project's gallery page and click **Edit listing** — the same dialog is a row action on [My Projects](/docs/gallery/cloud-saves-and-history#my-projects), and it sits in the editor's Cloud menu as **Edit gallery listing…**.
+
+You get three of the wizard's fields back: the description, the tags, and the preview page list with your current preview pages already ticked. Change what you need and hit **Save changes**. What visitors download is untouched — the listing editor never moves the published version, so the commit, the published name, and the public history all stay exactly where they were. Nor does editing push your project back to the top of *Recently updated*: that row is ordered by when you last **published**, not by when you last tidied up. So there's no cost to fixing a tag, and no way to farm the front page by fixing one.
+
+Touch the page list and the whole preview set is re-rendered — from the **published** version, not from whatever you have open in the editor. That's deliberate: the shop window can never drift from what's behind it. The first page you tick is still the cover. Leave the list alone and your existing previews are kept exactly as they are, so a tags-only fix costs no render and no upload at all.
+
+> [!NOTE]
+> One wrinkle for older listings. Previews only recently started recording which page each of them came from, so a listing published before that opens with **nothing ticked** and its current images shown above the list as *Current previews*. Leave the list alone and those images stay put. Tick pages and you replace the whole set — there is no way to swap a single preview, here or in the wizard.
+
 ## Unpublishing
 
 Publishing is designed to be reversible, and it's worth knowing exactly what the reverse does: unpublishing flips the project back to **private** and takes down the public page — the card leaves the gallery, the page stops resolving for visitors, and the reviews and ratings on it disappear from public view. Nothing is deleted. The server keeps your commits, your publication history, your previews, and the reviews people wrote; publishing again later brings the page back rather than starting a reputation from zero.
 
-That's the design — now the honest state of the app: the current release doesn't yet put an **Unpublish** button in the UI. The platform treats it as a first-class operation (moderators can unpublish a page, and the server supports owners doing the same), but until the button ships you have two levers of your own:
+That's the design — now the honest state of the app: the current release doesn't yet put an **Unpublish** button in the UI. The platform treats it as a first-class operation (moderators can unpublish a page, and the server supports owners doing the same), but until the button ships you have three levers of your own, gentlest first:
 
+- **Edit the listing.** If what you want gone lives only in the description, the tags, or a preview image, the previous section is the cheap fix: it overwrites those in place, leaves no earlier copy behind, and publishes nothing new. It can't reach inside the published *files*, though — for that, keep reading.
 - **Republish over it.** A new publish replaces the name, description, tags, and previews, and pins your new version as the current one. Remember the caveat: earlier published versions remain in the public history, so this fixes the page, not the past.
 - **Delete the cloud project** from [My Projects](/docs/gallery/cloud-saves-and-history#my-projects). This is the blunt instrument — it removes the gallery page *and* the entire cloud project with all of its history, permanently. It works, but it's deletion, not unpublishing.
 
 > [!NOTE]
-> Whatever takedown path you use, treat everything you publish as seen. A visitor who forked your project while it was public keeps that fork — it's their own copy, and unpublishing or even deleting the original doesn't reach into it. The time to catch a secret is in the wizard, before **Publish**; the previous two sections are that checklist.
+> Whatever takedown path you use, treat everything you publish as seen. A visitor who forked your project while it was public keeps that fork — it's their own copy, and unpublishing or even deleting the original doesn't reach into it. The time to catch a secret is in the wizard, before **Publish**; the exposure table and the generator-scripts warning above are that checklist.
 
 Your project now has a public face: a card in the grid, previews you chose, tags that put it in front of the right searches. What happens next involves other people — visitors forking your work, proposing changes back, rating and reviewing it. That's where this track goes from here.

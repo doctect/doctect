@@ -91,6 +91,40 @@ describe('gallery', () => {
         expect(res.body.project.thumbnailIds.length).toBe(1);
     });
 
+    it('returns each preview with the page that produced it, keeping thumbnailIds', async () => {
+        const created = await request(app).post('/api/projects').set('Cookie', cookie)
+            .send({ name: 'Preview Sources', state: minimalState('root') });
+        const id = created.body.project.id;
+        await request(app).post(`/api/projects/${id}/publish`).set('Cookie', cookie)
+            .set('If-Match', `"${created.body.project.headCommitId}"`)
+            .send({
+                description: 'd', tags: [],
+                thumbnails: [PNG_1X1, PNG_1X1], previewNodeIds: ['root', 'root'],
+            });
+
+        const res = await request(app).get(`/api/gallery/${id}`);
+
+        expect(res.status).toBe(200);
+        expect(res.body.project.previews.length).toBe(2);
+        expect(res.body.project.previews.every(p => p.nodeId === 'root')).toBe(true);
+        expect(res.body.project.previews.map(p => p.id)).toEqual(res.body.project.thumbnailIds);
+    });
+
+    it('returns a null nodeId for previews published without one', async () => {
+        const created = await request(app).post('/api/projects').set('Cookie', cookie)
+            .send({ name: 'Legacy Previews', state: minimalState('root') });
+        const id = created.body.project.id;
+        await request(app).post(`/api/projects/${id}/publish`).set('Cookie', cookie)
+            .set('If-Match', `"${created.body.project.headCommitId}"`)
+            .send({ description: 'd', tags: [], thumbnails: [PNG_1X1] });
+
+        const res = await request(app).get(`/api/gallery/${id}`);
+
+        expect(res.body.project.previews).toEqual([
+            { id: res.body.project.thumbnailIds[0], nodeId: null },
+        ]);
+    });
+
     it('404s for private projects', async () => {
         const res = await request(app).get(`/api/gallery/${privateId}`);
         expect(res.status).toBe(404);

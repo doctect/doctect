@@ -132,7 +132,7 @@ const reviewSelect = `
 
 router.get('/api/gallery/:id', async (req, res) => {
     const rows = await query(
-        `SELECT p.*, u.username AS author, t.id AS thumbnail_id,
+        `SELECT p.*, u.username AS author, t.id AS thumbnail_id, t.node_id AS thumbnail_node_id,
                 fp.id AS forked_project_id, fp.published_name AS forked_name,
                 fp.visibility AS forked_visibility, fu.username AS forked_author,
                 ${ratingFields}
@@ -155,7 +155,10 @@ router.get('/api/gallery/:id', async (req, res) => {
             id: p.id, name: p.published_name, description: p.published_description, tags: JSON.parse(p.published_tags || '[]'),
             author: p.author, ownerId: p.owner_id, forkCount: p.fork_count, downloadCount: p.download_count,
             updatedAt: p.published_at, headCommitId: p.published_commit_id,
-            thumbnailIds: rows.map(row => row.thumbnail_id).filter(Boolean), forkedFrom,
+            thumbnailIds: rows.map(row => row.thumbnail_id).filter(Boolean),
+            previews: rows.filter(row => row.thumbnail_id)
+                .map(row => ({ id: row.thumbnail_id, nodeId: row.thumbnail_node_id ?? null })),
+            forkedFrom,
             ...ratingDtoFields(p)
         }
     });

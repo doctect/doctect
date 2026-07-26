@@ -14,8 +14,10 @@ vi.mock('../../lib/auth-client', () => ({
 // it's evaluated, which jsdom doesn't provide, crashing module load before any test can run.
 // None of these tests exercise the Publish flow (project.cloud is always undefined here), so
 // stub the one function that pulls in pdfjs-dist rather than touch CloudMenu or global setup.
+// Resolves to the real contract's shape (an array of { nodeId, dataUrl } pairs) rather than
+// undefined, so the stub can't drift from generateThumbnails' signature.
 vi.mock('../../services/thumbnailService', () => ({
-    generateThumbnails: vi.fn(),
+    generateThumbnails: vi.fn(async () => []),
 }));
 
 const project: Project = {

@@ -6,6 +6,7 @@ import { validateAppState } from '../validateAppState.js';
 import { encodeState, decodeStateRow } from '../stateCodec.js';
 import { assertStorageAllowance, assertProjectAllowance, assertPublishAllowance, sendLimitError, userWriteLimiter, userStorageQuotaBytes } from '../middleware/limits.js';
 import { lockProjectRows } from '../projectLocks.js';
+import { publicationTag } from '../../shared/publicationTag.js';
 
 const router = Router();
 
@@ -312,21 +313,83 @@ export const getThumbnailIds = async (projectId) => {
     return rows.map(r => r.id);
 };
 
-router.post('/api/projects/:id/publish', requireAuth, requireUsername, loadProject(true), async (req, res) => {
-    const expectedHead = expectedHeadFromRequest(req, res);
-    if (expectedHead === null) return;
-    const { description, tags, thumbnails } = req.body || {};
-    if (!Array.isArray(thumbnails) || thumbnails.length < 1 || thumbnails.length > 4) {
-        return res.status(400).json({ error: 'thumbnails must contain 1-4 images' });
+export const MAX_PREVIEWS = 6;
+const PREVIEW_COUNT_ERROR = `thumbnails must contain 1-${MAX_PREVIEWS} images`;
+
+// Shared by the publish route and the listing-edit route so their validation can
+// never drift. Returns { error } on bad input, { previews: null } when the caller
+// omitted `thumbnails` entirely (the edit route reads that as "leave the existing
+// previews alone"; publish rejects it), or the parsed set otherwise.
+export const parsePreviewSet = (body) => {
+    const { thumbnails, previewNodeIds } = body || {};
+    if (thumbnails === undefined) {
+        // Node ids label the images they arrive with; there is no path that re-tags
+        // previews already stored. Accepting them alone would make the edit route
+        // answer 200 to a request it silently ignored.
+        if (previewNodeIds !== undefined) return { error: 'previewNodeIds requires thumbnails' };
+        return { previews: null };
+    }
+    if (!Array.isArray(thumbnails) || thumbnails.length < 1 || thumbnails.length > MAX_PREVIEWS) {
+        return { error: PREVIEW_COUNT_ERROR };
     }
     const parsed = thumbnails.map(parseThumbnail);
     if (parsed.some(p => p === null)) {
-        return res.status(400).json({ error: 'thumbnails must be valid webp/png data URLs under 300KB' });
+        return { error: 'thumbnails must be valid webp/png data URLs under 300KB' };
     }
+    if (previewNodeIds !== undefined
+        && (!Array.isArray(previewNodeIds)
+            || previewNodeIds.length !== thumbnails.length
+            || previewNodeIds.some(x => typeof x !== 'string' || x.length === 0 || x.length > 200))) {
+        return { error: 'previewNodeIds must be one non-empty string per thumbnail (max 200 chars)' };
+    }
+    return { previews: parsed.map((p, i) => ({ ...p, nodeId: previewNodeIds?.[i] ?? null })) };
+};
+
+export const parseTagList = (tags) => {
     if (!Array.isArray(tags) || tags.length > 10 || tags.some(x => typeof x !== 'string' || x.length > 30)) {
-        return res.status(400).json({ error: 'tags must be up to 10 strings of max 30 chars' });
+        return null;
     }
-    const d = String(description ?? '').slice(0, 2000);
+    return JSON.stringify(tags);
+};
+
+// The whole validated field set both listing writers accept, so publish and the
+// listing edit can never drift apart. Returns { error } on bad input, otherwise
+// { previews, tags, description } where a field the caller omitted comes back as
+// `null` (previews) or `undefined` (description). The two routes read an omission
+// differently: publish rewrites the listing wholesale, so it demands a preview set
+// and treats a missing description as empty; the edit route keeps whatever is
+// already published. `undefined` is the ONLY omission marker: an explicit JSON
+// null was sent, so it clears the description rather than storing String(null).
+const parseListingFields = (body) => {
+    const previewSet = parsePreviewSet(body);
+    if (previewSet.error) return { error: previewSet.error };
+    const tags = parseTagList(body?.tags);
+    if (tags === null) return { error: 'tags must be up to 10 strings of max 30 chars' };
+    const description = body?.description === undefined
+        ? undefined
+        : String(body.description ?? '').slice(0, 2000);
+    return { previews: previewSet.previews, tags, description };
+};
+
+export const replaceThumbnails = async (projectId, previews, txQuery) => {
+    await txQuery('DELETE FROM thumbnails WHERE project_id = $1', [projectId]);
+    for (let i = 0; i < previews.length; i++) {
+        await txQuery(
+            'INSERT INTO thumbnails (id, project_id, position, mime, image, node_id) VALUES ($1, $2, $3, $4, $5, $6)',
+            [randomUUID(), projectId, i, previews[i].mime, previews[i].buf, previews[i].nodeId]);
+    }
+};
+
+router.post('/api/projects/:id/publish', requireAuth, requireUsername, loadProject(true), async (req, res) => {
+    const expectedHead = expectedHeadFromRequest(req, res);
+    if (expectedHead === null) return;
+    const listing = parseListingFields(req.body);
+    if (listing.error) return res.status(400).json({ error: listing.error });
+    if (!listing.previews) {
+        return res.status(400).json({ error: PREVIEW_COUNT_ERROR });
+    }
+    const parsedTags = listing.tags;
+    const d = listing.description ?? '';
 
     let published;
     try {
@@ -345,7 +408,7 @@ router.post('/api/projects/:id/publish', requireAuth, requireUsername, loadProje
                      updated_at = CURRENT_TIMESTAMP
                  WHERE id = $6 AND head_commit_id = $7
                  RETURNING *`,
-                [expectedHead, d, JSON.stringify(tags), d, JSON.stringify(tags), current[0].id, expectedHead]
+                [expectedHead, d, parsedTags, d, parsedTags, current[0].id, expectedHead]
             );
             if (!updated[0]) return null;
 
@@ -355,11 +418,7 @@ router.post('/api/projects/:id/publish', requireAuth, requireUsername, loadProje
                 [current[0].id, expectedHead]
             );
 
-            await txQuery('DELETE FROM thumbnails WHERE project_id = $1', [current[0].id]);
-            for (let i = 0; i < parsed.length; i++) {
-                await txQuery('INSERT INTO thumbnails (id, project_id, position, mime, image) VALUES ($1, $2, $3, $4, $5)',
-                    [randomUUID(), current[0].id, i, parsed[i].mime, parsed[i].buf]);
-            }
+            await replaceThumbnails(current[0].id, listing.previews, txQuery);
             const thumbnailRows = await txQuery('SELECT id FROM thumbnails WHERE project_id = $1 ORDER BY position', [current[0].id]);
             return { row: updated[0], thumbnailIds: thumbnailRows.map(item => item.id) };
         });
@@ -372,6 +431,104 @@ router.post('/api/projects/:id/publish', requireAuth, requireUsername, loadProje
         return res.status(409).json({ error: 'Project head changed since it was inspected.', code: 'PROJECT_HEAD_CHANGED' });
     }
     res.json({ project: { ...projectDto(published.row), thumbnailIds: published.thumbnailIds } });
+});
+
+// Edits the listing's metadata. Writes the published_* columns AND mirrors tags and
+// description onto the draft columns, so a later publish (which copies the draft columns
+// forward) does not silently revert the edit. PATCH /api/projects/:id writes those same two
+// draft columns and has no client caller today; if one ever appears, these two routes are
+// writing the same columns and will need reconciling.
+//
+// Deliberately never writes published_commit_id (the public version is changed by publishing,
+// not by editing its description), published_name (a copy of the project name), or
+// published_at (it drives the gallery's "recently updated" sort, so a tag edit must not
+// re-rank the project).
+//
+// No requireUsername: the established rule gates routes that attach NEW content
+// to the gallery as the acting user, not routes acting on content the caller
+// already owns — and publishing already required a username.
+//
+// If-Match carries a token identifying the LISTING the client loaded — not merely the version
+// it was published from — matching publish's idiom, and a mismatch is refused. The race it
+// closes: the Cloud menu offers "Edit gallery listing…" and "Publish to gallery…" side by
+// side, so an owner can open the dialog, publish, then save the still-open dialog — writing
+// the pre-publish description and tags over the just-published ones while the untouched
+// selection omits `thumbnails` and leaves the post-publish previews standing.
+//
+// The token is composite (see shared/publicationTag.js) because publish does not require the
+// head to have moved: republishing an unchanged commit rewrites the description, tags,
+// previews and published_at while published_commit_id stays identical, so a commit-only token
+// would still match and let exactly that mixture through. published_at is the second factor
+// and never the sole one — SQLite's CURRENT_TIMESTAMP is second-resolution, so a republish
+// inside the same second remains indistinguishable. That is the one residual here.
+//
+// Two concurrent EDITS still last-write-wins, and that is intended: an edit never moves
+// published_commit_id and never moves published_at either (both are on the never-written list
+// above), so both halves of the token survive an edit and both writers carry the same valid
+// one. Both are the same owner editing their own metadata, and the loser loses only text it
+// just typed — not, as above, a mixture of two publishes shown to the public.
+router.patch('/api/projects/:id/publication', requireAuth, userWriteLimiter, loadProject(true), async (req, res) => {
+    const notPublished = () => res.status(409).json({ error: 'Project is not published.', code: 'NOT_PUBLISHED' });
+    // Ahead of the If-Match parse on purpose: "you never published this" is the more useful
+    // answer to give a caller than "you omitted a header", and it is the truer one.
+    if (req.project.visibility !== 'public' || !req.project.published_commit_id) return notPublished();
+
+    const expectedPublication = expectedHeadFromRequest(req, res);
+    if (expectedPublication === null) return;
+
+    const listing = parseListingFields(req.body);
+    if (listing.error) return res.status(400).json({ error: listing.error });
+
+    const updated = await withTransaction(async txQuery => {
+        const [current] = await lockProjectRows([req.project.id], txQuery);
+        if (!current || current.owner_id !== req.user.id) return null;
+        if (current.visibility !== 'public' || !current.published_commit_id) return null;
+        // Compared under the row lock, next to the checks it belongs with: a publish that
+        // commits between loadProject and here is exactly the case being caught. Built from
+        // the locked row rather than parsed out of the header, so there is no delimiter to
+        // disagree about — the two sides either produce the same string or they do not.
+        if (publicationTag(current.published_commit_id, current.published_at) !== expectedPublication) {
+            return 'stale';
+        }
+
+        // An omitted description keeps the published one, exactly as an omitted
+        // thumbnails set keeps the published previews — this route must never lose
+        // public data a caller did not mention. Placeholders are positional (the
+        // SQLite adapter rewrites $n by position), so every value takes its own
+        // number even when two columns carry the same one; numbering from the push
+        // keeps the two in step.
+        const params = [];
+        const assign = (column, value) => `${column} = $${params.push(value)}`;
+        const assignments = [assign('published_tags', listing.tags), assign('tags', listing.tags)];
+        if (listing.description !== undefined) {
+            assignments.push(
+                assign('published_description', listing.description),
+                assign('description', listing.description));
+        }
+        // Part of the list, not concatenated after it: an empty assignment list would
+        // otherwise emit `SET , updated_at = …`, which does not parse.
+        assignments.push('updated_at = CURRENT_TIMESTAMP');
+        const rows = await txQuery(
+            `UPDATE projects SET ${assignments.join(', ')}
+             WHERE id = $${params.push(current.id)} RETURNING *`,
+            params
+        );
+        if (!rows[0]) return null;
+
+        if (listing.previews) await replaceThumbnails(current.id, listing.previews, txQuery);
+        const thumbnailRows = await txQuery(
+            'SELECT id FROM thumbnails WHERE project_id = $1 ORDER BY position', [current.id]);
+        return { row: rows[0], thumbnailIds: thumbnailRows.map(item => item.id) };
+    });
+
+    if (updated === 'stale') {
+        return res.status(409).json({
+            error: 'This listing was republished after you loaded it.',
+            code: 'PUBLICATION_CHANGED',
+        });
+    }
+    if (!updated) return notPublished();
+    res.json({ project: { ...projectDto(updated.row), thumbnailIds: updated.thumbnailIds } });
 });
 
 router.post('/api/projects/:id/unpublish', requireAuth, loadProject(true), async (req, res) => {

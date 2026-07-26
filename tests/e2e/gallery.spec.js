@@ -19,6 +19,33 @@ const test = base.extend({
 const unique = Date.now();
 const activePane = page => page.locator('[data-testid="project-pane"][data-active="true"]');
 
+// `unique` is a module-scope Date.now(), and Playwright loads this file once per worker
+// (three browser projects here), so two workers can land in the same millisecond. The
+// listing test signs up its own account and publishes under a searchable name, both of
+// which have to be unique across simultaneously running workers.
+const listingRun = `${unique}${Math.random().toString(36).slice(2, 6)}`;
+
+const listingState = title => ({
+    nodes: { root: { id: 'root', parentId: null, type: 'page', title, data: {}, children: [] } },
+    rootId: 'root',
+    variants: {
+        default: {
+            id: 'default', name: 'Default',
+            templates: { page: { id: 'page', name: 'Page', width: 500, height: 700, elements: [] } },
+        },
+    },
+    activeVariantId: 'default',
+    schemaVersion: 7,
+});
+
+// published_at is written with the DB's CURRENT_TIMESTAMP, which has whole-second
+// resolution on SQLite. "The edit did not touch published_at" is therefore unfalsifiable
+// unless the edit happens in a strictly LATER second than the publish it is compared
+// against -- inside one second, a route that DID rewrite published_at would produce the
+// identical value and the assertion would pass anyway. Every timing-sensitive step in the
+// listing test is separated by this.
+const nextSecond = () => new Promise(resolve => { setTimeout(resolve, 1200); });
+
 const waitForPersistedGenerator = async (page, expected) => {
     await expect.poll(() => page.evaluate(() => {
         const projects = JSON.parse(localStorage.getItem('hype_projects') || '[]');
@@ -377,5 +404,99 @@ test.describe('Gallery', () => {
 
         await ctxA.close();
         await ctxB.close();
+    });
+
+    test('an owner edits a published listing without moving the published version', async ({ page }) => {
+        test.setTimeout(120000);
+        const email = `listing-${listingRun}@test.dev`;
+        await signUpAndVerify(page, { name: 'Listing Owner', username: `listing${listingRun}`.slice(0, 30), email });
+
+        const createProject = async (name, title) => {
+            const created = await page.request.post(`${API_BASE}/api/projects`, {
+                data: { name, state: listingState(title) },
+            });
+            expect(created.ok()).toBeTruthy();
+            return (await created.json()).project;
+        };
+        const publish = async (project, body) => {
+            const published = await page.request.post(`${API_BASE}/api/projects/${project.id}/publish`, {
+                headers: { 'If-Match': `"${project.headCommitId}"` },
+                data: body,
+            });
+            expect(published.ok()).toBeTruthy();
+            return (await published.json()).project;
+        };
+        const listing = async id => (await (await page.request.get(`${API_BASE}/api/gallery/${id}`)).json()).project;
+
+        // Two listings sharing one searchable name, so the "recently updated" order asserted
+        // below is exactly these two rows and nothing else the parallel suite published.
+        const searchName = `Listing E2E ${listingRun}`;
+        const project = await createProject(`${searchName} A`, 'Root');
+        const publishedCommitId = (await publish(project, {
+            description: 'before edit', tags: [`stale${listingRun}`],
+            thumbnails: [PNG_1X1], previewNodeIds: ['root'],
+        })).publishedCommitId;
+        const before = await listing(project.id);
+        expect(before.previews).toEqual([{ id: expect.any(String), nodeId: 'root' }]);
+
+        // Move the owner's head PAST the published commit. Without this the two are the same
+        // row and "the published version did not move" would hold even for a route that
+        // republished the newest commit -- the exact assertion this test exists for.
+        const advanced = await page.request.post(`${API_BASE}/api/projects/${project.id}/commits`, {
+            headers: { 'If-Match': `"${project.headCommitId}"` },
+            data: { state: listingState('Private newer page'), message: 'newer private snapshot' },
+        });
+        expect(advanced.status()).toBe(201);
+        const newerHead = (await advanced.json()).commit.id;
+        expect(newerHead).not.toBe(publishedCommitId);
+
+        // A second listing published a whole second later, so "recently updated" has a defined
+        // order for the pair rather than a published_at tie.
+        await nextSecond();
+        const other = await createProject(`${searchName} B`, 'Root');
+        await publish(other, {
+            description: 'newer listing', tags: [`stale${listingRun}`],
+            thumbnails: [PNG_1X1], previewNodeIds: ['root'],
+        });
+        const recentlyUpdated = async () => (await (await page.request.get(
+            `${API_BASE}/api/gallery?q=${encodeURIComponent(searchName)}`)).json()).items.map(p => p.id);
+        // Control for the ordering assertion after the edit: B genuinely outranks A right now.
+        expect(await recentlyUpdated()).toEqual([other.id, project.id]);
+
+        // One more second, so a stray `published_at = CURRENT_TIMESTAMP` during the edit would
+        // land after B's and flip that order.
+        await nextSecond();
+
+        await page.goto(`/gallery/${project.id}`);
+        await page.getByRole('button', { name: /edit listing/i }).click();
+        await expect(page.getByRole('heading', { name: /edit gallery listing/i })).toBeVisible();
+
+        // The page that produced the current preview reopens already ticked -- and it is named
+        // for the PUBLISHED commit ("Root"), not the newer private head ("Private newer page").
+        await expect(page.getByRole('checkbox', { name: 'Root' })).toBeChecked();
+
+        await page.getByPlaceholder('planner, 2026, remarkable').fill(`fresh${listingRun}`);
+        await page.getByRole('button', { name: /save changes/i }).click();
+
+        await expect.poll(async () => (await listing(project.id)).tags).toEqual([`fresh${listingRun}`]);
+
+        const after = await listing(project.id);
+        // The point of the whole feature: the listing changed, the published version did not.
+        expect(after.headCommitId).toBe(publishedCommitId);
+        expect(after.headCommitId).not.toBe(newerHead);
+        const publicState = await (await page.request.get(`${API_BASE}/api/gallery/${project.id}/state`)).json();
+        expect(publicState.state.nodes.root.title).toBe('Root');
+        // published_at drives the gallery's "recently updated" sort, so editing must not re-rank.
+        expect(after.updatedAt).toBe(before.updatedAt);
+        expect(await recentlyUpdated()).toEqual([other.id, project.id]);
+        // An untouched page list sends no thumbnails at all: replaceThumbnails mints fresh row
+        // ids, so identical ids prove the published previews were never rewritten.
+        expect(after.previews).toEqual(before.previews);
+
+        // The new tag is a real filter; the old one is gone.
+        const filtered = await (await page.request.get(`${API_BASE}/api/gallery?tag=fresh${listingRun}`)).json();
+        expect(filtered.items.map(p => p.id)).toContain(project.id);
+        const stale = await (await page.request.get(`${API_BASE}/api/gallery?tag=stale${listingRun}`)).json();
+        expect(stale.items.map(p => p.id)).not.toContain(project.id);
     });
 });

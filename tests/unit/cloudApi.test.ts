@@ -64,6 +64,44 @@ describe('cloudApi publish', () => {
     });
 });
 
+describe('cloudApi updatePublication', () => {
+    afterEach(() => vi.unstubAllGlobals());
+
+    it('PATCHes the publication route, dropping previews the caller left undefined', async () => {
+        const fetchMock = vi.fn().mockResolvedValue({
+            ok: true,
+            status: 200,
+            json: async () => ({ project: {} }),
+        });
+        vi.stubGlobal('fetch', fetchMock);
+
+        await cloudApi.updatePublication(
+            'project-1',
+            { headCommitId: 'published-1', updatedAt: '2026-07-26 06:10:02' },
+            {
+                description: 'Description', tags: ['planner'],
+                thumbnails: undefined, previewNodeIds: undefined,
+            },
+        );
+
+        const [path, options] = fetchMock.mock.calls[0];
+        expect(path).toBe(`${API_BASE}/api/projects/project-1/publication`);
+        expect(options.method).toBe('PATCH');
+        // Both halves of the loaded listing, as one quoted strong entity tag -- the same idiom
+        // publish uses. Without it the route 428s; with a stale one it 409s rather than writing
+        // pre-publish text over a listing that has since been republished. The timestamp half
+        // is percent-encoded because SQLite's published_at carries a space, which the route's
+        // entity-tag character class rejects.
+        expect(options.headers).toMatchObject({
+            'If-Match': '"published-1~2026-07-26%2006%3A10%3A02"',
+        });
+        // The route reads an absent `thumbnails` as "keep the published previews", which is the
+        // whole reason an untouched selection is cheap -- so an undefined must reach the wire as
+        // a missing key, not as a null or an empty array (an empty array is a 400).
+        expect(Object.keys(JSON.parse(options.body))).toEqual(['description', 'tags']);
+    });
+});
+
 describe('cloudApi save', () => {
     afterEach(() => vi.unstubAllGlobals());
 

@@ -182,7 +182,7 @@ async function pollNewVerificationLink(servers, previous, tries = 50) {
 // ---------------------------------------------------------------------------
 // Tutorial 04 (publishing) helpers.
 
-// The publish dialog element (PublishModal.tsx:146, role="dialog" -- the only
+// The publish dialog element (PublishModal.tsx, role="dialog" -- the only
 // dialog either wizard shot ever mounts). Element crop, same rationale as
 // AUTH_CARD: at the 1600x1000 viewport the 560px-wide modal would be a sliver
 // of a full-page shot.
@@ -232,7 +232,7 @@ async function openFilledPublishWizard(t) {
         await t.page.getByRole('checkbox', { name: pageTitle, exact: true }).check();
     }
     // Anti-rot for the tutorial's "the first page comes pre-checked" claim
-    // (PublishModal.tsx:68 seeds the selection with computePageOrder's first
+    // (PublishModal.tsx seeds the selection with computePageOrder's first
     // page -- the renamed root). Assert, don't check(): silently re-checking
     // would hide a regression of the default.
     const cover = t.page.getByRole('checkbox', { name: JOURNAL_NAME, exact: true });
@@ -778,7 +778,7 @@ export const shots = [
         await openFilledPublishWizard(t);
 
         // The rendered-thumbnails stage only exists DURING a publish:
-        // PublishModal.tsx:96-105 renders previews client-side
+        // PublishModal.tsx's publish() renders previews client-side
         // (generateThumbnails: jsPDF -> pdf.js raster -> WebP), setPreviews()s
         // them, then uploads -- and on success CloudMenu closes the modal and
         // alerts (CloudMenu.tsx:161). Snapping "after previews render" by
@@ -797,7 +797,7 @@ export const shots = [
 
         await t.page.getByRole('button', { name: 'Publish', exact: true }).click();
         // All three previews (pre-checked cover + the two JOURNAL_PREVIEW_PAGES)
-        // rendered AND decoded -- <img alt="Preview N"> per PublishModal.tsx:199;
+        // rendered AND decoded -- <img alt="Preview N"> per PublishModal.tsx;
         // scoped inside the dialog so no other page image can satisfy it. The
         // count also guards the three-page selection end to end: fewer checked
         // boxes would render fewer previews, not fail earlier.

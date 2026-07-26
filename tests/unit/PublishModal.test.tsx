@@ -2,10 +2,17 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PublishModal } from '../../components/cloud/PublishModal';
 import { ApiError, cloudApi } from '../../services/cloudApi';
+// Type-only (erased at compile time, so it does not defeat the vi.mock below): pins these
+// stubs to the renderer's real return shape instead of a hand-copied guess.
+import type { RenderedPreview } from '../../services/thumbnailService';
 
 const computePageOrder = vi.hoisted(() => vi.fn((projectState: any) => [projectState.rootId]));
 vi.mock('../../services/pdfService', () => ({ computePageOrder }));
 const generateThumbnails = vi.hoisted(() => vi.fn());
+// Stubbed wholesale because the real module loads pdfjs-dist at module scope, which touches
+// DOMMatrix and crashes under jsdom. Nothing is lost by that here: MAX_PREVIEWS -- the cap
+// PreviewPagePicker enforces, and the one the selection test below asserts -- lives in
+// constants/previews, which is NOT mocked, so that test binds to the shipped value.
 vi.mock('../../services/thumbnailService', () => ({ generateThumbnails }));
 
 const generator = {
@@ -125,7 +132,7 @@ describe('PublishModal generator source warning', () => {
     });
 
     it('publishes normally after cloud disclosure loads', async () => {
-        generateThumbnails.mockResolvedValue(['data:image/png;base64,preview']);
+        generateThumbnails.mockResolvedValue([{ nodeId: 'root', dataUrl: 'data:image/png;base64,preview' }]);
         const publish = vi.spyOn(cloudApi, 'publish').mockResolvedValue({} as any);
         const props = renderModal(false);
         const button = screen.getByRole('button', { name: 'Publish' });
@@ -137,6 +144,7 @@ describe('PublishModal generator source warning', () => {
             description: '',
             tags: [],
             thumbnails: ['data:image/png;base64,preview'],
+            previewNodeIds: ['root'],
         }));
         expect(props.onPublished).toHaveBeenCalledOnce();
     });
@@ -145,7 +153,7 @@ describe('PublishModal generator source warning', () => {
         vi.spyOn(cloudApi, 'getCommit').mockResolvedValue({
             id: 'head-1', message: 'Head', createdAt: '2026-07-14T12:40:00.000Z', state: cloudHeadState,
         });
-        generateThumbnails.mockResolvedValue(['data:image/png;base64,preview']);
+        generateThumbnails.mockResolvedValue([{ nodeId: 'cloud', dataUrl: 'data:image/png;base64,preview' }]);
         vi.spyOn(cloudApi, 'publish').mockResolvedValue({} as any);
         renderModal(false);
 
@@ -170,7 +178,7 @@ describe('PublishModal generator source warning', () => {
             createdAt: '2026-07-14T12:40:00.000Z',
             state: commitId === 'head-2' ? { ...state, generator } : state,
         }));
-        generateThumbnails.mockResolvedValue(['data:image/png;base64,preview']);
+        generateThumbnails.mockResolvedValue([{ nodeId: 'root', dataUrl: 'data:image/png;base64,preview' }]);
         const publish = vi.spyOn(cloudApi, 'publish').mockRejectedValue(
             new ApiError(409, 'Project changed since disclosure was inspected.', 'PROJECT_HEAD_CHANGED'),
         );
@@ -221,7 +229,7 @@ describe('PublishModal generator source warning', () => {
             createdAt: '2026-07-14T12:40:00.000Z',
             state: projectId === 'cloud-1' ? { ...state, generator } : nextState,
         }));
-        generateThumbnails.mockResolvedValue(['data:image/png;base64,old-preview']);
+        generateThumbnails.mockResolvedValue([{ nodeId: 'root', dataUrl: 'data:image/png;base64,old-preview' }]);
         vi.spyOn(cloudApi, 'publish').mockRejectedValue(new Error('Old project publish failed'));
         const { rerender } = render(modal('cloud-1'));
         const publishButton = screen.getByRole('button', { name: 'Publish' });
@@ -251,7 +259,7 @@ describe('PublishModal generator source warning', () => {
     });
 
     it('does not let an operation started for the old project publish after rerender', async () => {
-        const thumbnails = deferred<string[]>();
+        const thumbnails = deferred<RenderedPreview[]>();
         generateThumbnails.mockReturnValue(thumbnails.promise);
         const publish = vi.spyOn(cloudApi, 'publish').mockResolvedValue({} as any);
         const { rerender } = render(modal('cloud-1'));
@@ -261,7 +269,7 @@ describe('PublishModal generator source warning', () => {
         await waitFor(() => expect(generateThumbnails).toHaveBeenCalledOnce());
 
         rerender(modal('cloud-2'));
-        thumbnails.resolve(['data:image/png;base64,preview']);
+        thumbnails.resolve([{ nodeId: 'root', dataUrl: 'data:image/png;base64,preview' }]);
 
         await waitFor(() => expect(screen.getByRole('button', { name: 'Publish' })).toBeDisabled());
         expect(publish).not.toHaveBeenCalled();
@@ -311,5 +319,96 @@ describe('PublishModal generator source warning', () => {
         result.unmount();
         expect(trigger).toHaveFocus();
         trigger.remove();
+    });
+});
+
+describe('PublishModal preview selection', () => {
+    beforeEach(() => {
+        vi.restoreAllMocks();
+        generateThumbnails.mockReset();
+        vi.spyOn(cloudApi, 'getProject').mockResolvedValue(cloudProject);
+        vi.spyOn(cloudApi, 'getCommit').mockResolvedValue({
+            id: 'head-1', message: 'm', createdAt: '', state,
+        } as any);
+        computePageOrder.mockImplementation(() => ['p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7']);
+    });
+
+    it('caps the selection at six pages and sends each preview with its page', async () => {
+        const publishSpy = vi.spyOn(cloudApi, 'publish').mockResolvedValue({} as any);
+        generateThumbnails.mockImplementation(async (_s: any, ids: string[]) =>
+            ids.map(id => ({ nodeId: id, dataUrl: `data:image/webp;base64,${id}` })));
+
+        render(<PublishModal
+            project={{ id: 'local-1', name: 'Project', initialState: state as any }}
+            cloudProjectId="cloud-1" onClose={vi.fn()} onPublished={vi.fn()} />);
+
+        const boxes = await screen.findAllByRole('checkbox');
+        expect(boxes.length).toBe(7);
+        // p1 is preselected by the modal; tick p2..p7 and expect the 7th to be refused.
+        for (const box of boxes.slice(1)) fireEvent.click(box);
+        expect(boxes.filter(b => (b as HTMLInputElement).checked).length).toBe(6);
+
+        fireEvent.click(screen.getByRole('button', { name: /^publish$/i }));
+
+        await waitFor(() => expect(publishSpy).toHaveBeenCalled());
+        const [, , args] = publishSpy.mock.calls[0];
+        expect(args.thumbnails.length).toBe(6);
+        expect(args.previewNodeIds).toEqual(['p1', 'p2', 'p3', 'p4', 'p5', 'p6']);
+    });
+
+    it('labels each preview with the page it rendered from, not the page that was picked', async () => {
+        const publishSpy = vi.spyOn(cloudApi, 'publish').mockResolvedValue({} as any);
+        // generateThumbnails returns page/image PAIRS, and those pairs -- not `selected` --
+        // are what says which page produced which image. The renderer skipping a page is the
+        // divergence that originally made that visible; it no longer reaches the upload, since
+        // the modal's count guard refuses a short render outright (covered by the next test).
+        // So this stands the pairs' order apart from the selection's instead: a caller zipping
+        // `selected` against a bare image list would caption every one of these with the wrong
+        // page, exactly as it would have after a skip.
+        generateThumbnails.mockImplementation(async (_s: any, ids: string[]) =>
+            [...ids].reverse().map(id => ({ nodeId: id, dataUrl: `data:image/webp;base64,${id}` })));
+
+        render(<PublishModal
+            project={{ id: 'local-1', name: 'Project', initialState: state as any }}
+            cloudProjectId="cloud-1" onClose={vi.fn()} onPublished={vi.fn()} />);
+
+        const boxes = await screen.findAllByRole('checkbox');
+        // p1 is preselected; add p2, p3 and p4.
+        for (const box of boxes.slice(1, 4)) fireEvent.click(box);
+        fireEvent.click(screen.getByRole('button', { name: /^publish$/i }));
+
+        await waitFor(() => expect(publishSpy).toHaveBeenCalled());
+        expect(generateThumbnails).toHaveBeenCalledWith(state, ['p1', 'p2', 'p3', 'p4'], 'default');
+        const [, , args] = publishSpy.mock.calls[0];
+        expect(args.previewNodeIds).toEqual(['p4', 'p3', 'p2', 'p1']);
+        expect(args.thumbnails).toEqual([
+            'data:image/webp;base64,p4', 'data:image/webp;base64,p3',
+            'data:image/webp;base64,p2', 'data:image/webp;base64,p1',
+        ]);
+    });
+
+    it('refuses a partial render instead of publishing fewer previews than were picked', async () => {
+        const publishSpy = vi.spyOn(cloudApi, 'publish').mockResolvedValue({} as any);
+        const onPublished = vi.fn();
+        // Shipping whatever came back would put a listing live one preview short of what the
+        // owner picked, with nothing anywhere to say so: the images are internally coherent,
+        // the server accepts them, and reopening the editor re-ticks the reduced set.
+        generateThumbnails.mockImplementation(async (_s: any, ids: string[]) =>
+            ids.filter(id => id !== 'p3').map(id => ({ nodeId: id, dataUrl: `data:image/webp;base64,${id}` })));
+
+        render(<PublishModal
+            project={{ id: 'local-1', name: 'Project', initialState: state as any }}
+            cloudProjectId="cloud-1" onClose={vi.fn()} onPublished={onPublished} />);
+
+        const boxes = await screen.findAllByRole('checkbox');
+        // p1 is preselected; add p2, p3 (the page the renderer will skip) and p4.
+        for (const box of boxes.slice(1, 4)) fireEvent.click(box);
+        fireEvent.click(screen.getByRole('button', { name: /^publish$/i }));
+
+        expect(await screen.findByRole('alert')).toHaveTextContent(
+            'Only 3 of 4 previews rendered. Nothing was published — try again.');
+        expect(publishSpy).not.toHaveBeenCalled();
+        expect(onPublished).not.toHaveBeenCalled();
+        expect(screen.getByRole('button', { name: /^publish$/i })).toBeEnabled();
     });
 });

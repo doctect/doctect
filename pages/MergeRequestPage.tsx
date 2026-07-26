@@ -94,7 +94,7 @@ export function MergeRequestPage() {
             const pageNode = order.find(nid => interesting.has(srcState.nodes[nid]?.type)) ?? order[0];
             const [after] = await generateThumbnails(srcState, [pageNode]);
             const [before] = await generateThumbnails(tgtState, [pageNode]);
-            setPreviews({ before: before ?? '', after: after ?? '' });
+            setPreviews({ before: before?.dataUrl ?? '', after: after?.dataUrl ?? '' });
         } catch { setError('Preview rendering failed'); }
         finally { setRendering(false); }
     };
