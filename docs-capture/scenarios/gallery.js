@@ -182,7 +182,7 @@ async function pollNewVerificationLink(servers, previous, tries = 50) {
 // ---------------------------------------------------------------------------
 // Tutorial 04 (publishing) helpers.
 
-// The publish dialog element (PublishModal.tsx:146, role="dialog" -- the only
+// The publish dialog element (PublishModal.tsx, role="dialog" -- the only
 // dialog either wizard shot ever mounts). Element crop, same rationale as
 // AUTH_CARD: at the 1600x1000 viewport the 560px-wide modal would be a sliver
 // of a full-page shot.
@@ -797,7 +797,7 @@ export const shots = [
 
         await t.page.getByRole('button', { name: 'Publish', exact: true }).click();
         // All three previews (pre-checked cover + the two JOURNAL_PREVIEW_PAGES)
-        // rendered AND decoded -- <img alt="Preview N"> per PublishModal.tsx:199;
+        // rendered AND decoded -- <img alt="Preview N"> per PublishModal.tsx;
         // scoped inside the dialog so no other page image can satisfy it. The
         // count also guards the three-page selection end to end: fewer checked
         // boxes would render fewer previews, not fail earlier.

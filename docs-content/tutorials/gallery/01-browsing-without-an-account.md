@@ -47,7 +47,7 @@ A project page collects everything its owner chose to publish:
 
 | On the page | What it is |
 | --- | --- |
-| **Preview pages** | Up to four page images the owner picked when publishing — a cover, a divider, an inside page. |
+| **Preview pages** | Up to six page images the owner picked when publishing — a cover, a divider, an inside page. |
 | **Title and author** | The author's name links to their public profile and their other published work. |
 | **Rating and reviews** | The star average, count, and written reviews are visible to everyone — signed out included. Writing one is where "Sign in to review" appears. |
 | **Description and tags** | The owner's pitch, plus clickable tags that jump back to a filtered gallery. |

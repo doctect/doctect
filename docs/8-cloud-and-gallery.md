@@ -22,12 +22,20 @@ Every cloud save inserts an immutable row into `commits`: a full JSON snapshot o
 
 Publishing (`components/cloud/PublishModal.tsx`, `POST /api/projects/:id/publish`) requires: you own the project, and it's already cloud-linked (you can't publish a project that's never been saved to the cloud). The wizard walks through:
 
-1. **Page selection** — pick 1–4 pages to serve as gallery preview images (checkbox picker over `computePageOrder`, capped client-side at 4).
+1. **Page selection** — pick 1–6 pages to serve as gallery preview images (`PreviewPagePicker` over `computePageOrder`, capped client-side at `MAX_PREVIEWS`). That constant lives in `constants/previews.ts` rather than in `services/thumbnailService` — importing it from there would pull `pdfjs-dist` into the importer's chunk (the service assigns pdf.js's worker URL at module scope) and undo the listing editor's code split; `server/routes/projects.js` keeps its own copy, since it cannot trust the client's. Each rendered preview records the page that produced it in `thumbnails.node_id` (migration `016_thumbnail_node_id`), so the listing editor can reopen the picker pre-ticked.
 2. **Client-side rendering** — the selected pages are rendered to WebP thumbnails in the browser via `generateThumbnails` (the same PDF/canvas rendering pipeline used for export — see [PDF Generation](5-pdf-generation.md)), so the server never needs its own rendering stack.
 3. **Metadata** — a description (≤2000 chars) and up to 10 tags (≤30 chars each).
 4. **Upload** — the rendered thumbnails and metadata are sent with a strong expected-head tag; one transaction pins that exact commit, snapshots public name/description/tags, records publication history, replaces thumbnails, and flips `visibility` to `'public'`.
 
-Later cloud saves and MR merges do not alter public content. The gallery remains on the old commit, metadata, source, pages, and thumbnails until the owner runs Publish again and reviews the disclosure. Publishing is reversible: `POST /api/projects/:id/unpublish` clears current publication visibility/pointer and returns 404 publicly; retained publication records remain owner-inaccessible while private. An admin can also force-unpublish.
+Later cloud saves and MR merges do not alter public content. The gallery remains on the old commit, source, and pages until the owner runs Publish again and reviews the disclosure — the listing's own presentation is separately editable (below), but nothing a visitor can open or download moves without a publish. Publishing is reversible: `POST /api/projects/:id/unpublish` clears current publication visibility/pointer and returns 404 publicly; retained publication records remain owner-inaccessible while private. An admin can also force-unpublish.
+
+### Editing a Published Listing
+
+`PATCH /api/projects/:id/publication` (`components/cloud/EditListingModal.tsx`) is metadata-only: it writes `published_tags`/`tags`, `published_description`/`description` (both mirrored the same way `publish` does), `updated_at`, and — only when the caller sends a new set — the `thumbnails` rows. It deliberately never touches `published_commit_id`, `published_name`, or `published_at`. That last omission is load-bearing rather than incidental: `published_at` is what `GET /api/gallery` orders its default *Recently updated* listing by, so a tag fix that re-ranked the project would be free promotion. 409 `NOT_PUBLISHED` if the project isn't currently public, re-checked under the row lock inside the transaction.
+
+Two omissions are meaningful on the wire, both meaning "keep what is published": an omitted `description` preserves the published one, and an omitted `thumbnails` preserves the published previews (`previewNodeIds` without `thumbnails` is a 400 — accepting it would answer 200 to a request the route silently ignored). Only `tags` is mandatory. `parsePreviewSet` is shared with the publish route so the two cannot drift on the count, the magic-byte check, or the 300 KB ceiling.
+
+Client side, the modal seeds its picker from `GET /api/gallery/:id`'s `previews[].nodeId` and re-renders previews from the **published** commit, never from the editor's working state — so the preview strip can never advertise pages the download doesn't contain. A listing published before migration `016` has no recorded source pages: it opens with nothing ticked and its current images displayed above the picker, and an untouched selection sends no thumbnails, so those images survive. All three entry points (`GalleryDetailBody`, `MyProjectsPage`, `CloudMenu`) mount it through `LazyEditListingModal`, which `lazy()`-imports it so `pdfjs-dist` stays off the gallery and my-projects route chunks.
 
 ## Browsing the Gallery Without Login
 
@@ -96,6 +104,7 @@ Two independent edits that happen to produce byte-identical results are *not* fl
 | `GET /api/projects/:id/commits` | owner or public | Owner history, or explicitly published history only |
 | `GET /api/projects/:id/commits/:commitId` | owner or public | Owner commit, or explicitly published commit only |
 | `POST /api/projects/:id/publish` | owner | Publish with thumbnails + description + tags |
+| `PATCH /api/projects/:id/publication` | owner | Edit the live listing's description/tags/previews — never the published commit or `published_at` |
 | `POST /api/projects/:id/unpublish` | owner | Make private again |
 | `POST /api/projects/:id/fork` | required | Fork a public project into a new private one |
 | `GET /api/thumbnails/:thumbId` | none | Serve a stored thumbnail image |
