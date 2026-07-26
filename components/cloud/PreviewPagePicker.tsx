@@ -19,6 +19,12 @@ interface PreviewPagePickerProps {
  * The matching lower bound is NOT here: a picker with nothing ticked is a legal
  * intermediate state while the user re-picks. Each host enforces "at least one"
  * when it submits -- see PublishModal's `selected.length === 0` guard.
+ *
+ * The cap gates additions, not what it is given: a `selected` longer than
+ * MAX_PREVIEWS (a listing published under a larger cap, say) renders fully ticked
+ * and can only be shrunk, because unticking boxes on the host's behalf would
+ * misreport what is published. generateThumbnails renders at most MAX_PREVIEWS
+ * pages, so an over-long selection still cannot reach the server.
  */
 export function PreviewPagePicker({ pages, selected, onChange }: PreviewPagePickerProps) {
     const toggle = (id: string) => {

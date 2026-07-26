@@ -13,7 +13,7 @@ vi.mock('../../lib/auth-client', () => ({
 const detail: GalleryDetail = {
     id: 'proj-1', name: 'Test Project', description: 'desc', tags: [], author: 'someone',
     forkCount: 0, downloadCount: 0, updatedAt: '2026-01-01', ownerId: 'owner-1',
-    headCommitId: 'commit-1', thumbnailIds: [], forkedFrom: null,
+    headCommitId: 'commit-1', thumbnailIds: [], previews: [], forkedFrom: null,
     ratingAvg: null, ratingCount: 0,
 };
 

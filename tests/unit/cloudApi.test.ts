@@ -64,6 +64,32 @@ describe('cloudApi publish', () => {
     });
 });
 
+describe('cloudApi updatePublication', () => {
+    afterEach(() => vi.unstubAllGlobals());
+
+    it('PATCHes the publication route, dropping previews the caller left undefined', async () => {
+        const fetchMock = vi.fn().mockResolvedValue({
+            ok: true,
+            status: 200,
+            json: async () => ({ project: {} }),
+        });
+        vi.stubGlobal('fetch', fetchMock);
+
+        await cloudApi.updatePublication('project-1', {
+            description: 'Description', tags: ['planner'],
+            thumbnails: undefined, previewNodeIds: undefined,
+        });
+
+        const [path, options] = fetchMock.mock.calls[0];
+        expect(path).toBe(`${API_BASE}/api/projects/project-1/publication`);
+        expect(options.method).toBe('PATCH');
+        // The route reads an absent `thumbnails` as "keep the published previews", which is the
+        // whole reason an untouched selection is cheap -- so an undefined must reach the wire as
+        // a missing key, not as a null or an empty array (an empty array is a 400).
+        expect(Object.keys(JSON.parse(options.body))).toEqual(['description', 'tags']);
+    });
+});
+
 describe('cloudApi save', () => {
     afterEach(() => vi.unstubAllGlobals());
 

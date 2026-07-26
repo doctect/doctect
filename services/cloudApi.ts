@@ -147,8 +147,12 @@ export interface GalleryItem {
     forkCount: number; downloadCount: number; updatedAt: string; thumbnailId: string | null;
     ratingAvg: number | null; ratingCount: number;
 }
+// `nodeId` is null for every preview published before the source page was recorded,
+// so it cannot be relied on to identify the page an existing image came from.
+export interface GalleryPreview { id: string; nodeId: string | null; }
 export interface GalleryDetail extends Omit<GalleryItem, 'thumbnailId'> {
     ownerId: string; headCommitId: string | null; thumbnailIds: string[];
+    previews: GalleryPreview[];
     forkedFrom: { projectId: string; name: string; author: string } | null;
 }
 
@@ -215,6 +219,17 @@ export const cloudApi = {
         api<{ project: CloudProject & { thumbnailIds: string[] } }>(`/api/projects/${projectId}/publish`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'If-Match': `"${expectedHead}"` },
+            body: JSON.stringify(args),
+        }),
+
+    // Metadata-only. Never moves the published commit — see the route comment in
+    // server/routes/projects.js. `thumbnails` omitted means "keep the current previews".
+    updatePublication: (projectId: string, args: {
+        description: string; tags: string[];
+        thumbnails?: string[]; previewNodeIds?: string[];
+    }) =>
+        api<{ project: CloudProject & { thumbnailIds: string[] } }>(`/api/projects/${projectId}/publication`, {
+            method: 'PATCH',
             body: JSON.stringify(args),
         }),
 
