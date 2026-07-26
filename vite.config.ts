@@ -29,7 +29,10 @@ export default defineConfig(({ mode }) => {
       // and without the '**/' prefix a plain 'node_modules' pattern only reliably excludes the
       // top-level one. Project-local worktree directories are explicit belt-and-suspenders
       // excludes for the same reason: they duplicate this project's own tests/** at nested paths.
-      exclude: ['**/node_modules/**', '.worktrees/**', '.claude/worktrees/**', 'tests/e2e/**'],
+      // 'scratch/**' is the gitignored drafting area for throwaway verification drivers. Those
+      // are Playwright scripts, not vitest suites: collecting one fails the whole run with a
+      // Playwright error rather than a test failure, which reads as a broken suite.
+      exclude: ['**/node_modules/**', '.worktrees/**', '.claude/worktrees/**', 'tests/e2e/**', 'scratch/**'],
     }
   };
 });
