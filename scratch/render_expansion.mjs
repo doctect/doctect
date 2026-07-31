@@ -36,6 +36,7 @@ if (projects.length === 0) {
 const browser = await chromium.launch();
 const ctx = await browser.newContext({ viewport: { width: 1680, height: 1000 }, deviceScaleFactor: 2, acceptDownloads: true });
 const p = await ctx.newPage();
+p.on('dialog', d => d.accept()); // accept the Replace Current Project confirm
 
 for (const proj of projects) {
   const out = `${proj.dir}/samples`;
@@ -52,7 +53,9 @@ for (const proj of projects) {
     setter.call(tas[0], t); tas[0].dispatchEvent(new Event('input', { bubbles: true }));
     setter.call(tas[1], h); tas[1].dispatchEvent(new Event('input', { bubbles: true }));
   }, { t, h });
-  await p.getByRole('button', { name: /Run Generator/i }).click();
+  // Current generator flow: Preview (sandbox) -> visual preview modal -> Replace Current Project (+confirm)
+  await p.getByRole('button', { name: 'Preview', exact: true }).click();
+  await p.getByRole('button', { name: /Replace Current Project/i }).click({ timeout: 120000 });
   await p.waitForTimeout(2600);
 
   // PNG samples (Templates view)
