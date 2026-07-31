@@ -59,7 +59,7 @@ const chromeGeometrySignature = (slug: string) => {
 };
 
 describe('gallery sample collection', () => {
-    it('contains exactly the eight approved products', () => {
+    it('contains exactly the approved products', () => {
         expect(collectGallerySampleSlugs()).toEqual(EXPECTED_SLUGS);
     });
 
@@ -68,7 +68,7 @@ describe('gallery sample collection', () => {
         expect(validateSharedGalleryInvariants(sample)).toEqual([]);
     });
 
-    it('gives all eight products distinct core chrome geometry', () => {
+    it('gives all products distinct core chrome geometry', () => {
         const signatures = EXPECTED_SLUGS.map(chromeGeometrySignature);
         expect(new Set(signatures).size).toBe(EXPECTED_SLUGS.length);
     });
