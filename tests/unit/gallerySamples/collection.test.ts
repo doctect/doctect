@@ -16,6 +16,7 @@ const EXPECTED_SLUGS = [
     '07-novel-story-studio',
     '08-ttrpg-campaign-codex',
     '09-adventure-gamebook',
+    '10-trivia-quiz-night',
 ];
 
 const descendants = (sample: ReturnType<typeof loadGallerySample>, rootId: string) => {
