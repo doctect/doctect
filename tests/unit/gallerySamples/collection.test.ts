@@ -19,6 +19,7 @@ const EXPECTED_SLUGS = [
     '10-trivia-quiz-night',
     '11-chess-opening-repertoire',
     '12-family-history-workbook',
+    '13-language-learning-lab',
 ];
 
 const descendants = (sample: ReturnType<typeof loadGallerySample>, rootId: string) => {
