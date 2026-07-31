@@ -5,7 +5,7 @@ A job-search command center for reMarkable Paper Pro. Every company gets a dossi
 ## Why you'll like it
 
 - **One board over everything.** The pipeline board enumerates every dossier as a tappable chip under Wishlist / Applied / Interviewing / Offer / Closed bands – and its STAGE column is writable, because the board should hold the truth, not pretend to know it.
-- **Dossiers that carry their own prep.** Each dossier has a role/source/salary header, a five-step stage timeline, a next-action box, contact rows, and always-labelled chips straight to the question and ask banks.
+- **Dossiers that carry their own prep.** Each dossier has a role/source/salary header, a five-step stage timeline, a next-action box, contact rows, and always-labelled chips straight to the question bank, the ask bank, and the contact log.
 - **A prep bank you fill once.** Six STAR worksheets (Situation / Task / Action / Result, with a question-it-answers box), ten real interview questions with answer-sketch space, and six genuinely good questions to ask interviewers.
 - **A worked example that shows the whole system.** A dossier filled end to end for the fictional Meridian Data Co. and one finished STAR story, both clearly marked EXAMPLE with a skip link to your live workspace.
 - **An honest endgame.** Four offer columns crossed with base, bonus, equity, benefits, growth, and the gut call – plus a decision box that demands one sentence of why.
@@ -56,7 +56,7 @@ Minimum configuration (`dossierCount: 4, reviewWeeks: 4`) exports 29 pages; maxi
 - Briefing -> worked example, Search HQ, `pipeline_board`, `prep_questions`, `comparison_sheet`, `review_w01`
 - Search HQ desk chips -> pipeline board, STAR stories, question/ask banks, contacts, matrix, reviews by stable id; the worked-example hub's two slot chips (`child_index` 0/1) open its dossier and story
 - Pipeline board slot chips -> the dossiers via reference-node children (`child_index` 0-15; slots past `dossierCount` bind `''` and vanish)
-- Dossier prep chips -> `prep_questions` / `prep_asks` (always labelled); prev/next dossiers chain with `sibling` links whose end-of-run labels bind `''`
+- Dossier prep chips -> `prep_questions` / `prep_asks` / `contacts_01` (always labelled); prev/next dossiers chain with `sibling` links whose end-of-run labels bind `''`
 - STAR sheets, question bank pages, contact pages, and weekly reviews chain with `sibling` links; every dead end binds `''`
 - Every page's footer returns to its hub (`parent`) and most carry a `PIPELINE »` or matrix shortcut
 - The worked example shows **EXAMPLE** chrome with a working skip link to the blank workspace

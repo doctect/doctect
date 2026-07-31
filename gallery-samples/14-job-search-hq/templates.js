@@ -641,9 +641,9 @@ const dossier = {
     }),
     rect('dossier', 'contact_rule_2', 36, 348, 437, 0.9, COLORS.rule),
     label('dossier', 'prep_label', 36, 362, 200, 'PREP DESK'),
-    text('dossier', 'questions_chip', 36, 378, 212, 32, 'Question bank »', {
+    text('dossier', 'questions_chip', 36, 378, 139, 32, 'Question bank »', {
       fontFamily: 'georgia',
-      fontSize: 11,
+      fontSize: 10.5,
       fontWeight: 'bold',
       textColor: COLORS.navy,
       fill: COLORS.card,
@@ -653,9 +653,9 @@ const dossier = {
       linkTarget: 'specific_node',
       linkValue: 'prep_questions',
     }),
-    text('dossier', 'asks_chip', 261, 378, 212, 32, 'Asks to raise »', {
+    text('dossier', 'asks_chip', 185, 378, 139, 32, 'Asks to raise »', {
       fontFamily: 'georgia',
-      fontSize: 11,
+      fontSize: 10.5,
       fontWeight: 'bold',
       textColor: COLORS.navy,
       fill: COLORS.card,
@@ -664,6 +664,18 @@ const dossier = {
       align: 'center',
       linkTarget: 'specific_node',
       linkValue: 'prep_asks',
+    }),
+    text('dossier', 'contacts_chip', 334, 378, 139, 32, 'Contact log »', {
+      fontFamily: 'georgia',
+      fontSize: 10.5,
+      fontWeight: 'bold',
+      textColor: COLORS.navy,
+      fill: COLORS.card,
+      stroke: COLORS.navy,
+      strokeWidth: 0.9,
+      align: 'center',
+      linkTarget: 'specific_node',
+      linkValue: 'contacts_01',
     }),
     label('dossier', 'notes_label', 36, 424, 200, 'FIELD NOTES'),
     writingLines('dossier', 'notes_lines', 36, 440, 437, 152, 22),

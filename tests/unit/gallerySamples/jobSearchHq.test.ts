@@ -38,6 +38,16 @@ describe('14-job-search-hq', () => {
     });
   });
 
+  it('links every dossier to the contact log', () => {
+    const sample = expectValidGallerySample(contract.slug, contract);
+    const chip = sample.templates.dossier.elements.find((e: any) =>
+      e.linkTarget === 'specific_node' && e.linkValue === 'contacts_01');
+    expect(chip, 'dossier contact log chip').toBeTruthy();
+    expect(typeof chip.text === 'string' && chip.text.length > 0, 'chip is always labelled').toBe(true);
+    expect(chip.dataBinding, 'label must not be data-bound (never vanishes)').toBeUndefined();
+    expect(sample.nodes.contacts_01.type).toBe('contacts');
+  });
+
   it('supports a lean search', () => {
     const sample = loadGallerySample(contract.slug, { dossierCount: 4, reviewWeeks: 4 });
     expect(validateGallerySample(sample, { ...contract, pageCount: [22, 36] })).toEqual([]);
