@@ -23,6 +23,7 @@ const EXPECTED_SLUGS = [
     '14-job-search-hq',
     '15-garden-almanac',
     '16-reading-journal',
+    '17-home-owners-manual',
 ];
 
 const descendants = (sample: ReturnType<typeof loadGallerySample>, rootId: string) => {
