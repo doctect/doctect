@@ -6,7 +6,7 @@ A family-history workbook for reMarkable Paper Pro, built around a tappable four
 
 - **A chart you can tap through.** Every pedigree box is a link: tap `Grandmother (Maternal)` and her page opens, and her own kin chips carry on to boxes 12 and 13.
 - **The numbering cannot drift.** Boxes follow the genealogist's ahnentafel - a father is double his child's number, a mother double plus one - and every person page quotes its own number and the numbers its kin chips lead to. The chart's connector lines are drawn from the same rule the kin references are generated from.
-- **Renaming is one edit.** Box labels are bound to the chart's data, so replacing `Father` with a real name in `box_2_label` is the user's single edit point for that ancestor.
+- **Each chart box is a single field.** The pedigree chart reads every box label from one field in its data, so replacing `Father` with a real name in `box_2_label` updates that box wherever the chart shows it; the person page's own header is edited on the page itself.
 - **An example family shows the standard.** Three filled specimen pages for the clearly fictional Hartwell-Reyes family (all invented dates pre-1950) demonstrate vitals, timeline entries, sourcing habits and kin links - stamped EXAMPLE with a skip link.
 - **Archivist's habits built in.** Pencil-then-ink advice, a research ledger that logs empty-handed searches too, and a source index numbered once and cited everywhere.
 
@@ -44,7 +44,7 @@ Default configuration exports 50 pages:
 - 3 example person pages (the fictional Hartwell-Reyes family, EXAMPLE chrome)
 - 1 family archive hub (chart chip, record-book rows, spare-page index)
 - 1 pedigree chart with 15 tappable boxes over 15 person pages
-- 30 kin reference nodes (zero extra pages - they resolve to chart persons)
+- 14 kin reference nodes (zero extra pages - they resolve to chart persons)
 - 4 family group sheets, 4 photo ledgers, 4 research ledgers, 2 source index sheets
 - 8 spare person pages and 6 interview sheets (12 of the 24 questions)
 

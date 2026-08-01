@@ -131,7 +131,7 @@ const QUIZ = [
       ['Longest river in Africa', 'What is the longest river in Africa?', 'The Nile',
         'It runs about 6,650 kilometres north to the Mediterranean Sea.'],
       ['Capital of Japan', 'What is the capital city of Japan?', 'Tokyo',
-        'Greater Tokyo is the most populous metropolitan area in the world, home to some 37 million people.'],
+        "Greater Tokyo, home to some 37 million people, has long been the world's most populous metropolitan area."],
       ['Highest mountain', 'What is the highest mountain above sea level?', 'Mount Everest',
         'The 2020 China-Nepal joint survey put the summit at 8,848.86 metres.'],
       ['Largest hot desert', 'What is the largest hot desert in the world?', 'The Sahara',

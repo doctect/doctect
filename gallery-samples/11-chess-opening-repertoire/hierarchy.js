@@ -572,7 +572,7 @@ addPosition('sc_closed', 'sc_root', 'Closed Sicilian: 2... d6', {
 addNode('chapter_french', 'black_repertoire', 'chapter', 'French Defence', {
   chapter_label: 'BLACK REPERTOIRE · CHAPTER FOUR',
   summary: 'Answer 1. e4 with 1...e6 and 2...d5, then attack the White centre with ...c5. The Advance, the Tarrasch and the Winawer each branch from one root position - and in every one of them the d4-pawn is the target.',
-  ideas: '· The pawn chain points at d4: pile on it with ...Nc6, ...Qb6 and ...Nh6-f5.\n· In the Tarrasch, accept the isolani for open lines and fast development.\n· In the Winawer, trade the bishop for a lasting dark-square grip.\n· The c8-bishop is the problem piece: give it a future before the endgame.',
+  ideas: '· The pawn chain points at d4: pile on it with ...Nc6, ...Qb6 and ...Nh6-f5.\n· In the Tarrasch, accept the isolani for open lines and fast development.\n· In the Winawer, trade the bishop, accept White\'s dark-square play, and target the doubled c-pawns.\n· The c8-bishop is the problem piece: give it a future before the endgame.',
   begin_note: 'Begin at the root French position after 2...d5.',
 });
 
@@ -643,7 +643,7 @@ addPosition('fr_nc3', 'fr_root', 'Winawer: 3... Bb4', {
 
 addPosition('fr_win4', 'fr_nc3', 'Winawer Advance: 4... c5', {
   chapter: FR,
-  idea: 'Mainline: 5. a3 Bxc3+ 6. bxc3 Ne7 - a lasting dark-square grip against doubled c-pawns to target.',
+  idea: 'Mainline: 5. a3 Bxc3+ 6. bxc3 Ne7 - play against the doubled c-pawns with a light-square blockade.',
   verdict: 'Unclear',
   candidates: [],
 });
