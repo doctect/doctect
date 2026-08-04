@@ -52,10 +52,10 @@ test.describe('Username identity', () => {
         expect(publishRes.ok()).toBeTruthy();
         await expect(page.getByRole('heading', { name: /publish to gallery/i })).toBeHidden({ timeout: 10000 });
 
-        // Gallery card shows the original username. The unfiltered gallery renders up to
-        // three curated sections (Top rated / Popular / Recently updated), so the same
-        // project card can legitimately appear more than once -- .first() is enough since
-        // we only care that the author name shows up somewhere.
+        // Gallery card shows the original username. The unfiltered gallery can show the
+        // same project both in the daily spotlight and in a use-case strip / leftover
+        // grid, so the author line can legitimately appear more than once -- .first() is
+        // enough since we only care that the author name shows up somewhere.
         await page.goto('/gallery');
         await expect(page.getByText(`by ${oldUsername}`).first()).toBeVisible({ timeout: 10000 });
 

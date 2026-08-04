@@ -17,6 +17,10 @@ const mkItem = (id: string, name: string): GalleryItem => ({
     ratingAvg: 4.0, ratingCount: 2,
 });
 
+const catalogItem = (id: string, name: string, tags: string[]): GalleryItem => ({
+    ...mkItem(id, name), tags,
+});
+
 const renderAt = (entry = '/gallery') => render(
     <MemoryRouter initialEntries={[entry]}>
         <Routes>
@@ -29,26 +33,51 @@ const renderAt = (entry = '/gallery') => render(
 describe('GalleryPage', () => {
     beforeEach(() => {
         vi.restoreAllMocks();
+        // GalleryExplainer's dismissal flag persists in jsdom localStorage across tests.
+        localStorage.clear();
         mockUseSession.mockReturnValue({ data: null });
         vi.spyOn(cloudApi, 'galleryTags').mockResolvedValue([{ tag: 'planner', count: 3 }, { tag: 'weekly', count: 1 }]);
         vi.spyOn(cloudApi, 'gallery').mockResolvedValue({ items: [mkItem('p1', 'Alpha')], page: 0, hasMore: false });
+        vi.spyOn(cloudApi, 'galleryAll').mockResolvedValue([mkItem('p1', 'Alpha')]);
     });
 
-    it('default view renders the hero, tag chips and three sections', async () => {
+    it('sections view: explainer, spotlight, use-case strips, leftover grid, bottom tag chips', async () => {
+        vi.spyOn(cloudApi, 'galleryAll').mockResolvedValue([
+            catalogItem('p1', 'Alpha Planner', ['planner']),
+            catalogItem('p2', 'Beta Budget', ['finance']),
+            catalogItem('p3', 'Gamma Game', ['games']),
+            catalogItem('p4', 'Delta Dice', ['adventure']),
+            catalogItem('p5', 'Omega Misc', ['misc']),
+        ]);
         renderAt();
-        expect(await screen.findByText(/discover planner & notebook templates/i)).toBeInTheDocument();
-        expect(await screen.findByRole('heading', { name: /top rated/i })).toBeInTheDocument();
-        expect(screen.getByRole('heading', { name: /popular/i })).toBeInTheDocument();
-        expect(screen.getByRole('heading', { name: /recently updated/i })).toBeInTheDocument();
-        expect(await screen.findByRole('button', { name: /planner \(3\)/i })).toBeInTheDocument();
-        await waitFor(() => {
-            const sorts = (cloudApi.gallery as any).mock.calls.map((c: any[]) => c[0]?.sort);
-            expect(sorts).toContain('rating');
-            expect(sorts).toContain('popular');
-            expect(sorts).toContain('recent');
-        });
-        // section fetches are limit-capped
-        expect((cloudApi.gallery as any).mock.calls.every((c: any[]) => c[0]?.limit === 8)).toBe(true);
+        // explainer (signed out by default in these tests)
+        expect(await screen.findByText(/make it yours/i)).toBeInTheDocument();
+        // spotlight is one of the catalog
+        expect(screen.getByText(/in the spotlight/i)).toBeInTheDocument();
+        // strips: plan claims p1+p2, play claims p3+p4
+        expect(screen.getByRole('heading', { name: /plan & organize/i })).toBeInTheDocument();
+        expect(screen.getByRole('heading', { name: /play & explore/i })).toBeInTheDocument();
+        // thin/unmatched strips absent
+        expect(screen.queryByRole('heading', { name: /track & improve/i })).toBeNull();
+        // leftover grid
+        expect(screen.getByRole('heading', { name: /more to explore/i })).toBeInTheDocument();
+        expect(screen.getByText('Omega Misc')).toBeInTheDocument();
+        // old hero gone
+        expect(screen.queryByText(/discover planner & notebook templates/i)).toBeNull();
+        // tag chips still work (now at the bottom)
+        expect(screen.getByRole('button', { name: /planner \(3\)/i })).toBeInTheDocument();
+    });
+
+    it('sections view: empty catalog shows the empty state', async () => {
+        vi.spyOn(cloudApi, 'galleryAll').mockResolvedValue([]);
+        renderAt();
+        expect(await screen.findByText(/nothing here yet/i)).toBeInTheDocument();
+    });
+
+    it('sections view: fetch failure shows the error message', async () => {
+        vi.spyOn(cloudApi, 'galleryAll').mockRejectedValue(new Error('down'));
+        renderAt();
+        expect(await screen.findByText(/could not load the gallery/i)).toBeInTheDocument();
     });
 
     it('?tag= URL param opens the filtered grid directly', async () => {
@@ -62,24 +91,24 @@ describe('GalleryPage', () => {
 
     it('typing a search switches to grid mode with the q param', async () => {
         renderAt();
-        await screen.findByRole('heading', { name: /top rated/i });
+        await screen.findByRole('heading', { name: /more to explore/i });
         fireEvent.change(screen.getByPlaceholderText(/search planners/i), { target: { value: 'alp' } });
         await waitFor(() => expect(cloudApi.gallery).toHaveBeenCalledWith(expect.objectContaining({ q: 'alp' })), { timeout: 2000 });
-        expect(screen.queryByRole('heading', { name: /top rated/i })).toBeNull();
+        expect(screen.queryByRole('heading', { name: /more to explore/i })).toBeNull();
     });
 
-    it('"See all" enters grid mode with that sort', async () => {
+    it('bottom tag chips enter grid mode with that tag', async () => {
         renderAt();
-        await screen.findByRole('heading', { name: /top rated/i });
-        fireEvent.click(screen.getAllByRole('button', { name: /see all/i })[0]);
-        await waitFor(() => expect(cloudApi.gallery).toHaveBeenCalledWith(expect.objectContaining({ sort: 'rating', page: 0 })));
+        await screen.findByRole('heading', { name: /more to explore/i });
+        fireEvent.click(screen.getByRole('button', { name: /planner \(3\)/i }));
+        await waitFor(() => expect(cloudApi.gallery).toHaveBeenCalledWith(expect.objectContaining({ tag: 'planner', page: 0 })));
     });
 
     it('clearing filters returns to sections mode', async () => {
         renderAt('/gallery?tag=planner');
         await screen.findByText('Alpha');
         fireEvent.click(screen.getByRole('button', { name: /all projects/i }));
-        expect(await screen.findByRole('heading', { name: /top rated/i })).toBeInTheDocument();
+        expect(await screen.findByRole('heading', { name: /more to explore/i })).toBeInTheDocument();
     });
 
     it('grid mode keeps the sort select with a Top rated option', async () => {

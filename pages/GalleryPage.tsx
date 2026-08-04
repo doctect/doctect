@@ -1,11 +1,12 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Search, Star, Flame, Clock, X, ArrowLeft } from 'lucide-react';
+import { Search, X, ArrowLeft } from 'lucide-react';
 import { cloudApi, GalleryItem, GalleryTag } from '../services/cloudApi';
 import { AppHeader } from '../components/AppHeader';
 import { ProjectCard } from '../components/gallery/ProjectCard';
-
-const SECTION_LIMIT = 8;
+import { GalleryExplainer } from '../components/gallery/GalleryExplainer';
+import { Spotlight } from '../components/gallery/Spotlight';
+import { groupCatalog, pickSpotlight, dateKey } from '../components/gallery/sections';
 
 function SkeletonGrid({ count }: { count: number }) {
     return (
@@ -23,13 +24,6 @@ function SkeletonGrid({ count }: { count: number }) {
     );
 }
 
-const SECTIONS = [
-    { key: 'rating' as const, title: 'Top rated', icon: <Star size={16} className="text-amber-500" /> },
-    { key: 'popular' as const, title: 'Popular', icon: <Flame size={16} className="text-orange-500" /> },
-    { key: 'recent' as const, title: 'Recently updated', icon: <Clock size={16} className="text-blue-500" /> },
-];
-type SectionKey = typeof SECTIONS[number]['key'];
-
 export function GalleryPage() {
     const [searchParams, setSearchParams] = useSearchParams();
     const qParam = searchParams.get('q') ?? '';
@@ -42,7 +36,7 @@ export function GalleryPage() {
     const [tags, setTags] = useState<GalleryTag[]>([]);
     const [items, setItems] = useState<GalleryItem[] | null>(null);   // grid mode; null = loading
     const [hasMore, setHasMore] = useState(false);
-    const [sections, setSections] = useState<Record<SectionKey, GalleryItem[]> | null>(null);
+    const [catalog, setCatalog] = useState<GalleryItem[] | null>(null);   // sections mode; null = loading
     const [error, setError] = useState<string | null>(null);
 
     const setParam = (key: string, value: string | null) => {
@@ -73,17 +67,12 @@ export function GalleryPage() {
         cloudApi.galleryTags().then(setTags).catch(() => {});
     }, []);
 
-    // Sections mode: three parallel, limit-capped fetches.
+    // Sections mode: one sweep of the whole (small) catalog, grouped client-side.
     useEffect(() => {
         if (isFiltered) return;
-        setSections(null);
-        Promise.all(SECTIONS.map(s => cloudApi.gallery({ sort: s.key, limit: SECTION_LIMIT })))
-            .then(results => {
-                const bySection = {} as Record<SectionKey, GalleryItem[]>;
-                SECTIONS.forEach((s, i) => { bySection[s.key] = results[i].items; });
-                setSections(bySection);
-                setError(null);
-            })
+        setCatalog(null);
+        cloudApi.galleryAll()
+            .then(items => { setCatalog(items); setError(null); })
             .catch(() => setError('Could not load the gallery.'));
     }, [isFiltered]);
 
@@ -98,7 +87,9 @@ export function GalleryPage() {
     }, [isFiltered, qParam, tagParam, sortParam, page]);
 
     const clearFilters = () => { setQInput(''); setSearchParams({}); };
-    const galleryEmpty = sections !== null && SECTIONS.every(s => sections[s.key].length === 0);
+    const grouped = useMemo(() => catalog ? groupCatalog(catalog) : null, [catalog]);
+    const spotlight = useMemo(() => catalog ? pickSpotlight(catalog, dateKey(new Date())) : null, [catalog]);
+    const galleryEmpty = catalog !== null && catalog.length === 0;
 
     return (
         // h-screen + overflow-y-auto: index.html sets body{overflow:hidden}, so each page owns its scrolling
@@ -121,46 +112,45 @@ export function GalleryPage() {
                 )}
             </div>
 
-            {!isFiltered && (
-                <div className="bg-gradient-to-r from-blue-600 via-blue-500 to-indigo-500 text-white">
-                    <div className="max-w-6xl mx-auto px-6 py-10">
-                        <h1 className="text-2xl md:text-3xl font-bold">Discover planner & notebook templates</h1>
-                        <p className="text-sm text-blue-100 mt-1">Browse community-published designs — open, download, or fork any of them.</p>
-                        {tags.length > 0 && (
-                            <div className="flex flex-wrap gap-2 mt-5">
-                                {tags.map(t => (
-                                    <button key={t.tag} onClick={() => setParam('tag', t.tag)}
-                                        className="text-xs bg-white/15 hover:bg-white/30 rounded-full px-3 py-1 transition-colors">
-                                        {t.tag} <span className="text-blue-100">({t.count})</span>
-                                    </button>
-                                ))}
-                            </div>
-                        )}
-                    </div>
-                </div>
-            )}
-
             <main className="max-w-6xl mx-auto p-6">
                 {error && <div className="text-sm text-red-600">{error}</div>}
 
                 {!isFiltered ? (
-                    galleryEmpty
+                    catalog === null && !error ? <SkeletonGrid count={8} />
+                    : galleryEmpty
                         ? <div className="text-sm text-slate-400 text-center py-16">Nothing here yet. Publish the first project!</div>
-                        : SECTIONS.map(s => {
-                            const rows = sections?.[s.key];
-                            if (rows && rows.length === 0) return null;
-                            return (
-                                <section key={s.key} className="mt-8 first:mt-2">
-                                    <div className="flex items-center justify-between mb-3">
-                                        <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-700">{s.icon} {s.title}</h2>
-                                        <button onClick={() => setParam('sort', s.key)} className="text-xs text-blue-600 hover:underline">See all →</button>
+                        : <>
+                            <GalleryExplainer />
+                            {spotlight && <Spotlight item={spotlight} />}
+                            {grouped?.strips.map(({ def, items: stripItems }) => (
+                                <section key={def.key} className="mt-8 first:mt-2">
+                                    <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-700 mb-3">
+                                        <span aria-hidden>{def.emoji}</span> {def.title}
+                                    </h2>
+                                    <div className="flex gap-4 overflow-x-auto pb-2 -mx-1 px-1">
+                                        {stripItems.map(i => <div key={i.id} className="w-44 shrink-0"><ProjectCard item={i} /></div>)}
                                     </div>
-                                    {rows
-                                        ? <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">{rows.map(i => <ProjectCard key={i.id} item={i} />)}</div>
-                                        : <SkeletonGrid count={4} />}
                                 </section>
-                            );
-                        })
+                            ))}
+                            {grouped && grouped.leftover.length > 0 && (
+                                <section className="mt-8">
+                                    <h2 className="text-sm font-semibold text-slate-700 mb-3">More to explore</h2>
+                                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                                        {grouped.leftover.map(i => <ProjectCard key={i.id} item={i} />)}
+                                    </div>
+                                </section>
+                            )}
+                            {tags.length > 0 && (
+                                <div className="flex flex-wrap gap-2 mt-10 pt-6 border-t">
+                                    {tags.map(t => (
+                                        <button key={t.tag} onClick={() => setParam('tag', t.tag)}
+                                            className="text-xs bg-slate-100 text-slate-600 hover:bg-blue-100 hover:text-blue-700 rounded-full px-3 py-1 transition-colors">
+                                            {t.tag} <span className="text-slate-400">({t.count})</span>
+                                        </button>
+                                    ))}
+                                </div>
+                            )}
+                        </>
                 ) : (
                     <>
                         <div className="flex items-center gap-3 mb-4">

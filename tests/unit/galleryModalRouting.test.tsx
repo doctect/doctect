@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom';
 import type { Location } from 'react-router-dom';
 import { GalleryPage } from '../../pages/GalleryPage';
@@ -57,11 +57,13 @@ describe('gallery card click opens an overlay modal; direct hits still get the f
 
     it('clicking a card shows the modal without unmounting the grid behind it', async () => {
         render(<MemoryRouter initialEntries={['/gallery']}><TestAppRoutes /></MemoryRouter>);
-        // Sections mode renders the item once per section (rating/popular/recent),
-        // so the same name can appear multiple times; any card works for this test.
-        const card = (await screen.findAllByText('Cool Planner'))[0];
-        fireEvent.click(card);
-        expect(await screen.findByRole('button', { name: /open in editor/i })).toBeInTheDocument();
+        // The one-item catalog shows the project in the daily spotlight AND as a card
+        // in the leftover grid. Only the card is a link, and the spotlight has its own
+        // "Open in editor" button, so target the card by role and scope the modal
+        // assertion with within().
+        fireEvent.click(await screen.findByRole('link', { name: /cool planner/i }));
+        const modal = await screen.findByTestId('modal-backdrop');
+        expect(await within(modal).findByRole('button', { name: /open in editor/i })).toBeInTheDocument();
         // The grid's own search input proves GalleryPage never unmounted underneath the modal.
         expect(screen.getByPlaceholderText(/search planners/i)).toBeInTheDocument();
     });
