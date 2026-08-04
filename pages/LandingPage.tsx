@@ -3,6 +3,7 @@ import React from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowRight, Layers, LayoutTemplate, Link as LinkIcon, Download, MousePointer2, Github, Image, Coffee } from 'lucide-react';
 import { AccountMenu } from '../components/AccountMenu';
+import { GalleryCtaStrip } from '../components/GalleryCtaStrip';
 import { KOFI_URL } from '../constants/editor';
 
 export const LandingPage: React.FC = () => {
@@ -70,6 +71,7 @@ export const LandingPage: React.FC = () => {
               <ArrowRight size={20} className="group-hover:translate-x-1 transition-transform" />
             </Link>
             <Link to="/gallery" className="flex items-center gap-2 px-8 py-4 rounded-xl text-lg font-semibold text-slate-700 bg-white border border-slate-200 hover:border-blue-200 hover:text-blue-600 transition-all shadow-lg shadow-slate-200/50 hover:shadow-xl hover:-translate-y-1">
+              <GalleryCtaStrip />
               <Image size={20} />
               Explore the Gallery
             </Link>

@@ -3,9 +3,9 @@ import { render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { AppHeader } from '../../components/AppHeader';
 
-const api = vi.hoisted(() => ({ me: vi.fn() }));
+const api = vi.hoisted(() => ({ me: vi.fn(), gallery: vi.fn() }));
 
-vi.mock('../../services/cloudApi', () => ({ cloudApi: api }));
+vi.mock('../../services/cloudApi', () => ({ cloudApi: api, API_BASE: '' }));
 vi.mock('../../lib/auth-client', () => ({
     useSession: () => ({ data: null, isPending: false }),
     signIn: {}, signUp: {}, signOut: vi.fn(), authClient: {},
@@ -14,6 +14,7 @@ vi.mock('../../lib/auth-client', () => ({
 beforeEach(() => {
     vi.clearAllMocks();
     api.me.mockResolvedValue(null);
+    api.gallery.mockResolvedValue({ items: [], page: 0, hasMore: false });
 });
 
 describe('AppHeader', () => {
