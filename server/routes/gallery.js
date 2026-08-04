@@ -60,8 +60,9 @@ const cardDto = (r) => ({
 
 // Ordered preview ids for the card rollover. Batched (one query for the whole
 // page of results) because a per-row correlated subquery can't return an array
-// on SQLite.
-async function thumbnailIdsByProject(projectIds) {
+// on SQLite. Exported: the /api/users/:username projects DTO (routes/me.js)
+// must stay shape-identical to the gallery card DTO, so it reuses this helper.
+export async function thumbnailIdsByProject(projectIds) {
     const map = new Map();
     if (projectIds.length === 0) return map;
     const placeholders = projectIds.map((_, i) => `$${i + 1}`).join(', ');

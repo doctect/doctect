@@ -3,6 +3,7 @@ import { Router } from 'express';
 import { strictOptionalAuth } from '../middleware/guards.js';
 import { query } from '../db.js';
 import { isSignupOpen } from '../signupCap.js';
+import { thumbnailIdsByProject } from './gallery.js';
 
 const router = Router();
 
@@ -27,6 +28,9 @@ router.get('/api/users/:username', async (req, res) => {
          FROM projects p WHERE p.owner_id = $1 AND p.visibility = 'public' AND p.published_commit_id IS NOT NULL
          ORDER BY p.published_at DESC LIMIT 100`,
         [users[0].id]);
+    // Same batched pattern as GET /api/gallery: cards are GalleryItem-shaped, so
+    // they must carry the full ordered preview list, not just the first id.
+    const thumbs = await thumbnailIdsByProject(rows.map(r => r.id));
     res.json({
         // Public, unauthenticated endpoint — anyone can call this for any known/guessed
         // username. Deliberately excludes the account's real `name` field (see /api/me above).
@@ -35,6 +39,7 @@ router.get('/api/users/:username', async (req, res) => {
             id: r.id, name: r.name, description: r.description, tags: JSON.parse(r.tags || '[]'),
             author: users[0].username, forkCount: r.fork_count, downloadCount: r.download_count,
             updatedAt: r.updated_at, thumbnailId: r.thumbnail_id,
+            thumbnailIds: thumbs.get(r.id) ?? [],
             ratingAvg: r.rating_avg == null ? null : Math.round(Number(r.rating_avg) * 10) / 10,
             ratingCount: Number(r.rating_count ?? 0)
         }))
