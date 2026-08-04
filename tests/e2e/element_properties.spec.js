@@ -172,7 +172,12 @@ test.describe('Element Properties auto width and disclosure', () => {
         await expect(textBox).toHaveCSS('width', '164px');
         await expect(textBox).toHaveCSS('height', '24px');
 
-        await link.uncheck();
+        // The link checkbox is sr-only inside its icon label; uncheck() on the
+        // clipped 1x1 input fails Playwright's hit-target check (the click lands
+        // on the Link2 svg). Click the visible label — the user's actual gesture
+        // — and assert the state flip it must produce.
+        await pane.getByTitle('Link padding sides').click();
+        await expect(link).not.toBeChecked();
         await right.fill('12');
         await expect(textBox).toHaveCSS('left', '8px');
         await expect(textBox).toHaveCSS('top', '8px');
