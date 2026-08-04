@@ -58,6 +58,23 @@ const cardDto = (r) => ({
     ...ratingDtoFields(r)
 });
 
+// Ordered preview ids for the card rollover. Batched (one query for the whole
+// page of results) because a per-row correlated subquery can't return an array
+// on SQLite.
+async function thumbnailIdsByProject(projectIds) {
+    const map = new Map();
+    if (projectIds.length === 0) return map;
+    const placeholders = projectIds.map((_, i) => `$${i + 1}`).join(', ');
+    const rows = await query(
+        `SELECT id, project_id FROM thumbnails WHERE project_id IN (${placeholders}) ORDER BY position`,
+        projectIds);
+    for (const r of rows) {
+        if (!map.has(r.project_id)) map.set(r.project_id, []);
+        map.get(r.project_id).push(r.id);
+    }
+    return map;
+}
+
 router.get('/api/gallery', async (req, res) => {
     const q = String(req.query.q ?? '').toLowerCase().slice(0, 100);
     const tag = String(req.query.tag ?? '').slice(0, 30);
@@ -91,7 +108,13 @@ router.get('/api/gallery', async (req, res) => {
          LIMIT ${limit + 1} OFFSET ${page * limit}`,
         params
     );
-    res.json({ items: rows.slice(0, limit).map(cardDto), page, hasMore: rows.length > limit });
+    const items = rows.slice(0, limit);
+    const thumbs = await thumbnailIdsByProject(items.map(r => r.id));
+    res.json({
+        items: items.map(r => ({ ...cardDto(r), thumbnailIds: thumbs.get(r.id) ?? [] })),
+        page,
+        hasMore: rows.length > limit,
+    });
 });
 
 router.get('/api/gallery/tags', async (req, res) => {

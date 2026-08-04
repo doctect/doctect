@@ -8,6 +8,7 @@ const item: GalleryItem = {
     id: 'p1', name: 'Weekly Planner', description: 'A tidy weekly spread for busy people',
     tags: ['planner', 'weekly', 'minimal', 'extra'], author: 'maker',
     forkCount: 2, downloadCount: 9, updatedAt: '2026-01-01', thumbnailId: null,
+    thumbnailIds: [],
     ratingAvg: 4.5, ratingCount: 3,
 };
 

@@ -80,6 +80,22 @@ describe('gallery', () => {
         expect(item.thumbnailId).toBeTruthy();
     });
 
+    it('returns ordered thumbnailIds on every card', async () => {
+        const proj = await request(app).post('/api/projects').set('Cookie', cookie)
+            .send({ name: 'Two Thumbs', state: minimalState() });
+        await request(app).post(`/api/projects/${proj.body.project.id}/publish`).set('Cookie', cookie)
+            .set('If-Match', `"${proj.body.project.headCommitId}"`)
+            .send({ description: 'multi', tags: ['planner'], thumbnails: [PNG_1X1, PNG_1X1] });
+
+        const res = await request(app).get('/api/gallery');
+        expect(res.status).toBe(200);
+        const item = res.body.items.find(i => i.name === 'Two Thumbs');
+        expect(item.thumbnailIds).toHaveLength(2);
+        expect(item.thumbnailId).toBe(item.thumbnailIds[0]);
+        const single = res.body.items.find(i => i.name === 'Public Planner');
+        expect(single.thumbnailIds).toHaveLength(1);
+    });
+
     it('supports search', async () => {
         const res = await request(app).get('/api/gallery?q=nomatchxyz');
         expect(res.body.items.length).toBe(0);

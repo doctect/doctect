@@ -13,6 +13,7 @@ vi.mock('../../lib/auth-client', () => ({
 const mkItem = (id: string, name: string): GalleryItem => ({
     id, name, description: 'desc', tags: ['planner'], author: 'maker',
     forkCount: 0, downloadCount: 0, updatedAt: '2026-01-01', thumbnailId: null,
+    thumbnailIds: [],
     ratingAvg: 4.0, ratingCount: 2,
 });
 

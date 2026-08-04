@@ -146,6 +146,7 @@ export interface GlobalAuditFilters {
 export interface GalleryItem {
     id: string; name: string; description: string; tags: string[]; author: string;
     forkCount: number; downloadCount: number; updatedAt: string; thumbnailId: string | null;
+    thumbnailIds: string[];
     ratingAvg: number | null; ratingCount: number;
 }
 // `nodeId` is null for every preview published before the source page was recorded,

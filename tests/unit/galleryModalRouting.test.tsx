@@ -38,6 +38,7 @@ function TestAppRoutes() {
 const item: GalleryItem = {
     id: 'proj-1', name: 'Cool Planner', description: '', tags: [], author: 'someone',
     forkCount: 0, downloadCount: 0, updatedAt: '2026-01-01', thumbnailId: null,
+    thumbnailIds: [],
     ratingAvg: null, ratingCount: 0,
 };
 const detail: GalleryDetail = {
