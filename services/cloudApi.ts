@@ -261,6 +261,18 @@ export const cloudApi = {
         if (params.limit) qs.set('limit', String(params.limit));
         return api<{ items: GalleryItem[]; page: number; hasMore: boolean }>(`/api/gallery?${qs}`);
     },
+    // Sections view fetches the whole (small) catalog in one sweep and groups it
+    // client-side. The cap is a guard for the small-catalog era, not a feature —
+    // see the discoverability spec.
+    galleryAll: async (maxPages = 5): Promise<GalleryItem[]> => {
+        const all: GalleryItem[] = [];
+        for (let page = 0; page < maxPages; page++) {
+            const res = await cloudApi.gallery({ sort: 'recent', page });
+            all.push(...res.items);
+            if (!res.hasMore) break;
+        }
+        return all;
+    },
     galleryDetail: async (id: string) =>
         (await api<{ project: GalleryDetail }>(`/api/gallery/${id}`)).project,
     galleryState: (id: string) =>
