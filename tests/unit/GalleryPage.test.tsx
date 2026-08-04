@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { GalleryPage } from '../../pages/GalleryPage';
 import { cloudApi, GalleryItem } from '../../services/cloudApi';
@@ -39,6 +39,16 @@ describe('GalleryPage', () => {
         vi.spyOn(cloudApi, 'galleryTags').mockResolvedValue([{ tag: 'planner', count: 3 }, { tag: 'weekly', count: 1 }]);
         vi.spyOn(cloudApi, 'gallery').mockResolvedValue({ items: [mkItem('p1', 'Alpha')], page: 0, hasMore: false });
         vi.spyOn(cloudApi, 'galleryAll').mockResolvedValue([mkItem('p1', 'Alpha')]);
+        // Pin the date: pickSpotlight keys off dateKey(new Date()), so an unpinned
+        // clock makes the daily pick — and any name-collision assertions — drift by
+        // calendar day. 2026-08-04 hashes to p1 for the five-item catalog below.
+        // Without vi.useFakeTimers() this mocks Date only; setTimeout stays real,
+        // which the search-debounce test below depends on.
+        vi.setSystemTime(new Date('2026-08-04T12:00:00Z'));
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
     });
 
     it('sections view: explainer, spotlight, use-case strips, leftover grid, bottom tag chips', async () => {
@@ -59,9 +69,11 @@ describe('GalleryPage', () => {
         expect(screen.getByRole('heading', { name: /play & explore/i })).toBeInTheDocument();
         // thin/unmatched strips absent
         expect(screen.queryByRole('heading', { name: /track & improve/i })).toBeNull();
-        // leftover grid
-        expect(screen.getByRole('heading', { name: /more to explore/i })).toBeInTheDocument();
-        expect(screen.getByText('Omega Misc')).toBeInTheDocument();
+        // leftover grid — scoped to its section: the daily spotlight can
+        // legitimately repeat a project name elsewhere on the page
+        const leftover = screen.getByRole('heading', { name: /more to explore/i }).closest('section');
+        expect(leftover).not.toBeNull();
+        expect(within(leftover as HTMLElement).getByText('Omega Misc')).toBeInTheDocument();
         // old hero gone
         expect(screen.queryByText(/discover planner & notebook templates/i)).toBeNull();
         // tag chips still work (now at the bottom)
