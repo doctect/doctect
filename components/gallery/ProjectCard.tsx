@@ -1,8 +1,9 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Square, GitFork, Download } from 'lucide-react';
-import { GalleryItem, API_BASE } from '../../services/cloudApi';
+import { GitFork, Download } from 'lucide-react';
+import { GalleryItem } from '../../services/cloudApi';
 import { GalleryLink } from './GalleryLink';
+import { RollingPreview } from './RollingPreview';
 import { StarRating } from './StarRating';
 
 export function ProjectCard({ item, showAuthor = true }: { item: GalleryItem; showAuthor?: boolean }) {
@@ -10,11 +11,10 @@ export function ProjectCard({ item, showAuthor = true }: { item: GalleryItem; sh
     return (
         <GalleryLink projectId={item.id}
             className="group flex flex-col bg-white border rounded-xl overflow-hidden hover:shadow-lg hover:-translate-y-0.5 transition-all duration-150">
-            <div className="aspect-[3/4] bg-slate-100 flex items-center justify-center overflow-hidden">
-                {item.thumbnailId
-                    ? <img src={`${API_BASE}/api/thumbnails/${item.thumbnailId}`} alt={item.name} loading="lazy"
-                        className="w-full h-full object-contain group-hover:scale-[1.03] transition-transform duration-200" />
-                    : <Square size={32} className="text-slate-300" />}
+            <div className="aspect-[3/4] bg-slate-100 overflow-hidden">
+                <RollingPreview thumbnailIds={item.thumbnailIds} alt={item.name}
+                    className="w-full h-full"
+                    imgClassName="w-full h-full object-contain group-hover:scale-[1.03] transition-transform duration-200" />
             </div>
             <div className="p-3 flex flex-col gap-1 flex-1">
                 <div className="text-sm font-semibold text-slate-800 truncate">{item.name}</div>

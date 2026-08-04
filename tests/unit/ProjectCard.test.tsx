@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen, fireEvent, act } from '@testing-library/react';
 import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom';
 import { ProjectCard } from '../../components/gallery/ProjectCard';
 import { GalleryItem } from '../../services/cloudApi';
@@ -52,5 +52,19 @@ describe('ProjectCard', () => {
         fireEvent.click(screen.getByRole('button', { name: 'weekly' }));
         expect(screen.getByTestId('loc')).toHaveTextContent('/gallery?tag=weekly');
         expect(screen.queryByText('DETAIL_MARKER')).toBeNull();
+    });
+
+    describe('preview rollover', () => {
+        beforeEach(() => { vi.useFakeTimers(); });
+        afterEach(() => { vi.useRealTimers(); });
+
+        it('cycles preview images on hover', () => {
+            renderCard({ ...item, thumbnailId: 't1', thumbnailIds: ['t1', 't2'] });
+            const img = screen.getByRole('img') as HTMLImageElement;
+            expect(img.src).toContain('/api/thumbnails/t1');
+            fireEvent.mouseEnter(screen.getByTestId('rolling-preview'));
+            act(() => { vi.advanceTimersByTime(700); });
+            expect((screen.getByRole('img') as HTMLImageElement).src).toContain('/api/thumbnails/t2');
+        });
     });
 });
