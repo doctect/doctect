@@ -86,10 +86,11 @@ describe('GalleryPage', () => {
         expect(await screen.findByText(/nothing here yet/i)).toBeInTheDocument();
     });
 
-    it('sections view: fetch failure shows the error message', async () => {
+    it('sections view: fetch failure shows the error message and no browse-all band', async () => {
         vi.spyOn(cloudApi, 'galleryAll').mockRejectedValue(new Error('down'));
         renderAt();
         expect(await screen.findByText(/could not load the gallery/i)).toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: /browse all/i })).toBeNull();
     });
 
     it('?tag= URL param opens the filtered grid directly', async () => {
@@ -116,10 +117,10 @@ describe('GalleryPage', () => {
         await waitFor(() => expect(cloudApi.gallery).toHaveBeenCalledWith(expect.objectContaining({ tag: 'planner', page: 0 })));
     });
 
-    it('clearing filters returns to sections mode', async () => {
+    it('clearing filters via the Gallery back button returns to sections mode', async () => {
         renderAt('/gallery?tag=planner');
         await screen.findByText('Alpha');
-        fireEvent.click(screen.getByRole('button', { name: /all projects/i }));
+        fireEvent.click(screen.getByRole('button', { name: /^gallery$/i }));
         expect(await screen.findByRole('heading', { name: /more to explore/i })).toBeInTheDocument();
     });
 

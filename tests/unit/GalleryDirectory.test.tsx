@@ -78,4 +78,18 @@ describe('GalleryDirectory', () => {
         fireEvent.click(within(screen.getAllByTestId('directory-row')[0]).getByRole('link'));
         expect(screen.getByText('DETAIL_MARKER')).toBeInTheDocument();
     });
+
+    it('thumbnail cell links to the project without adding a second tab stop', () => {
+        renderIt();
+        const row = screen.getAllByTestId('directory-row')[0];
+        // exactly one link in the accessibility tree per row: the thumb link is aria-hidden
+        expect(within(row).getAllByRole('link')).toHaveLength(1);
+        const links = within(row).getAllByRole('link', { hidden: true });
+        expect(links).toHaveLength(2);
+        const thumbLink = links[0]; // thumbnail cell comes first in DOM order
+        expect(thumbLink).toHaveAttribute('aria-hidden', 'true');
+        expect(thumbLink).toHaveAttribute('tabindex', '-1');
+        fireEvent.click(thumbLink);
+        expect(screen.getByText('DETAIL_MARKER')).toBeInTheDocument();
+    });
 });

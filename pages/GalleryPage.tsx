@@ -164,10 +164,12 @@ export function GalleryPage() {
                                     </div>
                                 </section>
                             )}
-                            <button onClick={() => setParam('view', 'all')}
-                                className="block w-full mt-10 border rounded-xl bg-white hover:border-blue-300 hover:text-blue-700 text-sm text-slate-700 font-medium py-3 text-center transition-colors">
-                                Browse all {catalog?.length ?? 0} projects →
-                            </button>
+                            {catalog && catalog.length > 0 && (
+                                <button onClick={() => setParam('view', 'all')}
+                                    className="block w-full mt-10 border rounded-xl bg-white hover:border-blue-300 hover:text-blue-700 text-sm text-slate-700 font-medium py-3 text-center transition-colors">
+                                    Browse all {catalog.length} projects →
+                                </button>
+                            )}
                             {tags.length > 0 && (
                                 <div className="flex flex-wrap gap-2 mt-6 pt-6 border-t">
                                     {tags.map(t => (
@@ -183,7 +185,7 @@ export function GalleryPage() {
                     <>
                         <div className="flex items-center gap-3 mb-4">
                             <button onClick={clearFilters} className="flex items-center gap-1 text-xs text-slate-600 hover:text-blue-600">
-                                <ArrowLeft size={12} /> All projects
+                                <ArrowLeft size={12} /> Gallery
                             </button>
                             {tagParam && (
                                 <span className="flex items-center gap-1 text-xs bg-blue-100 text-blue-700 rounded-full px-3 py-1">

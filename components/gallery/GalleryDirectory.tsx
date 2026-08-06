@@ -72,11 +72,15 @@ export function GalleryDirectory({ items }: { items: GalleryItem[] }) {
                     {sorted.map(i => (
                         <tr key={i.id} data-testid="directory-row" className="border-b last:border-b-0 hover:bg-slate-50">
                             <td className="pl-3 py-1.5">
-                                <div className="w-8 aspect-[3/4] bg-slate-100 rounded overflow-hidden flex items-center justify-center">
-                                    {i.thumbnailIds[0]
-                                        ? <img src={`${API_BASE}/api/thumbnails/${i.thumbnailIds[0]}`} alt="" loading="lazy" className="w-full h-full object-cover" />
-                                        : <Square size={12} className="text-slate-300" />}
-                                </div>
+                                {/* Bigger mouse target for the row's project link; aria-hidden +
+                                    tabIndex=-1 keep the name link the row's only tab stop. */}
+                                <GalleryLink projectId={i.id} tabIndex={-1} aria-hidden="true" className="block">
+                                    <div className="w-8 aspect-[3/4] bg-slate-100 rounded overflow-hidden flex items-center justify-center">
+                                        {i.thumbnailIds[0]
+                                            ? <img src={`${API_BASE}/api/thumbnails/${i.thumbnailIds[0]}`} alt="" loading="lazy" className="w-full h-full object-cover" />
+                                            : <Square size={12} className="text-slate-300" />}
+                                    </div>
+                                </GalleryLink>
                             </td>
                             <td className="px-3 py-1.5">
                                 <GalleryLink projectId={i.id} className="font-medium text-slate-800 hover:text-blue-600">
