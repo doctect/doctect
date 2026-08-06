@@ -6,6 +6,7 @@ import { AppHeader } from '../components/AppHeader';
 import { ProjectCard } from '../components/gallery/ProjectCard';
 import { GalleryExplainer } from '../components/gallery/GalleryExplainer';
 import { Spotlight } from '../components/gallery/Spotlight';
+import { GalleryDirectory } from '../components/gallery/GalleryDirectory';
 import { groupCatalog, pickSpotlight, dateKey } from '../components/gallery/sections';
 
 function SkeletonGrid({ count }: { count: number }) {
@@ -31,6 +32,8 @@ export function GalleryPage() {
     const sortParam = searchParams.get('sort') ?? '';
     const page = Math.max(0, parseInt(searchParams.get('page') ?? '0', 10) || 0);
     const isFiltered = !!(qParam || tagParam || sortParam);
+    const viewParam = searchParams.get('view') ?? '';
+    const isDirectory = !isFiltered && viewParam === 'all';
 
     const [qInput, setQInput] = useState(qParam);
     const [tags, setTags] = useState<GalleryTag[]>([]);
@@ -102,6 +105,12 @@ export function GalleryPage() {
                         placeholder="Search planners and notebooks…"
                         className="w-full border rounded-lg pl-8 pr-3 py-1.5 text-sm" />
                 </div>
+                {!isFiltered && !isDirectory && (
+                    <button onClick={() => setParam('view', 'all')}
+                        className="text-xs text-blue-600 hover:underline whitespace-nowrap">
+                        All projects
+                    </button>
+                )}
                 {isFiltered && (
                     <select value={sortParam || 'recent'} onChange={e => setParam('sort', e.target.value)}
                         className="border rounded-lg px-2 py-1.5 text-sm">
@@ -119,7 +128,18 @@ export function GalleryPage() {
                     catalog === null && !error ? <SkeletonGrid count={8} />
                     : galleryEmpty
                         ? <div className="text-sm text-slate-400 text-center py-16">Nothing here yet. Publish the first project!</div>
-                        : <>
+                        : isDirectory && catalog ? (
+                            <>
+                                <div className="flex items-center gap-3 mb-4">
+                                    <button onClick={() => setParam('view', null)}
+                                        className="flex items-center gap-1 text-xs text-slate-600 hover:text-blue-600">
+                                        <ArrowLeft size={12} /> Gallery
+                                    </button>
+                                    <h1 className="text-sm font-semibold text-slate-700">All projects ({catalog.length})</h1>
+                                </div>
+                                <GalleryDirectory items={catalog} />
+                            </>
+                        ) : <>
                             <GalleryExplainer />
                             {spotlight && <Spotlight item={spotlight} />}
                             {grouped?.strips.map(({ def, items: stripItems }) => (
@@ -134,14 +154,22 @@ export function GalleryPage() {
                             ))}
                             {grouped && grouped.leftover.length > 0 && (
                                 <section className="mt-8">
-                                    <h2 className="text-sm font-semibold text-slate-700 mb-3">More to explore</h2>
+                                    <div className="flex items-center justify-between mb-3">
+                                        <h2 className="text-sm font-semibold text-slate-700">More to explore</h2>
+                                        <button onClick={() => setParam('view', 'all')}
+                                            className="text-xs text-blue-600 hover:underline">See all →</button>
+                                    </div>
                                     <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
                                         {grouped.leftover.map(i => <ProjectCard key={i.id} item={i} />)}
                                     </div>
                                 </section>
                             )}
+                            <button onClick={() => setParam('view', 'all')}
+                                className="block w-full mt-10 border rounded-xl bg-white hover:border-blue-300 hover:text-blue-700 text-sm text-slate-700 font-medium py-3 text-center transition-colors">
+                                Browse all {catalog?.length ?? 0} projects →
+                            </button>
                             {tags.length > 0 && (
-                                <div className="flex flex-wrap gap-2 mt-10 pt-6 border-t">
+                                <div className="flex flex-wrap gap-2 mt-6 pt-6 border-t">
                                     {tags.map(t => (
                                         <button key={t.tag} onClick={() => setParam('tag', t.tag)}
                                             className="text-xs bg-slate-100 text-slate-600 hover:bg-blue-100 hover:text-blue-700 rounded-full px-3 py-1 transition-colors">

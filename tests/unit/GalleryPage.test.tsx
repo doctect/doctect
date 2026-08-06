@@ -138,4 +138,56 @@ describe('GalleryPage', () => {
         renderAt('/gallery?q=zzz');
         expect(await screen.findByText(/no projects match/i)).toBeInTheDocument();
     });
+
+    const directoryCatalog = () => [
+        { ...mkItem('p1', 'Alpha Planner'), tags: ['planner'] },
+        { ...mkItem('p2', 'Beta Budget'), tags: ['finance'] },
+        { ...mkItem('p3', 'Omega Misc'), tags: ['misc'] },
+    ];
+
+    describe('directory mode (?view=all)', () => {
+        it('renders the directory table with a count heading', async () => {
+            vi.spyOn(cloudApi, 'galleryAll').mockResolvedValue(directoryCatalog());
+            renderAt('/gallery?view=all');
+            expect(await screen.findByText(/all projects \(3\)/i)).toBeInTheDocument();
+            expect(screen.getAllByTestId('directory-row')).toHaveLength(3);
+            // sections chrome absent
+            expect(screen.queryByText(/in the spotlight/i)).toBeNull();
+        });
+
+        it('filtered params win over view=all', async () => {
+            renderAt('/gallery?q=alpha&view=all');
+            await waitFor(() => expect(cloudApi.gallery).toHaveBeenCalledWith(expect.objectContaining({ q: 'alpha' })));
+            expect(screen.queryByTestId('directory-row')).toBeNull();
+        });
+
+        it('all three sections-view entry points open the directory', async () => {
+            vi.spyOn(cloudApi, 'galleryAll').mockResolvedValue(directoryCatalog());
+            renderAt();
+            await screen.findByText(/in the spotlight/i);
+            expect(screen.getByRole('button', { name: /^all projects$/i })).toBeInTheDocument();
+            expect(screen.getByRole('button', { name: /see all/i })).toBeInTheDocument();
+            fireEvent.click(screen.getByRole('button', { name: /browse all 3 projects/i }));
+            expect(await screen.findByText(/all projects \(3\)/i)).toBeInTheDocument();
+        });
+
+        it('Gallery back link returns to the sections view', async () => {
+            vi.spyOn(cloudApi, 'galleryAll').mockResolvedValue(directoryCatalog());
+            renderAt('/gallery?view=all');
+            fireEvent.click(await screen.findByRole('button', { name: /gallery/i }));
+            expect(await screen.findByText(/in the spotlight/i)).toBeInTheDocument();
+        });
+
+        it('empty catalog shows the shared empty state', async () => {
+            vi.spyOn(cloudApi, 'galleryAll').mockResolvedValue([]);
+            renderAt('/gallery?view=all');
+            expect(await screen.findByText(/nothing here yet/i)).toBeInTheDocument();
+        });
+
+        it('sweep failure shows the shared error message', async () => {
+            vi.spyOn(cloudApi, 'galleryAll').mockRejectedValue(new Error('down'));
+            renderAt('/gallery?view=all');
+            expect(await screen.findByText(/could not load the gallery/i)).toBeInTheDocument();
+        });
+    });
 });
