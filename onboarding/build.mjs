@@ -160,8 +160,27 @@ export const buildData = (rootDir, anchors = []) => {
     return { tree, vitals: collectVitals(rootDir, tree), excerpts: extractExcerpts(rootDir, anchors) };
 };
 
+export const buildRefs = (rootDir) => {
+    const tree = scanTree(rootDir);
+    const filePaths = new Set();
+    const dirPaths = new Set();
+    const walk = (n) => {
+        if (n.kind === 'file') filePaths.add(n.path);
+        else { if (n.path) dirPaths.add(n.path); (n.children || []).forEach(walk); }
+    };
+    walk(tree);
+    return { filePaths, dirPaths,
+             specFiles: new Set(fs.readdirSync(path.join(rootDir, 'docs/superpowers/specs'))) };
+};
+
 export const main = async () => {
     const content = await buildContent();
+    const { validateContent } = await import('./src/content/validate.mjs');
+    const errors = validateContent(content, buildRefs(REPO_ROOT));
+    if (errors.length) {
+        console.error('Content validation failed:\n' + errors.map(e => `  - ${e}`).join('\n'));
+        process.exit(1);
+    }
     const data = buildData(REPO_ROOT, content.codeMap.anchors);
     const html = assemblePage({
         style: fs.readFileSync(path.join(HERE, 'src/style.css'), 'utf8'),
