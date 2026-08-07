@@ -54,3 +54,17 @@ describe('TOURS content', () => {
         }
     });
 });
+
+import { CODE_MAP } from '../../../onboarding/src/content/code-map.mjs';
+
+describe('CODE_MAP annotations', () => {
+    it('covers the load-bearing surface', () => {
+        expect(CODE_MAP.annotations.length).toBeGreaterThanOrEqual(40);
+        const annotated = new Set(CODE_MAP.annotations.map(a => a.path));
+        for (const must of ['components', 'pages', 'services', 'server', 'shared', 'tests',
+            'server/routes/projects.js', 'shared/diff.js', 'services/textLayout.ts',
+            'server/auth.js', 'components/canvas/CanvasElement.tsx', 'types.ts']) {
+            expect(annotated.has(must), `missing annotation for ${must}`).toBe(true);
+        }
+    });
+});

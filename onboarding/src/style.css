@@ -90,3 +90,15 @@ pre.diagram { background: #0e1310; border: 1px solid #2a352c; padding: 14px; ove
 .tour-text { max-width: 72ch; }
 .files-strip { margin-top: 1em; color: #7d8a7a; }
 .tour-nav { display: flex; justify-content: space-between; margin-top: 1.4em; }
+
+/* code window */
+.code-tree { flex: 1; max-width: 460px; }
+.code-detail { flex: 1.6; }
+.tree ul { list-style: none; margin-left: 1em; }
+.tree > ul { margin-left: 0; margin-top: 8px; }
+.tree summary { cursor: pointer; color: #c8d3c5; }
+.tree summary:hover { color: #7ce38b; }
+.tree a.tree-file { color: #7d8a7a; }
+.tree a.tree-file:hover { color: #7ce38b; text-decoration: none; }
+.tree a.tree-file.selected { color: #0c0f0d; background: #7ce38b; padding: 0 4px; }
+.code-tree input { width: 100%; }
