@@ -21,6 +21,7 @@ One deliberate deviation from the spec: tests live at `tests/unit/onboarding/` (
 - **Regen is manual:** `node onboarding/build.mjs` rewrites `onboarding/index.html`; the committed file is a build artifact that must be regenerated and committed whenever a task changes anything it embeds.
 - Commit style: `feat(onboarding): …` / `test(onboarding): …`; commit at the end of every task (and mid-task where steps say so).
 - The app, server, and existing tests are never modified by this plan.
+- **Escape authored text at render time:** every content-module string interpolated into `innerHTML` goes through `escapeHtml` from `app-logic.mjs`, via a per-module alias with a UNIQUE name (`esc` in introWin, `escT` in toursWin, `escC` in codeWin, `escP` in playgroundWin) — the shipped bundle concatenates all modules into one IIFE scope, so duplicate `const` names are a SyntaxError. Raw interpolation is reserved for renderer-constructed markup and repo paths/ids known to be HTML-free; `highlightCode` escapes internally. (Added after Task 4's review caught the literal `<track>` in a run command being parsed as an HTML element and vanishing.)
 
 ## File map (who owns what)
 
@@ -627,6 +628,9 @@ describe('profile + ranks', () => {
         expect(formatBytes(2048)).toBe('2.0 KB');
         expect(formatBytes(3 * 1024 * 1024)).toBe('3.0 MB');
     });
+    it('escapeHtml neutralizes markup', () => {
+        expect(escapeHtml('node run.js <track> & "x"')).toBe('node run.js &lt;track&gt; &amp; &quot;x&quot;');
+    });
 });
 
 describe('assembly', () => {
@@ -682,6 +686,10 @@ export const buildHash = (win, parts = []) => '#/' + [win, ...parts].join('/');
 export const formatBytes = (n) => n < 1024 ? `${n} B`
     : n < 1024 * 1024 ? `${(n / 1024).toFixed(1)} KB`
     : `${(n / (1024 * 1024)).toFixed(1)} MB`;
+
+export const escapeHtml = (s) => String(s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 export const filterTree = (node, query) => {
     const q = (query || '').toLowerCase();
@@ -1320,10 +1328,14 @@ export const INTRO = {
 
 ```js
 // onboarding/src/render/introWin.mjs
+import { escapeHtml } from '../app-logic.mjs';
+
+const esc = escapeHtml;
+
 function pane(title, extraClass = '') {
     const section = document.createElement('section');
     section.className = `pane ${extraClass}`;
-    section.innerHTML = `<div class="pane-title">${title}</div><div class="pane-body"></div>`;
+    section.innerHTML = `<div class="pane-title">${esc(title)}</div><div class="pane-body"></div>`;
     return { section, body: section.querySelector('.pane-body') };
 }
 
@@ -1333,9 +1345,9 @@ export function renderIntro(el, ctx) {
 
     const about = pane('doctect · what this is', 'intro-about');
     about.body.innerHTML =
-        intro.about.map(p => `<p>${p}</p>`).join('') +
+        intro.about.map(p => `<p>${esc(p)}</p>`).join('') +
         '<h3 class="accent">run it</h3><table class="cmds">' +
-        intro.run.map(r => `<tr><td><code>${r.cmd}</code></td><td class="dim">${r.note}</td></tr>`).join('') +
+        intro.run.map(r => `<tr><td><code>${esc(r.cmd)}</code></td><td class="dim">${esc(r.note)}</td></tr>`).join('') +
         '</table>';
 
     const col = document.createElement('div');
@@ -1359,15 +1371,15 @@ export function renderIntro(el, ctx) {
 
     const method = pane('the house method');
     method.body.innerHTML =
-        intro.houseMethod.text.map(p => `<p>${p}</p>`).join('') +
-        `<p class="accent">${intro.houseMethod.stages.join(' → ')}</p>` +
+        intro.houseMethod.text.map(p => `<p>${esc(p)}</p>`).join('') +
+        `<p class="accent">${esc(intro.houseMethod.stages.join(' → '))}</p>` +
         '<h3 class="amber">catches only a whole-branch review makes</h3><ul>' +
-        intro.houseMethod.catches.map(c => `<li>${c}</li>`).join('') + '</ul>' +
+        intro.houseMethod.catches.map(c => `<li>${esc(c)}</li>`).join('') + '</ul>' +
         '<h3 class="accent">rounds shipped</h3><ul class="timeline">' +
         [...vitals.specs].reverse().map(spec => {
             const label = intro.roundLabels[spec] ||
                 spec.replace(/^\d{4}-\d{2}-\d{2}-/, '').replace(/-design\.md$/, '').replace(/-/g, ' ');
-            return `<li><span class="dim">${spec.slice(0, 10)}</span> ${label}</li>`;
+            return `<li><span class="dim">${spec.slice(0, 10)}</span> ${esc(label)}</li>`;
         }).join('') + '</ul>';
 
     col.append(vit.section, method.section);
@@ -1618,15 +1630,21 @@ export const TOURS = [
 
 ```js
 // onboarding/src/render/toursWin.mjs
+import { escapeHtml } from '../app-logic.mjs';
+
+const escT = escapeHtml;
+
 function tourPane(title, cls) {
     const s = document.createElement('section');
     s.className = 'pane ' + cls;
-    s.innerHTML = `<div class="pane-title">${title}</div><div class="pane-body"></div>`;
+    s.innerHTML = `<div class="pane-title">${escT(title)}</div><div class="pane-body"></div>`;
     return { s, body: s.querySelector('.pane-body') };
 }
 
 function renderDiagram(lines, highlight) {
-    const html = lines.map(l => l.replace(/\{\{([a-z0-9-]+):([^}]*)\}\}/g, (_, id, label) =>
+    // Escape the whole line FIRST (diagrams contain literals like "<head tag>"),
+    // then substitute tokens — {{id:label}} survives escaping untouched.
+    const html = lines.map(l => escT(l).replace(/\{\{([a-z0-9-]+):([^}]*)\}\}/g, (_, id, label) =>
         `<span class="diag${highlight.includes(id) ? ' lit' : ''}" data-d="${id}">${label}</span>`))
         .join('\n');
     return `<pre class="diagram">${html}</pre>`;
@@ -1642,17 +1660,17 @@ export function renderTours(el, ctx) {
     const list = tourPane('tours', 'tours-list');
     list.body.innerHTML =
         '<ul class="tour-index">' + tours.map(t =>
-            `<li class="${t.id === tour.id ? 'active' : ''}"><a href="#/tours/${t.id}/0">${t.title}</a></li>`
+            `<li class="${t.id === tour.id ? 'active' : ''}"><a href="#/tours/${t.id}/0">${escT(t.title)}</a></li>`
         ).join('') + '</ul>' +
-        `<p class="dim">${tour.blurb}</p>` +
+        `<p class="dim">${escT(tour.blurb)}</p>` +
         '<ol class="tour-steps">' + tour.steps.map((s, i) =>
             `<li class="${i === stepIdx ? 'active' : ''}"><a href="#/tours/${tour.id}/${i}">` +
-            `${s.text.slice(0, 64)}…</a></li>`).join('') + '</ol>';
+            `${escT(s.text.slice(0, 64))}…</a></li>`).join('') + '</ol>';
 
     const stage = tourPane(tour.title, 'tours-stage');
     stage.body.innerHTML =
         renderDiagram(tour.diagram, step.highlight) +
-        `<p class="tour-text">${step.text}</p>` +
+        `<p class="tour-text">${escT(step.text)}</p>` +
         '<div class="files-strip">files: ' + step.files.map(f =>
             `<a href="#/code/${f}"><code>${f}</code></a>`).join(' · ') + '</div>' +
         `<div class="tour-nav">` +
@@ -1813,7 +1831,9 @@ export const CODE_MAP = {
 // onboarding/src/render/codeWin.mjs
 // The import is stripped in the shipped bundle (shared IIFE scope) but is
 // REQUIRED for vitest, which imports this module as real ESM.
-import { formatBytes, filterTree, findNode, flattenDirs, nearestAnnotated } from '../app-logic.mjs';
+import { formatBytes, filterTree, findNode, flattenDirs, nearestAnnotated, escapeHtml } from '../app-logic.mjs';
+
+const escC = escapeHtml;
 
 export function treeHtml(node, selectedPath, openPaths) {
     if (node.kind === 'file') {
@@ -1855,8 +1875,8 @@ function detailHtml(ctx, selectedPath) {
         `<p class="dim">${node.kind === 'file'
             ? `${formatBytes(node.size)}${node.lines ? ` · ${node.lines} lines` : ''}`
             : `${(node.children || []).length} entries · ${formatBytes(node.size)}`}</p>`;
-    if (exact) html += `<p>${exact.note}</p>` + (exact.detail ? `<p>${exact.detail}</p>` : '');
-    else if (nearest) html += `<p class="dim">nearest commentary — <code>${nearest.path}</code>:</p><p>${nearest.note}</p>`;
+    if (exact) html += `<p>${escC(exact.note)}</p>` + (exact.detail ? `<p>${escC(exact.detail)}</p>` : '');
+    else if (nearest) html += `<p class="dim">nearest commentary — <code>${nearest.path}</code>:</p><p>${escC(nearest.note)}</p>`;
     return html;
 }
 
@@ -2053,7 +2073,7 @@ Add the dive list to the tree pane body (after the `<nav class="tree">`):
 ```js
         `<div class="dive-list"><div class="pane-subtitle">deep dives</div><ul>` +
         ctx.content.codeMap.deepDives.map(d =>
-            `<li><a href="#/code/dive/${d.id}/0">${d.title}</a></li>`).join('') + '</ul></div>' +
+            `<li><a href="#/code/dive/${d.id}/0">${escC(d.title)}</a></li>`).join('') + '</ul></div>' +
 ```
 
 And the dive renderer:
@@ -2069,10 +2089,10 @@ function renderDive(el, ctx, diveId, sectionIdx) {
 
     const pane = document.createElement('section');
     pane.className = 'pane dive-pane';
-    pane.innerHTML = `<div class="pane-title">deep dive · ${dive.title}</div>` +
+    pane.innerHTML = `<div class="pane-title">deep dive · ${escC(dive.title)}</div>` +
         `<div class="pane-body">` +
-        `<p class="dim">${dive.tagline} · <a href="#/code">back to the tree</a></p>` +
-        `<p>${section.text}</p>` +
+        `<p class="dim">${escC(dive.tagline)} · <a href="#/code">back to the tree</a></p>` +
+        `<p>${escC(section.text)}</p>` +
         (excerpt ? `<p class="dim"><a href="#/code/${excerpt.file}"><code>${excerpt.file}</code></a>` +
                    `:${excerpt.startLine}</p><pre class="code">${highlightCode(excerpt.code)}</pre>` : '') +
         `<div class="tour-nav">` +
@@ -2280,13 +2300,15 @@ Run — expected FAIL.
 ```js
 // onboarding/src/render/playgroundWin.mjs
 // Imports stripped in the shipped bundle, required for direct ESM import in tests.
-import { scoreProfile, rankFor, levelUnlocked } from '../app-logic.mjs';
+import { scoreProfile, rankFor, levelUnlocked, escapeHtml } from '../app-logic.mjs';
 import { highlightCode, treeHtml } from './codeWin.mjs';
+
+const escP = escapeHtml;
 
 function pgPane(title) {
     const s = document.createElement('section');
     s.className = 'pane pg-pane';
-    s.innerHTML = `<div class="pane-title">${title}</div><div class="pane-body"></div>`;
+    s.innerHTML = `<div class="pane-title">${escP(title)}</div><div class="pane-body"></div>`;
     return { s, body: s.querySelector('.pane-body') };
 }
 
@@ -2335,11 +2357,11 @@ function renderQuiz(el, ctx, levelIdx) {
         const chosen = state.answers[qi];
         const div = document.createElement('div');
         div.className = 'quiz-q';
-        div.innerHTML = `<p><b>Q${qi + 1}.</b> ${q.q}</p>` + q.options.map((opt, oi) => {
+        div.innerHTML = `<p><b>Q${qi + 1}.</b> ${escP(q.q)}</p>` + q.options.map((opt, oi) => {
             const cls = chosen === undefined ? '' :
                 oi === q.answer ? 'right' : oi === chosen ? 'wrong' : 'dim';
-            return `<button class="quiz-opt ${cls}" data-q="${qi}" data-o="${oi}" ${chosen !== undefined ? 'disabled' : ''}>${opt}</button>`;
-        }).join('') + (chosen !== undefined ? `<p class="quiz-why dim">${q.why}</p>` : '');
+            return `<button class="quiz-opt ${cls}" data-q="${qi}" data-o="${oi}" ${chosen !== undefined ? 'disabled' : ''}>${escP(opt)}</button>`;
+        }).join('') + (chosen !== undefined ? `<p class="quiz-why dim">${escP(q.why)}</p>` : '');
         list.append(div);
     });
     list.addEventListener('click', (e) => {
@@ -2511,20 +2533,20 @@ function renderBugs(el, ctx, bugId) {
             const st = ctx.profile.bugs[b.id];
             const mark = st === 'found' ? '<span class="accent">✓</span>'
                 : st === 'revealed' ? '<span class="amber">◦</span>' : '<span class="dim">·</span>';
-            return `<li>${mark} <a class="${b.id === bug.id ? 'amber' : ''}" href="#/playground/bugs/${b.id}">${b.title}</a></li>`;
+            return `<li>${mark} <a class="${b.id === bug.id ? 'amber' : ''}" href="#/playground/bugs/${b.id}">${escP(b.title)}</a></li>`;
         }).join('') + '</ul>' +
         '<p class="dim">Each panel reconstructs the bug as it was written. Click the guilty line. One shot.</p>';
 
     const panel = pgPane(bug.title);
     const lines = bug.code.split('\n');
-    panel.body.innerHTML = `<p>${bug.setup}</p><pre class="code bug-code">` +
+    panel.body.innerHTML = `<p>${escP(bug.setup)}</p><pre class="code bug-code">` +
         lines.map((ln, i) => {
             const cls = status && i === bug.guiltyLine ? 'bug-line guilty' : 'bug-line';
             return `<span class="${cls}" data-line="${i}">${highlightCode(ln) || ' '}</span>`;
         }).join('\n') + '</pre>' +
         (status ? `<p class="${status === 'found' ? 'accent' : 'amber'}">` +
             `${status === 'found' ? 'found it.' : 'revealed — the guilty line is highlighted.'}</p>` +
-            `<p class="bug-story">${bug.story}</p>` +
+            `<p class="bug-story">${escP(bug.story)}</p>` +
             `<p class="dim">lives on, fixed: <a href="#/code/${bug.fixedRef}"><code>${bug.fixedRef}</code></a></p>`
           : '');
     if (!status) {
@@ -2760,12 +2782,12 @@ function renderWdil(el, ctx, wdilId) {
             const st = ctx.profile.wdil[w.id];
             const mark = st?.done ? (st.failed ? '<span class="amber">◦</span>' : '<span class="accent">✓</span>')
                                   : '<span class="dim">·</span>';
-            return `<li>${mark} <a class="${w.id === item.id ? 'amber' : ''}" href="#/playground/wdil/${w.id}">${w.prompt}</a></li>`;
+            return `<li>${mark} <a class="${w.id === item.id ? 'amber' : ''}" href="#/playground/wdil/${w.id}">${escP(w.prompt)}</a></li>`;
         }).join('') + '</ol>';
 
     const game = pgPane(`find it · ${3 - state.tries} tries left`);
-    game.body.innerHTML = `<p>${item.prompt}</p>` +
-        (state.tries >= 1 && !state.done ? `<p class="amber">hint: ${item.hint}</p>` : '') +
+    game.body.innerHTML = `<p>${escP(item.prompt)}</p>` +
+        (state.tries >= 1 && !state.done ? `<p class="amber">hint: ${escP(item.hint)}</p>` : '') +
         (state.done ? `<p class="${state.failed ? 'amber' : 'accent'}">` +
             (state.failed ? 'it lives in: ' : 'correct: ') +
             item.answers.map(a => `<a href="#/code/${a}"><code>${a}</code></a>`).join(' or ') + '</p>'
