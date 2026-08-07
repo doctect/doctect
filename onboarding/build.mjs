@@ -85,3 +85,43 @@ export const collectVitals = (rootDir, tree) => {
         areas, specs,
     };
 };
+
+export class AnchorError extends Error {
+    constructor(id, reason) { super(`Anchor "${id}": ${reason}`); this.id = id; }
+}
+
+// Authoring rule (Global Constraints): imports single-line, exports are
+// `export const|function|class` declarations only. That is all this handles.
+export const stripModuleSyntax = (source) => source
+    .replace(/^import[^\n]*;[ \t]*$/gm, '')
+    .replace(/^export (const|function|class|let) /gm, '$1 ');
+
+export const bundleDiffEngine = (rootDir) => {
+    const meta = fs.readFileSync(path.join(rootDir, 'shared/generatorMetadata.js'), 'utf8');
+    const diff = fs.readFileSync(path.join(rootDir, 'shared/diff.js'), 'utf8');
+    return `window.DoctectDiff = (() => {\n${stripModuleSyntax(meta)}\n${stripModuleSyntax(diff)}\n` +
+        `return { stableStringify, computeChangeSet, threeWayDiff, applyChangeSet };\n})();\n`;
+};
+
+const countOccurrences = (haystack, needle) => haystack.split(needle).length - 1;
+
+export const extractExcerpts = (rootDir, anchors) => anchors.map(anchor => {
+    const abs = path.join(rootDir, anchor.file);
+    if (!fs.existsSync(abs)) throw new AnchorError(anchor.id, `file not found: ${anchor.file}`);
+    const source = fs.readFileSync(abs, 'utf8');
+    const n = countOccurrences(source, anchor.start);
+    if (n === 0) throw new AnchorError(anchor.id, `start not found in ${anchor.file}`);
+    if (n > 1) throw new AnchorError(anchor.id, `start matches ${n} times in ${anchor.file} — not unique`);
+    const lines = source.split('\n');
+    const startLine = lines.findIndex(l => l.includes(anchor.start));
+    let endLine;
+    if (anchor.lines) {
+        endLine = startLine + anchor.lines;
+    } else {
+        const rel = lines.slice(startLine + 1).findIndex(l => l.includes(anchor.end));
+        if (rel === -1) throw new AnchorError(anchor.id, `end not found after start in ${anchor.file}`);
+        endLine = startLine + 1 + rel;
+    }
+    return { id: anchor.id, file: anchor.file, startLine: startLine + 1,
+             code: lines.slice(startLine, endLine).join('\n') };
+});
