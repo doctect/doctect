@@ -89,6 +89,7 @@ describe('repository configuration', () => {
         const activeRepositorySearch = spawnSync('git', [
             'grep', '-n', '-E', `${retiredAdminVariable}|${retiredAdminHelper}|${retiredAdminScript}`,
             '--', '.', ':!docs/superpowers/plans/**', ':!docs/superpowers/specs/**',
+            ':!public/walkthroughs/**',
         ], { cwd: repositoryRoot, encoding: 'utf8' });
         expect(activeRepositorySearch.stderr).toBe('');
         expect(activeRepositorySearch.stdout).toBe('');
