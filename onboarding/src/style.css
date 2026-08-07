@@ -1,0 +1,65 @@
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; }
+body {
+    background: #0c0f0d; color: #c8d3c5;
+    font: 14px/1.5 "SFMono-Regular", ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace;
+    display: flex; flex-direction: column; overflow: hidden;
+}
+#root { flex: 1; overflow: hidden; display: flex; gap: 8px; padding: 8px; }
+a { color: #7ce38b; text-decoration: none; }
+a:hover { text-decoration: underline; }
+button { font: inherit; color: inherit; background: #1d2a20; border: 1px solid #2a352c;
+         padding: 2px 10px; cursor: pointer; }
+button:hover { border-color: #7ce38b; }
+input, textarea, select { font: inherit; color: inherit; background: #0c0f0d;
+    border: 1px solid #2a352c; padding: 3px 6px; }
+input:focus, textarea:focus { outline: 1px solid #7ce38b; }
+
+/* tmux pane: titled bordered box */
+.pane { border: 1px solid #2a352c; background: #101512; display: flex; flex-direction: column;
+        min-width: 0; min-height: 0; }
+.pane > .pane-title { color: #7d8a7a; font-size: 12px; padding: 3px 8px;
+    border-bottom: 1px solid #2a352c; background: #0e1310; }
+.pane > .pane-title::before { content: "┌ "; color: #2a352c; }
+.pane > .pane-body { flex: 1; overflow-y: auto; padding: 12px; min-height: 0; }
+
+/* status bar */
+#statusbar { display: flex; align-items: center; gap: 6px; background: #1d2a20;
+    color: #c8d3c5; padding: 2px 8px; font-size: 13px; flex-wrap: wrap; }
+#statusbar .session { color: #7ce38b; font-weight: bold; }
+#statusbar .wtab { cursor: pointer; padding: 0 6px; color: #7d8a7a; }
+#statusbar .wtab.active { background: #7ce38b; color: #0c0f0d; }
+#statusbar .spacer { flex: 1; }
+#statusbar .clock, #statusbar .meta { color: #7d8a7a; font-size: 12px; }
+#buildinfo { display: none; }
+
+/* boot overlay */
+#boot { position: fixed; inset: 0; background: #0c0f0d; z-index: 60;
+    display: flex; flex-direction: column; justify-content: center; padding: 15vh 12vw; }
+#boot-lines { color: #7ce38b; white-space: pre-wrap; }
+.boot-hint { color: #7d8a7a; margin-top: 2em; font-size: 12px; }
+
+/* help overlay */
+#help { position: fixed; inset: 10vh 20vw; background: #101512; border: 1px solid #7ce38b;
+    z-index: 50; padding: 20px; overflow-y: auto; }
+#help h2 { color: #7ce38b; font-size: 14px; margin-bottom: 12px; }
+#help table { border-collapse: collapse; }
+#help td { padding: 3px 14px 3px 0; }
+#help td.key { color: #e3c67c; }
+
+kbd { background: #1d2a20; border: 1px solid #2a352c; padding: 0 5px; border-radius: 3px;
+      color: #e3c67c; font-size: 12px; }
+.dim { color: #7d8a7a; }
+.accent { color: #7ce38b; }
+.amber { color: #e3c67c; }
+.red { color: #e37c7c; }
+code, pre.code { background: #0e1310; border: 1px solid #2a352c; }
+pre.code { padding: 10px; overflow-x: auto; font-size: 13px; line-height: 1.45; }
+pre.code .tok-k { color: #7ce38b; } pre.code .tok-s { color: #e3c67c; }
+pre.code .tok-c { color: #7d8a7a; font-style: italic; }
+
+.stub { color: #7d8a7a; padding: 24px; }
+
+@media (max-width: 900px) { #root { flex-direction: column; overflow-y: auto; }
+    .pane { min-height: 200px; } }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }

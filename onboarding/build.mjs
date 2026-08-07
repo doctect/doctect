@@ -125,3 +125,58 @@ export const extractExcerpts = (rootDir, anchors) => anchors.map(anchor => {
     return { id: anchor.id, file: anchor.file, startLine: startLine + 1,
              code: lines.slice(startLine, endLine).join('\n') };
 });
+
+export const RUNTIME_MODULES = [
+    'src/app-logic.mjs',
+    'src/render/introWin.mjs', 'src/render/toursWin.mjs',
+    'src/render/codeWin.mjs', 'src/render/playgroundWin.mjs',
+    'src/app.js',
+];
+
+export const buildRuntimeBundle = (rootDir) => RUNTIME_MODULES
+    .map(rel => stripModuleSyntax(fs.readFileSync(path.join(rootDir, 'onboarding', rel), 'utf8')))
+    .join('\n');
+
+export const assemblePage = ({ style, runtime, dataJson, contentJson, diffBundle, footerHtml }) => {
+    const shell = fs.readFileSync(path.join(HERE, 'src/shell.html'), 'utf8');
+    return shell
+        .replace('<!--SLOT:STYLE-->', () => style)
+        .replace('<!--SLOT:DATA-->', () => `window.DOCTECT = {data: ${dataJson}, content: ${contentJson}};`)
+        .replace('<!--SLOT:DIFF-->', () => diffBundle)
+        .replace('<!--SLOT:RUNTIME-->', () => `(() => {\n${runtime}\n})();`)
+        .replace('<!--SLOT:FOOTER-->', () => footerHtml);
+};
+
+export const buildContent = async () => {
+    const { INTRO } = await import('./src/content/intro.mjs');
+    const { TOURS } = await import('./src/content/tours.mjs');
+    const { CODE_MAP } = await import('./src/content/code-map.mjs');
+    const { PLAYGROUND } = await import('./src/content/playground.mjs');
+    return { intro: INTRO, tours: TOURS, codeMap: CODE_MAP, playground: PLAYGROUND };
+};
+
+export const buildData = (rootDir, anchors = []) => {
+    const tree = scanTree(rootDir);
+    return { tree, vitals: collectVitals(rootDir, tree), excerpts: extractExcerpts(rootDir, anchors) };
+};
+
+export const main = async () => {
+    const content = await buildContent();
+    const data = buildData(REPO_ROOT, content.codeMap.anchors);
+    const html = assemblePage({
+        style: fs.readFileSync(path.join(HERE, 'src/style.css'), 'utf8'),
+        runtime: buildRuntimeBundle(REPO_ROOT),
+        // <-escape so no code excerpt or story containing "</script" (or any
+        // tag) can terminate the inline <script> block. Valid JSON, parses identically.
+        dataJson: JSON.stringify(data).replace(/</g, '\\u003c'),
+        contentJson: JSON.stringify(content).replace(/</g, '\\u003c'),
+        diffBundle: bundleDiffEngine(REPO_ROOT),
+        footerHtml: `generated ${data.vitals.generatedAt} @ ${data.vitals.gitSha}`,
+    });
+    fs.writeFileSync(path.join(HERE, 'index.html'), html);
+    console.log(`onboarding/index.html written (${(html.length / 1024).toFixed(0)} KB, @${data.vitals.gitSha})`);
+};
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+    await main();
+}
