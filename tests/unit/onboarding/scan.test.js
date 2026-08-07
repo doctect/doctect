@@ -20,7 +20,7 @@ describe('scanTree', () => {
         for (const dir of ['components', 'server', 'services', 'shared', 'pages', 'tests']) {
             expect(names).toContain(dir);
         }
-        for (const junk of ['node_modules', 'dist', 'scratch', 'playwright-report', '.git']) {
+        for (const junk of ['node_modules', 'dist', 'scratch', 'playwright-report', '.git', '.claude']) {
             expect(names).not.toContain(junk);
         }
     });

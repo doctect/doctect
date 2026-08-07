@@ -11,7 +11,7 @@ export const REPO_ROOT = path.resolve(HERE, '..');
 
 // Basenames excluded anywhere; paths (with '/') excluded at that exact repo-relative path.
 export const SCAN_EXCLUDES = [
-    'node_modules', 'dist', '.git', 'scratch', 'playwright-report', 'archives',
+    'node_modules', 'dist', '.git', '.claude', 'scratch', 'playwright-report', 'archives',
     'tutorial-videos', '.superpowers', 'package-lock.json', 'server.log',
     'server/analytics.db', 'onboarding/index.html', '.env',
 ];
