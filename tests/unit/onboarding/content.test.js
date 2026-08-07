@@ -3,6 +3,7 @@ import { describe, it, expect } from 'vitest';
 import { REPO_ROOT, buildRefs, buildContent } from '../../../onboarding/build.mjs';
 import { validateContent } from '../../../onboarding/src/content/validate.mjs';
 import { INTRO } from '../../../onboarding/src/content/intro.mjs';
+import { TOURS } from '../../../onboarding/src/content/tours.mjs';
 
 const refs = buildRefs(REPO_ROOT);
 
@@ -39,5 +40,17 @@ describe('INTRO content', () => {
         expect(INTRO.houseMethod.stages.length).toBeGreaterThanOrEqual(6);
         expect(INTRO.houseMethod.catches.length).toBeGreaterThanOrEqual(3);
         expect(Object.keys(INTRO.roundLabels).length).toBeGreaterThanOrEqual(12);
+    });
+});
+
+describe('TOURS content', () => {
+    it('ships the six spec tours', () => {
+        expect(TOURS.map(t => t.id)).toEqual(
+            ['local-first', 'cloud-save', 'publish', 'fork-merge', 'pdf-export', 'signup']);
+        for (const tour of TOURS) {
+            expect(tour.steps.length).toBeGreaterThanOrEqual(5);
+            expect(tour.diagram.length).toBeGreaterThanOrEqual(4);
+            expect(tour.steps.every(s => s.files.length >= 1)).toBe(true);
+        }
     });
 });
