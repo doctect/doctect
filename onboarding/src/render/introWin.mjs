@@ -1,8 +1,12 @@
 // onboarding/src/render/introWin.mjs
+import { escapeHtml } from '../app-logic.mjs';
+
+const esc = escapeHtml;
+
 function pane(title, extraClass = '') {
     const section = document.createElement('section');
     section.className = `pane ${extraClass}`;
-    section.innerHTML = `<div class="pane-title">${title}</div><div class="pane-body"></div>`;
+    section.innerHTML = `<div class="pane-title">${esc(title)}</div><div class="pane-body"></div>`;
     return { section, body: section.querySelector('.pane-body') };
 }
 
@@ -12,9 +16,9 @@ export function renderIntro(el, ctx) {
 
     const about = pane('doctect · what this is', 'intro-about');
     about.body.innerHTML =
-        intro.about.map(p => `<p>${p}</p>`).join('') +
+        intro.about.map(p => `<p>${esc(p)}</p>`).join('') +
         '<h3 class="accent">run it</h3><table class="cmds">' +
-        intro.run.map(r => `<tr><td><code>${r.cmd}</code></td><td class="dim">${r.note}</td></tr>`).join('') +
+        intro.run.map(r => `<tr><td><code>${esc(r.cmd)}</code></td><td class="dim">${esc(r.note)}</td></tr>`).join('') +
         '</table>';
 
     const col = document.createElement('div');
@@ -38,15 +42,15 @@ export function renderIntro(el, ctx) {
 
     const method = pane('the house method');
     method.body.innerHTML =
-        intro.houseMethod.text.map(p => `<p>${p}</p>`).join('') +
-        `<p class="accent">${intro.houseMethod.stages.join(' → ')}</p>` +
+        intro.houseMethod.text.map(p => `<p>${esc(p)}</p>`).join('') +
+        `<p class="accent">${esc(intro.houseMethod.stages.join(' → '))}</p>` +
         '<h3 class="amber">catches only a whole-branch review makes</h3><ul>' +
-        intro.houseMethod.catches.map(c => `<li>${c}</li>`).join('') + '</ul>' +
+        intro.houseMethod.catches.map(c => `<li>${esc(c)}</li>`).join('') + '</ul>' +
         '<h3 class="accent">rounds shipped</h3><ul class="timeline">' +
         [...vitals.specs].reverse().map(spec => {
             const label = intro.roundLabels[spec] ||
                 spec.replace(/^\d{4}-\d{2}-\d{2}-/, '').replace(/-design\.md$/, '').replace(/-/g, ' ');
-            return `<li><span class="dim">${spec.slice(0, 10)}</span> ${label}</li>`;
+            return `<li><span class="dim">${spec.slice(0, 10)}</span> ${esc(label)}</li>`;
         }).join('') + '</ul>';
 
     col.append(vit.section, method.section);

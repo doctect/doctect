@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { parseHash, buildHash, formatBytes, filterTree, findNode, nearestAnnotated,
          rankFor, scoreProfile, levelUnlocked, defaultProfile, loadProfile, saveProfile,
-         WINDOWS } from '../../../onboarding/src/app-logic.mjs';
+         WINDOWS, escapeHtml } from '../../../onboarding/src/app-logic.mjs';
 import { REPO_ROOT, buildRuntimeBundle, assemblePage, buildData, buildContent }
     from '../../../onboarding/build.mjs';
 
@@ -76,6 +76,9 @@ describe('profile + ranks', () => {
         expect(formatBytes(512)).toBe('512 B');
         expect(formatBytes(2048)).toBe('2.0 KB');
         expect(formatBytes(3 * 1024 * 1024)).toBe('3.0 MB');
+    });
+    it('escapeHtml neutralizes markup', () => {
+        expect(escapeHtml('node run.js <track> & "x"')).toBe('node run.js &lt;track&gt; &amp; &quot;x&quot;');
     });
 });
 

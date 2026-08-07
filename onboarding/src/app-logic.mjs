@@ -19,6 +19,10 @@ export const formatBytes = (n) => n < 1024 ? `${n} B`
     : n < 1024 * 1024 ? `${(n / 1024).toFixed(1)} KB`
     : `${(n / (1024 * 1024)).toFixed(1)} MB`;
 
+export const escapeHtml = (s) => String(s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
 export const filterTree = (node, query) => {
     const q = (query || '').toLowerCase();
     if (!q) return node;
