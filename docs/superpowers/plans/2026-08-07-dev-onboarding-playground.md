@@ -1796,7 +1796,7 @@ export const CODE_MAP = {
         { path: 'server/routes/projects.js', note: 'The big file: CRUD, commits, publish, publication PATCH, fork. The CAS save and published-commit pinning idioms live here.' },
         { path: 'server/routes/gallery.js', note: 'Public reads, reviews, tags, reports. The LIKE … ESCAPE wildcard fix is here.' },
         { path: 'server/routes/mergeRequests.js', note: 'MR lifecycle: live diff recompute per view, merge re-verified under the target-head lock.' },
-        { path: 'server/middleware/guards.js', note: 'requireUsername guards exactly the five content-creating routes; requireAdmin/requireOwner check live config membership, never trusting a stored role.' },
+        { path: 'server/middleware/guards.js', note: 'requireUsername guards exactly the six content-creating routes; requireAdmin/requireOwner check live config membership, never trusting a stored role.' },
         { path: 'server/validateAppState.js', note: 'Structural gate for every stored AppState: shape, 5 MB cap, node/element caps.' },
         { path: 'server/stateCodec.js', note: 'gzip encode/decode for full-snapshot commits.' },
         { path: 'server/projectLocks.js', note: 'withTransaction + lockProjectRows — the write-path integrity layer every later round leans on.' },
