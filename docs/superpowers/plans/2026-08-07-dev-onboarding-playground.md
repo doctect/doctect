@@ -2108,6 +2108,7 @@ Append to `style.css`:
 
 ```css
 .dive-list { margin-top: 1em; border-top: 1px solid #2a352c; padding-top: 8px; }
+.dive-list ul { list-style: none; }
 .pane-subtitle { color: #e3c67c; font-size: 12px; margin-bottom: 6px; }
 .dive-pane { flex: 1; }
 .dive-pane .pane-body { max-width: 90ch; }
@@ -2442,6 +2443,27 @@ describe('bug hunt', () => {
             ['dotenv-resurrection', 'rate-limit-toggle', 'like-wildcards', 'provider-id',
              'commit-timestamps', 'signup-cap-space', 'spa-fallback']);
         for (const b of PLAYGROUND.bugHunt) expect(b.story.length).toBeGreaterThan(80);
+    });
+
+    // The bug panel highlights each snippet LINE BY LINE. highlightCode's string
+    // pass can emit malformed markup on a line holding an unbalanced quote next to
+    // a comment (Task 7's review found the shape), so pin every shipped line.
+    it('every bug-hunt line highlights to balanced, text-preserving markup', async () => {
+        const { highlightCode } = await import('../../../onboarding/src/render/codeWin.mjs');
+        for (const bug of PLAYGROUND.bugHunt) {
+            for (const [i, line] of bug.code.split('\n').entries()) {
+                const html = highlightCode(line);
+                let depth = 0;
+                for (const tag of html.match(/<\/?span[^>]*>/g) || []) {
+                    depth += tag.startsWith('</') ? -1 : 1;
+                    expect(depth, `${bug.id} line ${i}: closing tag with nothing open`).toBeGreaterThanOrEqual(0);
+                }
+                expect(depth, `${bug.id} line ${i}: unclosed span`).toBe(0);
+                const text = html.replace(/<\/?span[^>]*>/g, '')
+                    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+                expect(text, `${bug.id} line ${i}: text not preserved`).toBe(line);
+            }
+        }
     });
 });
 
