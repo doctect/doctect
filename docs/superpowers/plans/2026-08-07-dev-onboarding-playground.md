@@ -2969,6 +2969,40 @@ the bundler strips module syntax by line). Content modules are data-only and
 JSON-serializable. Validators: `src/content/validate.mjs`.
 ```
 
+- [ ] **Step 2a: Guard `matchMedia`** — `onboarding/src/app.js` calls it bare, so the whole
+runtime IIFE aborts anywhere it is missing (jsdom, older embedded webviews) and the page
+renders nothing. Tasks 4 and 8 both had to hand-polyfill it to smoke-test the built page.
+Replace the bare call with a guarded read:
+
+```js
+    const reducedMotion = typeof matchMedia === 'function'
+        && matchMedia('(prefers-reduced-motion: reduce)').matches;
+```
+
+Add a test to `tests/unit/onboarding/chrome.test.js` that evaluates the committed
+`onboarding/index.html`'s runtime in jsdom **without** a `matchMedia` polyfill and asserts the
+status bar and intro pane rendered — the page's own no-blank-screen guard:
+
+```js
+describe('built page boots without matchMedia', () => {
+    it('renders chrome and the intro window in a bare jsdom document', async () => {
+        const fs = await import('fs');
+        const path = await import('path');
+        const { JSDOM } = await import('jsdom');
+        const html = fs.readFileSync(path.join(REPO_ROOT, 'onboarding/index.html'), 'utf8');
+        const errors = [];
+        const dom = new JSDOM(html, { runScripts: 'dangerously', pretendToBeVisual: false });
+        dom.window.addEventListener('error', e => errors.push(e.error || e.message));
+        expect(errors).toEqual([]);
+        expect(dom.window.document.querySelector('#statusbar').textContent).toContain('doctect');
+        expect(dom.window.document.querySelector('#root').textContent.length).toBeGreaterThan(200);
+        dom.window.close();
+    });
+});
+```
+
+(`jsdom` is already a devDependency — no new package.)
+
 - [ ] **Step 2: Make the footer visible** — in `style.css` replace `#buildinfo { display: none; }` with:
 
 ```css
