@@ -80,7 +80,10 @@ describe('CODE_MAP annotations', () => {
     //
     // Both families run, and every historical copy is kept as a fixture below so
     // the predicate can never quietly stop catching the ones it was written for.
-    const VERBS = 'runs?|imports?|executes?|computes?|enforces?|renders?';
+    // Participles are listed explicitly: `imports?` does not match "imported", so
+    // "shared/diff.js is imported by the client" escaped every guard until now.
+    const VERBS = 'runs?|imports?|executes?|computes?|enforces?|renders?'
+        + '|imported|executed|rendered|computed|enforced';
     // "client and server" is unambiguous. "both sides" is NOT — in this codebase's
     // merge vocabulary it means fork vs upstream ("threeWayDiff computes both sides'
     // change sets"), so it only counts inside an import/sharing phrase.
@@ -92,7 +95,7 @@ describe('CODE_MAP annotations', () => {
     // and server" on its own is TRUE of shared/ (it is the graded quiz answer's own
     // wording), so a list of bare both-sides phrases would fire on correct text.
     const KNOWN_BAD = [
-        /no dependencies, imported by client and server/i,
+        /diff\/merge engine[^.]{0,80}imported by client and server/i,
         /both sides — most importantly the diff engine/i,
         /the three-way diff engine and generator provenance/i,
         /renders the diff in the client/i,
@@ -102,8 +105,14 @@ describe('CODE_MAP annotations', () => {
         new RegExp(`\\b(${BOTH})\\b[^.]{0,80}(${ENGINE})`, 'i'),
         // mirrored:  "The three-way diff/merge engine — … imported by client and server"
         new RegExp(`(${ENGINE})[^.]{0,80}\\b(${BOTH})\\b`, 'i'),
-        // active:  "renders the diff in the client", "the client runs the engine"
+        // active, client first:  "The client runs the diff engine."  ENGINE is gated
+        // separately in semanticClaim, so this deliberately does NOT sequence the two
+        // — requiring the engine to be named BEFORE the client is what dropped this
+        // whole family once. Keep it unordered.
+        new RegExp(`\\bclient\\b[^.]{0,40}\\b(${VERBS})\\b`, 'i'),
+        // active, engine first:  "…the diff engine, which the client runs"
         new RegExp(`(${ENGINE})[^.]{0,60}\\bclient\\b[^.]{0,40}\\b(${VERBS})\\b`, 'i'),
+        // active, client as object:  "renders the diff in the client", "imported by the client"
         new RegExp(`\\b(${VERBS})\\b[^.]{0,40}\\b(in|on|by) the client\\b`, 'i'),
     ];
     // The escape hatch: a sentence may name the engine and the client together
@@ -134,6 +143,17 @@ describe('CODE_MAP annotations', () => {
         'fork-merge tour blurb (task 6)':
             'The same 189-line plain-JS engine renders the diff in the client and enforces it on the server.',
     };
+    // Phrasings that have not shipped but must not be able to. The plainest way of
+    // saying the false thing is the ACTIVE voice — which is what this test and the
+    // predicate are both named after — and a pattern rewrite silently dropped it
+    // once already. The passive participle is the other easy escape ("is imported
+    // by the client": `imports?` does not match "imported").
+    const MUST_BE_CAUGHT = {
+        'active · runs': 'The client runs the diff engine.',
+        'active · imports': 'The client imports shared/diff.js directly.',
+        'active · executes': 'The client executes threeWayDiff before it posts.',
+        'passive participle': 'shared/diff.js is imported by the client.',
+    };
     // True statements that name the engine and the client in one breath. The guard
     // earns its keep only if it leaves these alone.
     const MUST_STAY_GREEN = {
@@ -151,10 +171,22 @@ describe('CODE_MAP annotations', () => {
             'Plain ESM imported by BOTH client and server — generator metadata and shared validation rules',
         'quiz L1 why (graded answer)':
             'shared/generatorMetadata.js is imported by services/generatorSandbox.ts on the client AND server/validateAppState.js on the server; shared/passwordPolicy.js by pages/LoginPage.tsx AND server/auth.js. shared/diff.js is server-side today — the client renders the ChangeSet the server computed.',
+        // The other dependency-free shared modules ARE imported by both sides. A
+        // verbatim fragment that is not engine-scoped fires on these.
+        'a true both-sides claim about another shared module':
+            'shared/passwordPolicy.js — no dependencies, imported by client and server.',
+        'generatorMetadata, both sides, spelled out':
+            'Generator provenance shape + size caps, no dependencies, imported by client and server.',
     };
 
     it('the guard catches every phrasing this claim has ever shipped in', () => {
         for (const [where, text] of Object.entries(HISTORICAL_COPIES)) {
+            expect(sentencesOf([text]).some(claimsClientRunsEngine), `missed: ${where}`).toBe(true);
+        }
+    });
+
+    it('the guard catches the plainest ways of saying it, shipped or not', () => {
+        for (const [where, text] of Object.entries(MUST_BE_CAUGHT)) {
             expect(sentencesOf([text]).some(claimsClientRunsEngine), `missed: ${where}`).toBe(true);
         }
     });
@@ -164,7 +196,7 @@ describe('CODE_MAP annotations', () => {
     // a semantic rule that was green on three of the four: the passive phrasings
     // give the client no verb to be the subject of.)
     it('the semantic patterns alone catch all four, without the verbatim list', () => {
-        for (const [where, text] of Object.entries(HISTORICAL_COPIES)) {
+        for (const [where, text] of Object.entries({ ...HISTORICAL_COPIES, ...MUST_BE_CAUGHT })) {
             expect(sentencesOf([text]).some(semanticClaim), `semantics missed: ${where}`).toBe(true);
         }
     });
