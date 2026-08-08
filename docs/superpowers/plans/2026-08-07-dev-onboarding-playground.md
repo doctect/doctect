@@ -1755,7 +1755,7 @@ export const CODE_MAP = {
         { path: 'pages', note: 'Route-level components. EditorPage is the product; everything else orbits it.' },
         { path: 'services', note: 'Client logic kept DOM-light: PDF export, text layout, schema migrations, typed API wrapper, generator sandbox.' },
         { path: 'server', note: 'Express 5 API. app.js is the createApp() factory; index.js just boots it. SQLite in dev, Postgres in prod.' },
-        { path: 'server/routes', note: 'All endpoints in five files (+2 moderation-era files). Rounds add endpoints to existing files — a new route file is rare and deliberate.' },
+        { path: 'server/routes', note: 'All endpoints in six files — four core (me, projects, gallery, mergeRequests) plus the two moderation-era ones. Rounds add endpoints to existing files — a new route file is rare and deliberate.' },
         { path: 'server/migrations', note: 'The migration ledger (index.js). NEVER edit an applied migration — append a new one. Two migrations are database triggers.' },
         { path: 'server/middleware', note: 'checkOrigin (CSRF), rate limits, requireAdmin/requireOwner (live config membership on every request), requireUsername.' },
         { path: 'shared', note: 'Plain ESM imported by BOTH client and server — the three-way diff engine and generator provenance rules.' },
@@ -1782,7 +1782,7 @@ export const CODE_MAP = {
         { path: 'components/cloud/CloudMenu.tsx', note: 'Save/history/publish menu; the signed-out / no-username / ready 3-way branch; forked-from indicator.' },
         { path: 'components/cloud/PublishModal.tsx', note: 'Publish wizard. Compares rendered previews against picked pages and refuses partial sets.' },
         { path: 'components/cloud/EditListingModal.tsx', note: 'Edit a published listing without republishing; carries the composite If-Match token.' },
-        { path: 'components/gallery/ProjectCard.tsx', note: 'The shared card with rollover previews — gallery, profile, and directory all render this one component.' },
+        { path: 'components/gallery/ProjectCard.tsx', note: 'The shared card with rollover previews — gallery grids, strips, and profile pages all render this one component (the ?view=all directory deliberately uses a compact table instead).' },
         { path: 'pages/EditorPage.tsx', note: 'Route wrapper that anchors the pdf.js-heavy chunk (EditorPage → CloudMenu → PublishModal → thumbnailService).' },
         { path: 'pages/GalleryPage.tsx', note: 'Three modes in one page: sections view, URL-param filtered grid, ?view=all sortable directory.' },
         { path: 'pages/MergeRequestPage.tsx', note: 'MR review: structured change list, conflict warnings, before/after preview; owner state comes from the server’s isTargetOwner.' },
@@ -1799,7 +1799,7 @@ export const CODE_MAP = {
         { path: 'server/middleware/guards.js', note: 'requireUsername guards exactly the six content-creating routes; requireAdmin/requireOwner check live config membership, never trusting a stored role.' },
         { path: 'server/validateAppState.js', note: 'Structural gate for every stored AppState: shape, 5 MB cap, node/element caps.' },
         { path: 'server/stateCodec.js', note: 'gzip encode/decode for full-snapshot commits.' },
-        { path: 'server/projectLocks.js', note: 'withTransaction + lockProjectRows — the write-path integrity layer every later round leans on.' },
+        { path: 'server/projectLocks.js', note: 'lockProjectRows — paired with db.js’s withTransaction, the write-path integrity layer every later round leans on.' },
         { path: 'server/email.js', note: 'Resend-or-console fail-safe email. A missing key never weakens sign-in blocking. First of the dotenv seals.' },
         { path: 'server/signupCap.js', note: 'Verified-only cap counting, fails open; SIGNUP_CAP trimmed first because Number(" ") === 0 once meant “closed”.' },
         { path: 'server/ownerAuthority.js', note: 'OWNER_EMAILS reconciliation — the only root of trust for the owner role; no HTTP path grants it.' },
@@ -1868,7 +1868,7 @@ function detailHtml(ctx, selectedPath) {
             '</table>';
     }
     const node = findNode(tree, selectedPath);
-    if (!node) return `<p class="red">gone from the tree: ${selectedPath} — regenerate the page?</p>`;
+    if (!node) return `<p class="red">gone from the tree: ${escC(selectedPath)} — regenerate the page?</p>`;
     const exact = anns.find(a => a.path === selectedPath);
     const nearest = exact || nearestAnnotated(selectedPath, anns);
     let html = `<h3 class="accent">${selectedPath}${node.kind === 'dir' ? '/' : ''}</h3>` +
