@@ -38,7 +38,7 @@ function detailHtml(ctx, selectedPath) {
             '</table>';
     }
     const node = findNode(tree, selectedPath);
-    if (!node) return `<p class="red">gone from the tree: ${selectedPath} — regenerate the page?</p>`;
+    if (!node) return `<p class="red">gone from the tree: ${escC(selectedPath)} — regenerate the page?</p>`;
     const exact = anns.find(a => a.path === selectedPath);
     const nearest = exact || nearestAnnotated(selectedPath, anns);
     let html = `<h3 class="accent">${selectedPath}${node.kind === 'dir' ? '/' : ''}</h3>` +
