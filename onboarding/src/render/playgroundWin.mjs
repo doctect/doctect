@@ -173,6 +173,11 @@ function renderMerge(el, ctx) {
         catch (err) { out.textContent = `engine error — ${err.message}`; }
     };
     const conflictLines = (conflicts) => conflicts.map(c => `  · [${c.kind}] ${c.description}`).join('\n');
+    // A verdict must never outlive the panes it describes: typing invalidates it.
+    // (load() assigns .value, which fires no input event, so presets are unaffected.)
+    for (const k of ['base', 'fork', 'upstream']) {
+        ta[k].addEventListener('input', () => { out.textContent = 'edited — run it again.'; });
+    }
     lab.body.querySelector('[data-scenario]').addEventListener('change', (e) => load(e.target.value));
     lab.body.querySelector('[data-run]').addEventListener('click', () => show((s) => {
         const result = ctx.diff.threeWayDiff(s.base, s.fork, s.upstream);
