@@ -1,5 +1,7 @@
 // tests/unit/onboarding/bundle.test.js
 import { describe, it, expect } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
 import vm from 'node:vm';
 import { REPO_ROOT, stripModuleSyntax, bundleDiffEngine, extractExcerpts, AnchorError }
     from '../../../onboarding/build.mjs';
@@ -44,6 +46,16 @@ describe('bundleDiffEngine parity', () => {
         const conflictCounts = DIFF_SCENARIOS.map(s => realDiff.threeWayDiff(s.base, s.fork, s.upstream).conflicts.length);
         expect(conflictCounts.filter(n => n === 0).length).toBeGreaterThanOrEqual(1);
         expect(conflictCounts.filter(n => n > 0).length).toBeGreaterThanOrEqual(3);
+    });
+});
+
+describe('built page', () => {
+    // A `display` rule on #boot beats the UA sheet's `[hidden] { display: none }`
+    // on cascade origin, so hiding the overlay in JS is not enough: without this
+    // rule the finished page ships a full-screen overlay over everything.
+    it('keeps the boot overlay hidden-state rule', () => {
+        const html = fs.readFileSync(path.join(REPO_ROOT, 'onboarding/index.html'), 'utf8');
+        expect(html).toContain('#boot[hidden]');
     });
 });
 

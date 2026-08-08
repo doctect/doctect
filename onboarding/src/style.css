@@ -31,7 +31,8 @@ input:focus, textarea:focus { outline: 1px solid #7ce38b; }
 #statusbar .wtab.active { background: #7ce38b; color: #0c0f0d; }
 #statusbar .spacer { flex: 1; }
 #statusbar .clock, #statusbar .meta { color: #7d8a7a; font-size: 12px; }
-#buildinfo { display: none; }
+#buildinfo { color: #7d8a7a; font-size: 11px; text-align: right; padding: 1px 8px;
+    background: #0c0f0d; border-top: 1px solid #1d2a20; }
 
 /* boot overlay */
 #boot { position: fixed; inset: 0; background: #0c0f0d; z-index: 60;

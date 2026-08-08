@@ -67,6 +67,30 @@ describe('CODE_MAP annotations', () => {
             expect(annotated.has(must), `missing annotation for ${must}`).toBe(true);
         }
     });
+
+    // The page said "imported by client and server" here while two other panes
+    // said the opposite (and the repo agrees with them: only server/routes/
+    // mergeRequests.js and server/stateCodec.js import it). One bundle, one story.
+    it('does not contradict the rest of the page about shared/diff.js', () => {
+        const note = CODE_MAP.annotations.find(a => a.path === 'shared/diff.js').note;
+        expect(note).not.toContain('imported by client and server');
+        expect(note).toContain('server-side today');
+        // Same claim, other end of the page: the intro's opening paragraphs.
+        for (const para of INTRO.about) expect(para).not.toMatch(/both sides[^.]*diff engine/);
+    });
+
+    // Anti-rot for the claim above: if the client ever does import the engine,
+    // this fires and points at the strings that have to change with it.
+    it('the repo still agrees that only the server imports the engine', async () => {
+        const fs = await import('node:fs');
+        const path = await import('node:path');
+        const { scanTree, flattenTreePaths } = await import('../../../onboarding/build.mjs');
+        const importers = flattenTreePaths(scanTree(REPO_ROOT))
+            .filter(p => /\.[cm]?[jt]sx?$/.test(p) && !/\.test\./.test(p) && !p.startsWith('onboarding/'))
+            .filter(p => /from ['"][^'"]*shared\/diff\.js['"]/
+                .test(fs.readFileSync(path.join(REPO_ROOT, p), 'utf8')));
+        expect(importers.sort()).toEqual(['server/routes/mergeRequests.js', 'server/stateCodec.js']);
+    });
 });
 
 import { REPO_ROOT as ROOT2, extractExcerpts } from '../../../onboarding/build.mjs';
@@ -241,7 +265,19 @@ describe('merge lab', () => {
         el.querySelector('[data-scenario]').value = 'same-template-conflict';
         el.querySelector('[data-scenario]').dispatchEvent(new Event('change'));
         el.querySelector('[data-run]').click();
-        expect(el.querySelector('.merge-out').textContent).toContain('conflict');
+        // Not the loose 'conflict' — the clean verdict ('no conflicts — mergeable')
+        // contains that too, so the engine could stop detecting conflicts entirely
+        // and this test would stay green.
+        expect(el.querySelector('.merge-out').textContent).toContain('1 conflict(s)');
+    });
+    it('says out loud that it models the conflict gate only', async () => {
+        const { renderPlayground } = await import('../../../onboarding/src/render/playgroundWin.mjs');
+        const { defaultProfile } = await import('../../../onboarding/src/app-logic.mjs');
+        const content = await buildContent();
+        const el = document.createElement('div');
+        renderPlayground(el, { data: { vitals: { gitSha: 'x' } }, content, profile: defaultProfile(),
+            save: () => {}, navigate: () => {}, route: { win: 'playground', parts: ['merge'] }, diff: realDiff });
+        expect(el.textContent).toContain('models the conflict gate only');
     });
 });
 
@@ -249,6 +285,17 @@ describe('where-does-it-live', () => {
     it('ships ten prompts with existing answer paths (validator checks existence)', () => {
         expect(PLAYGROUND.wdil).toHaveLength(10);
         for (const w of PLAYGROUND.wdil) expect(w.answers.length).toBeGreaterThanOrEqual(1);
+    });
+
+    // A prompt has to be answerable from the prompt: the tries are spent before
+    // the hint appears, so anything needed to pick between accepted answers (or
+    // to disambiguate a plausible near-miss) belongs in the prompt itself.
+    it('asks for everything its answers accept', () => {
+        const cap = PLAYGROUND.wdil.find(w => w.id === 'signup-cap');
+        expect(cap.answers).toContain('server/auth.js');   // the enforcement half
+        expect(cap.prompt).toContain('enforced');
+        const roll = PLAYGROUND.wdil.find(w => w.id === 'card-rollover');
+        expect(roll.prompt).toContain('runs that cycle');  // not buried in the hint
     });
 });
 

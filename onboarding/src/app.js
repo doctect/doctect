@@ -74,7 +74,10 @@
     });
 
     const boot = document.getElementById('boot');
-    const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    // Guarded: a bare call aborts this whole IIFE — and with it the entire page —
+    // anywhere matchMedia is missing (jsdom, older embedded webviews).
+    const reducedMotion = typeof matchMedia === 'function'
+        && matchMedia('(prefers-reduced-motion: reduce)').matches;
     const finishBoot = () => {
         boot.hidden = true;
         if (!profile.bootSeen) { profile.bootSeen = true; saveProfile(profile); }

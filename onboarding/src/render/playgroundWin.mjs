@@ -133,6 +133,8 @@ function renderMerge(el, ctx) {
         '<p><a href="#/playground">hub</a> · <span class="dim">this runs the REAL shared/diff.js, bundled at build time</span></p>' +
         `<p><select data-scenario>${scenarios.map(s => `<option value="${escP(s.name)}">${escP(s.name)}</option>`).join('')}</select>` +
         ' <button data-run>threeWayDiff</button> <button data-merge>merge (applyChangeSet)</button></p>' +
+        '<p class="dim">The lab models the conflict gate only — the server also refuses on failed ' +
+        'validation, a schema mismatch, a moved target head, or an oversized result.</p>' +
         '<p class="dim" data-blurb></p>' +
         '<div class="merge-grid">' +
         ['base', 'fork', 'upstream'].map(k =>

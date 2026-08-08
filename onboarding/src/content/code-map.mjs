@@ -62,7 +62,7 @@ export const CODE_MAP = {
         { path: 'services/pdfService.ts', note: 'jsPDF export: Unicode font embedding, link annotations from every branch, svg2pdf, grayscale.' },
         { path: 'services/thumbnailService.ts', note: 'jsPDF → pdfjs-dist → WebP preview pipeline (pdfjs pinned after npm latest shipped broken).' },
         { path: 'services/generatorSandbox.ts', note: 'The generator trust boundary: sandboxed iframe, disposable worker, captured intrinsics, 10 s timeout.' },
-        { path: 'shared/diff.js', note: 'The three-way diff/merge engine — 189 lines, no dependencies, imported by client and server. This playground bundles the real thing (Merge Lab).' },
+        { path: 'shared/diff.js', note: 'The three-way diff/merge engine — 189 lines, no dependencies, server-side today (the client renders the ChangeSet the server computed). This playground bundles the real thing (Merge Lab).' },
         { path: 'shared/generatorMetadata.js', note: 'Generator provenance shape + size caps, shared by validator, diff, and client.' },
         // meta
         { path: 'deploy.sh', note: 'Fail-closed deploy script — with its own unit tests, after review found it plowing on past failed builds.' },

@@ -475,7 +475,7 @@ export const PLAYGROUND = {
     wdil: [
         { id: 'svg-sanitize', prompt: 'Someone published a malicious SVG. Which file makes sure it can’t run in your browser?',
           answers: ['components/canvas/CanvasElement.tsx'], hint: 'Sanitize at the render site, not at upload.' },
-        { id: 'signup-cap', prompt: 'Where is the signup cap counted and decided?',
+        { id: 'signup-cap', prompt: 'Where is the signup cap counted, decided, and enforced?',
           answers: ['server/signupCap.js', 'server/auth.js'], hint: 'The decision is a module; the enforcement is a hook.' },
         { id: 'conflict-rules', prompt: 'Which file decides that remove-vs-modify is a merge conflict?',
           answers: ['shared/diff.js'], hint: 'It sits in shared/, but only the server imports it — the client just renders the ChangeSet it gets back.' },
@@ -489,7 +489,7 @@ export const PLAYGROUND = {
           answers: ['services/cloudApi.ts'], hint: 'One typed wrapper around fetch — it throws ApiError so callers never read res.status.' },
         { id: 'email-fallback', prompt: 'With no email key configured, verification links print to the console. Where?',
           answers: ['server/email.js'], hint: 'Fail-safe by design.' },
-        { id: 'card-rollover', prompt: 'Gallery cards and profile cards flip through a project’s preview pages while you hover. Which component runs that rollover?',
+        { id: 'card-rollover', prompt: 'Gallery and profile cards cycle their preview pages on hover. Which component runs that cycle?',
           answers: ['components/gallery/RollingPreview.tsx'], hint: 'Not the card — the card only hands it the thumbnail ids. This one owns the timer, and checks prefers-reduced-motion first.' },
         { id: 'sandbox', prompt: 'Generator Preview runs untrusted code. Which file is the cage?',
           answers: ['services/generatorSandbox.ts'], hint: 'iframe + worker + captured intrinsics.' },

@@ -123,3 +123,27 @@ describe('assembly', () => {
         expect(JSON.parse(JSON.stringify(content))).toEqual(content);
     });
 });
+
+// The whole runtime is one IIFE: any bare global it touches that a host does not
+// provide aborts the lot and paints a blank page. This boots the COMMITTED page in
+// a jsdom that deliberately has no matchMedia — the page's own no-blank-screen guard.
+describe('built page boots without matchMedia', () => {
+    it('renders chrome and the intro window in a bare jsdom document', async () => {
+        const fs = await import('fs');
+        const path = await import('path');
+        const { JSDOM, VirtualConsole } = await import('jsdom');
+        const html = fs.readFileSync(path.join(REPO_ROOT, 'onboarding/index.html'), 'utf8');
+        const errors = [];
+        // Wired BEFORE construction: inline scripts run during it, and jsdom reports
+        // an uncaught one as a virtual-console 'jsdomError', not a window 'error'.
+        const virtualConsole = new VirtualConsole();
+        virtualConsole.on('jsdomError', (err) => errors.push(err));
+        const dom = new JSDOM(html, { runScripts: 'dangerously', pretendToBeVisual: false, virtualConsole });
+        dom.window.addEventListener('error', (e) => errors.push(e.error || e.message));
+        expect(dom.window.matchMedia).toBeUndefined();
+        expect(errors.map(String)).toEqual([]);
+        expect(dom.window.document.querySelector('#statusbar').textContent).toContain('doctect');
+        expect(dom.window.document.querySelector('#root').textContent.length).toBeGreaterThan(200);
+        dom.window.close();
+    });
+});
