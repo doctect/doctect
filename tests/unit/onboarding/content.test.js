@@ -69,32 +69,121 @@ describe('CODE_MAP annotations', () => {
     });
 
     // "Only the server imports the engine" is the story the reader is GRADED on
-    // (quiz L1, "What lives in shared/?"). The opposite claim shipped in three
-    // separate places — the shared/diff.js note, the shared/ directory note, and
-    // the intro — so a guard that reads one of them certifies consistency while
-    // the story is still two. This one reads every authored string in the bundle.
+    // (quiz L1, "What lives in shared/?"). The opposite claim has shipped FOUR
+    // times in four different phrasings, so this guard is built to a rule the
+    // last two rounds learned the hard way:
+    //
+    //   a known-bad phrase list is not sufficient on its own (copy 4 said it a
+    //   fourth way and sailed through), and a semantic rule is not sufficient
+    //   either (three of the four copies are PASSIVE — "imported by client and
+    //   server" — so the client never "acts" and they sailed through too).
+    //
+    // Both families run, and every historical copy is kept as a fixture below so
+    // the predicate can never quietly stop catching the ones it was written for.
+    const VERBS = 'runs?|imports?|executes?|computes?|enforces?|renders?';
+    // "client and server" is unambiguous. "both sides" is NOT — in this codebase's
+    // merge vocabulary it means fork vs upstream ("threeWayDiff computes both sides'
+    // change sets"), so it only counts inside an import/sharing phrase.
+    const BOTH = ['both client and server', 'client and server',
+                  '(?:imported|shared|used|available) (?:by|to) (?:both sides|both|either side)'].join('|');
+    const ENGINE = String.raw`\bdiff\b|diff\.js|threeWayDiff|merge engine`;
+    // Verbatim fragments of the four copies, as belt-and-braces behind the patterns.
+    // Every one names the ENGINE in the bad relationship: "imported by BOTH client
+    // and server" on its own is TRUE of shared/ (it is the graded quiz answer's own
+    // wording), so a list of bare both-sides phrases would fire on correct text.
+    const KNOWN_BAD = [
+        /no dependencies, imported by client and server/i,
+        /both sides — most importantly the diff engine/i,
+        /the three-way diff engine and generator provenance/i,
+        /renders the diff in the client/i,
+    ];
+    const PATTERNS = [
+        // passive, both-sides first:  "…imported by both sides — … the diff engine"
+        new RegExp(`\\b(${BOTH})\\b[^.]{0,80}(${ENGINE})`, 'i'),
+        // mirrored:  "The three-way diff/merge engine — … imported by client and server"
+        new RegExp(`(${ENGINE})[^.]{0,80}\\b(${BOTH})\\b`, 'i'),
+        // active:  "renders the diff in the client", "the client runs the engine"
+        new RegExp(`(${ENGINE})[^.]{0,60}\\bclient\\b[^.]{0,40}\\b(${VERBS})\\b`, 'i'),
+        new RegExp(`\\b(${VERBS})\\b[^.]{0,40}\\b(in|on|by) the client\\b`, 'i'),
+    ];
+    // The escape hatch: a sentence may name the engine and the client together
+    // when it says out loud which side runs it.
+    const SERVER_ONLY = /only the server|server-side|the server computed|the server enforces/i;
+    const semanticClaim = (sentence) =>
+        !SERVER_ONLY.test(sentence)
+        && new RegExp(ENGINE, 'i').test(sentence)
+        && PATTERNS.some(re => re.test(sentence));
+    const claimsClientRunsEngine = (sentence) =>
+        KNOWN_BAD.some(re => re.test(sentence)) || semanticClaim(sentence);
+    const sentencesOf = (strings) => strings.flatMap(s => s.split(/(?<=[.;])\s+/));
     const everyString = (value, out = []) => {
         if (typeof value === 'string') out.push(value);
         else if (value && typeof value === 'object') Object.values(value).forEach(v => everyString(v, out));
         return out;
     };
-    // Matching the false phrasings was not enough — the fourth copy said it a
-    // fourth way ("renders the diff in the client and enforces it on the server").
-    // So the rule is positive instead: any sentence that puts the engine and the
-    // client in the same breath must carry the server-only qualifier out loud.
+
+    // Every phrasing this claim has actually shipped in. Verbatim, so reverting any
+    // of them in the source is caught by the sweep below AND proved caught here.
+    const HISTORICAL_COPIES = {
+        'shared/diff.js note (task 8)':
+            'The three-way diff/merge engine — 189 lines, no dependencies, imported by client and server. This playground bundles the real thing (Merge Lab).',
+        'intro paragraph 3 (task 2)':
+            'It is one repo with no monorepo tooling: the React 19 + Vite client sits at the root (components/, pages/, services/, hooks/), the Express 5 server in server/ (SQLite in dev, Postgres in prod, versioned run-once migrations), and shared/ holds plain-ESM code imported by both sides — most importantly the diff engine.',
+        'shared/ directory note (task 5)':
+            'Plain ESM imported by BOTH client and server — the three-way diff engine and generator provenance rules.',
+        'fork-merge tour blurb (task 6)':
+            'The same 189-line plain-JS engine renders the diff in the client and enforces it on the server.',
+    };
+    // True statements that name the engine and the client in one breath. The guard
+    // earns its keep only if it leaves these alone.
+    const MUST_STAY_GREEN = {
+        'generatorMetadata consumers':
+            'Generator provenance shape + size caps, shared by validator, diff, and client.',
+        'shared/ directory note (fixed)':
+            'Plain ESM imported by BOTH client and server — generator metadata and shared validation rules. The diff engine lives here too, but only the server imports it today.',
+        'shared/diff.js note (fixed)':
+            'The three-way diff/merge engine — under 200 lines, no dependencies, server-side today (the client renders the ChangeSet the server computed). This playground bundles the real thing (Merge Lab).',
+        'intro paragraph 3 (fixed)':
+            'It is one repo with no monorepo tooling: the React 19 + Vite client sits at the root (components/, pages/, services/, hooks/), the Express 5 server in server/ (SQLite in dev, Postgres in prod, versioned run-once migrations), and shared/ holds plain-ESM code either side can import (password policy, generator metadata, project limits). The diff engine lives there too, but only the server imports it today — the client just renders the ChangeSet it gets back.',
+        'fork-merge tour blurb (fixed)':
+            'One plain-JS engine, server-side: it recomputes the diff on every view of the request and enforces it again at merge time. The client renders what comes back.',
+        'quiz L1 option (graded answer)':
+            'Plain ESM imported by BOTH client and server — generator metadata and shared validation rules',
+        'quiz L1 why (graded answer)':
+            'shared/generatorMetadata.js is imported by services/generatorSandbox.ts on the client AND server/validateAppState.js on the server; shared/passwordPolicy.js by pages/LoginPage.tsx AND server/auth.js. shared/diff.js is server-side today — the client renders the ChangeSet the server computed.',
+    };
+
+    it('the guard catches every phrasing this claim has ever shipped in', () => {
+        for (const [where, text] of Object.entries(HISTORICAL_COPIES)) {
+            expect(sentencesOf([text]).some(claimsClientRunsEngine), `missed: ${where}`).toBe(true);
+        }
+    });
+
+    // …and the semantic patterns catch all four on their OWN, so the verbatim list
+    // is redundancy rather than the thing doing the work. (A previous round shipped
+    // a semantic rule that was green on three of the four: the passive phrasings
+    // give the client no verb to be the subject of.)
+    it('the semantic patterns alone catch all four, without the verbatim list', () => {
+        for (const [where, text] of Object.entries(HISTORICAL_COPIES)) {
+            expect(sentencesOf([text]).some(semanticClaim), `semantics missed: ${where}`).toBe(true);
+        }
+    });
+
+    it('the guard leaves true statements about the engine alone', () => {
+        for (const [where, text] of Object.entries(MUST_STAY_GREEN)) {
+            expect(sentencesOf([text]).filter(claimsClientRunsEngine), `false positive: ${where}`).toEqual([]);
+        }
+    });
+
     it('never tells the reader the client runs the diff engine, anywhere', async () => {
-        const content = await buildContent();
-        const VERBS = 'runs?|imports?|executes?|computes?|enforces?|renders?';
-        const ENGINE = /\bdiff\b|diff\.js|threeWayDiff|merge engine/i;
-        // The client DOING something to the diff — not merely being named beside it
-        // (shared/generatorMetadata.js is legitimately "shared by validator, diff,
-        // and client", which is a statement about generatorMetadata's consumers).
-        const CLIENT_ACTS = new RegExp(
-            `\\bclient\\b[^.]{0,40}\\b(${VERBS})\\b|\\b(${VERBS})\\b[^.]{0,40}\\b(in|on|by) the client\\b`, 'i');
-        const SERVER_ONLY = /only the server|server-side|the server computed|the server enforces/i;
-        const offenders = everyString(content)
-            .flatMap(s => s.split(/(?<=[.;])\s+/))   // judged sentence by sentence
-            .filter(s => ENGINE.test(s) && CLIENT_ACTS.test(s) && !SERVER_ONLY.test(s));
+        // Authored content (intro/tours/codeMap/playground) PLUS the render layer,
+        // which carries its own copy — buildContent() alone does not reach it.
+        const fs = await import('node:fs');
+        const path = await import('node:path');
+        const RENDER = ['introWin', 'toursWin', 'codeWin', 'playgroundWin']
+            .map(m => fs.readFileSync(path.join(REPO_ROOT, `onboarding/src/render/${m}.mjs`), 'utf8'));
+        const offenders = sentencesOf([...everyString(await buildContent()), ...RENDER])
+            .filter(claimsClientRunsEngine);
         expect(offenders).toEqual([]);
     });
 
