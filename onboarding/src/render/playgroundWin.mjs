@@ -2,6 +2,7 @@
 // The import is stripped in the shipped bundle (shared IIFE scope) but is
 // REQUIRED for vitest, which imports this module as real ESM.
 import { scoreProfile, rankFor, levelUnlocked, escapeHtml } from '../app-logic.mjs';
+import { highlightCode } from './codeWin.mjs';
 
 const escP = escapeHtml;
 
@@ -84,10 +85,52 @@ function renderQuiz(el, ctx, levelIdx) {
     el.append(pane.s);
 }
 
+function renderBugs(el, ctx, bugId) {
+    const bugs = ctx.content.playground.bugHunt;
+    const bug = bugs.find(b => b.id === bugId) || bugs[0];
+    const status = ctx.profile.bugs[bug.id];
+
+    const list = pgPane('bug hunt · 7 true stories');
+    list.body.innerHTML = '<p><a href="#/playground">hub</a></p><ul class="bug-list">' +
+        bugs.map(b => {
+            const st = ctx.profile.bugs[b.id];
+            const mark = st === 'found' ? '<span class="accent">✓</span>'
+                : st === 'revealed' ? '<span class="amber">◦</span>' : '<span class="dim">·</span>';
+            return `<li>${mark} <a class="${b.id === bug.id ? 'amber' : ''}" href="#/playground/bugs/${b.id}">${escP(b.title)}</a></li>`;
+        }).join('') + '</ul>' +
+        '<p class="dim">Each panel reconstructs the code as it stood. Click the guilty line. One shot.</p>';
+
+    const panel = pgPane(bug.title);
+    const lines = bug.code.split('\n');
+    // join('') deliberately: the lines are display:block, and a literal newline
+    // between them inside a <pre> would render as an extra blank line.
+    panel.body.innerHTML = `<p>${escP(bug.setup)}</p><pre class="code bug-code${status ? ' resolved' : ''}">` +
+        lines.map((ln, i) => {
+            const cls = status && i === bug.guiltyLine ? 'bug-line guilty' : 'bug-line';
+            return `<span class="${cls}" data-line="${i}">${highlightCode(ln) || ' '}</span>`;
+        }).join('') + '</pre>' +
+        (status ? `<p class="${status === 'found' ? 'accent' : 'amber'}">` +
+            `${status === 'found' ? 'found it.' : 'revealed — the guilty line is highlighted.'}</p>` +
+            `<p class="bug-story">${escP(bug.story)}</p>` +
+            `<p class="dim">lives on, fixed: <a href="#/code/${bug.fixedRef}"><code>${bug.fixedRef}</code></a></p>`
+          : '');
+    if (!status) {
+        panel.body.querySelector('.bug-code').addEventListener('click', (e) => {
+            const line = e.target.closest('.bug-line');
+            if (!line) return;
+            ctx.profile.bugs[bug.id] = Number(line.dataset.line) === bug.guiltyLine ? 'found' : 'revealed';
+            ctx.save();
+            renderPlayground(el, ctx);
+        });
+    }
+    el.append(list.s, panel.s);
+}
+
 export function renderPlayground(el, ctx) {
     el.innerHTML = '';
     const [section, arg] = ctx.route.parts;
     if (section === 'quiz') return renderQuiz(el, ctx, Number(arg) || 0);
-    // Tasks 9-11 add their `bugs` / `merge` / `wdil` branches here.
+    if (section === 'bugs') return renderBugs(el, ctx, arg);
+    // Tasks 10-11 add their `merge` / `wdil` branches here.
     return renderHub(el, ctx);
 }

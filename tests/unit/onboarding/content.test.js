@@ -164,3 +164,55 @@ describe('quiz interaction', () => {
         expect(profile.quiz[0].answers).toEqual({});
     });
 });
+
+describe('bug hunt', () => {
+    it('ships seven bugs whose guilty lines are in range (validator) and stories are told', () => {
+        expect(PLAYGROUND.bugHunt.map(b => b.id)).toEqual(
+            ['dotenv-resurrection', 'rate-limit-toggle', 'like-wildcards', 'provider-id',
+             'commit-timestamps', 'signup-cap-space', 'spa-fallback']);
+        for (const b of PLAYGROUND.bugHunt) expect(b.story.length).toBeGreaterThan(80);
+    });
+
+    // The bug panel highlights each snippet LINE BY LINE. highlightCode's string
+    // pass can emit malformed markup on a line holding an unbalanced quote next to
+    // a comment (Task 7's review found the shape), so pin every shipped line.
+    it('every bug-hunt line highlights to balanced, text-preserving markup', async () => {
+        const { highlightCode } = await import('../../../onboarding/src/render/codeWin.mjs');
+        for (const bug of PLAYGROUND.bugHunt) {
+            for (const [i, line] of bug.code.split('\n').entries()) {
+                const html = highlightCode(line);
+                let depth = 0;
+                for (const tag of html.match(/<\/?span[^>]*>/g) || []) {
+                    depth += tag.startsWith('</') ? -1 : 1;
+                    expect(depth, `${bug.id} line ${i}: closing tag with nothing open`).toBeGreaterThanOrEqual(0);
+                }
+                expect(depth, `${bug.id} line ${i}: unclosed span`).toBe(0);
+                const text = html.replace(/<\/?span[^>]*>/g, '')
+                    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+                expect(text, `${bug.id} line ${i}: text not preserved`).toBe(line);
+            }
+        }
+    });
+});
+
+describe('bug hunt interaction', () => {
+    it('clicking the guilty line marks found; a wrong line reveals', async () => {
+        const { renderPlayground } = await import('../../../onboarding/src/render/playgroundWin.mjs');
+        const { defaultProfile } = await import('../../../onboarding/src/app-logic.mjs');
+        const content = await buildContent();
+        const makeCtx = (profile, parts) => ({
+            data: { vitals: { gitSha: 'x' } }, content, profile,
+            save: () => {}, navigate: () => {}, route: { win: 'playground', parts }, diff: null });
+        const el = document.createElement('div');
+        const profile = defaultProfile();
+        const bug = content.playground.bugHunt[0];
+        renderPlayground(el, makeCtx(profile, ['bugs', bug.id]));
+        el.querySelector(`[data-line="${bug.guiltyLine}"]`).click();
+        expect(profile.bugs[bug.id]).toBe('found');
+        const el2 = document.createElement('div');
+        const profile2 = defaultProfile();
+        renderPlayground(el2, makeCtx(profile2, ['bugs', bug.id]));
+        el2.querySelector(`[data-line="${(bug.guiltyLine + 1) % bug.code.split('\n').length}"]`).click();
+        expect(profile2.bugs[bug.id]).toBe('revealed');
+    });
+});

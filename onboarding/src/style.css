@@ -118,3 +118,11 @@ pre.diagram { background: #0e1310; border: 1px solid #2a352c; padding: 14px; ove
 .quiz-opt.right { border-color: #7ce38b; color: #7ce38b; }
 .quiz-opt.wrong { border-color: #e37c7c; color: #e37c7c; }
 .quiz-why { margin-top: 6px; max-width: 80ch; }
+.bug-list { list-style: none; margin: 0 0 1em 0; }
+.bug-code .bug-line { display: block; cursor: pointer; padding: 0 6px; }
+.bug-code .bug-line:hover { background: #1d2a20; }
+.bug-code .bug-line.guilty { background: #3a1d1d; outline: 1px solid #e37c7c; }
+/* one shot only: once resolved the lines must stop advertising as clickable */
+.bug-code.resolved .bug-line { cursor: default; }
+.bug-code.resolved .bug-line:not(.guilty):hover { background: none; }
+.bug-story { max-width: 85ch; }
