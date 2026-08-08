@@ -133,3 +133,5 @@ pre.diagram { background: #0e1310; border: 1px solid #2a352c; padding: 14px; ove
 .merge-grid textarea { width: 100%; font-size: 12px; resize: vertical; }
 .merge-out { white-space: pre-wrap; max-height: 40vh; overflow-y: auto; }
 @media (max-width: 900px) { .merge-grid { grid-template-columns: 1fr; } }
+.wdil-list li { margin-bottom: 6px; }
+.wdil-tree { margin-top: 10px; max-height: 50vh; overflow-y: auto; }

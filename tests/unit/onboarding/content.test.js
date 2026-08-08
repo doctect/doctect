@@ -244,3 +244,70 @@ describe('merge lab', () => {
         expect(el.querySelector('.merge-out').textContent).toContain('conflict');
     });
 });
+
+describe('where-does-it-live', () => {
+    it('ships ten prompts with existing answer paths (validator checks existence)', () => {
+        expect(PLAYGROUND.wdil).toHaveLength(10);
+        for (const w of PLAYGROUND.wdil) expect(w.answers.length).toBeGreaterThanOrEqual(1);
+    });
+});
+
+describe('where-does-it-live interaction', () => {
+    // A non-answer file that is guaranteed to be in the scanned tree.
+    const DECOY = 'package.json';
+    const makeCtx = (content, profile, parts, tree) => ({
+        data: { vitals: { gitSha: 'x' }, tree }, content, profile,
+        save: () => {}, navigate: () => {}, route: { win: 'playground', parts }, diff: null,
+    });
+
+    it('a correct pick solves it and scores', async () => {
+        const { renderPlayground } = await import('../../../onboarding/src/render/playgroundWin.mjs');
+        const { defaultProfile, scoreProfile } = await import('../../../onboarding/src/app-logic.mjs');
+        const { scanTree } = await import('../../../onboarding/build.mjs');
+        const content = await buildContent();
+        const tree = scanTree(REPO_ROOT);
+        const item = content.playground.wdil[0];
+        const profile = defaultProfile();
+        const el = document.createElement('div');
+
+        renderPlayground(el, makeCtx(content, profile, ['wdil', item.id], tree));
+        expect(el.textContent).not.toContain('hint:');
+        el.querySelector(`a.tree-file[href="#/code/${item.answers[0]}"]`).click();
+
+        expect(profile.wdil[item.id]).toEqual({ tries: 0, done: true, failed: false });
+        expect(el.textContent).toContain('correct:');
+        expect(scoreProfile(profile, content.playground).points).toBe(1);
+    });
+
+    it('a wrong pick burns exactly one try and shows the hint; the third reveals without scoring', async () => {
+        const { renderPlayground } = await import('../../../onboarding/src/render/playgroundWin.mjs');
+        const { defaultProfile, scoreProfile } = await import('../../../onboarding/src/app-logic.mjs');
+        const { scanTree } = await import('../../../onboarding/build.mjs');
+        const content = await buildContent();
+        const tree = scanTree(REPO_ROOT);
+        const item = content.playground.wdil[0];
+        const profile = defaultProfile();
+        const el = document.createElement('div');
+        const miss = () => el.querySelector(`a.tree-file[href="#/code/${DECOY}"]`).click();
+
+        renderPlayground(el, makeCtx(content, profile, ['wdil', item.id], tree));
+        miss();
+        expect(profile.wdil[item.id]).toEqual({ tries: 1, done: false, failed: false });
+        expect(el.textContent).toContain(`hint: ${item.hint}`);
+        expect(el.textContent).toContain('2 tries left');
+
+        miss();
+        expect(profile.wdil[item.id]).toEqual({ tries: 2, done: false, failed: false });
+
+        miss();
+        expect(profile.wdil[item.id]).toEqual({ tries: 3, done: true, failed: true });
+        expect(el.textContent).toContain('it lives in:');
+        expect(el.textContent).toContain(item.answers[0]);
+        // A revealed answer must never score.
+        expect(scoreProfile(profile, content.playground).points).toBe(0);
+
+        // Resolved: the tree stops taking picks.
+        miss();
+        expect(profile.wdil[item.id]).toEqual({ tries: 3, done: true, failed: true });
+    });
+});

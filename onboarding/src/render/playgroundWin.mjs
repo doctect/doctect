@@ -2,7 +2,7 @@
 // The import is stripped in the shipped bundle (shared IIFE scope) but is
 // REQUIRED for vitest, which imports this module as real ESM.
 import { scoreProfile, rankFor, levelUnlocked, escapeHtml } from '../app-logic.mjs';
-import { highlightCode } from './codeWin.mjs';
+import { highlightCode, treeHtml } from './codeWin.mjs';
 
 const escP = escapeHtml;
 
@@ -199,12 +199,54 @@ function renderMerge(el, ctx) {
     el.append(lab.s);
 }
 
+function renderWdil(el, ctx, wdilId) {
+    const items = ctx.content.playground.wdil;
+    const item = items.find(w => w.id === wdilId) || items[0];
+    const state = ctx.profile.wdil[item.id] || (ctx.profile.wdil[item.id] = { tries: 0, done: false, failed: false });
+
+    const list = pgPane('where does it live?');
+    list.body.innerHTML = '<p><a href="#/playground">hub</a></p><ol class="wdil-list">' +
+        items.map(w => {
+            const st = ctx.profile.wdil[w.id];
+            const mark = st?.done ? (st.failed ? '<span class="amber">◦</span>' : '<span class="accent">✓</span>')
+                                  : '<span class="dim">·</span>';
+            return `<li>${mark} <a class="${w.id === item.id ? 'amber' : ''}" href="#/playground/wdil/${w.id}">${escP(w.prompt)}</a></li>`;
+        }).join('') + '</ol>';
+
+    const game = pgPane(`find it · ${3 - state.tries} tries left`);
+    game.body.innerHTML = `<p>${escP(item.prompt)}</p>` +
+        (state.tries >= 1 && !state.done ? `<p class="amber">hint: ${escP(item.hint)}</p>` : '') +
+        (state.done ? `<p class="${state.failed ? 'amber' : 'accent'}">` +
+            (state.failed ? 'it lives in: ' : 'correct: ') +
+            item.answers.map(a => `<a href="#/code/${a}"><code>${a}</code></a>`).join(' or ') + '</p>'
+          : '<p class="dim">click the file in the tree.</p>') +
+        `<nav class="tree wdil-tree"></nav>`;
+    game.body.querySelector('.wdil-tree').innerHTML =
+        treeHtml(ctx.data.tree, '', new Set(item.answers.map(a => a.split('/')[0])));
+    if (!state.done) {
+        game.body.querySelector('.wdil-tree').addEventListener('click', (e) => {
+            const link = e.target.closest('a.tree-file');
+            if (!link) return;
+            e.preventDefault();
+            const picked = link.getAttribute('href').replace('#/code/', '');
+            if (item.answers.includes(picked)) { state.done = true; }
+            else {
+                state.tries += 1;
+                if (state.tries >= 3) { state.done = true; state.failed = true; }
+            }
+            ctx.save();
+            renderPlayground(el, ctx);
+        });
+    }
+    el.append(list.s, game.s);
+}
+
 export function renderPlayground(el, ctx) {
     el.innerHTML = '';
     const [section, arg] = ctx.route.parts;
     if (section === 'quiz') return renderQuiz(el, ctx, Number(arg) || 0);
     if (section === 'bugs') return renderBugs(el, ctx, arg);
     if (section === 'merge') return renderMerge(el, ctx);
-    // Task 11 adds its `wdil` branch here.
+    if (section === 'wdil') return renderWdil(el, ctx, arg);
     return renderHub(el, ctx);
 }

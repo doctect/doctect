@@ -469,5 +469,29 @@ export const PLAYGROUND = {
             }
         },
     ],
-    wdil: [],
+    // Every `answers` path is a real file, and every claim below was re-checked
+    // against the tree before shipping. Where a behavior genuinely spans files
+    // (decide vs. enforce) the array lists both.
+    wdil: [
+        { id: 'svg-sanitize', prompt: 'Someone published a malicious SVG. Which file makes sure it can’t run in your browser?',
+          answers: ['components/canvas/CanvasElement.tsx'], hint: 'Sanitize at the render site, not at upload.' },
+        { id: 'signup-cap', prompt: 'Where is the signup cap counted and decided?',
+          answers: ['server/signupCap.js', 'server/auth.js'], hint: 'The decision is a module; the enforcement is a hook.' },
+        { id: 'conflict-rules', prompt: 'Which file decides that remove-vs-modify is a merge conflict?',
+          answers: ['shared/diff.js'], hint: 'It sits in shared/, but only the server imports it — the client just renders the ChangeSet it gets back.' },
+        { id: 'save-cas', prompt: 'A stale save gets a 409 instead of overwriting. Where is that compare-and-swap?',
+          answers: ['server/routes/projects.js'], hint: 'The biggest route file.' },
+        { id: 'text-wrap', prompt: 'Where is the decision made about where a long line of text wraps?',
+          answers: ['services/textLayout.ts'], hint: 'One engine, two renderers.' },
+        { id: 'session-trigger', prompt: 'A suspended user’s new session is refused by the database itself. Where does that guard live?',
+          answers: ['server/migrations/index.js'], hint: 'It’s DDL, not route code.' },
+        { id: 'typed-api', prompt: 'A component needs to call a server endpoint. Which file should it import from?',
+          answers: ['services/cloudApi.ts'], hint: 'One typed wrapper around fetch — it throws ApiError so callers never read res.status.' },
+        { id: 'email-fallback', prompt: 'With no email key configured, verification links print to the console. Where?',
+          answers: ['server/email.js'], hint: 'Fail-safe by design.' },
+        { id: 'card-rollover', prompt: 'Gallery cards and profile cards flip through a project’s preview pages while you hover. Which component runs that rollover?',
+          answers: ['components/gallery/RollingPreview.tsx'], hint: 'Not the card — the card only hands it the thumbnail ids. This one owns the timer, and checks prefers-reduced-motion first.' },
+        { id: 'sandbox', prompt: 'Generator Preview runs untrusted code. Which file is the cage?',
+          answers: ['services/generatorSandbox.ts'], hint: 'iframe + worker + captured intrinsics.' },
+    ],
 };
