@@ -22,7 +22,7 @@ function renderHub(el, ctx) {
     hub.body.innerHTML =
         `<p>rank: <span class="amber">${rank}</span> · ${points}/${max} points</p>` +
         `<div class="pg-cards">` +
-        `<a class="pg-card" href="#/playground/quiz/0"><b>quiz ladder</b><span class="dim">5 levels, unlock at 6/8 · ${quizDone}/${quizMax}</span></a>` +
+        `<a class="pg-card" href="#/playground/quiz/0"><b>quiz ladder</b><span class="dim">${pg.quizLevels.length} levels, unlock at 6/8 · ${quizDone}/${quizMax}</span></a>` +
         `<a class="pg-card" href="#/playground/bugs"><b>bug hunt</b><span class="dim">${pg.bugHunt.length} real historical bugs</span></a>` +
         `<a class="pg-card" href="#/playground/merge"><b>merge lab</b><span class="dim">drive the real diff engine</span></a>` +
         `<a class="pg-card" href="#/playground/wdil"><b>where does it live?</b><span class="dim">${pg.wdil.length} behaviors to locate</span></a>` +
