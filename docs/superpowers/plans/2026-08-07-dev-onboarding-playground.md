@@ -21,6 +21,7 @@ One deliberate deviation from the spec: tests live at `tests/unit/onboarding/` (
 - **Regen is manual:** `node onboarding/build.mjs` rewrites `onboarding/index.html`; the committed file is a build artifact that must be regenerated and committed whenever a task changes anything it embeds.
 - Commit style: `feat(onboarding): …` / `test(onboarding): …`; commit at the end of every task (and mid-task where steps say so).
 - The app, server, and existing tests are never modified by this plan.
+- **Escape authored text at render time:** every content-module string interpolated into `innerHTML` goes through `escapeHtml` from `app-logic.mjs`, via a per-module alias with a UNIQUE name (`esc` in introWin, `escT` in toursWin, `escC` in codeWin, `escP` in playgroundWin) — the shipped bundle concatenates all modules into one IIFE scope, so duplicate `const` names are a SyntaxError. Raw interpolation is reserved for renderer-constructed markup and repo paths/ids known to be HTML-free; `highlightCode` escapes internally. (Added after Task 4's review caught the literal `<track>` in a run command being parsed as an HTML element and vanishing.)
 
 ## File map (who owns what)
 
@@ -198,7 +199,7 @@ export const REPO_ROOT = path.resolve(HERE, '..');
 
 // Basenames excluded anywhere; paths (with '/') excluded at that exact repo-relative path.
 export const SCAN_EXCLUDES = [
-    'node_modules', 'dist', '.git', 'scratch', 'playwright-report', 'archives',
+    'node_modules', 'dist', '.git', '.claude', 'scratch', 'playwright-report', 'archives',
     'tutorial-videos', '.superpowers', 'package-lock.json', 'server.log',
     'server/analytics.db', 'onboarding/index.html', '.env',
 ];
@@ -627,6 +628,9 @@ describe('profile + ranks', () => {
         expect(formatBytes(2048)).toBe('2.0 KB');
         expect(formatBytes(3 * 1024 * 1024)).toBe('3.0 MB');
     });
+    it('escapeHtml neutralizes markup', () => {
+        expect(escapeHtml('node run.js <track> & "x"')).toBe('node run.js &lt;track&gt; &amp; &quot;x&quot;');
+    });
 });
 
 describe('assembly', () => {
@@ -682,6 +686,10 @@ export const buildHash = (win, parts = []) => '#/' + [win, ...parts].join('/');
 export const formatBytes = (n) => n < 1024 ? `${n} B`
     : n < 1024 * 1024 ? `${(n / 1024).toFixed(1)} KB`
     : `${(n / (1024 * 1024)).toFixed(1)} MB`;
+
+export const escapeHtml = (s) => String(s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 export const filterTree = (node, query) => {
     const q = (query || '').toLowerCase();
@@ -1320,10 +1328,14 @@ export const INTRO = {
 
 ```js
 // onboarding/src/render/introWin.mjs
+import { escapeHtml } from '../app-logic.mjs';
+
+const esc = escapeHtml;
+
 function pane(title, extraClass = '') {
     const section = document.createElement('section');
     section.className = `pane ${extraClass}`;
-    section.innerHTML = `<div class="pane-title">${title}</div><div class="pane-body"></div>`;
+    section.innerHTML = `<div class="pane-title">${esc(title)}</div><div class="pane-body"></div>`;
     return { section, body: section.querySelector('.pane-body') };
 }
 
@@ -1333,9 +1345,9 @@ export function renderIntro(el, ctx) {
 
     const about = pane('doctect · what this is', 'intro-about');
     about.body.innerHTML =
-        intro.about.map(p => `<p>${p}</p>`).join('') +
+        intro.about.map(p => `<p>${esc(p)}</p>`).join('') +
         '<h3 class="accent">run it</h3><table class="cmds">' +
-        intro.run.map(r => `<tr><td><code>${r.cmd}</code></td><td class="dim">${r.note}</td></tr>`).join('') +
+        intro.run.map(r => `<tr><td><code>${esc(r.cmd)}</code></td><td class="dim">${esc(r.note)}</td></tr>`).join('') +
         '</table>';
 
     const col = document.createElement('div');
@@ -1359,15 +1371,15 @@ export function renderIntro(el, ctx) {
 
     const method = pane('the house method');
     method.body.innerHTML =
-        intro.houseMethod.text.map(p => `<p>${p}</p>`).join('') +
-        `<p class="accent">${intro.houseMethod.stages.join(' → ')}</p>` +
+        intro.houseMethod.text.map(p => `<p>${esc(p)}</p>`).join('') +
+        `<p class="accent">${esc(intro.houseMethod.stages.join(' → '))}</p>` +
         '<h3 class="amber">catches only a whole-branch review makes</h3><ul>' +
-        intro.houseMethod.catches.map(c => `<li>${c}</li>`).join('') + '</ul>' +
+        intro.houseMethod.catches.map(c => `<li>${esc(c)}</li>`).join('') + '</ul>' +
         '<h3 class="accent">rounds shipped</h3><ul class="timeline">' +
         [...vitals.specs].reverse().map(spec => {
             const label = intro.roundLabels[spec] ||
                 spec.replace(/^\d{4}-\d{2}-\d{2}-/, '').replace(/-design\.md$/, '').replace(/-/g, ' ');
-            return `<li><span class="dim">${spec.slice(0, 10)}</span> ${label}</li>`;
+            return `<li><span class="dim">${spec.slice(0, 10)}</span> ${esc(label)}</li>`;
         }).join('') + '</ul>';
 
     col.append(vit.section, method.section);
@@ -1463,8 +1475,8 @@ export const TOURS = [
               files: ['types.ts'], highlight: ['state'] },
             { text: 'The canvas is not a <canvas> — it is absolutely-positioned DOM. That choice is why thumbnails need the PDF pipeline (you cannot screenshot a DOM canvas), and why editor chrome uses an isolation:isolate wrapper so user z-indexes can never paint over selection boxes.',
               files: ['components/ProjectEditor.tsx', 'components/canvas/CanvasElement.tsx'], highlight: ['ui', 'canvas'] },
-            { text: 'Projects persist to localStorage on every change. Cloud is opt-in and explicit — there is no silent auto-sync, by design decision from the very first gallery brainstorm.',
-              files: ['services/loadProjectState.ts'], highlight: ['ls'] },
+            { text: 'Projects persist to localStorage on every change (the effect lives in EditorPage; loadProjectState migrates and normalizes on the way back in). Cloud is opt-in and explicit — there is no silent auto-sync, by design decision from the very first gallery brainstorm.',
+              files: ['services/loadProjectState.ts', 'pages/EditorPage.tsx'], highlight: ['ls'] },
             { text: 'On load, documents migrate v1 → v11 one version at a time. Two silent traps live here: presets and generator imports stamp CURRENT_SCHEMA_VERSION, so both paths must apply new-version tagging themselves (the layers round hit exactly this).',
               files: ['services/migration.ts', 'services/presets.ts'], highlight: ['mig'] },
             { text: 'PDF export runs entirely client-side through jsPDF — and shares its text layout decisions with the canvas through one engine, so what you see is what prints (that parity was a whole round of work).',
@@ -1575,7 +1587,7 @@ export const TOURS = [
               files: ['services/canvasTextLayout.ts', 'services/pdfTextLayout.ts'], highlight: ['cadapt', 'padapt'] },
             { text: 'Quiet correctness lives here: the ellipsis search was a binary search over grapheme counts — which assumes measured width is monotonic in count; it isn’t guaranteed to be, so it became a linear scan. Greedy wrap was O(n²) re-measuring whole candidate lines and was rewritten single-pass, with tests asserting bounded measure-call counts.',
               files: ['services/textLayout.ts', 'services/graphemes.ts'], highlight: ['engine'] },
-            { text: 'Text padding: one 87-line geometry function, resolveTextContentBox, shrinks the box before the engine ever sees it. Canvas, the inline overlay editor, and PDF all consume the same content box.',
+            { text: 'Text padding: one 87-line module whose single geometry function, resolveTextContentBox, shrinks the box before the engine ever sees it. Canvas, the inline overlay editor, and PDF all consume the same content box.',
               files: ['services/textPadding.ts'], highlight: ['req'] },
             { text: 'SVG export is a tree-transform pipeline before svg2pdf sees anything: hsl()/8-digit-hex normalized to rgb + opacity attributes (svg2pdf silently drops what it can’t parse), element opacity baked into the SVG’s own opacity scopes (svg2pdf replaces outer alpha rather than multiplying), grayscale as a desaturation pass with the full CSS named-color table.',
               files: ['services/svgColorNormalize.ts'], highlight: ['svg'] },
@@ -1605,7 +1617,7 @@ export const TOURS = [
               files: ['server/signupCap.js'], highlight: ['cap', 'wait'] },
             { text: 'Email delivery is one fail-safe module: Resend’s HTTP API when a key is configured, console logging when not — and a missing key never weakens sign-in blocking. The dotenv seals (present-but-empty, never delete) guard every test/tooling surface from sending real mail.',
               files: ['server/email.js'], highlight: ['verify'] },
-            { text: 'Accounts can exist with username = null (OAuth, legacy). /welcome blocks content creation until one is set; requireUsername guards exactly the five routes that create or attach public content — and deliberately not unpublish/delete/merge-close, so a legacy account can always clean up its own data.',
+            { text: 'Accounts can exist with username = null (OAuth, legacy). /welcome blocks content creation until one is set; requireUsername guards the six routes that create or attach public content (project create, commits, publish, fork, merge-request create, reviews) — and deliberately not unpublish/delete/merge-close, so a legacy account can always clean up its own data.',
               files: ['pages/WelcomePage.tsx', 'server/middleware/guards.js'], highlight: ['welcome', 'gated'] },
             { text: 'hooks.before also denies /admin/* inside better-auth — where it sees the normalized path. Express-level blocking was bypassable with percent-encoded dot-segments that normalized back to /admin/* inside the library; red tests proved unban and role promotion answered 200 to a non-admin before the fix.',
               files: ['server/auth.js'], highlight: ['auth'] },
@@ -1618,15 +1630,21 @@ export const TOURS = [
 
 ```js
 // onboarding/src/render/toursWin.mjs
+import { escapeHtml } from '../app-logic.mjs';
+
+const escT = escapeHtml;
+
 function tourPane(title, cls) {
     const s = document.createElement('section');
     s.className = 'pane ' + cls;
-    s.innerHTML = `<div class="pane-title">${title}</div><div class="pane-body"></div>`;
+    s.innerHTML = `<div class="pane-title">${escT(title)}</div><div class="pane-body"></div>`;
     return { s, body: s.querySelector('.pane-body') };
 }
 
 function renderDiagram(lines, highlight) {
-    const html = lines.map(l => l.replace(/\{\{([a-z0-9-]+):([^}]*)\}\}/g, (_, id, label) =>
+    // Escape the whole line FIRST (diagrams contain literals like "<head tag>"),
+    // then substitute tokens — {{id:label}} survives escaping untouched.
+    const html = lines.map(l => escT(l).replace(/\{\{([a-z0-9-]+):([^}]*)\}\}/g, (_, id, label) =>
         `<span class="diag${highlight.includes(id) ? ' lit' : ''}" data-d="${id}">${label}</span>`))
         .join('\n');
     return `<pre class="diagram">${html}</pre>`;
@@ -1642,17 +1660,17 @@ export function renderTours(el, ctx) {
     const list = tourPane('tours', 'tours-list');
     list.body.innerHTML =
         '<ul class="tour-index">' + tours.map(t =>
-            `<li class="${t.id === tour.id ? 'active' : ''}"><a href="#/tours/${t.id}/0">${t.title}</a></li>`
+            `<li class="${t.id === tour.id ? 'active' : ''}"><a href="#/tours/${t.id}/0">${escT(t.title)}</a></li>`
         ).join('') + '</ul>' +
-        `<p class="dim">${tour.blurb}</p>` +
+        `<p class="dim">${escT(tour.blurb)}</p>` +
         '<ol class="tour-steps">' + tour.steps.map((s, i) =>
             `<li class="${i === stepIdx ? 'active' : ''}"><a href="#/tours/${tour.id}/${i}">` +
-            `${s.text.slice(0, 64)}…</a></li>`).join('') + '</ol>';
+            `${escT(s.text.slice(0, 64))}…</a></li>`).join('') + '</ol>';
 
     const stage = tourPane(tour.title, 'tours-stage');
     stage.body.innerHTML =
         renderDiagram(tour.diagram, step.highlight) +
-        `<p class="tour-text">${step.text}</p>` +
+        `<p class="tour-text">${escT(step.text)}</p>` +
         '<div class="files-strip">files: ' + step.files.map(f =>
             `<a href="#/code/${f}"><code>${f}</code></a>`).join(' · ') + '</div>' +
         `<div class="tour-nav">` +
@@ -1737,7 +1755,7 @@ export const CODE_MAP = {
         { path: 'pages', note: 'Route-level components. EditorPage is the product; everything else orbits it.' },
         { path: 'services', note: 'Client logic kept DOM-light: PDF export, text layout, schema migrations, typed API wrapper, generator sandbox.' },
         { path: 'server', note: 'Express 5 API. app.js is the createApp() factory; index.js just boots it. SQLite in dev, Postgres in prod.' },
-        { path: 'server/routes', note: 'All endpoints in five files (+2 moderation-era files). Rounds add endpoints to existing files — a new route file is rare and deliberate.' },
+        { path: 'server/routes', note: 'All endpoints in six files — four core (me, projects, gallery, mergeRequests) plus the two moderation-era ones. Rounds add endpoints to existing files — a new route file is rare and deliberate.' },
         { path: 'server/migrations', note: 'The migration ledger (index.js). NEVER edit an applied migration — append a new one. Two migrations are database triggers.' },
         { path: 'server/middleware', note: 'checkOrigin (CSRF), rate limits, requireAdmin/requireOwner (live config membership on every request), requireUsername.' },
         { path: 'shared', note: 'Plain ESM imported by BOTH client and server — the three-way diff engine and generator provenance rules.' },
@@ -1764,7 +1782,7 @@ export const CODE_MAP = {
         { path: 'components/cloud/CloudMenu.tsx', note: 'Save/history/publish menu; the signed-out / no-username / ready 3-way branch; forked-from indicator.' },
         { path: 'components/cloud/PublishModal.tsx', note: 'Publish wizard. Compares rendered previews against picked pages and refuses partial sets.' },
         { path: 'components/cloud/EditListingModal.tsx', note: 'Edit a published listing without republishing; carries the composite If-Match token.' },
-        { path: 'components/gallery/ProjectCard.tsx', note: 'The shared card with rollover previews — gallery, profile, and directory all render this one component.' },
+        { path: 'components/gallery/ProjectCard.tsx', note: 'The shared card with rollover previews — gallery grids, strips, and profile pages all render this one component (the ?view=all directory deliberately uses a compact table instead).' },
         { path: 'pages/EditorPage.tsx', note: 'Route wrapper that anchors the pdf.js-heavy chunk (EditorPage → CloudMenu → PublishModal → thumbnailService).' },
         { path: 'pages/GalleryPage.tsx', note: 'Three modes in one page: sections view, URL-param filtered grid, ?view=all sortable directory.' },
         { path: 'pages/MergeRequestPage.tsx', note: 'MR review: structured change list, conflict warnings, before/after preview; owner state comes from the server’s isTargetOwner.' },
@@ -1778,10 +1796,10 @@ export const CODE_MAP = {
         { path: 'server/routes/projects.js', note: 'The big file: CRUD, commits, publish, publication PATCH, fork. The CAS save and published-commit pinning idioms live here.' },
         { path: 'server/routes/gallery.js', note: 'Public reads, reviews, tags, reports. The LIKE … ESCAPE wildcard fix is here.' },
         { path: 'server/routes/mergeRequests.js', note: 'MR lifecycle: live diff recompute per view, merge re-verified under the target-head lock.' },
-        { path: 'server/middleware/guards.js', note: 'requireUsername guards exactly the five content-creating routes; requireAdmin/requireOwner check live config membership, never trusting a stored role.' },
+        { path: 'server/middleware/guards.js', note: 'requireUsername guards exactly the six content-creating routes; requireAdmin/requireOwner check live config membership, never trusting a stored role.' },
         { path: 'server/validateAppState.js', note: 'Structural gate for every stored AppState: shape, 5 MB cap, node/element caps.' },
         { path: 'server/stateCodec.js', note: 'gzip encode/decode for full-snapshot commits.' },
-        { path: 'server/projectLocks.js', note: 'withTransaction + lockProjectRows — the write-path integrity layer every later round leans on.' },
+        { path: 'server/projectLocks.js', note: 'lockProjectRows — paired with db.js’s withTransaction, the write-path integrity layer every later round leans on.' },
         { path: 'server/email.js', note: 'Resend-or-console fail-safe email. A missing key never weakens sign-in blocking. First of the dotenv seals.' },
         { path: 'server/signupCap.js', note: 'Verified-only cap counting, fails open; SIGNUP_CAP trimmed first because Number(" ") === 0 once meant “closed”.' },
         { path: 'server/ownerAuthority.js', note: 'OWNER_EMAILS reconciliation — the only root of trust for the owner role; no HTTP path grants it.' },
@@ -1813,7 +1831,9 @@ export const CODE_MAP = {
 // onboarding/src/render/codeWin.mjs
 // The import is stripped in the shipped bundle (shared IIFE scope) but is
 // REQUIRED for vitest, which imports this module as real ESM.
-import { formatBytes, filterTree, findNode, flattenDirs, nearestAnnotated } from '../app-logic.mjs';
+import { formatBytes, filterTree, findNode, flattenDirs, nearestAnnotated, escapeHtml } from '../app-logic.mjs';
+
+const escC = escapeHtml;
 
 export function treeHtml(node, selectedPath, openPaths) {
     if (node.kind === 'file') {
@@ -1848,15 +1868,15 @@ function detailHtml(ctx, selectedPath) {
             '</table>';
     }
     const node = findNode(tree, selectedPath);
-    if (!node) return `<p class="red">gone from the tree: ${selectedPath} — regenerate the page?</p>`;
+    if (!node) return `<p class="red">gone from the tree: ${escC(selectedPath)} — regenerate the page?</p>`;
     const exact = anns.find(a => a.path === selectedPath);
     const nearest = exact || nearestAnnotated(selectedPath, anns);
     let html = `<h3 class="accent">${selectedPath}${node.kind === 'dir' ? '/' : ''}</h3>` +
         `<p class="dim">${node.kind === 'file'
             ? `${formatBytes(node.size)}${node.lines ? ` · ${node.lines} lines` : ''}`
             : `${(node.children || []).length} entries · ${formatBytes(node.size)}`}</p>`;
-    if (exact) html += `<p>${exact.note}</p>` + (exact.detail ? `<p>${exact.detail}</p>` : '');
-    else if (nearest) html += `<p class="dim">nearest commentary — <code>${nearest.path}</code>:</p><p>${nearest.note}</p>`;
+    if (exact) html += `<p>${escC(exact.note)}</p>` + (exact.detail ? `<p>${escC(exact.detail)}</p>` : '');
+    else if (nearest) html += `<p class="dim">nearest commentary — <code>${nearest.path}</code>:</p><p>${escC(nearest.note)}</p>`;
     return html;
 }
 
@@ -2053,7 +2073,7 @@ Add the dive list to the tree pane body (after the `<nav class="tree">`):
 ```js
         `<div class="dive-list"><div class="pane-subtitle">deep dives</div><ul>` +
         ctx.content.codeMap.deepDives.map(d =>
-            `<li><a href="#/code/dive/${d.id}/0">${d.title}</a></li>`).join('') + '</ul></div>' +
+            `<li><a href="#/code/dive/${d.id}/0">${escC(d.title)}</a></li>`).join('') + '</ul></div>' +
 ```
 
 And the dive renderer:
@@ -2069,10 +2089,10 @@ function renderDive(el, ctx, diveId, sectionIdx) {
 
     const pane = document.createElement('section');
     pane.className = 'pane dive-pane';
-    pane.innerHTML = `<div class="pane-title">deep dive · ${dive.title}</div>` +
+    pane.innerHTML = `<div class="pane-title">deep dive · ${escC(dive.title)}</div>` +
         `<div class="pane-body">` +
-        `<p class="dim">${dive.tagline} · <a href="#/code">back to the tree</a></p>` +
-        `<p>${section.text}</p>` +
+        `<p class="dim">${escC(dive.tagline)} · <a href="#/code">back to the tree</a></p>` +
+        `<p>${escC(section.text)}</p>` +
         (excerpt ? `<p class="dim"><a href="#/code/${excerpt.file}"><code>${excerpt.file}</code></a>` +
                    `:${excerpt.startLine}</p><pre class="code">${highlightCode(excerpt.code)}</pre>` : '') +
         `<div class="tour-nav">` +
@@ -2088,6 +2108,7 @@ Append to `style.css`:
 
 ```css
 .dive-list { margin-top: 1em; border-top: 1px solid #2a352c; padding-top: 8px; }
+.dive-list ul { list-style: none; }
 .pane-subtitle { color: #e3c67c; font-size: 12px; margin-bottom: 6px; }
 .dive-pane { flex: 1; }
 .dive-pane .pane-body { max-width: 90ch; }
@@ -2208,8 +2229,8 @@ Run — expected FAIL.
               options: ['Snapshotted when opened', 'Cached for an hour', 'Recomputed live on every view', 'Computed client-side only'],
               answer: 2, why: 'A request that becomes conflicted after upstream changes is caught on view — and the merge endpoint re-verifies under lock anyway.' },
             { q: 'requireUsername guards…',
-              options: ['Every /api route', 'Exactly the five content-creating routes — not unpublish/delete/close', 'Only publish', 'Only the gallery'],
-              answer: 1, why: 'Gating cleanup routes would trap legacy no-username accounts away from reducing their own exposure.' },
+              options: ['Every /api route', 'The six content-creating routes (create/commits/publish/fork/MR/reviews) — not unpublish/delete/close', 'Only publish', 'Only the gallery'],
+              answer: 1, why: 'Every write that attaches a public handle is gated; cleanup routes aren’t, so legacy no-username accounts can still reduce their own exposure.' },
             { q: 'Star-rating averages are…',
               options: ['Denormalized onto projects and updated on write', 'Computed client-side', 'Cached in Redis', 'Computed at read time with SQL AVG()'],
               answer: 3, why: 'A live AVG can’t drift the way a hand-maintained counter can — ratings change on every edit and delete.' },
@@ -2280,13 +2301,15 @@ Run — expected FAIL.
 ```js
 // onboarding/src/render/playgroundWin.mjs
 // Imports stripped in the shipped bundle, required for direct ESM import in tests.
-import { scoreProfile, rankFor, levelUnlocked } from '../app-logic.mjs';
+import { scoreProfile, rankFor, levelUnlocked, escapeHtml } from '../app-logic.mjs';
 import { highlightCode, treeHtml } from './codeWin.mjs';
+
+const escP = escapeHtml;
 
 function pgPane(title) {
     const s = document.createElement('section');
     s.className = 'pane pg-pane';
-    s.innerHTML = `<div class="pane-title">${title}</div><div class="pane-body"></div>`;
+    s.innerHTML = `<div class="pane-title">${escP(title)}</div><div class="pane-body"></div>`;
     return { s, body: s.querySelector('.pane-body') };
 }
 
@@ -2335,11 +2358,11 @@ function renderQuiz(el, ctx, levelIdx) {
         const chosen = state.answers[qi];
         const div = document.createElement('div');
         div.className = 'quiz-q';
-        div.innerHTML = `<p><b>Q${qi + 1}.</b> ${q.q}</p>` + q.options.map((opt, oi) => {
+        div.innerHTML = `<p><b>Q${qi + 1}.</b> ${escP(q.q)}</p>` + q.options.map((opt, oi) => {
             const cls = chosen === undefined ? '' :
                 oi === q.answer ? 'right' : oi === chosen ? 'wrong' : 'dim';
-            return `<button class="quiz-opt ${cls}" data-q="${qi}" data-o="${oi}" ${chosen !== undefined ? 'disabled' : ''}>${opt}</button>`;
-        }).join('') + (chosen !== undefined ? `<p class="quiz-why dim">${q.why}</p>` : '');
+            return `<button class="quiz-opt ${cls}" data-q="${qi}" data-o="${oi}" ${chosen !== undefined ? 'disabled' : ''}>${escP(opt)}</button>`;
+        }).join('') + (chosen !== undefined ? `<p class="quiz-why dim">${escP(q.why)}</p>` : '');
         list.append(div);
     });
     list.addEventListener('click', (e) => {
@@ -2399,6 +2422,73 @@ git add onboarding/ tests/unit/onboarding/content.test.js
 git commit -m "feat(onboarding): playground hub with ranks and the 40-question quiz ladder"
 ```
 
+**Post-review amendments (Task 8's own review).** The shipped `quizLevels` deliberately
+departs from the block above: ten claims the repo contradicted were rewritten, and the
+option order was permuted because the verbatim keys put 27/40 correct answers at index 1
+(always clicking option 2 scored 7/8 and cleared the 6/8 unlock gate). Both deviations are
+documented in `task-8-report.md` and were verified by review; the shipped file, not the block
+above, is the content of record. The review then required these further changes:
+
+- **L1Q8's correct option** must stop asserting what its own `why` retracts: drop `the diff
+  engine and` so it reads `'Plain ESM imported by BOTH client and server — generator metadata
+  and shared validation rules'`. (`shared/diff.js` has no client importer today.)
+- **L1 and L2 answer keys** must not form a guessable cycle (L1 shipped `[1,2,3,0,1,2,3,0]`).
+  Reshuffle both so no simple period predicts them, keeping ≤2 answers per index per level.
+- **`rank`** is escaped like every other authored string: `escP(rank)` in the hub.
+- **`.dive-list ul { list-style: none; }`** must actually reach `onboarding/src/style.css`
+  (Task 7's review raised it; the plan was amended but the stylesheet was not).
+
+Two tests join `tests/unit/onboarding/content.test.js` — the distribution guard pins the
+permutation fix, and the interaction block covers the quiz state machine (the amended Task 9
+block below establishes the same jsdom pattern):
+
+```js
+describe('quiz answer distribution', () => {
+    it('no index dominates a level and constant-guessing cannot clear the 6/8 gate', () => {
+        for (const [li, level] of PLAYGROUND.quizLevels.entries()) {
+            for (let choice = 0; choice < 4; choice++) {
+                const score = level.questions.filter(q => q.answer === choice).length;
+                expect(score, `L${li} always-option-${choice} scores ${score}/8`).toBeLessThan(6);
+                expect(score, `L${li} index ${choice} over-used`).toBeLessThanOrEqual(3);
+            }
+        }
+    });
+});
+
+describe('quiz interaction', () => {
+    const makeCtx = (content, profile, parts) => ({
+        data: { vitals: { gitSha: 'x' } }, content, profile,
+        save: () => {}, navigate: () => {}, route: { win: 'playground', parts }, diff: null,
+    });
+
+    it('locks later levels, unlocks on a passing best, and retry keeps the best', async () => {
+        const { renderPlayground } = await import('../../../onboarding/src/render/playgroundWin.mjs');
+        const { defaultProfile } = await import('../../../onboarding/src/app-logic.mjs');
+        const content = await buildContent();
+        const level = content.playground.quizLevels[0];
+        const profile = defaultProfile();
+        const el = document.createElement('div');
+
+        renderPlayground(el, makeCtx(content, profile, ['quiz', '1']));
+        expect(el.textContent).toContain('locked');
+
+        renderPlayground(el, makeCtx(content, profile, ['quiz', '0']));
+        level.questions.forEach((q, qi) => {
+            el.querySelector(`.quiz-opt[data-q="${qi}"][data-o="${q.answer}"]`).click();
+        });
+        expect(profile.quiz[0].best).toBe(8);
+
+        renderPlayground(el, makeCtx(content, profile, ['quiz', '1']));
+        expect(el.textContent).not.toContain('locked');
+
+        renderPlayground(el, makeCtx(content, profile, ['quiz', '0']));
+        el.querySelector('[data-reset]').click();
+        expect(profile.quiz[0].best).toBe(8);
+        expect(profile.quiz[0].answers).toEqual({});
+    });
+});
+```
+
 ---
 
 ### Task 9: Bug Hunt — seven real historical bugs
@@ -2420,6 +2510,27 @@ describe('bug hunt', () => {
             ['dotenv-resurrection', 'rate-limit-toggle', 'like-wildcards', 'provider-id',
              'commit-timestamps', 'signup-cap-space', 'spa-fallback']);
         for (const b of PLAYGROUND.bugHunt) expect(b.story.length).toBeGreaterThan(80);
+    });
+
+    // The bug panel highlights each snippet LINE BY LINE. highlightCode's string
+    // pass can emit malformed markup on a line holding an unbalanced quote next to
+    // a comment (Task 7's review found the shape), so pin every shipped line.
+    it('every bug-hunt line highlights to balanced, text-preserving markup', async () => {
+        const { highlightCode } = await import('../../../onboarding/src/render/codeWin.mjs');
+        for (const bug of PLAYGROUND.bugHunt) {
+            for (const [i, line] of bug.code.split('\n').entries()) {
+                const html = highlightCode(line);
+                let depth = 0;
+                for (const tag of html.match(/<\/?span[^>]*>/g) || []) {
+                    depth += tag.startsWith('</') ? -1 : 1;
+                    expect(depth, `${bug.id} line ${i}: closing tag with nothing open`).toBeGreaterThanOrEqual(0);
+                }
+                expect(depth, `${bug.id} line ${i}: unclosed span`).toBe(0);
+                const text = html.replace(/<\/?span[^>]*>/g, '')
+                    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+                expect(text, `${bug.id} line ${i}: text not preserved`).toBe(line);
+            }
+        }
     });
 });
 
@@ -2511,20 +2622,20 @@ function renderBugs(el, ctx, bugId) {
             const st = ctx.profile.bugs[b.id];
             const mark = st === 'found' ? '<span class="accent">✓</span>'
                 : st === 'revealed' ? '<span class="amber">◦</span>' : '<span class="dim">·</span>';
-            return `<li>${mark} <a class="${b.id === bug.id ? 'amber' : ''}" href="#/playground/bugs/${b.id}">${b.title}</a></li>`;
+            return `<li>${mark} <a class="${b.id === bug.id ? 'amber' : ''}" href="#/playground/bugs/${b.id}">${escP(b.title)}</a></li>`;
         }).join('') + '</ul>' +
         '<p class="dim">Each panel reconstructs the bug as it was written. Click the guilty line. One shot.</p>';
 
     const panel = pgPane(bug.title);
     const lines = bug.code.split('\n');
-    panel.body.innerHTML = `<p>${bug.setup}</p><pre class="code bug-code">` +
+    panel.body.innerHTML = `<p>${escP(bug.setup)}</p><pre class="code bug-code">` +
         lines.map((ln, i) => {
             const cls = status && i === bug.guiltyLine ? 'bug-line guilty' : 'bug-line';
             return `<span class="${cls}" data-line="${i}">${highlightCode(ln) || ' '}</span>`;
         }).join('\n') + '</pre>' +
         (status ? `<p class="${status === 'found' ? 'accent' : 'amber'}">` +
             `${status === 'found' ? 'found it.' : 'revealed — the guilty line is highlighted.'}</p>` +
-            `<p class="bug-story">${bug.story}</p>` +
+            `<p class="bug-story">${escP(bug.story)}</p>` +
             `<p class="dim">lives on, fixed: <a href="#/code/${bug.fixedRef}"><code>${bug.fixedRef}</code></a></p>`
           : '');
     if (!status) {
@@ -2760,12 +2871,12 @@ function renderWdil(el, ctx, wdilId) {
             const st = ctx.profile.wdil[w.id];
             const mark = st?.done ? (st.failed ? '<span class="amber">◦</span>' : '<span class="accent">✓</span>')
                                   : '<span class="dim">·</span>';
-            return `<li>${mark} <a class="${w.id === item.id ? 'amber' : ''}" href="#/playground/wdil/${w.id}">${w.prompt}</a></li>`;
+            return `<li>${mark} <a class="${w.id === item.id ? 'amber' : ''}" href="#/playground/wdil/${w.id}">${escP(w.prompt)}</a></li>`;
         }).join('') + '</ol>';
 
     const game = pgPane(`find it · ${3 - state.tries} tries left`);
-    game.body.innerHTML = `<p>${item.prompt}</p>` +
-        (state.tries >= 1 && !state.done ? `<p class="amber">hint: ${item.hint}</p>` : '') +
+    game.body.innerHTML = `<p>${escP(item.prompt)}</p>` +
+        (state.tries >= 1 && !state.done ? `<p class="amber">hint: ${escP(item.hint)}</p>` : '') +
         (state.done ? `<p class="${state.failed ? 'amber' : 'accent'}">` +
             (state.failed ? 'it lives in: ' : 'correct: ') +
             item.answers.map(a => `<a href="#/code/${a}"><code>${a}</code></a>`).join(' or ') + '</p>'
@@ -2857,6 +2968,72 @@ Source lives in `src/` (ESM; single-line imports; `export const/function` only �
 the bundler strips module syntax by line). Content modules are data-only and
 JSON-serializable. Validators: `src/content/validate.mjs`.
 ```
+
+- [ ] **Step 1a: Close three gaps the task reviews left open**
+
+Each is a one-liner the reviewing task couldn't take without deviating from its own brief:
+
+1. **The merge-lab conflict assertion passes on the opposite outcome.** In
+   `tests/unit/onboarding/content.test.js`, the `merge lab` block asserts
+   `toContain('conflict')` — which the clean verdict `'✓ no conflicts — mergeable'`
+   also satisfies, so the engine could stop detecting conflicts entirely and the test
+   would stay green. Change it to `toContain('1 conflict(s)')`.
+2. **The boot-overlay fix has no regression guard.** A `display` rule on `#boot` beats
+   the UA `[hidden] { display: none }` on cascade origin, which left a full-screen
+   overlay covering the page from Task 3 until Task 10 caught it in a real browser.
+   Add to `tests/unit/onboarding/bundle.test.js`: read `onboarding/index.html` and
+   assert it contains `#boot[hidden]`.
+3. **The merge lab's clean path over-generalizes.** Its refusal wording is accurate,
+   but the server also refuses a merge for reasons the panel doesn't model. Add one
+   `dim` line under the buttons in `renderMerge`: `<p class="dim">The lab models the
+   conflict gate only — the server also refuses on failed validation, a schema
+   mismatch, a moved target head, or an oversized result.</p>`
+4. **The page contradicts itself about `shared/diff.js`.** `onboarding/src/content/code-map.mjs`
+   annotates it "imported by client and server" — false (only `server/routes/mergeRequests.js`
+   and `server/stateCodec.js` import it), and Tasks 8 and 11 both shipped corrected strings
+   saying so in the same bundle. Reword the note's opening to: "The three-way diff/merge
+   engine — 189 lines, no dependencies, server-side today (the client renders the ChangeSet
+   the server computed). This playground bundles the real thing (Merge Lab)."
+5. **Two where-does-it-live entries mis-teach on a technicality.** `signup-cap`'s prompt asks
+   only where the cap is "counted and decided" while its `answers` also accept `server/auth.js`,
+   which enforces it — widen the prompt to "counted, decided, and enforced". And
+   `card-rollover` hides its disambiguation in a hint that only appears after a miss; move it
+   into the prompt: "Gallery and profile cards cycle their preview pages on hover. Which
+   component runs that cycle?"
+
+- [ ] **Step 2a: Guard `matchMedia`** — `onboarding/src/app.js` calls it bare, so the whole
+runtime IIFE aborts anywhere it is missing (jsdom, older embedded webviews) and the page
+renders nothing. Tasks 4 and 8 both had to hand-polyfill it to smoke-test the built page.
+Replace the bare call with a guarded read:
+
+```js
+    const reducedMotion = typeof matchMedia === 'function'
+        && matchMedia('(prefers-reduced-motion: reduce)').matches;
+```
+
+Add a test to `tests/unit/onboarding/chrome.test.js` that evaluates the committed
+`onboarding/index.html`'s runtime in jsdom **without** a `matchMedia` polyfill and asserts the
+status bar and intro pane rendered — the page's own no-blank-screen guard:
+
+```js
+describe('built page boots without matchMedia', () => {
+    it('renders chrome and the intro window in a bare jsdom document', async () => {
+        const fs = await import('fs');
+        const path = await import('path');
+        const { JSDOM } = await import('jsdom');
+        const html = fs.readFileSync(path.join(REPO_ROOT, 'onboarding/index.html'), 'utf8');
+        const errors = [];
+        const dom = new JSDOM(html, { runScripts: 'dangerously', pretendToBeVisual: false });
+        dom.window.addEventListener('error', e => errors.push(e.error || e.message));
+        expect(errors).toEqual([]);
+        expect(dom.window.document.querySelector('#statusbar').textContent).toContain('doctect');
+        expect(dom.window.document.querySelector('#root').textContent.length).toBeGreaterThan(200);
+        dom.window.close();
+    });
+});
+```
+
+(`jsdom` is already a devDependency — no new package.)
 
 - [ ] **Step 2: Make the footer visible** — in `style.css` replace `#buildinfo { display: none; }` with:
 
