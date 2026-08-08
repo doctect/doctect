@@ -119,3 +119,48 @@ describe('quiz ladder', () => {
         }
     });
 });
+
+describe('quiz answer distribution', () => {
+    it('no index dominates a level and constant-guessing cannot clear the 6/8 gate', () => {
+        for (const [li, level] of PLAYGROUND.quizLevels.entries()) {
+            for (let choice = 0; choice < 4; choice++) {
+                const score = level.questions.filter(q => q.answer === choice).length;
+                expect(score, `L${li} always-option-${choice} scores ${score}/8`).toBeLessThan(6);
+                expect(score, `L${li} index ${choice} over-used`).toBeLessThanOrEqual(3);
+            }
+        }
+    });
+});
+
+describe('quiz interaction', () => {
+    const makeCtx = (content, profile, parts) => ({
+        data: { vitals: { gitSha: 'x' } }, content, profile,
+        save: () => {}, navigate: () => {}, route: { win: 'playground', parts }, diff: null,
+    });
+
+    it('locks later levels, unlocks on a passing best, and retry keeps the best', async () => {
+        const { renderPlayground } = await import('../../../onboarding/src/render/playgroundWin.mjs');
+        const { defaultProfile } = await import('../../../onboarding/src/app-logic.mjs');
+        const content = await buildContent();
+        const level = content.playground.quizLevels[0];
+        const profile = defaultProfile();
+        const el = document.createElement('div');
+
+        renderPlayground(el, makeCtx(content, profile, ['quiz', '1']));
+        expect(el.textContent).toContain('locked');
+
+        renderPlayground(el, makeCtx(content, profile, ['quiz', '0']));
+        level.questions.forEach((q, qi) => {
+            el.querySelector(`.quiz-opt[data-q="${qi}"][data-o="${q.answer}"]`).click();
+        });
+        expect(profile.quiz[0].best).toBe(8);
+
+        renderPlayground(el, makeCtx(content, profile, ['quiz', '1']));
+        expect(el.textContent).not.toContain('locked');
+
+        renderPlayground(el, makeCtx(content, profile, ['quiz', '0']));
+        el.querySelector('[data-reset]').click();
+        expect(profile.quiz[0].best).toBe(8);
+        expect(profile.quiz[0].answers).toEqual({});
+    });
+});

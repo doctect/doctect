@@ -103,6 +103,7 @@ pre.diagram { background: #0e1310; border: 1px solid #2a352c; padding: 14px; ove
 .tree a.tree-file.selected { color: #0c0f0d; background: #7ce38b; padding: 0 4px; }
 .code-tree input { width: 100%; }
 .dive-list { margin-top: 1em; border-top: 1px solid #2a352c; padding-top: 8px; }
+.dive-list ul { list-style: none; }
 .pane-subtitle { color: #e3c67c; font-size: 12px; margin-bottom: 6px; }
 .dive-pane { flex: 1; }
 .dive-pane .pane-body { max-width: 90ch; }

@@ -20,7 +20,7 @@ function renderHub(el, ctx) {
     const quizMax = pg.quizLevels.reduce((s, l) => s + l.questions.length, 0);
     const quizDone = pg.quizLevels.reduce((s, _, i) => s + (ctx.profile.quiz[i]?.best || 0), 0);
     hub.body.innerHTML =
-        `<p>rank: <span class="amber">${rank}</span> · ${points}/${max} points</p>` +
+        `<p>rank: <span class="amber">${escP(rank)}</span> · ${points}/${max} points</p>` +
         `<div class="pg-cards">` +
         `<a class="pg-card" href="#/playground/quiz/0"><b>quiz ladder</b><span class="dim">${pg.quizLevels.length} levels, unlock at 6/8 · ${quizDone}/${quizMax}</span></a>` +
         `<a class="pg-card" href="#/playground/bugs"><b>bug hunt</b><span class="dim">${pg.bugHunt.length} real historical bugs</span></a>` +
