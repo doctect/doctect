@@ -71,6 +71,8 @@ export const validateContent = (content, refs) => {
             `bugHunt ${bug.id}: guiltyLine out of range`);
         push(errors, !bug.story, `bugHunt ${bug.id}: empty story`);
         push(errors, !fileOk(bug.fixedRef), `bugHunt ${bug.id}: missing fixedRef ${bug.fixedRef}`);
+        push(errors, bug.anchorId && !anchorIds.has(bug.anchorId),
+            `bugHunt ${bug.id}: unknown anchor ${bug.anchorId}`);
     }
     for (const s of content.playground.mergeScenarios) {
         push(errors, !s.name || !s.base || !s.fork || !s.upstream, `mergeScenario: incomplete ${s.name || '?'}`);

@@ -13,8 +13,10 @@ offline, with zero dependencies.
 
 Rerun after meaningful repo changes (same policy as `docs-capture/`): the tree,
 vitals, code excerpts, and the diff-engine bundle are read from the working
-checkout at build time. The footer of the page records when and from which
-commit it was built. Commit the regenerated `index.html`.
+checkout at build time. The footer records the build time and the commit that was
+checked out when the build ran — which is structurally the PARENT of the commit
+that carries the rebuilt page, since you build first and commit second. Commit the
+regenerated `index.html`.
 
 ## What guards it
 

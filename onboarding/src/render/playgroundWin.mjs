@@ -85,6 +85,16 @@ function renderQuiz(el, ctx, levelIdx) {
     el.append(pane.s);
 }
 
+// A resolved bug can show the real code as it stands today, straight out of the
+// tree, when it carries an anchorId. ctx.data.excerpts is absent in unit contexts
+// that never build them, so this stays optional at both ends.
+function fixedExcerptHtml(ctx, bug) {
+    const excerpt = bug.anchorId && (ctx.data.excerpts || []).find(e => e.id === bug.anchorId);
+    if (!excerpt) return '';
+    return `<p class="dim">${escP(excerpt.file)}:${excerpt.startLine} — today:</p>` +
+        `<pre class="code">${highlightCode(excerpt.code)}</pre>`;
+}
+
 function renderBugs(el, ctx, bugId) {
     const bugs = ctx.content.playground.bugHunt;
     const bug = bugs.find(b => b.id === bugId) || bugs[0];
@@ -112,7 +122,8 @@ function renderBugs(el, ctx, bugId) {
         (status ? `<p class="${status === 'found' ? 'accent' : 'amber'}">` +
             `${status === 'found' ? 'found it.' : 'revealed — the guilty line is highlighted.'}</p>` +
             `<p class="bug-story">${escP(bug.story)}</p>` +
-            `<p class="dim">lives on, fixed: <a href="#/code/${bug.fixedRef}"><code>${bug.fixedRef}</code></a></p>`
+            `<p class="dim">lives on, fixed: <a href="#/code/${bug.fixedRef}"><code>${bug.fixedRef}</code></a></p>` +
+            fixedExcerptHtml(ctx, bug)
           : '');
     if (!status) {
         panel.body.querySelector('.bug-code').addEventListener('click', (e) => {

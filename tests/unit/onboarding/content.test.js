@@ -1,6 +1,6 @@
 // tests/unit/onboarding/content.test.js
 import { describe, it, expect } from 'vitest';
-import { REPO_ROOT, buildRefs, buildContent } from '../../../onboarding/build.mjs';
+import { REPO_ROOT, buildRefs, buildContent, scanTree, flattenTreePaths } from '../../../onboarding/build.mjs';
 import { validateContent } from '../../../onboarding/src/content/validate.mjs';
 import { INTRO } from '../../../onboarding/src/content/intro.mjs';
 import { TOURS } from '../../../onboarding/src/content/tours.mjs';
@@ -195,7 +195,7 @@ describe('CODE_MAP annotations', () => {
     // is redundancy rather than the thing doing the work. (A previous round shipped
     // a semantic rule that was green on three of the four: the passive phrasings
     // give the client no verb to be the subject of.)
-    it('the semantic patterns alone catch all four, without the verbatim list', () => {
+    it('the semantic patterns alone catch every phrasing, without the verbatim list', () => {
         for (const [where, text] of Object.entries({ ...HISTORICAL_COPIES, ...MUST_BE_CAUGHT })) {
             expect(sentencesOf([text]).some(semanticClaim), `semantics missed: ${where}`).toBe(true);
         }
@@ -238,6 +238,79 @@ describe('CODE_MAP annotations', () => {
     });
 });
 
+import fs from 'node:fs';
+import path from 'node:path';
+
+// Sibling guards to the shared/diff.js importer pin above, for the claims that are
+// COUNTABLE against the repo. Every one of these shipped wrong at least once: a
+// module states a number, a later task corrects it in its own module, nobody sweeps
+// back. A count that the repo can answer should not be re-checked by hand.
+describe('countable claims still agree with the repo', () => {
+    const readRepo = (rel) => fs.readFileSync(path.join(REPO_ROOT, rel), 'utf8');
+
+    // Shipped as "Two migrations are database triggers" while three do. That note is
+    // also the nearest-commentary FALLBACK for every unannotated file under
+    // server/migrations/, so it is the most-shown sentence in the module.
+    it('exactly three migrations install database triggers', () => {
+        const src = readRepo('server/migrations/index.js');
+        const ids = [...src.matchAll(/id:\s*'(\d{3}_[a-z0-9_]+)'/g)];
+        const withTriggers = ids.filter(([, ], i) => {
+            const from = ids[i].index;
+            const to = i + 1 < ids.length ? ids[i + 1].index : src.length;
+            return /CREATE TRIGGER/.test(src.slice(from, to));
+        }).map(m => m[1]);
+        expect(withTriggers,
+            'server/migrations/index.js changed which migrations CREATE TRIGGER. Update the '
+            + '"server/migrations" and "server/migrations/index.js" annotations in '
+            + 'onboarding/src/content/code-map.mjs, plus the migrations deep dive.'
+        ).toEqual(['011_account_moderation', '012_session_suspension_guard', '014_platform_audit_actions']);
+        const note = CODE_MAP.annotations.find(a => a.path === 'server/migrations').note;
+        expect(note, 'the note must still say how many install triggers').toContain('Three');
+    });
+
+    // Shipped enumerating FOUR classes and closing "Everything else coexists" while
+    // the engine detects six — and the Merge Lab ships a preset producing one of the
+    // two that were missing, so a reader disproved the deep dive with one click.
+    it('shared/diff.js still detects exactly six conflict classes', () => {
+        const src = readRepo('shared/diff.js');
+        const pushes = src.split('conflicts.push').length - 1;
+        // 7 push sites, 6 classes: removed-vs-modified is pushed twice, once per
+        // direction (fork removed / upstream removed), and reads as one class.
+        expect(pushes,
+            'shared/diff.js gained or lost a conflicts.push. Re-enumerate the conflict '
+            + 'classes in the diff-engine deep dive (onboarding/src/content/code-map.mjs) '
+            + 'AND the fork-merge tour step (onboarding/src/content/tours.mjs) — both list '
+            + 'them out loud and both have been wrong before.'
+        ).toBe(7);
+        for (const [where, text] of Object.entries({
+            'code-map diff-engine dive': CODE_MAP.deepDives.find(d => d.id === 'diff-engine')
+                .sections.find(s => s.anchorId === 'diff-threeway').text,
+            'fork-merge tour step': TOURS.find(t => t.id === 'fork-merge')
+                .steps.find(s => /threeWayDiff/.test(s.text)).text,
+        })) {
+            expect(text, `${where} must state the count`).toMatch(/six/i);
+        }
+    });
+
+    // Shipped as "every path that accepts an AppState: commits, publish, …" and
+    // "Every write path funnels through it — saves, publishes, merges". Publish takes
+    // listing fields and an If-Match head; it never accepts an AppState.
+    it('validateAppState still has exactly three call sites', () => {
+        const sites = {};
+        for (const rel of flattenTreePaths(scanTree(REPO_ROOT))) {
+            if (!/\.[cm]?[jt]sx?$/.test(rel) || /\.test\./.test(rel) || rel.startsWith('onboarding/')) continue;
+            const calls = readRepo(rel).split(/(?<![A-Za-z])validateAppState\(/).length - 1;
+            if (calls) sites[rel] = calls;
+        }
+        expect(sites,
+            'the validateAppState call sites moved. Update the validate-appstate deep dive '
+            + '(onboarding/src/content/code-map.mjs) and the cloud-save tour step that names '
+            + 'them (onboarding/src/content/tours.mjs) — if publish ever gains one, both '
+            + 'currently say out loud that it has none.'
+        ).toEqual({ 'server/routes/mergeRequests.js': 1, 'server/routes/projects.js': 2 });
+    });
+});
+
 import { REPO_ROOT as ROOT2, extractExcerpts } from '../../../onboarding/build.mjs';
 import { highlightCode } from '../../../onboarding/src/render/codeWin.mjs';
 
@@ -269,6 +342,51 @@ describe('deep dives + anchors', () => {
             expect(html.replace(/<\/?span[^>]*>/g, ''), `${excerpt.id}: text changed`)
                 .toBe(excerpt.code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'));
         }
+    });
+});
+
+// Three of the four windows executed in ZERO committed tests: a refactor that made
+// renderTours/renderCode throw would have shipped a blank window under a green
+// suite. These drive the two that the playground tests below do not.
+describe('tour + code windows actually render', () => {
+    const baseCtx = (content, parts, data = {}) => ({
+        content, data, profile: { quiz: {}, bugs: {}, wdil: {} },
+        save: () => {}, navigate: () => {}, diff: null, route: { win: 'x', parts },
+    });
+
+    it('renderTours paints the active step and lights exactly its diagram tokens', async () => {
+        const { renderTours } = await import('../../../onboarding/src/render/toursWin.mjs');
+        const content = await buildContent();
+        const tour = content.tours.find(t => t.id === 'fork-merge');
+        const idx = tour.steps.length - 1;
+        const el = document.createElement('div');
+
+        renderTours(el, baseCtx(content, ['fork-merge', String(idx)]));
+
+        expect(el.querySelector('.tour-text').textContent).toBe(tour.steps[idx].text);
+        const lit = [...el.querySelectorAll('.diag.lit')].map(n => n.dataset.d).sort();
+        expect(lit.length).toBeGreaterThan(0);
+        expect(lit).toEqual([...tour.steps[idx].highlight].sort());
+        // The unlit tokens must still render — a diagram that lights everything, or
+        // nothing, is the failure this catches.
+        expect(el.querySelectorAll('.diag').length).toBeGreaterThan(lit.length);
+    });
+
+    it('renderCode paints a deep dive with its anchored excerpt', async () => {
+        const { renderCode } = await import('../../../onboarding/src/render/codeWin.mjs');
+        const content = await buildContent();
+        const dive = content.codeMap.deepDives.find(d => d.id === 'diff-engine');
+        const idx = dive.sections.findIndex(s => s.anchorId === 'diff-changeset');
+        const excerpts = extractExcerpts(REPO_ROOT, content.codeMap.anchors);
+        const el = document.createElement('div');
+
+        renderCode(el, baseCtx(content, ['dive', 'diff-engine', String(idx)], { excerpts }));
+
+        expect(el.querySelector('.pane-title').textContent).toContain(dive.title);
+        expect(el.textContent).toContain(dive.sections[idx].text);
+        const code = el.querySelector('pre.code');
+        expect(code, 'the anchored excerpt did not render').not.toBeNull();
+        expect(code.textContent).toContain('export const computeChangeSet');
     });
 });
 

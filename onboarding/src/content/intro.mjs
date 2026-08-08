@@ -10,7 +10,7 @@ export const INTRO = {
     run: [
         { cmd: 'npm run dev', note: 'Vite client :3000 + Express API :3001, concurrently' },
         { cmd: 'npm test', note: 'vitest unit suite (jsdom) — the ~1,850-test wall every round leans on' },
-        { cmd: 'npm run test:e2e', note: 'Playwright end-to-end, Chromium + Firefox, boots its own server' },
+        { cmd: 'npm run test:e2e', note: 'Playwright end-to-end across the three configured projects (chromium, firefox, webkit), boots its own server' },
         { cmd: 'node docs-capture/run.js <track>', note: 'regenerate the in-app docs screenshots from a live scripted app' },
         { cmd: 'node onboarding/build.mjs', note: 'regenerate this page from the current repo' },
         { cmd: 'npm run build', note: 'production client build into dist/, served by the Express fallback route' },

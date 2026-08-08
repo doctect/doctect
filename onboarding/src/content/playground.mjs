@@ -50,7 +50,7 @@ export const PLAYGROUND = {
               answer: 2, why: 'Opening must never execute foreign code. Preview runs in a sandboxed iframe + disposable worker with a 10 s timeout (SANDBOX_TIMEOUT_MS, services/generatorSandbox.ts).' },
             { q: 'Which client code is code-split off the main chunk?',
               options: ['The /docs section and the Edit Listing modal', 'Every route', 'The gallery', 'Nothing'],
-              answer: 0, why: 'App.tsx imports every page statically by design — there are no per-route chunks. DocsSection and the ~6 kB EditListingModal are the client’s only two lazy boundaries.' },
+              answer: 0, why: 'App.tsx imports every page statically by design — there are no per-route chunks. DocsSection and the ~6 kB EditListingModal are the client’s only two lazy boundaries. Splitting the docs section out moved roughly 160 KB gzipped off the critical path, measured on a production build.' },
         ] },
         { title: 'L3 · server & data', questions: [
             { q: 'Migration policy is…',
@@ -177,6 +177,7 @@ export const PLAYGROUND = {
           code: "const distPath = path.join(__dirname, '../dist');\napp.use(express.static(distPath));\napp.get(/.*/, (req, res) => {\n    res.sendFile(path.join(distPath, 'index.html'));\n});",
           guiltyLine: 3,
           story: 'express@5.2.1’s res.sendFile() 404s on a bare absolute path here even when the file exists — so every hard load of any non-root route (/login, /app, every gallery URL, a refresh, a bookmark) died the moment the app was served from the built dist/ instead of the dev server. In-app navigation was unaffected and Vite’s dev server has its own correct fallback, which is why the identical call sat unnoticed for six months, byte-for-byte, since the repo’s first Express commit. What found it was the gallery plan’s final task building and booting the production path for the first time — not a code review. The fix is the one-line recommended form: res.sendFile(\'index.html\', { root: distPath }).',
+          anchorId: 'spa-fallback',
           fixedRef: 'server/app.js' },
     ],
     // Mirrors tests/unit/onboarding/fixtures/diffScenarios.js exactly (a test in

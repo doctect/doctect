@@ -21,21 +21,44 @@ const BINARY_EXT = /\.(png|jpe?g|webp|gif|ico|pdf|zip|woff2?|ttf|otf|mp4|webm|db
 const isExcluded = (relPath, name) =>
     SCAN_EXCLUDES.includes(name) || SCAN_EXCLUDES.includes(relPath);
 
+// wc -l semantics: a trailing newline TERMINATES the last line, it does not start
+// an empty one. Counting split segments overcounts every newline-terminated file by
+// one, which shipped as a visible contradiction (a tour called textPadding.ts an
+// "87-line module" while the code window rendered "88 lines" for the same file).
+const countLines = (text) =>
+    text === '' ? 0 : text.split('\n').length - (text.endsWith('\n') ? 1 : 0);
+
+// Vitest runs test files in parallel and some suites create-then-delete temp dirs
+// inside the repo (tests/unit/gallerySampleHarness.test.ts writes under
+// gallery-samples/). An entry can therefore vanish between readdir and stat, and
+// content.test.js calls buildRefs at module level — so an unguarded throw takes a
+// whole test file down at collection with an opaque ENOENT. Skip what vanished;
+// that covers any future churn, which an exclusion list would not.
+const GONE = Symbol('gone');
+const skipIfGone = (fn) => {
+    try { return fn(); } catch (e) { if (e.code === 'ENOENT') return GONE; throw e; }
+};
+
 export const scanTree = (rootDir, relPath = '') => {
     const abs = path.join(rootDir, relPath);
     const name = relPath === '' ? path.basename(rootDir) : path.basename(relPath);
-    const stat = fs.statSync(abs);
+    const stat = skipIfGone(() => fs.statSync(abs));
+    if (stat === GONE) return null;
     if (stat.isDirectory()) {
-        const children = fs.readdirSync(abs)
+        const entries = skipIfGone(() => fs.readdirSync(abs));
+        if (entries === GONE) return null;
+        const children = entries
             .filter(entry => !isExcluded(relPath ? `${relPath}/${entry}` : entry, entry))
             .map(entry => scanTree(rootDir, relPath ? `${relPath}/${entry}` : entry))
+            .filter(Boolean)
             .sort((a, b) => (a.kind === b.kind ? a.name.localeCompare(b.name) : a.kind === 'dir' ? -1 : 1));
         return { name, path: relPath, kind: 'dir', size: children.reduce((s, c) => s + c.size, 0),
                  lines: null, children };
     }
-    const lines = BINARY_EXT.test(name) ? null
-        : fs.readFileSync(abs, 'utf8').split('\n').length;
-    return { name, path: relPath, kind: 'file', size: stat.size, lines };
+    if (BINARY_EXT.test(name)) return { name, path: relPath, kind: 'file', size: stat.size, lines: null };
+    const text = skipIfGone(() => fs.readFileSync(abs, 'utf8'));
+    if (text === GONE) return null;
+    return { name, path: relPath, kind: 'file', size: stat.size, lines: countLines(text) };
 };
 
 const walkFiles = (node, out = []) => {
