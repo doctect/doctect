@@ -2988,6 +2988,18 @@ Each is a one-liner the reviewing task couldn't take without deviating from its 
    `dim` line under the buttons in `renderMerge`: `<p class="dim">The lab models the
    conflict gate only — the server also refuses on failed validation, a schema
    mismatch, a moved target head, or an oversized result.</p>`
+4. **The page contradicts itself about `shared/diff.js`.** `onboarding/src/content/code-map.mjs`
+   annotates it "imported by client and server" — false (only `server/routes/mergeRequests.js`
+   and `server/stateCodec.js` import it), and Tasks 8 and 11 both shipped corrected strings
+   saying so in the same bundle. Reword the note's opening to: "The three-way diff/merge
+   engine — 189 lines, no dependencies, server-side today (the client renders the ChangeSet
+   the server computed). This playground bundles the real thing (Merge Lab)."
+5. **Two where-does-it-live entries mis-teach on a technicality.** `signup-cap`'s prompt asks
+   only where the cap is "counted and decided" while its `answers` also accept `server/auth.js`,
+   which enforces it — widen the prompt to "counted, decided, and enforced". And
+   `card-rollover` hides its disambiguation in a hint that only appears after a miss; move it
+   into the prompt: "Gallery and profile cards cycle their preview pages on hover. Which
+   component runs that cycle?"
 
 - [ ] **Step 2a: Guard `matchMedia`** — `onboarding/src/app.js` calls it bare, so the whole
 runtime IIFE aborts anywhere it is missing (jsdom, older embedded webviews) and the page
