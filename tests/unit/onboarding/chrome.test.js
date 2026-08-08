@@ -4,6 +4,7 @@ import { parseHash, buildHash, formatBytes, filterTree, findNode, nearestAnnotat
          WINDOWS, escapeHtml } from '../../../onboarding/src/app-logic.mjs';
 import { REPO_ROOT, buildRuntimeBundle, assemblePage, buildData, buildContent }
     from '../../../onboarding/build.mjs';
+import { highlightCode } from '../../../onboarding/src/render/codeWin.mjs';
 
 describe('router helpers', () => {
     it('parses window + parts, defaults to intro', () => {
@@ -79,6 +80,23 @@ describe('profile + ranks', () => {
     });
     it('escapeHtml neutralizes markup', () => {
         expect(escapeHtml('node run.js <track> & "x"')).toBe('node run.js &lt;track&gt; &amp; &quot;x&quot;');
+    });
+});
+
+describe('highlightCode', () => {
+    it('tags keywords, strings and comments and escapes the code itself', () => {
+        const out = highlightCode('const tag = "<script>"; // & done');
+        expect(out).toContain('<span class="tok-k">const</span>');
+        expect(out).toContain('&lt;script&gt;');
+        expect(out).not.toContain('<script>');
+        expect(out).toContain('<span class="tok-c">// &amp; done</span>');
+    });
+    it('never rewrites the markup it already emitted (class is itself a keyword)', () => {
+        const src = "const x = 'added'; // note";
+        const out = highlightCode(src);
+        expect(out).not.toMatch(/<span <span/);          // nested-tag corruption
+        expect(out).not.toMatch(/>=&quot;|>="tok-/);      // attribute text leaking into the page
+        expect(out.replace(/<\/?span[^>]*>/g, '')).toBe(src);
     });
 });
 

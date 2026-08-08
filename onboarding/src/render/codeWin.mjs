@@ -5,6 +5,21 @@ import { formatBytes, filterTree, findNode, flattenDirs, nearestAnnotated, escap
 
 const escC = escapeHtml;
 
+// Deliberately minimal: comments, strings, keywords. Escapes internally, so
+// callers must NOT pre-escape the code they pass in.
+export function highlightCode(code) {
+    const esc = code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return esc
+        .replace(/(\/\/[^\n]*|\/\*[\s\S]*?\*\/)/g, '<span class="tok-c">$1</span>')
+        .replace(/(&#39;|')(?:[^'\\\n]|\\.)*\1|(&quot;|")(?:[^"\\\n]|\\.)*\2|`[^`]*`/g,
+            (m) => m.includes('tok-') ? m : `<span class="tok-s">${m}</span>`)
+        // The leading tag alternative is load-bearing: it consumes the spans the
+        // passes above emitted, so `class` (a keyword!) inside class="tok-c"
+        // cannot be rewritten into a nested tag.
+        .replace(/<\/?span[^>]*>|\b(const|let|var|function|return|if|else|for|while|import|export|class|new|throw|await|async|null|true|false|typeof|delete)\b/g,
+            (m, kw) => kw ? `<span class="tok-k">${kw}</span>` : m);
+}
+
 export function treeHtml(node, selectedPath, openPaths) {
     if (node.kind === 'file') {
         const sel = node.path === selectedPath ? ' selected' : '';
@@ -50,7 +65,36 @@ function detailHtml(ctx, selectedPath) {
     return html;
 }
 
+function renderDive(el, ctx, diveId, sectionIdx) {
+    const dive = ctx.content.codeMap.deepDives.find(d => d.id === diveId);
+    if (!dive) { ctx.navigate('#/code'); return; }
+    const idx = Math.min(Math.max(sectionIdx, 0), dive.sections.length - 1);
+    const section = dive.sections[idx];
+    const excerpt = section.anchorId
+        ? ctx.data.excerpts.find(e => e.id === section.anchorId) : null;
+
+    const pane = document.createElement('section');
+    pane.className = 'pane dive-pane';
+    pane.innerHTML = `<div class="pane-title">deep dive · ${escC(dive.title)}</div>` +
+        `<div class="pane-body">` +
+        `<p class="dim">${escC(dive.tagline)} · <a href="#/code">back to the tree</a></p>` +
+        `<p>${escC(section.text)}</p>` +
+        (excerpt ? `<p class="dim"><a href="#/code/${escC(excerpt.file)}"><code>${escC(excerpt.file)}</code></a>` +
+                   `:${excerpt.startLine}</p><pre class="code">${highlightCode(excerpt.code)}</pre>` : '') +
+        `<div class="tour-nav">` +
+        (idx > 0 ? `<a href="#/code/dive/${dive.id}/${idx - 1}">◀ prev</a>` : '<span></span>') +
+        `<span class="dim">${idx + 1}/${dive.sections.length}</span>` +
+        (idx < dive.sections.length - 1 ? `<a href="#/code/dive/${dive.id}/${idx + 1}">next ▶</a>` : '<span></span>') +
+        `</div></div>`;
+    el.append(pane);
+}
+
 export function renderCode(el, ctx) {
+    // 'dive' is reserved as a first part: no repo path starts with a dive/ dir.
+    if (ctx.route.parts[0] === 'dive') {
+        renderDive(el, ctx, ctx.route.parts[1], Number(ctx.route.parts[2]) || 0);
+        return;
+    }
     const selectedPath = ctx.route.parts.join('/');
     const openPaths = ancestorsOf(selectedPath);
 
@@ -58,7 +102,11 @@ export function renderCode(el, ctx) {
     nav.className = 'pane code-tree';
     nav.innerHTML = `<div class="pane-title">files</div><div class="pane-body">` +
         `<input data-search type="search" placeholder="/ filter…">` +
-        `<nav class="tree"></nav></div>`;
+        `<nav class="tree"></nav>` +
+        `<div class="dive-list"><div class="pane-subtitle">deep dives</div><ul>` +
+        ctx.content.codeMap.deepDives.map(d =>
+            `<li><a href="#/code/dive/${d.id}/0">${escC(d.title)}</a></li>`).join('') + '</ul></div>' +
+        `</div>`;
     const treeBox = nav.querySelector('.tree');
     const drawTree = (query) => {
         const filtered = query ? filterTree(ctx.data.tree, query) : ctx.data.tree;

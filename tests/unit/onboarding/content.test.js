@@ -68,3 +68,37 @@ describe('CODE_MAP annotations', () => {
         }
     });
 });
+
+import { REPO_ROOT as ROOT2, extractExcerpts } from '../../../onboarding/build.mjs';
+import { highlightCode } from '../../../onboarding/src/render/codeWin.mjs';
+
+describe('deep dives + anchors', () => {
+    it('ships the eight spec dives and every anchor resolves', () => {
+        expect(CODE_MAP.deepDives.map(d => d.id)).toEqual(
+            ['diff-engine', 'text-layout', 'generator-sandbox', 'migrations',
+             'publication-pinning', 'validate-appstate', 'dotenv-seals', 'auth-stack']);
+        const excerpts = extractExcerpts(ROOT2, CODE_MAP.anchors); // throws AnchorError on rot
+        expect(excerpts.length).toBe(CODE_MAP.anchors.length);
+        for (const dive of CODE_MAP.deepDives) {
+            expect(dive.sections.length).toBeGreaterThanOrEqual(2);
+            expect(dive.sections.some(s => s.anchorId)).toBe(true);
+        }
+    });
+
+    // Anti-rot: re-pointing an anchor must not hand the page markup that the
+    // highlighter mangles. Every shipped excerpt has to come out balanced and
+    // with its text intact once the tokens are stripped again.
+    it('highlights every shipped excerpt into balanced, text-preserving markup', () => {
+        for (const excerpt of extractExcerpts(ROOT2, CODE_MAP.anchors)) {
+            const html = highlightCode(excerpt.code);
+            let depth = 0;
+            for (const tag of html.match(/<\/?span[^>]*>/g) || []) {
+                depth += tag.startsWith('</') ? -1 : 1;
+                expect(depth, `${excerpt.id}: closing tag with nothing open`).toBeGreaterThanOrEqual(0);
+            }
+            expect(depth, `${excerpt.id}: unbalanced spans`).toBe(0);
+            expect(html.replace(/<\/?span[^>]*>/g, ''), `${excerpt.id}: text changed`)
+                .toBe(excerpt.code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'));
+        }
+    });
+});
