@@ -106,3 +106,14 @@ pre.diagram { background: #0e1310; border: 1px solid #2a352c; padding: 14px; ove
 .pane-subtitle { color: #e3c67c; font-size: 12px; margin-bottom: 6px; }
 .dive-pane { flex: 1; }
 .dive-pane .pane-body { max-width: 90ch; }
+
+/* playground */
+.pg-pane { flex: 1; }
+.pg-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; margin-top: 1em; }
+.pg-card { border: 1px solid #2a352c; padding: 16px; display: flex; flex-direction: column; gap: 6px; }
+.pg-card:hover { border-color: #7ce38b; text-decoration: none; }
+.quiz-q { margin: 1.2em 0; }
+.quiz-opt { display: block; width: 100%; text-align: left; margin: 4px 0; }
+.quiz-opt.right { border-color: #7ce38b; color: #7ce38b; }
+.quiz-opt.wrong { border-color: #e37c7c; color: #e37c7c; }
+.quiz-why { margin-top: 6px; max-width: 80ch; }

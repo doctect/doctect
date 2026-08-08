@@ -102,3 +102,20 @@ describe('deep dives + anchors', () => {
         }
     });
 });
+
+import { PLAYGROUND } from '../../../onboarding/src/content/playground.mjs';
+
+describe('quiz ladder', () => {
+    it('is 5 levels × 8 questions, each with a cited why', () => {
+        expect(PLAYGROUND.quizLevels).toHaveLength(5);
+        for (const level of PLAYGROUND.quizLevels) {
+            expect(level.questions).toHaveLength(8);
+            for (const q of level.questions) expect(q.why.length).toBeGreaterThan(20);
+        }
+    });
+    it('answers are not all the same index (no answer-position tell)', () => {
+        for (const level of PLAYGROUND.quizLevels) {
+            expect(new Set(level.questions.map(q => q.answer)).size).toBeGreaterThan(1);
+        }
+    });
+});
