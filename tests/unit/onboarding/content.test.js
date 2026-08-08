@@ -216,3 +216,31 @@ describe('bug hunt interaction', () => {
         expect(profile2.bugs[bug.id]).toBe('revealed');
     });
 });
+
+import { DIFF_SCENARIOS } from './fixtures/diffScenarios.js';
+import * as realDiff from '../../../shared/diff.js';
+
+describe('merge lab', () => {
+    it('presets mirror the parity fixtures exactly', () => {
+        expect(PLAYGROUND.mergeScenarios.map(s => s.name)).toEqual(DIFF_SCENARIOS.map(s => s.name));
+        PLAYGROUND.mergeScenarios.forEach((s, i) => {
+            expect({ base: s.base, fork: s.fork, upstream: s.upstream })
+                .toEqual({ base: DIFF_SCENARIOS[i].base, fork: DIFF_SCENARIOS[i].fork, upstream: DIFF_SCENARIOS[i].upstream });
+            expect(s.blurb.length).toBeGreaterThan(20);
+        });
+    });
+    it('renderMerge runs the engine and prints conflicts', async () => {
+        const { renderPlayground } = await import('../../../onboarding/src/render/playgroundWin.mjs');
+        const { defaultProfile } = await import('../../../onboarding/src/app-logic.mjs');
+        const content = await buildContent();
+        const el = document.createElement('div');
+        const ctx = { data: { vitals: { gitSha: 'x' } }, content, profile: defaultProfile(),
+            save: () => {}, navigate: () => {}, route: { win: 'playground', parts: ['merge'] },
+            diff: realDiff };
+        renderPlayground(el, ctx);
+        el.querySelector('[data-scenario]').value = 'same-template-conflict';
+        el.querySelector('[data-scenario]').dispatchEvent(new Event('change'));
+        el.querySelector('[data-run]').click();
+        expect(el.querySelector('.merge-out').textContent).toContain('conflict');
+    });
+});

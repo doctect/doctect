@@ -126,11 +126,80 @@ function renderBugs(el, ctx, bugId) {
     el.append(list.s, panel.s);
 }
 
+function renderMerge(el, ctx) {
+    const scenarios = ctx.content.playground.mergeScenarios;
+    const lab = pgPane('merge lab · the engine the server enforces');
+    lab.body.innerHTML =
+        '<p><a href="#/playground">hub</a> · <span class="dim">this runs the REAL shared/diff.js, bundled at build time</span></p>' +
+        `<p><select data-scenario>${scenarios.map(s => `<option value="${escP(s.name)}">${escP(s.name)}</option>`).join('')}</select>` +
+        ' <button data-run>threeWayDiff</button> <button data-merge>merge (applyChangeSet)</button></p>' +
+        '<p class="dim" data-blurb></p>' +
+        '<div class="merge-grid">' +
+        ['base', 'fork', 'upstream'].map(k =>
+            `<div><div class="pane-subtitle">${k}</div><textarea data-${k} rows="14" spellcheck="false"></textarea></div>`
+        ).join('') + '</div>' +
+        '<div class="pane-subtitle">output</div><pre class="code merge-out">pick a scenario, edit the JSON, run.</pre>';
+
+    const ta = { base: lab.body.querySelector('[data-base]'), fork: lab.body.querySelector('[data-fork]'),
+                 upstream: lab.body.querySelector('[data-upstream]') };
+    const out = lab.body.querySelector('.merge-out');
+    const blurb = lab.body.querySelector('[data-blurb]');
+    const load = (name) => {
+        const s = scenarios.find(x => x.name === name) || scenarios[0];
+        for (const k of ['base', 'fork', 'upstream']) ta[k].value = JSON.stringify(s[k], null, 2);
+        blurb.textContent = s.blurb;
+        out.textContent = 'pick a scenario, edit the JSON, run.';
+    };
+    // The panes are free-text: every failure has to land IN the output pane,
+    // naming the pane at fault, never as an exception that kills the button.
+    const parseAll = () => {
+        const states = {};
+        for (const k of ['base', 'fork', 'upstream']) {
+            let parsed;
+            try { parsed = JSON.parse(ta[k].value); }
+            catch (err) { out.textContent = `${k}: JSON parse error — ${err.message}`; return null; }
+            if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+                out.textContent = `${k}: expected a JSON object (a project state), got ${Array.isArray(parsed) ? 'an array' : String(parsed)}`;
+                return null;
+            }
+            states[k] = parsed;
+        }
+        return states;
+    };
+    const show = (fn) => {
+        const states = parseAll();
+        if (!states) return;
+        try { out.textContent = fn(states); }
+        catch (err) { out.textContent = `engine error — ${err.message}`; }
+    };
+    const conflictLines = (conflicts) => conflicts.map(c => `  · [${c.kind}] ${c.description}`).join('\n');
+    lab.body.querySelector('[data-scenario]').addEventListener('change', (e) => load(e.target.value));
+    lab.body.querySelector('[data-run]').addEventListener('click', () => show((s) => {
+        const result = ctx.diff.threeWayDiff(s.base, s.fork, s.upstream);
+        return (result.conflicts.length
+            ? `⚠ ${result.conflicts.length} conflict(s):\n` + conflictLines(result.conflicts)
+            : '✓ no conflicts — mergeable') +
+            '\n\nfork changed:\n' + JSON.stringify(result.source, null, 2) +
+            '\n\nupstream changed:\n' + JSON.stringify(result.target, null, 2);
+    }));
+    lab.body.querySelector('[data-merge]').addEventListener('click', () => show((s) => {
+        const check = ctx.diff.threeWayDiff(s.base, s.fork, s.upstream);
+        return check.conflicts.length
+            ? `refused — ${check.conflicts.length} conflict(s), exactly like the merge endpoint would:\n` +
+              conflictLines(check.conflicts)
+            : 'merged state (fork changes replayed onto upstream):\n' +
+              JSON.stringify(ctx.diff.applyChangeSet(s.base, s.fork, s.upstream), null, 2);
+    }));
+    load(scenarios[0].name);
+    el.append(lab.s);
+}
+
 export function renderPlayground(el, ctx) {
     el.innerHTML = '';
     const [section, arg] = ctx.route.parts;
     if (section === 'quiz') return renderQuiz(el, ctx, Number(arg) || 0);
     if (section === 'bugs') return renderBugs(el, ctx, arg);
-    // Tasks 10-11 add their `merge` / `wdil` branches here.
+    if (section === 'merge') return renderMerge(el, ctx);
+    // Task 11 adds its `wdil` branch here.
     return renderHub(el, ctx);
 }

@@ -179,6 +179,295 @@ export const PLAYGROUND = {
           story: 'express@5.2.1’s res.sendFile() 404s on a bare absolute path here even when the file exists — so every hard load of any non-root route (/login, /app, every gallery URL, a refresh, a bookmark) died the moment the app was served from the built dist/ instead of the dev server. In-app navigation was unaffected and Vite’s dev server has its own correct fallback, which is why the identical call sat unnoticed for six months, byte-for-byte, since the repo’s first Express commit. What found it was the gallery plan’s final task building and booting the production path for the first time — not a code review. The fix is the one-line recommended form: res.sendFile(\'index.html\', { root: distPath }).',
           fixedRef: 'server/app.js' },
     ],
-    mergeScenarios: [],
+    // Mirrors tests/unit/onboarding/fixtures/diffScenarios.js exactly (a test in
+    // content.test.js pins it): the same five states the bundle-vs-module parity
+    // test runs, so the shipped presets can never drift from what is proven equal.
+    mergeScenarios: [
+        {
+            name: 'clean-merge',
+            blurb: 'Fork edits the day template; upstream renames the variant. No overlap — applyChangeSet keeps both.',
+            base: {
+                nodes: {
+                    root: { id: 'root', name: 'Planner', children: ['week'] },
+                    week: { id: 'week', name: 'Week 1', children: [] }
+                },
+                rootId: 'root',
+                variants: {
+                    weekly: {
+                        name: 'Weekly',
+                        templates: {
+                            day: { id: 'day', elements: [{ type: 'text', text: 'Day', x: 10, y: 10 }] },
+                            notes: { id: 'notes', elements: [{ type: 'rect', x: 0, y: 0, w: 100, h: 40 }] }
+                        }
+                    }
+                }
+            },
+            fork: {
+                nodes: {
+                    root: { id: 'root', name: 'Planner', children: ['week'] },
+                    week: { id: 'week', name: 'Week 1', children: [] }
+                },
+                rootId: 'root',
+                variants: {
+                    weekly: {
+                        name: 'Weekly',
+                        templates: {
+                            day: {
+                                id: 'day',
+                                elements: [{ type: 'text', text: 'Day (fork)', x: 10, y: 10 }]
+                            },
+                            notes: { id: 'notes', elements: [{ type: 'rect', x: 0, y: 0, w: 100, h: 40 }] }
+                        }
+                    }
+                }
+            },
+            upstream: {
+                nodes: {
+                    root: { id: 'root', name: 'Planner', children: ['week'] },
+                    week: { id: 'week', name: 'Week 1', children: [] }
+                },
+                rootId: 'root',
+                variants: {
+                    weekly: {
+                        name: 'Weekly v2',
+                        templates: {
+                            day: { id: 'day', elements: [{ type: 'text', text: 'Day', x: 10, y: 10 }] },
+                            notes: { id: 'notes', elements: [{ type: 'rect', x: 0, y: 0, w: 100, h: 40 }] }
+                        }
+                    }
+                }
+            }
+        },
+        {
+            name: 'same-template-conflict',
+            blurb: 'Both sides edit the same template differently. The engine refuses; a human decides.',
+            base: {
+                nodes: {
+                    root: { id: 'root', name: 'Planner', children: ['week'] },
+                    week: { id: 'week', name: 'Week 1', children: [] }
+                },
+                rootId: 'root',
+                variants: {
+                    weekly: {
+                        name: 'Weekly',
+                        templates: {
+                            day: { id: 'day', elements: [{ type: 'text', text: 'Day', x: 10, y: 10 }] },
+                            notes: { id: 'notes', elements: [{ type: 'rect', x: 0, y: 0, w: 100, h: 40 }] }
+                        }
+                    }
+                }
+            },
+            fork: {
+                nodes: {
+                    root: { id: 'root', name: 'Planner', children: ['week'] },
+                    week: { id: 'week', name: 'Week 1', children: [] }
+                },
+                rootId: 'root',
+                variants: {
+                    weekly: {
+                        name: 'Weekly',
+                        templates: {
+                            day: { id: 'day', elements: [{ type: 'text', text: 'Fork edit', x: 1, y: 1 }] },
+                            notes: { id: 'notes', elements: [{ type: 'rect', x: 0, y: 0, w: 100, h: 40 }] }
+                        }
+                    }
+                }
+            },
+            upstream: {
+                nodes: {
+                    root: { id: 'root', name: 'Planner', children: ['week'] },
+                    week: { id: 'week', name: 'Week 1', children: [] }
+                },
+                rootId: 'root',
+                variants: {
+                    weekly: {
+                        name: 'Weekly',
+                        templates: {
+                            day: {
+                                id: 'day',
+                                elements: [{ type: 'text', text: 'Upstream edit', x: 2, y: 2 }]
+                            },
+                            notes: { id: 'notes', elements: [{ type: 'rect', x: 0, y: 0, w: 100, h: 40 }] }
+                        }
+                    }
+                }
+            }
+        },
+        {
+            name: 'remove-vs-modify',
+            blurb: 'Fork deletes the notes template; upstream improves it. Deleting what someone improved is a conflict.',
+            base: {
+                nodes: {
+                    root: { id: 'root', name: 'Planner', children: ['week'] },
+                    week: { id: 'week', name: 'Week 1', children: [] }
+                },
+                rootId: 'root',
+                variants: {
+                    weekly: {
+                        name: 'Weekly',
+                        templates: {
+                            day: { id: 'day', elements: [{ type: 'text', text: 'Day', x: 10, y: 10 }] },
+                            notes: { id: 'notes', elements: [{ type: 'rect', x: 0, y: 0, w: 100, h: 40 }] }
+                        }
+                    }
+                }
+            },
+            fork: {
+                nodes: {
+                    root: { id: 'root', name: 'Planner', children: ['week'] },
+                    week: { id: 'week', name: 'Week 1', children: [] }
+                },
+                rootId: 'root',
+                variants: {
+                    weekly: {
+                        name: 'Weekly',
+                        templates: {
+                            day: { id: 'day', elements: [{ type: 'text', text: 'Day', x: 10, y: 10 }] }
+                        }
+                    }
+                }
+            },
+            upstream: {
+                nodes: {
+                    root: { id: 'root', name: 'Planner', children: ['week'] },
+                    week: { id: 'week', name: 'Week 1', children: [] }
+                },
+                rootId: 'root',
+                variants: {
+                    weekly: {
+                        name: 'Weekly',
+                        templates: {
+                            day: { id: 'day', elements: [{ type: 'text', text: 'Day', x: 10, y: 10 }] },
+                            notes: { id: 'notes', elements: [{ type: 'rect', x: 5, y: 5, w: 90, h: 30 }] }
+                        }
+                    }
+                }
+            }
+        },
+        {
+            name: 'variant-added-both-sides',
+            blurb: 'Both sides add a variant with the same id but different content — an add/add conflict.',
+            base: {
+                nodes: {
+                    root: { id: 'root', name: 'Planner', children: ['week'] },
+                    week: { id: 'week', name: 'Week 1', children: [] }
+                },
+                rootId: 'root',
+                variants: {
+                    weekly: {
+                        name: 'Weekly',
+                        templates: {
+                            day: { id: 'day', elements: [{ type: 'text', text: 'Day', x: 10, y: 10 }] },
+                            notes: { id: 'notes', elements: [{ type: 'rect', x: 0, y: 0, w: 100, h: 40 }] }
+                        }
+                    }
+                }
+            },
+            fork: {
+                nodes: {
+                    root: { id: 'root', name: 'Planner', children: ['week'] },
+                    week: { id: 'week', name: 'Week 1', children: [] }
+                },
+                rootId: 'root',
+                variants: {
+                    weekly: {
+                        name: 'Weekly',
+                        templates: {
+                            day: { id: 'day', elements: [{ type: 'text', text: 'Day', x: 10, y: 10 }] },
+                            notes: { id: 'notes', elements: [{ type: 'rect', x: 0, y: 0, w: 100, h: 40 }] }
+                        }
+                    },
+                    daily: { name: 'Daily', templates: { morning: { id: 'morning', elements: [] } } }
+                }
+            },
+            upstream: {
+                nodes: {
+                    root: { id: 'root', name: 'Planner', children: ['week'] },
+                    week: { id: 'week', name: 'Week 1', children: [] }
+                },
+                rootId: 'root',
+                variants: {
+                    weekly: {
+                        name: 'Weekly',
+                        templates: {
+                            day: { id: 'day', elements: [{ type: 'text', text: 'Day', x: 10, y: 10 }] },
+                            notes: { id: 'notes', elements: [{ type: 'rect', x: 0, y: 0, w: 100, h: 40 }] }
+                        }
+                    },
+                    daily: { name: 'Daily', templates: { evening: { id: 'evening', elements: [] } } }
+                }
+            }
+        },
+        {
+            name: 'generator-conflict',
+            blurb: 'Both sides changed the generator source. It is one atomic value — never line-merged.',
+            base: {
+                nodes: {
+                    root: { id: 'root', name: 'Planner', children: ['week'] },
+                    week: { id: 'week', name: 'Week 1', children: [] }
+                },
+                rootId: 'root',
+                variants: {
+                    weekly: {
+                        name: 'Weekly',
+                        templates: {
+                            day: { id: 'day', elements: [{ type: 'text', text: 'Day', x: 10, y: 10 }] },
+                            notes: { id: 'notes', elements: [{ type: 'rect', x: 0, y: 0, w: 100, h: 40 }] }
+                        }
+                    }
+                },
+                generator: {
+                    formatVersion: 1,
+                    templateScript: '// base',
+                    hierarchyScript: '// h',
+                    generatedAt: '2026-08-07T00:00:00.000Z'
+                }
+            },
+            fork: {
+                nodes: {
+                    root: { id: 'root', name: 'Planner', children: ['week'] },
+                    week: { id: 'week', name: 'Week 1', children: [] }
+                },
+                rootId: 'root',
+                variants: {
+                    weekly: {
+                        name: 'Weekly',
+                        templates: {
+                            day: { id: 'day', elements: [{ type: 'text', text: 'Day', x: 10, y: 10 }] },
+                            notes: { id: 'notes', elements: [{ type: 'rect', x: 0, y: 0, w: 100, h: 40 }] }
+                        }
+                    }
+                },
+                generator: {
+                    formatVersion: 1,
+                    templateScript: '// fork',
+                    hierarchyScript: '// h',
+                    generatedAt: '2026-08-07T00:00:00.000Z'
+                }
+            },
+            upstream: {
+                nodes: {
+                    root: { id: 'root', name: 'Planner', children: ['week'] },
+                    week: { id: 'week', name: 'Week 1', children: [] }
+                },
+                rootId: 'root',
+                variants: {
+                    weekly: {
+                        name: 'Weekly',
+                        templates: {
+                            day: { id: 'day', elements: [{ type: 'text', text: 'Day', x: 10, y: 10 }] },
+                            notes: { id: 'notes', elements: [{ type: 'rect', x: 0, y: 0, w: 100, h: 40 }] }
+                        }
+                    }
+                },
+                generator: {
+                    formatVersion: 1,
+                    templateScript: '// upstream',
+                    hierarchyScript: '// h',
+                    generatedAt: '2026-08-07T00:00:00.000Z'
+                }
+            }
+        },
+    ],
     wdil: [],
 };
