@@ -2422,6 +2422,73 @@ git add onboarding/ tests/unit/onboarding/content.test.js
 git commit -m "feat(onboarding): playground hub with ranks and the 40-question quiz ladder"
 ```
 
+**Post-review amendments (Task 8's own review).** The shipped `quizLevels` deliberately
+departs from the block above: ten claims the repo contradicted were rewritten, and the
+option order was permuted because the verbatim keys put 27/40 correct answers at index 1
+(always clicking option 2 scored 7/8 and cleared the 6/8 unlock gate). Both deviations are
+documented in `task-8-report.md` and were verified by review; the shipped file, not the block
+above, is the content of record. The review then required these further changes:
+
+- **L1Q8's correct option** must stop asserting what its own `why` retracts: drop `the diff
+  engine and` so it reads `'Plain ESM imported by BOTH client and server — generator metadata
+  and shared validation rules'`. (`shared/diff.js` has no client importer today.)
+- **L1 and L2 answer keys** must not form a guessable cycle (L1 shipped `[1,2,3,0,1,2,3,0]`).
+  Reshuffle both so no simple period predicts them, keeping ≤2 answers per index per level.
+- **`rank`** is escaped like every other authored string: `escP(rank)` in the hub.
+- **`.dive-list ul { list-style: none; }`** must actually reach `onboarding/src/style.css`
+  (Task 7's review raised it; the plan was amended but the stylesheet was not).
+
+Two tests join `tests/unit/onboarding/content.test.js` — the distribution guard pins the
+permutation fix, and the interaction block covers the quiz state machine (the amended Task 9
+block below establishes the same jsdom pattern):
+
+```js
+describe('quiz answer distribution', () => {
+    it('no index dominates a level and constant-guessing cannot clear the 6/8 gate', () => {
+        for (const [li, level] of PLAYGROUND.quizLevels.entries()) {
+            for (let choice = 0; choice < 4; choice++) {
+                const score = level.questions.filter(q => q.answer === choice).length;
+                expect(score, `L${li} always-option-${choice} scores ${score}/8`).toBeLessThan(6);
+                expect(score, `L${li} index ${choice} over-used`).toBeLessThanOrEqual(3);
+            }
+        }
+    });
+});
+
+describe('quiz interaction', () => {
+    const makeCtx = (content, profile, parts) => ({
+        data: { vitals: { gitSha: 'x' } }, content, profile,
+        save: () => {}, navigate: () => {}, route: { win: 'playground', parts }, diff: null,
+    });
+
+    it('locks later levels, unlocks on a passing best, and retry keeps the best', async () => {
+        const { renderPlayground } = await import('../../../onboarding/src/render/playgroundWin.mjs');
+        const { defaultProfile } = await import('../../../onboarding/src/app-logic.mjs');
+        const content = await buildContent();
+        const level = content.playground.quizLevels[0];
+        const profile = defaultProfile();
+        const el = document.createElement('div');
+
+        renderPlayground(el, makeCtx(content, profile, ['quiz', '1']));
+        expect(el.textContent).toContain('locked');
+
+        renderPlayground(el, makeCtx(content, profile, ['quiz', '0']));
+        level.questions.forEach((q, qi) => {
+            el.querySelector(`.quiz-opt[data-q="${qi}"][data-o="${q.answer}"]`).click();
+        });
+        expect(profile.quiz[0].best).toBe(8);
+
+        renderPlayground(el, makeCtx(content, profile, ['quiz', '1']));
+        expect(el.textContent).not.toContain('locked');
+
+        renderPlayground(el, makeCtx(content, profile, ['quiz', '0']));
+        el.querySelector('[data-reset]').click();
+        expect(profile.quiz[0].best).toBe(8);
+        expect(profile.quiz[0].answers).toEqual({});
+    });
+});
+```
+
 ---
 
 ### Task 9: Bug Hunt — seven real historical bugs
