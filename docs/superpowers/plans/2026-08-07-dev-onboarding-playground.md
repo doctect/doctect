@@ -2969,6 +2969,26 @@ the bundler strips module syntax by line). Content modules are data-only and
 JSON-serializable. Validators: `src/content/validate.mjs`.
 ```
 
+- [ ] **Step 1a: Close three gaps the task reviews left open**
+
+Each is a one-liner the reviewing task couldn't take without deviating from its own brief:
+
+1. **The merge-lab conflict assertion passes on the opposite outcome.** In
+   `tests/unit/onboarding/content.test.js`, the `merge lab` block asserts
+   `toContain('conflict')` — which the clean verdict `'✓ no conflicts — mergeable'`
+   also satisfies, so the engine could stop detecting conflicts entirely and the test
+   would stay green. Change it to `toContain('1 conflict(s)')`.
+2. **The boot-overlay fix has no regression guard.** A `display` rule on `#boot` beats
+   the UA `[hidden] { display: none }` on cascade origin, which left a full-screen
+   overlay covering the page from Task 3 until Task 10 caught it in a real browser.
+   Add to `tests/unit/onboarding/bundle.test.js`: read `onboarding/index.html` and
+   assert it contains `#boot[hidden]`.
+3. **The merge lab's clean path over-generalizes.** Its refusal wording is accurate,
+   but the server also refuses a merge for reasons the panel doesn't model. Add one
+   `dim` line under the buttons in `renderMerge`: `<p class="dim">The lab models the
+   conflict gate only — the server also refuses on failed validation, a schema
+   mismatch, a moved target head, or an oversized result.</p>`
+
 - [ ] **Step 2a: Guard `matchMedia`** — `onboarding/src/app.js` calls it bare, so the whole
 runtime IIFE aborts anywhere it is missing (jsdom, older embedded webviews) and the page
 renders nothing. Tasks 4 and 8 both had to hand-polyfill it to smoke-test the built page.
