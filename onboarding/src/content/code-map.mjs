@@ -9,7 +9,7 @@ export const CODE_MAP = {
         { path: 'server/routes', note: 'All endpoints in six files — four core (me, projects, gallery, mergeRequests) plus the two moderation-era ones. Rounds add endpoints to existing files — a new route file is rare and deliberate.' },
         { path: 'server/migrations', note: 'The migration ledger (index.js). NEVER edit an applied migration — append a new one. Two migrations are database triggers.' },
         { path: 'server/middleware', note: 'checkOrigin (CSRF), rate limits, requireAdmin/requireOwner (live config membership on every request), requireUsername.' },
-        { path: 'shared', note: 'Plain ESM imported by BOTH client and server — the three-way diff engine and generator provenance rules.' },
+        { path: 'shared', note: 'Plain ESM imported by BOTH client and server — generator metadata and shared validation rules. The diff engine lives here too, but only the server imports it today.' },
         { path: 'hooks', note: 'Two React hooks: useCurrentUser (session) and useGalleryDetail (shared by gallery page + modal).' },
         { path: 'lib', note: 'Docs content loading/validation/search + the better-auth browser client.' },
         { path: 'tests', note: 'Component vitest suites flat in tests/unit, server suites in tests/unit/server, Playwright e2e in tests/e2e, shared helpers (incl. the gallery-sample harness) in tests/helpers.' },
@@ -62,7 +62,7 @@ export const CODE_MAP = {
         { path: 'services/pdfService.ts', note: 'jsPDF export: Unicode font embedding, link annotations from every branch, svg2pdf, grayscale.' },
         { path: 'services/thumbnailService.ts', note: 'jsPDF → pdfjs-dist → WebP preview pipeline (pdfjs pinned after npm latest shipped broken).' },
         { path: 'services/generatorSandbox.ts', note: 'The generator trust boundary: sandboxed iframe, disposable worker, captured intrinsics, 10 s timeout.' },
-        { path: 'shared/diff.js', note: 'The three-way diff/merge engine — 189 lines, no dependencies, server-side today (the client renders the ChangeSet the server computed). This playground bundles the real thing (Merge Lab).' },
+        { path: 'shared/diff.js', note: 'The three-way diff/merge engine — under 200 lines, no dependencies, server-side today (the client renders the ChangeSet the server computed). This playground bundles the real thing (Merge Lab).' },
         { path: 'shared/generatorMetadata.js', note: 'Generator provenance shape + size caps, shared by validator, diff, and client.' },
         // meta
         { path: 'deploy.sh', note: 'Fail-closed deploy script — with its own unit tests, after review found it plowing on past failed builds.' },
@@ -85,7 +85,7 @@ export const CODE_MAP = {
         { id: 'spa-fallback', file: 'server/app.js', start: '// Must pass a relative filename', lines: 8 },
     ],
     deepDives: [
-        { id: 'diff-engine', title: 'shared/diff.js — the whole merge system in 189 lines',
+        { id: 'diff-engine', title: 'shared/diff.js — the whole merge system in under 200 lines',
           tagline: 'Diffs whole templates, so schema rounds ride along for free.',
           sections: [
             { text: 'computeChangeSet answers “what changed between two states” at the granularity of variants and templates — never text lines. stableStringify (sorted keys) is the entire equality story: two objects are equal iff their canonical strings match. Note nodesChanged is a single boolean: the node hierarchy is compared wholesale.', anchorId: 'diff-changeset' },

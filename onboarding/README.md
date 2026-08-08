@@ -25,6 +25,14 @@ commit it was built. Commit the regenerated `index.html`.
 - the bundled diff engine is behavior-identical to the real ESM module
   (parity fixtures), so the Merge Lab can never drift from what the server enforces.
 
+Two of them read the built `index.html` rather than `src/`, because they guard failures
+that only exist in the assembled artifact — both shipped undetected once:
+- `#boot[hidden] { display: none }` survives in the page. An id `display` rule outranks
+  the UA sheet's `[hidden]`, so hiding the overlay in JS is not enough; without that rule
+  the page is a full-screen overlay over everything.
+- the page boots in a jsdom with **no** `matchMedia`. The runtime is one IIFE: any bare
+  global a host does not provide aborts all of it and paints a blank page.
+
 There is deliberately no freshness test — regeneration is manual. If the page
 looks stale, it is: rebuild it.
 

@@ -55,7 +55,9 @@ describe('built page', () => {
     // rule the finished page ships a full-screen overlay over everything.
     it('keeps the boot overlay hidden-state rule', () => {
         const html = fs.readFileSync(path.join(REPO_ROOT, 'onboarding/index.html'), 'utf8');
-        expect(html).toContain('#boot[hidden]');
+        // The declaration, not just the selector: `#boot[hidden] { display: block }`
+        // would satisfy a bare selector match and still paint over the whole page.
+        expect(html).toMatch(/#boot\[hidden\]\s*\{\s*display:\s*none\s*;?\s*\}/);
     });
 });
 

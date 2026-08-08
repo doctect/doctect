@@ -68,15 +68,39 @@ describe('CODE_MAP annotations', () => {
         }
     });
 
-    // The page said "imported by client and server" here while two other panes
-    // said the opposite (and the repo agrees with them: only server/routes/
-    // mergeRequests.js and server/stateCodec.js import it). One bundle, one story.
-    it('does not contradict the rest of the page about shared/diff.js', () => {
+    // "Only the server imports the engine" is the story the reader is GRADED on
+    // (quiz L1, "What lives in shared/?"). The opposite claim shipped in three
+    // separate places — the shared/diff.js note, the shared/ directory note, and
+    // the intro — so a guard that reads one of them certifies consistency while
+    // the story is still two. This one reads every authored string in the bundle.
+    const everyString = (value, out = []) => {
+        if (typeof value === 'string') out.push(value);
+        else if (value && typeof value === 'object') Object.values(value).forEach(v => everyString(v, out));
+        return out;
+    };
+    // Matching the false phrasings was not enough — the fourth copy said it a
+    // fourth way ("renders the diff in the client and enforces it on the server").
+    // So the rule is positive instead: any sentence that puts the engine and the
+    // client in the same breath must carry the server-only qualifier out loud.
+    it('never tells the reader the client runs the diff engine, anywhere', async () => {
+        const content = await buildContent();
+        const VERBS = 'runs?|imports?|executes?|computes?|enforces?|renders?';
+        const ENGINE = /\bdiff\b|diff\.js|threeWayDiff|merge engine/i;
+        // The client DOING something to the diff — not merely being named beside it
+        // (shared/generatorMetadata.js is legitimately "shared by validator, diff,
+        // and client", which is a statement about generatorMetadata's consumers).
+        const CLIENT_ACTS = new RegExp(
+            `\\bclient\\b[^.]{0,40}\\b(${VERBS})\\b|\\b(${VERBS})\\b[^.]{0,40}\\b(in|on|by) the client\\b`, 'i');
+        const SERVER_ONLY = /only the server|server-side|the server computed|the server enforces/i;
+        const offenders = everyString(content)
+            .flatMap(s => s.split(/(?<=[.;])\s+/))   // judged sentence by sentence
+            .filter(s => ENGINE.test(s) && CLIENT_ACTS.test(s) && !SERVER_ONLY.test(s));
+        expect(offenders).toEqual([]);
+    });
+
+    it('says the true thing about shared/diff.js where it is annotated', () => {
         const note = CODE_MAP.annotations.find(a => a.path === 'shared/diff.js').note;
-        expect(note).not.toContain('imported by client and server');
         expect(note).toContain('server-side today');
-        // Same claim, other end of the page: the intro's opening paragraphs.
-        for (const para of INTRO.about) expect(para).not.toMatch(/both sides[^.]*diff engine/);
     });
 
     // Anti-rot for the claim above: if the client ever does import the engine,
@@ -267,8 +291,9 @@ describe('merge lab', () => {
         el.querySelector('[data-run]').click();
         // Not the loose 'conflict' — the clean verdict ('no conflicts — mergeable')
         // contains that too, so the engine could stop detecting conflicts entirely
-        // and this test would stay green.
-        expect(el.querySelector('.merge-out').textContent).toContain('1 conflict(s)');
+        // and this test would stay green. Anchored on the verdict marker so it
+        // cannot pass on '11 conflict(s)' either.
+        expect(el.querySelector('.merge-out').textContent).toMatch(/⚠ 1 conflict\(s\)/);
     });
     it('says out loud that it models the conflict gate only', async () => {
         const { renderPlayground } = await import('../../../onboarding/src/render/playgroundWin.mjs');

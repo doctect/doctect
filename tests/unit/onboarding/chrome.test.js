@@ -140,10 +140,15 @@ describe('built page boots without matchMedia', () => {
         virtualConsole.on('jsdomError', (err) => errors.push(err));
         const dom = new JSDOM(html, { runScripts: 'dangerously', pretendToBeVisual: false, virtualConsole });
         dom.window.addEventListener('error', (e) => errors.push(e.error || e.message));
-        expect(dom.window.matchMedia).toBeUndefined();
-        expect(errors.map(String)).toEqual([]);
-        expect(dom.window.document.querySelector('#statusbar').textContent).toContain('doctect');
-        expect(dom.window.document.querySelector('#root').textContent.length).toBeGreaterThan(200);
-        dom.window.close();
+        // finally: a failed assertion must not leave the boot-typing and clock
+        // intervals firing for the rest of the worker's life.
+        try {
+            expect(dom.window.matchMedia).toBeUndefined();
+            expect(errors.map(String)).toEqual([]);
+            expect(dom.window.document.querySelector('#statusbar').textContent).toContain('doctect');
+            expect(dom.window.document.querySelector('#root').textContent.length).toBeGreaterThan(200);
+        } finally {
+            dom.window.close();
+        }
     });
 });

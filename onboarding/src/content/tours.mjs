@@ -87,7 +87,7 @@ export const TOURS = [
     {
         id: 'fork-merge',
         title: 'Fork → merge request: the three-way diff at work',
-        blurb: 'The same 189-line plain-JS engine renders the diff in the client and enforces it on the server.',
+        blurb: 'One plain-JS engine, server-side: it recomputes the diff on every view of the request and enforces it again at merge time. The client renders what comes back.',
         diagram: [
             '{{up:upstream (public)}} ──fork──▶ {{fork:private fork + lineage}}',
             '     │  base = common ancestor         │ edits, saves',
