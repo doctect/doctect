@@ -241,12 +241,35 @@ Three independent enforcement points, all on `MAX_STATE_BYTES = 5 * 1024 * 1024`
   oversized output past the check.
 - `server/validateAppState.js:26` — on publish.
 
-A fourth, softer ceiling matters more in practice: local projects all live in one
-`localStorage` key (`pages/EditorPage.tsx:33`), and browsers grant roughly 5 MB **per origin in
-total**, across every project the user has. The app already handles the failure
-(`tests/unit/EditorPageGeneratedProject.test.tsx:123,146` assert a clean rollback on
-`QuotaExceededError`), but a 4 MB project would monopolise the user's entire local budget.
-**Target is ~2.5 MB per edition, not "under 5".**
+A fourth ceiling matters more in practice, and it is stricter than it looks. Local projects all
+live in one `localStorage` key (`pages/EditorPage.tsx:33`). Web Storage is **not** governed by
+the percentage-of-disk Storage API quotas that cover IndexedDB, Cache Storage and the OPFS; it
+has its own fixed per-origin cap — 5 MiB by the spec's recommendation, 10 MiB by MDN's current
+Web Storage page, varying by browser and version — and that cap covers every project the user
+has, not just this one.
+
+**localStorage counts UTF-16 code units, two bytes per character.** `MAX_STATE_BYTES` is
+measured in UTF-8 bytes (`Buffer.byteLength(state, 'utf8')` server-side,
+`new TextEncoder().encode(...).byteLength` client-side), and for mostly-ASCII JSON those bytes
+are roughly one per character. So a project's localStorage cost is about **twice** its
+`MAX_STATE_BYTES` measurement.
+
+This makes `MAX_STATE_BYTES` unreachable for a locally-saved project: a state at the 5 MiB
+ceiling costs ~10.5 MB of localStorage quota. Anything between roughly 2.5 MB and 5 MB passes
+every validator in the codebase and then fails to save. The app degrades cleanly — 
+`tests/unit/EditorPageGeneratedProject.test.tsx:123,146` assert a rollback of both storage keys
+on `QuotaExceededError` — but the user is left with a project they can generate and cannot
+keep.
+
+**Target is ~2.4 MB per edition** — about 4.8 MB of localStorage, comfortable against a 10 MiB
+quota and marginal against 5 MiB. Task 1 must settle this against a real browser rather than
+this paragraph. The product's normal use is generate → export PDF → done, so long-term
+localStorage residency is not required, but a book that cannot be saved at all is not
+acceptable.
+
+This is an app-wide finding, not a sticker-book one, and it is worth its own issue: the
+declared 5 MiB document limit and the real local limit differ by 2×, in the direction that
+surprises the user.
 
 Estimated composition per edition:
 
@@ -336,10 +359,18 @@ Product-specific assertions on top:
 ## Implementation notes
 
 **Task 1 is a measurement spike, not a feature.** Build one category — Botanical, 34 stickers,
-3 treatments, 2 sizes — at both page sizes, generate, and weigh the actual serialised state.
-Every number in the byte budget above is arithmetic, and the whole scope depends on it. If the
-real per-sticker cost lands materially above 405 bytes, the sticker count or the colourway
-depth is what gives, and it is better to learn that at 34 stickers than at 500.
+3 treatments, 2 sizes — at both page sizes, then:
+
+1. Generate it and weigh the actual serialised state, to check the ~405 bytes-per-placement
+   assumption the whole scope rests on.
+2. **Extrapolate to 500 stickers, synthesise a state of that size, and actually save it to
+   `localStorage` in real Chrome and real Firefox.** The UTF-16 doubling above means the
+   arithmetic ceiling and the practical one differ by 2×, and browser quotas vary by version.
+   A `QuotaExceededError` here is the finding that resizes the product, and it is far cheaper
+   to hit it now than at 500 stickers.
+
+If the real per-sticker cost lands materially above 405 bytes, or the save fails, the sticker
+count or the colourway depth is what gives.
 
 ## Non-goals
 
@@ -348,9 +379,15 @@ depth is what gives, and it is better to learn that at 34 stickers than at 500.
 - **No `palette` config knob.** Colours must be in the exported PDF, not behind a re-run.
 - **No separate Paper Pure edition.** It reads Compact scaled up; the luminance-separated
   palette is what makes that acceptable.
-- **No raising of `MAX_STATE_BYTES`.** Moving local persistence to IndexedDB and giving the
-  sandbox its own deliberately-chosen bound is a legitimate platform round, but it is not a
-  prerequisite for this product and should not be coupled to it.
+- **No raising of `MAX_STATE_BYTES`, and no move to IndexedDB.** Both are legitimate — and the
+  case is stronger than it first appears, because Web Storage's fixed 5–10 MiB cap is the one
+  storage API that does *not* get the percentage-of-disk quotas (roughly 60% of disk on
+  Chromium and WebKit, the lesser of 10% of disk or 10 GiB on Firefox) that IndexedDB, Cache
+  Storage and the OPFS all receive. Moving local persistence off localStorage would take the
+  practical document ceiling from single-digit megabytes to gigabytes, and would let the
+  sandbox's DoS bound be chosen on its own merits instead of inheriting a storage number. That
+  is a platform round with its own design, not a prerequisite for this product, and it should
+  not be coupled to it.
 - **No animation, gradients, or filters** in sticker markup, despite DOMPurify permitting them
   — they cost bytes and degrade unpredictably through svg2pdf.
 
