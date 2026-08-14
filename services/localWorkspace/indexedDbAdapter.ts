@@ -9,12 +9,16 @@ import {
   type WorkspacePendingImport,
   type WorkspaceProject,
 } from './contracts';
+import { canonicalStringify } from './canonical';
 import type { FaultInjector } from './faults';
 import type {
   PreparedInitialCopy,
   WorkspaceRecords,
 } from './migration';
-import type { PreparedLegacyRecovery } from './recovery';
+import {
+  validatePreparedLegacyRecovery,
+  type PreparedLegacyRecovery,
+} from './recovery';
 import {
   WORKSPACE_DB_NAME,
   WORKSPACE_DB_VERSION,
@@ -596,6 +600,15 @@ export const createIndexedDbAdapter = (
   const recoverLegacyAsCopies = async (
     prepared: PreparedLegacyRecovery,
   ): Promise<MigrationLedger> => {
+    try {
+      await validatePreparedLegacyRecovery(prepared);
+    } catch (error) {
+      throw new WorkspaceStoreError(
+        'Prepared legacy recovery target is invalid.',
+        'validation',
+        error,
+      );
+    }
     const activeDatabase = await getDatabase();
     let transaction: WriteTransaction | undefined;
     const requests: Promise<unknown>[] = [];
@@ -615,6 +628,7 @@ export const createIndexedDbAdapter = (
       ]);
       if (!recognizedLedger(ledger)
         || ledger.state !== 'verified'
+        || canonicalStringify(ledger) !== canonicalStringify(prepared.expectedLedger)
         || ledger.ledgerRevision !== prepared.expectedLedgerRevision
         || ledger.acceptedLegacyDigest !== prepared.expectedAcceptedLegacyDigest
         || ledger.acceptedLegacyBackupId !== prepared.expectedAcceptedLegacyBackupId
@@ -626,71 +640,27 @@ export const createIndexedDbAdapter = (
       }
       if (!workspace) throw conflict('Workspace record changed before legacy recovery.');
 
-      const projectIds = new Set(projects.map(record => record.id));
-      const pendingTargets = new Set(pendingImports.map(record =>
-        record.pendingImport.targetProjectId));
-      for (const record of prepared.projects) {
-        if (projectIds.has(record.id) || pendingTargets.has(record.id)) {
-          throw conflict(`Recovered project id ${record.id} is no longer unique.`);
-        }
-        projectIds.add(record.id);
-      }
-      const presetIds = new Set(presets.map(record => record.id));
-      for (const record of prepared.presets) {
-        if (presetIds.has(record.id)) {
-          throw conflict(`Recovered preset id ${record.id} is no longer unique.`);
-        }
-        presetIds.add(record.id);
-      }
-      const importIds = new Set(pendingImports.map(record => record.id));
-      for (const record of projects) {
-        if (record.consumedImportId) importIds.add(record.consumedImportId);
-      }
-      for (const record of prepared.pendingImports) {
-        if (importIds.has(record.id)
-          || projectIds.has(record.pendingImport.targetProjectId)
-          || pendingTargets.has(record.pendingImport.targetProjectId)) {
-          throw conflict(`Recovered pending import ${record.id} is no longer unique.`);
-        }
-        importIds.add(record.id);
-        pendingTargets.add(record.pendingImport.targetProjectId);
+      const currentRecords: WorkspaceRecords = {
+        projects,
+        workspace,
+        presets,
+        pendingImports,
+      };
+      if (canonicalStringify(currentRecords)
+        !== canonicalStringify(prepared.expectedRecords)) {
+        throw conflict('Workspace records changed before legacy recovery.');
       }
 
       for (const record of prepared.projects) requests.push(projectStore.add(record));
-      if (prepared.projects.length > 0) {
-        requests.push(workspaceStore.put({
-          ...workspace,
-          projectOrder: [
-            ...workspace.projectOrder,
-            ...prepared.projects.map(record => record.id),
-          ],
-          revision: workspace.revision + 1,
-        }));
-      }
-      const firstPresetPosition = Math.max(-1, ...presets.map(record => record.position)) + 1;
-      prepared.presets.forEach((record, index) => {
-        requests.push(presetStore.add({ ...record, position: firstPresetPosition + index }));
-      });
-      const firstImportPosition = Math.max(
-        -1,
-        ...pendingImports.map(record => record.position),
-      ) + 1;
-      prepared.pendingImports.forEach((record, index) => {
-        requests.push(importStore.add({ ...record, position: firstImportPosition + index }));
-      });
+      requests.push(workspaceStore.put(prepared.workspace));
+      for (const record of prepared.presets) requests.push(presetStore.add(record));
+      for (const record of prepared.pendingImports) requests.push(importStore.add(record));
       requests.push(transaction.objectStore('legacyBackup').add(prepared.backup));
-      const nextLedger: MigrationLedger = {
-        ...ledger,
-        ledgerRevision: ledger.ledgerRevision + 1,
-        acceptedLegacyDigest: prepared.observedLegacyDigest,
-        acceptedLegacyBackupId: prepared.backup.id,
-        unresolvedRecovery: null,
-      };
-      requests.push(ledgerStore.put(nextLedger));
+      requests.push(ledgerStore.put(prepared.ledger));
       environment.fault?.('recovery.before-complete');
       await Promise.all(requests);
       await transaction.done;
-      return nextLedger;
+      return structuredClone(prepared.ledger);
     } catch (error) {
       return abortTransaction(transaction, requests, error);
     }

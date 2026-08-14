@@ -151,6 +151,40 @@ const deferred = () => {
   return { promise, resolve };
 };
 
+const instrumentTransactionCompletion = (
+  indexedDB: IDBFactory,
+  onComplete: (
+    database: IDBDatabase,
+    stores: string[],
+    mode: IDBTransactionMode,
+  ) => void,
+): void => {
+  const originalOpen = indexedDB.open.bind(indexedDB);
+  const patched = new WeakSet<IDBDatabase>();
+  indexedDB.open = ((name: string, version?: number) => {
+    const request = version === undefined ? originalOpen(name) : originalOpen(name, version);
+    request.addEventListener('success', () => {
+      const database = request.result;
+      if (patched.has(database)) return;
+      patched.add(database);
+      const originalTransaction = database.transaction.bind(database);
+      database.transaction = ((
+        storeNames: string | string[],
+        mode?: IDBTransactionMode,
+        options?: IDBTransactionOptions,
+      ) => {
+        const transaction = originalTransaction(storeNames, mode, options);
+        const stores = typeof storeNames === 'string' ? [storeNames] : Array.from(storeNames);
+        transaction.addEventListener('complete', () => {
+          onComplete(database, stores, mode ?? 'readonly');
+        }, { once: true });
+        return transaction;
+      }) as IDBDatabase['transaction'];
+    });
+    return request;
+  }) as IDBFactory['open'];
+};
+
 const recoveryResult = (
   result: WorkspaceBootstrapResult,
 ): Extract<WorkspaceBootstrapResult, { status: 'recovery' }> => {
@@ -242,6 +276,90 @@ describe('old-tab drift lifecycle', () => {
     })).resolves.toMatchObject({ activeProjectId: 'project-a' });
   });
 
+  it('revalidates a byte-identical event that arrives during the final ready hash', async () => {
+    const hashStarted = deferred();
+    const releaseHash = deferred();
+    let armed = false;
+    let legacyDigestCalls = 0;
+    const crypto = {
+      subtle: {
+        digest: async (algorithm: AlgorithmIdentifier, data: BufferSource) => {
+          const text = new TextDecoder().decode(data as never);
+          if (armed && text.includes('doctect-legacy-source')) {
+            legacyDigestCalls += 1;
+            if (legacyDigestCalls === 6) {
+              hashStarted.resolve();
+              await releaseHash.promise;
+            }
+          }
+          return webcrypto.subtle.digest(algorithm, data as never);
+        },
+      },
+    } as unknown as Crypto;
+    const harness = createHarness({ crypto });
+    const { store, onAuthorityLost } = await readyStore(harness);
+    armed = true;
+
+    harness.dispatch(LEGACY_KEYS.projects);
+    await hashStarted.promise;
+    harness.dispatch(LEGACY_KEYS.projects);
+    releaseHash.resolve();
+
+    await expect(store.bootstrap()).resolves.toMatchObject({ status: 'ready' });
+    expect(legacyDigestCalls).toBeGreaterThan(6);
+    expect(onAuthorityLost).not.toHaveBeenCalled();
+  });
+
+  it('rehashes live legacy before publishing a drift marker', async () => {
+    const hashStarted = deferred();
+    const releaseHash = deferred();
+    let armed = false;
+    let legacyDigestCalls = 0;
+    const crypto = {
+      subtle: {
+        digest: async (algorithm: AlgorithmIdentifier, data: BufferSource) => {
+          const text = new TextDecoder().decode(data as never);
+          if (armed && text.includes('doctect-legacy-source')) {
+            legacyDigestCalls += 1;
+            if (legacyDigestCalls === 6) {
+              hashStarted.resolve();
+              await releaseHash.promise;
+            }
+          }
+          return webcrypto.subtle.digest(algorithm, data as never);
+        },
+      },
+    } as unknown as Crypto;
+    const harness = createHarness({ crypto });
+    const { onAuthorityLost } = await readyStore(harness);
+    const first = validLegacyValues({
+      [LEGACY_KEYS.projects]: JSON.stringify([
+        legacyProject('project-a', 11, { name: 'First observed drift' }),
+      ]),
+    });
+    const latest = validLegacyValues({
+      [LEGACY_KEYS.projects]: JSON.stringify([
+        legacyProject('project-a', 11, { name: 'Latest observed drift' }),
+      ]),
+    });
+    armed = true;
+    harness.replace(first);
+    harness.dispatch(LEGACY_KEYS.projects);
+    await hashStarted.promise;
+
+    harness.replace(latest);
+    harness.dispatch(LEGACY_KEYS.projects);
+    releaseHash.resolve();
+
+    await vi.waitFor(() => expect(onAuthorityLost).toHaveBeenCalled());
+    const latestDigest = await digestLegacySnapshot(
+      captureLegacySnapshot(harness.storage),
+      webcrypto.subtle as unknown as SubtleCrypto,
+    );
+    expect((await inspect(harness)).migrationLedger[0].unresolvedRecovery)
+      .toMatchObject({ observedLegacyDigest: latestDigest });
+  });
+
   it('ignores unrelated storage events without freezing authority', async () => {
     const harness = createHarness();
     const { store, onAuthorityLost } = await readyStore(harness);
@@ -308,6 +426,67 @@ describe('old-tab drift lifecycle', () => {
     });
     expect(rightLost.mock.calls[0][0]).toMatchObject({
       recovery: { recoveryId: marker?.id },
+    });
+  });
+
+  it('recaptures live legacy after a differing concurrent marker wins CAS', async () => {
+    const indexedDB = new IDBFactory();
+    const storage = memoryStorage(validLegacyValues());
+    const concurrentValues = validLegacyValues({
+      [LEGACY_KEYS.projects]: JSON.stringify([
+        legacyProject('project-a', 11, { name: 'Concurrent latest drift' }),
+      ]),
+    });
+    let armed = false;
+    let injected = false;
+    let concurrentLedger: IndexedDbInspection['migrationLedger'][number] | undefined;
+    instrumentTransactionCompletion(indexedDB, (database, stores, mode) => {
+      if (!armed
+        || injected
+        || mode !== 'readonly'
+        || stores.length !== 1
+        || stores[0] !== 'migrationLedger'
+        || !concurrentLedger) {
+        return;
+      }
+      injected = true;
+      for (const key of LEGACY_DOCUMENT_KEYS) {
+        storage.seed(key, concurrentValues[key]);
+      }
+      const transaction = database.transaction('migrationLedger', 'readwrite');
+      transaction.objectStore('migrationLedger').put(concurrentLedger);
+    });
+    const harness = createHarness({ indexedDB, storage });
+    const { onAuthorityLost } = await readyStore(harness);
+    const stored = await inspect(harness);
+    const concurrentDigest = await digestLegacySnapshot(
+      captureLegacySnapshot(memoryStorage(concurrentValues)),
+      webcrypto.subtle as unknown as SubtleCrypto,
+    );
+    concurrentLedger = {
+      ...stored.migrationLedger[0],
+      ledgerRevision: stored.migrationLedger[0].ledgerRevision + 1,
+      unresolvedRecovery: {
+        id: 'concurrent-latest-marker',
+        kind: 'legacy-drift',
+        detectedAt: TEST_NOW,
+        observedLegacyDigest: concurrentDigest,
+      },
+    };
+    harness.replace(validLegacyValues({
+      [LEGACY_KEYS.projects]: JSON.stringify([
+        legacyProject('project-a', 11, { name: 'Older sampled drift' }),
+      ]),
+    }));
+    armed = true;
+
+    harness.dispatch(LEGACY_KEYS.projects);
+
+    await vi.waitFor(() => expect(onAuthorityLost).toHaveBeenCalled());
+    expect(injected).toBe(true);
+    expect((await inspect(harness)).migrationLedger[0].unresolvedRecovery).toMatchObject({
+      id: 'concurrent-latest-marker',
+      observedLegacyDigest: concurrentDigest,
     });
   });
 });

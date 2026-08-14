@@ -15,13 +15,17 @@ import {
   type LegacyDocumentKey,
   type LegacySnapshot,
 } from './legacyTypes';
-import type { WorkspaceRecords } from './migration';
+import {
+  reconstructWorkspace,
+  type WorkspaceRecords,
+} from './migration';
 import type {
   LegacyBackupRecord,
   MigrationLedger,
   StoredPendingImport,
   StoredPreset,
   StoredProject,
+  StoredWorkspace,
 } from './schema';
 import {
   preparePendingImport,
@@ -64,10 +68,14 @@ export interface PreparedLegacyRecovery {
   expectedLedgerRevision: number;
   expectedAcceptedLegacyDigest: string;
   expectedAcceptedLegacyBackupId: string;
+  expectedLedger: MigrationLedger;
+  expectedRecords: WorkspaceRecords;
   projects: StoredProject[];
+  workspace: StoredWorkspace;
   presets: StoredPreset[];
   pendingImports: StoredPendingImport[];
   backup: LegacyBackupRecord;
+  ledger: MigrationLedger;
 }
 
 interface ParsedItem<T> {
@@ -243,6 +251,25 @@ const changedItems = <T extends { id: string }>(
   return current.filter(item => acceptedDigests.get(item.value.id) !== item.digest);
 };
 
+const sameCanonicalValue = (left: unknown, right: unknown): boolean =>
+  canonicalStringify(left) === canonicalStringify(right);
+
+const reserveLegacyPendingIdentity = (
+  source: ParsedLegacySource,
+  sourceDigest: string,
+  reservedIds: Set<string>,
+): void => {
+  if (!source.pendingImport) return;
+  reservedIds.add('legacy-import-v1');
+  const projectIds = new Set(source.projects.map(item => item.value.id));
+  const base = `proj_migrated_import_${sourceDigest.slice(0, 16)}`;
+  let targetProjectId = base;
+  for (let suffix = 1; projectIds.has(targetProjectId); suffix += 1) {
+    targetProjectId = `${base}_${suffix}`;
+  }
+  reservedIds.add(targetProjectId);
+};
+
 export async function createLegacyRecoveryBundle(
   snapshot: LegacySnapshot,
   capturedAt: string,
@@ -333,12 +360,23 @@ export async function prepareLegacyRecovery(
     parseLegacySource(structuredClone(acceptedSource), environment),
   ]);
 
-  const usedProjectIds = new Set(records.projects.map(record => record.id));
-  for (const record of records.pendingImports) {
-    usedProjectIds.add(record.pendingImport.targetProjectId);
+  const usedIds = new Set([
+    ...records.projects.map(record => record.id),
+    ...records.presets.map(record => record.id),
+    ...records.pendingImports.map(record => record.id),
+    ...records.pendingImports.map(record => record.pendingImport.targetProjectId),
+    ...current.projects.map(item => item.value.id),
+    ...accepted.projects.map(item => item.value.id),
+    ...current.presets.map(item => item.value.id),
+    ...accepted.presets.map(item => item.value.id),
+  ]);
+  for (const record of records.projects) {
+    if (record.consumedImportId) usedIds.add(record.consumedImportId);
   }
+  reserveLegacyPendingIdentity(current, currentDigest, usedIds);
+  reserveLegacyPendingIdentity(accepted, ledger.acceptedLegacyDigest, usedIds);
   const projects = changedItems(current.projects, accepted.projects).map(item => {
-    const id = nextUniqueId('proj_recovered_', usedProjectIds, environment.randomUUID);
+    const id = nextUniqueId('proj_recovered_', usedIds, environment.randomUUID);
     const { cloud: _cloud, ...project } = item.value;
     return {
       id,
@@ -352,9 +390,8 @@ export async function prepareLegacyRecovery(
     } satisfies StoredProject;
   });
 
-  const usedPresetIds = new Set(records.presets.map(record => record.id));
   const presets = changedItems(current.presets, accepted.presets).map((item, index) => {
-    const id = nextUniqueId('preset_recovered_', usedPresetIds, environment.randomUUID);
+    const id = nextUniqueId('preset_recovered_', usedIds, environment.randomUUID);
     return {
       id,
       preset: { ...item.value, id },
@@ -362,17 +399,13 @@ export async function prepareLegacyRecovery(
     } satisfies StoredPreset;
   });
 
-  const usedImportIds = new Set(records.pendingImports.map(record => record.id));
-  for (const record of records.projects) {
-    if (record.consumedImportId) usedImportIds.add(record.consumedImportId);
-  }
   const pendingImports: StoredPendingImport[] = [];
   if (current.pendingImport
     && current.pendingImport.digest !== accepted.pendingImport?.digest) {
-    const id = nextUniqueId('import_recovered_', usedImportIds, environment.randomUUID);
+    const id = nextUniqueId('import_recovered_', usedIds, environment.randomUUID);
     const targetProjectId = nextUniqueId(
       'proj_recovered_import_',
-      usedProjectIds,
+      usedIds,
       environment.randomUUID,
     );
     const { cloud: _cloud, ...input } = current.pendingImport.value;
@@ -396,15 +429,92 @@ export async function prepareLegacyRecovery(
     snapshot: structuredClone(currentSource),
     digest: currentDigest,
   };
-  return {
+  const workspace: StoredWorkspace = {
+    ...records.workspace,
+    projectOrder: [
+      ...records.workspace.projectOrder,
+      ...projects.map(record => record.id),
+    ],
+    revision: records.workspace.revision + (projects.length > 0 ? 1 : 0),
+  };
+  const nextLedger: MigrationLedger = {
+    ...ledger,
+    ledgerRevision: ledger.ledgerRevision + 1,
+    acceptedLegacyDigest: currentDigest,
+    acceptedLegacyBackupId: backup.id,
+    unresolvedRecovery: null,
+  };
+  const prepared: PreparedLegacyRecovery = {
     recoveryId,
     observedLegacyDigest: currentDigest,
     expectedLedgerRevision: ledger.ledgerRevision,
     expectedAcceptedLegacyDigest: ledger.acceptedLegacyDigest,
     expectedAcceptedLegacyBackupId: ledger.acceptedLegacyBackupId,
+    expectedLedger: structuredClone(ledger),
+    expectedRecords: structuredClone(records),
     projects,
+    workspace,
     presets,
     pendingImports,
     backup,
+    ledger: nextLedger,
   };
+  await validatePreparedLegacyRecovery(prepared, environment.crypto.subtle);
+  return prepared;
+}
+
+export async function validatePreparedLegacyRecovery(
+  prepared: PreparedLegacyRecovery,
+  subtle: SubtleCrypto = globalThis.crypto.subtle,
+): Promise<void> {
+  reconstructWorkspace(structuredClone(prepared.expectedRecords));
+  reconstructWorkspace({
+    projects: [
+      ...structuredClone(prepared.expectedRecords.projects),
+      ...structuredClone(prepared.projects),
+    ],
+    workspace: structuredClone(prepared.workspace),
+    presets: [
+      ...structuredClone(prepared.expectedRecords.presets),
+      ...structuredClone(prepared.presets),
+    ],
+    pendingImports: [
+      ...structuredClone(prepared.expectedRecords.pendingImports),
+      ...structuredClone(prepared.pendingImports),
+    ],
+  });
+
+  const expectedWorkspace: StoredWorkspace = {
+    ...prepared.expectedRecords.workspace,
+    projectOrder: [
+      ...prepared.expectedRecords.workspace.projectOrder,
+      ...prepared.projects.map(record => record.id),
+    ],
+    revision: prepared.expectedRecords.workspace.revision
+      + (prepared.projects.length > 0 ? 1 : 0),
+  };
+  const expectedLedger: MigrationLedger = {
+    ...prepared.expectedLedger,
+    ledgerRevision: prepared.expectedLedger.ledgerRevision + 1,
+    acceptedLegacyDigest: prepared.observedLegacyDigest,
+    acceptedLegacyBackupId: prepared.backup.id,
+    unresolvedRecovery: null,
+  };
+  if (prepared.recoveryId.length === 0
+    || prepared.expectedLedgerRevision !== prepared.expectedLedger.ledgerRevision
+    || prepared.expectedAcceptedLegacyDigest !== prepared.expectedLedger.acceptedLegacyDigest
+    || prepared.expectedAcceptedLegacyBackupId
+      !== prepared.expectedLedger.acceptedLegacyBackupId
+    || prepared.expectedLedger.unresolvedRecovery?.kind !== 'legacy-drift'
+    || prepared.expectedLedger.unresolvedRecovery.id !== prepared.recoveryId
+    || prepared.expectedLedger.unresolvedRecovery.observedLegacyDigest
+      !== prepared.observedLegacyDigest
+    || prepared.backup.kind !== 'conflict'
+    || prepared.backup.digest !== prepared.observedLegacyDigest
+    || !sameCanonicalValue(prepared.workspace, expectedWorkspace)
+    || !sameCanonicalValue(prepared.ledger, expectedLedger)
+    || await digestLegacySnapshot(prepared.backup.snapshot, subtle)
+      !== prepared.observedLegacyDigest) {
+    throw new TypeError('Prepared legacy recovery write set is invalid.');
+  }
 }

@@ -88,6 +88,12 @@ const transactionDone = (transaction: IDBTransaction): Promise<void> =>
     );
   });
 
+const deferred = () => {
+  let resolve!: () => void;
+  const promise = new Promise<void>(nextResolve => { resolve = nextResolve; });
+  return { promise, resolve };
+};
+
 interface TransactionRecord {
   stores: string[];
   mode: IDBTransactionMode;
@@ -130,6 +136,8 @@ interface HarnessOptions {
   indexedDB?: IDBFactory;
   storage?: MemoryStorage;
   values?: Record<string, string>;
+  crypto?: Crypto;
+  now?: () => string;
   randomUUID?: () => string;
   hook?: TransactionHook;
 }
@@ -160,8 +168,8 @@ const createHarness = (options: HarnessOptions = {}): Harness => {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
-    crypto: webcrypto as unknown as Crypto,
-    now: () => TEST_NOW,
+    crypto: options.crypto ?? webcrypto as unknown as Crypto,
+    now: options.now ?? (() => TEST_NOW),
     randomUUID: options.randomUUID ?? (() => 'fixture-uuid'),
     createBlankProject: currentState,
     fault(point) {
@@ -341,6 +349,21 @@ describe('recovery bundle exports', () => {
     });
   });
 
+  it('uses the original backup capture time instead of the export clock', async () => {
+    const migratedAt = '2026-08-14T19:10:00.000Z';
+    const exportedAt = '2026-08-14T20:20:00.000Z';
+    let now = migratedAt;
+    const harness = createHarness({ now: () => now });
+    const { store } = await readyStore(harness);
+    now = exportedAt;
+
+    const original = await bundleJson(await store.exportRecoveryBundle('legacy-original'));
+    const current = await bundleJson(await store.exportRecoveryBundle('legacy-current'));
+
+    expect(original.capturedAt).toBe(migratedAt);
+    expect(current.capturedAt).toBe(exportedAt);
+  });
+
   it('does not advertise or export a malformed IndexedDB workspace', async () => {
     const harness = createHarness();
     const { store } = await readyStore(harness);
@@ -509,6 +532,95 @@ describe('explicit recover legacy as copies', () => {
       .toBe(snapshot.pendingImports.length);
     expect(new Set(snapshot.pendingImports.map(item => item.targetProjectId)).size)
       .toBe(snapshot.pendingImports.length);
+  });
+
+  it('reserves current and accepted legacy source-only IDs before generating copies', async () => {
+    const acceptedProjectId = 'proj_recovered_accepted-project-token';
+    const acceptedTargetId = 'proj_recovered_import_target-token';
+    const acceptedImportId = 'import_recovered_import-token';
+    const currentProjectId = 'proj_recovered_project-token';
+    const acceptedPresetId = 'preset_recovered_accepted-preset-token';
+    const currentPresetId = 'preset_recovered_preset-token';
+    const original = validLegacyValues({
+      [LEGACY_KEYS.projects]: JSON.stringify([
+        legacyProject('project-a'),
+        legacyProject(acceptedProjectId),
+        legacyProject(acceptedTargetId),
+        legacyProject(acceptedImportId),
+      ]),
+      [LEGACY_KEYS.activeProject]: 'project-a',
+      [LEGACY_KEYS.customPresets]: JSON.stringify([
+        legacyCustomPreset('preset-a'),
+        legacyCustomPreset(acceptedPresetId),
+      ]),
+    });
+    let recoveryIds: string[] | undefined;
+    const harness = createHarness({
+      values: original,
+      randomUUID: () => recoveryIds?.shift() ?? 'marker-uuid',
+    });
+    const { store } = await readyStore(harness);
+    await store.commit({ type: 'close-project', projectId: acceptedProjectId });
+    await store.commit({ type: 'close-project', projectId: acceptedTargetId });
+    await store.commit({ type: 'close-project', projectId: acceptedImportId });
+    await store.commit({ type: 'delete-custom-preset', presetId: acceptedPresetId });
+    await store.commit({
+      type: 'stage-import',
+      pendingImport: {
+        id: 'durable-existing-import',
+        targetProjectId: 'durable-import-target',
+        name: 'Durable collision',
+        state: currentState(),
+        createdAt: TEST_NOW,
+      },
+    });
+    const current = validLegacyValues({
+      [LEGACY_KEYS.projects]: JSON.stringify([
+        legacyProject('project-a', 11, { name: 'Changed A' }),
+        legacyProject(currentProjectId, 11, { name: 'Current source-only project' }),
+      ]),
+      [LEGACY_KEYS.activeProject]: 'project-a',
+      [LEGACY_KEYS.customPresets]: JSON.stringify([
+        legacyCustomPreset('preset-a', 11, { title: 'Changed A' }),
+        legacyCustomPreset(currentPresetId, 11, { title: 'Current source-only preset' }),
+      ]),
+      [LEGACY_KEYS.pendingImport]: JSON.stringify(legacyPendingImport(11, {
+        name: 'Changed pending import',
+      })),
+    });
+    const recovery = await observeDrift(harness, store, current);
+    recoveryIds = [
+      'project-token',
+      'accepted-project-token',
+      'preset-token',
+      'accepted-preset-token',
+      'import-token',
+      'target-token',
+    ];
+
+    const snapshot = await store.commit({
+      type: 'recover-legacy-as-copies',
+      recoveryId: recovery.recoveryId,
+    });
+
+    const sourceProjectIds = new Set([
+      'project-a',
+      acceptedProjectId,
+      acceptedTargetId,
+      acceptedImportId,
+      currentProjectId,
+    ]);
+    const recoveredProjects = snapshot.projects.filter(project =>
+      project.name.startsWith('Recovered — '));
+    expect(recoveredProjects).toHaveLength(2);
+    expect(recoveredProjects.every(project => !sourceProjectIds.has(project.id))).toBe(true);
+    const sourcePresetIds = new Set(['preset-a', acceptedPresetId, currentPresetId]);
+    const recoveredPresets = snapshot.customPresets.filter(preset =>
+      preset.title === 'Changed A' || preset.title === 'Current source-only preset');
+    expect(recoveredPresets.every(preset => !sourcePresetIds.has(preset.id))).toBe(true);
+    const recoveredImport = snapshot.pendingImports.at(-1)!;
+    expect(sourceProjectIds.has(recoveredImport.id)).toBe(false);
+    expect(sourceProjectIds.has(recoveredImport.targetProjectId)).toBe(false);
   });
 
   it('requires explicit confirmation for active-only drift without creating copies', async () => {
@@ -688,6 +800,147 @@ describe('explicit recover legacy as copies', () => {
     })).rejects.toMatchObject({ code: 'authority-lost' });
   });
 
+  it('keeps recovery open when late drift reverts during capability hashing', async () => {
+    const hashStarted = deferred();
+    const releaseHash = deferred();
+    const capabilityHashStarted = deferred();
+    const releaseCapabilityHash = deferred();
+    let armed = false;
+    let armOnRecoveryWrite = false;
+    let legacyDigestCalls = 0;
+    const crypto = {
+      subtle: {
+        digest: async (algorithm: AlgorithmIdentifier, data: BufferSource) => {
+          const text = new TextDecoder().decode(data as never);
+          if (armed && text.includes('doctect-legacy-source')) {
+            legacyDigestCalls += 1;
+            if (legacyDigestCalls === 3) {
+              hashStarted.resolve();
+              await releaseHash.promise;
+            }
+            if (legacyDigestCalls === 12) {
+              capabilityHashStarted.resolve();
+              await releaseCapabilityHash.promise;
+            }
+          }
+          return webcrypto.subtle.digest(algorithm, data as never);
+        },
+      },
+    } as unknown as Crypto;
+    const allStores = [
+      'projects',
+      'workspace',
+      'presets',
+      'pendingImports',
+      'migrationLedger',
+      'legacyBackup',
+    ];
+    const harness = createHarness({
+      crypto,
+      hook(stores, mode) {
+        if (armOnRecoveryWrite
+          && mode === 'readwrite'
+          && allStores.every(store => stores.includes(store))) {
+          armed = true;
+        }
+      },
+    });
+    const { store } = await readyStore(harness);
+    const accepted = validLegacyValues({
+      [LEGACY_KEYS.projects]: JSON.stringify([
+        legacyProject('project-a', 11, { name: 'First recovery source' }),
+      ]),
+    });
+    const firstRecovery = await observeDrift(harness, store, accepted);
+    armOnRecoveryWrite = true;
+    const commit = store.commit({
+      type: 'recover-legacy-as-copies',
+      recoveryId: firstRecovery.recoveryId,
+    });
+    await hashStarted.promise;
+    const latest = validLegacyValues({
+      [LEGACY_KEYS.projects]: JSON.stringify([
+        legacyProject('project-a', 11, { name: 'Late recovery source' }),
+      ]),
+    });
+
+    harness.replace(latest);
+    harness.dispatch(LEGACY_KEYS.projects);
+    releaseHash.resolve();
+    await capabilityHashStarted.promise;
+    harness.replace(accepted);
+    harness.dispatch(LEGACY_KEYS.projects);
+    releaseCapabilityHash.resolve();
+    await commit;
+
+    const result = recoveryResult(await store.bootstrap());
+    expect(result.recovery.kind).toBe('split-brain');
+    expect((await inspect(harness)).migrationLedger[0].unresolvedRecovery).not.toBeNull();
+  });
+
+  it('keeps lifecycle unavailable when versionchange occurs during post-recovery hash', async () => {
+    const hashStarted = deferred();
+    const releaseHash = deferred();
+    let armed = false;
+    let armOnRecoveryWrite = false;
+    let legacyDigestCalls = 0;
+    const crypto = {
+      subtle: {
+        digest: async (algorithm: AlgorithmIdentifier, data: BufferSource) => {
+          const text = new TextDecoder().decode(data as never);
+          if (armed && text.includes('doctect-legacy-source')) {
+            legacyDigestCalls += 1;
+            if (legacyDigestCalls === 3) {
+              hashStarted.resolve();
+              await releaseHash.promise;
+            }
+          }
+          return webcrypto.subtle.digest(algorithm, data as never);
+        },
+      },
+    } as unknown as Crypto;
+    const allStores = [
+      'projects',
+      'workspace',
+      'presets',
+      'pendingImports',
+      'migrationLedger',
+      'legacyBackup',
+    ];
+    const harness = createHarness({
+      crypto,
+      hook(stores, mode) {
+        if (armOnRecoveryWrite
+          && mode === 'readwrite'
+          && allStores.every(store => stores.includes(store))) {
+          armed = true;
+        }
+      },
+    });
+    const { store } = await readyStore(harness);
+    const recovery = await observeDrift(harness, store, validLegacyValues({
+      [LEGACY_KEYS.projects]: JSON.stringify([legacyProject(), secondProject()]),
+    }));
+    armOnRecoveryWrite = true;
+    const commit = store.commit({
+      type: 'recover-legacy-as-copies',
+      recoveryId: recovery.recoveryId,
+    });
+    const settledCommit = commit.then(() => undefined, () => undefined);
+    await hashStarted.promise;
+
+    const upgraded = await requestResult(harness.indexedDB.open(WORKSPACE_DB_NAME, 2));
+    releaseHash.resolve();
+    await settledCommit;
+
+    await expect(store.bootstrap()).resolves.toMatchObject({ status: 'unavailable' });
+    await expect(store.commit({
+      type: 'activate-project',
+      projectId: 'project-a',
+    })).rejects.toMatchObject({ code: 'authority-lost' });
+    upgraded.close();
+  });
+
   it('preserves existing private consume provenance without exposing or inventing it', async () => {
     const harness = createHarness();
     const { store } = await readyStore(harness);
@@ -758,6 +1011,52 @@ describe('explicit recover legacy as copies', () => {
       type: 'activate-project',
       projectId: 'project-a',
     })).rejects.toMatchObject({ code: 'authority-lost' });
+  });
+
+  it('rejects an invalid generated target before opening the recovery transaction', async () => {
+    const harness = createHarness();
+    const { store } = await readyStore(harness);
+    const recovery = await observeDrift(harness, store, validLegacyValues({
+      [LEGACY_KEYS.projects]: JSON.stringify([legacyProject(), secondProject()]),
+    }));
+    const stored = await inspect(harness);
+    const currentSource = captureLegacySnapshot(harness.storage);
+    const currentDigest = await digestLegacySnapshot(
+      currentSource,
+      harness.environment.crypto.subtle,
+    );
+    const accepted = stored.legacyBackup.find(backup =>
+      backup.id === stored.migrationLedger[0].acceptedLegacyBackupId)!;
+    const prepared = await prepareLegacyRecovery(
+      currentSource,
+      currentDigest,
+      accepted.snapshot,
+      stored.migrationLedger[0],
+      {
+        projects: stored.projects,
+        workspace: stored.workspace[0],
+        presets: stored.presets,
+        pendingImports: stored.pendingImports,
+      },
+      recovery.recoveryId,
+      {
+        crypto: harness.environment.crypto,
+        now: () => TEST_NOW,
+        randomUUID: () => 'invalid-target-uuid',
+      },
+    );
+    prepared.projects[0].project.id = 'mismatched-generated-id';
+    const writesBefore = harness.records.filter(record => record.mode === 'readwrite').length;
+    const adapter = createIndexedDbAdapter({
+      indexedDB: harness.indexedDB,
+      now: () => TEST_NOW,
+    });
+
+    await expect(adapter.recoverLegacyAsCopies(prepared)).rejects.toBeDefined();
+    adapter.close();
+
+    expect(harness.records.filter(record => record.mode === 'readwrite')).toHaveLength(writesBefore);
+    expect(await inspect(harness)).toEqual(stored);
   });
 
   it('rejects recovery after ledger revision changes behind the command', async () => {

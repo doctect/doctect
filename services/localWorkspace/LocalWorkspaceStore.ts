@@ -479,6 +479,34 @@ export const createLocalWorkspaceStore = (
     });
   };
 
+  interface ObservedLegacyCapture {
+    snapshot: LegacySnapshot;
+    digest: string;
+    generation: number;
+  }
+
+  const captureObservedLegacy = async (
+    assertCurrent?: () => void,
+  ): Promise<ObservedLegacyCapture> => {
+    const captured = await captureStableLegacySnapshotWithDigest(
+      environment.legacyStorage,
+      environment.crypto.subtle,
+      {
+        generation: () => observedLegacyChange,
+        assertCurrent,
+      },
+    );
+    assertCurrent?.();
+    return { ...captured, generation: observedLegacyChange };
+  };
+
+  const sameObservedLegacy = (
+    left: ObservedLegacyCapture,
+    right: ObservedLegacyCapture,
+  ): boolean => left.generation === right.generation
+    && left.digest === right.digest
+    && sameLegacySnapshot(left.snapshot, right.snapshot);
+
   const installDurableState = (
     records: WorkspaceRecords,
     snapshot: WorkspaceSnapshot,
@@ -599,10 +627,7 @@ export const createLocalWorkspaceStore = (
   ): Promise<RecoverySource[]> => {
     const sources: RecoverySource[] = [];
     try {
-      await captureStableLegacySnapshotWithDigest(
-        environment.legacyStorage,
-        environment.crypto.subtle,
-      );
+      await captureObservedLegacy();
       sources.push('legacy-current');
     } catch {
       // A changing or inaccessible source is not currently callable.
@@ -672,10 +697,7 @@ export const createLocalWorkspaceStore = (
             digest: ledger.acceptedLegacyDigest,
           },
         );
-        const current = await captureStableLegacySnapshotWithDigest(
-          environment.legacyStorage,
-          environment.crypto.subtle,
-        );
+        const current = await captureObservedLegacy();
         if (current.digest === marker.observedLegacyDigest) {
           await validateLegacyRecoveryPreparationSources(
             current.snapshot,
@@ -713,9 +735,14 @@ export const createLocalWorkspaceStore = (
   });
 
   const recordLegacyDrift = async (
-    observedLegacyDigest: string,
+    initialCapture: ObservedLegacyCapture,
     knownLedger?: MigrationLedger,
-  ): Promise<{ ledger: MigrationLedger; marker?: RecoveryMarker }> => {
+  ): Promise<{
+    ledger: MigrationLedger;
+    capture: ObservedLegacyCapture;
+    marker?: RecoveryMarker;
+  }> => {
+    let capture = initialCapture;
     let ledger = knownLedger ?? await readRecognizedLedger();
     for (let attempt = 0; attempt < 3; attempt += 1) {
       if (ledger.state !== 'verified') {
@@ -725,16 +752,16 @@ export const createLocalWorkspaceStore = (
       if (existing?.kind !== 'legacy-drift' && existing !== null) {
         throw new WorkspaceStoreError('Another recovery marker is already active.', 'conflict');
       }
-      if (existing?.observedLegacyDigest === observedLegacyDigest) {
-        return { ledger, marker: existing };
+      if (existing?.observedLegacyDigest === capture.digest) {
+        return { ledger, capture, marker: existing };
       }
-      if (existing === null && ledger.acceptedLegacyDigest === observedLegacyDigest) {
-        return { ledger };
+      if (existing === null && ledger.acceptedLegacyDigest === capture.digest) {
+        return { ledger, capture };
       }
       try {
         const marker = existing && existing.observedLegacyDigest === undefined
-          ? { ...existing, observedLegacyDigest }
-          : driftMarker(observedLegacyDigest, ledger.ledgerRevision + 1);
+          ? { ...existing, observedLegacyDigest: capture.digest }
+          : driftMarker(capture.digest, ledger.ledgerRevision + 1);
         const updated = await getAdapter().markLegacyDrift({
           expectedLedgerRevision: ledger.ledgerRevision,
           expectedAcceptedLegacyDigest: ledger.acceptedLegacyDigest,
@@ -743,13 +770,46 @@ export const createLocalWorkspaceStore = (
             observedLegacyDigest: string;
           },
         });
-        return { ledger: updated, marker: updated.unresolvedRecovery ?? undefined };
+        return {
+          ledger: updated,
+          capture,
+          marker: updated.unresolvedRecovery ?? undefined,
+        };
       } catch (error) {
         if (!(error instanceof WorkspaceStoreError) || error.code !== 'conflict') throw error;
         ledger = await readRecognizedLedger();
+        capture = await captureObservedLegacy();
       }
     }
     throw new WorkspaceStoreError('Legacy recovery marker changed repeatedly.', 'conflict');
+  };
+
+  const populateStableNonReadyResult = async (
+    result: NonReadyResult,
+  ): Promise<NonReadyResult> => {
+    if (result.status !== 'recovery'
+      || result.recovery.kind !== 'split-brain'
+      || result.recovery.category !== 'legacy-drift') {
+      return populateCapabilities(result);
+    }
+
+    let resolution = await recordLegacyDrift(
+      await captureObservedLegacy(),
+      await readRecognizedLedger(),
+    );
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      if (!resolution.marker) return populateCapabilities(result, resolution.ledger);
+      const populated = await populateCapabilities(
+        storedRecovery(resolution.marker),
+        resolution.ledger,
+      );
+      const finalCapture = await captureObservedLegacy();
+      if (sameObservedLegacy(finalCapture, resolution.capture)) return populated;
+      resolution = await recordLegacyDrift(finalCapture, resolution.ledger);
+    }
+    throw new LegacyCaptureError(
+      'Legacy storage changed repeatedly while recovery capabilities were prepared.',
+    );
   };
 
   startReadyLegacyRevalidation = () => {
@@ -764,45 +824,51 @@ export const createLocalWorkspaceStore = (
 
     let operation!: Promise<WorkspaceBootstrapResult>;
     operation = Promise.resolve().then(() => queue?.drain()).then(async () => {
-      let captured = await captureStableLegacySnapshotWithDigest(
-        environment.legacyStorage,
-        environment.crypto.subtle,
-      );
+      const captured = await captureObservedLegacy();
       const supersedingAfterCapture = supersedingLifecycleResult();
       if (supersedingAfterCapture) return supersedingAfterCapture;
-      let resolution = await recordLegacyDrift(captured.digest);
-      const after = await captureStableLegacySnapshotWithDigest(
-        environment.legacyStorage,
-        environment.crypto.subtle,
-      );
-      const supersedingAfterRecapture = supersedingLifecycleResult();
-      if (supersedingAfterRecapture) return supersedingAfterRecapture;
-      if (after.digest !== captured.digest) {
-        captured = after;
-        resolution = await recordLegacyDrift(captured.digest, resolution.ledger);
-      }
-
-      if (!resolution.marker) {
-        authority = 'ready';
-        lifecycleResult = undefined;
-        resetCommandQueue?.();
-        if (!cachedReady || !durableSnapshot) {
-          throw new WorkspaceStoreError('Ready workspace snapshot is unavailable.', 'unavailable');
+      let resolution = await recordLegacyDrift(captured);
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        const supersedingAfterRecord = supersedingLifecycleResult();
+        if (supersedingAfterRecord) return supersedingAfterRecord;
+        const after = await captureObservedLegacy();
+        const supersedingAfterRecapture = supersedingLifecycleResult();
+        if (supersedingAfterRecapture) return supersedingAfterRecapture;
+        if (!sameObservedLegacy(after, resolution.capture)) {
+          resolution = await recordLegacyDrift(after, resolution.ledger);
+          continue;
         }
-        return cachedReady;
-      }
 
-      const result = await populateCapabilities(
-        storedRecovery(resolution.marker),
-        resolution.ledger,
-      );
-      const supersedingAfterCapabilities = supersedingLifecycleResult();
-      if (supersedingAfterCapabilities) return supersedingAfterCapabilities;
-      invalidateDurableAuthority();
-      authority = 'recovery';
-      lifecycleResult = result;
-      notifyAuthorityLost(result);
-      return result;
+        if (!resolution.marker) {
+          authority = 'ready';
+          lifecycleResult = undefined;
+          resetCommandQueue?.();
+          if (!cachedReady || !durableSnapshot) {
+            throw new WorkspaceStoreError('Ready workspace snapshot is unavailable.', 'unavailable');
+          }
+          return cachedReady;
+        }
+
+        const result = await populateCapabilities(
+          storedRecovery(resolution.marker),
+          resolution.ledger,
+        );
+        const supersedingAfterCapabilities = supersedingLifecycleResult();
+        if (supersedingAfterCapabilities) return supersedingAfterCapabilities;
+        const finalCapture = await captureObservedLegacy();
+        const supersedingAfterFinalCapture = supersedingLifecycleResult();
+        if (supersedingAfterFinalCapture) return supersedingAfterFinalCapture;
+        if (!sameObservedLegacy(finalCapture, resolution.capture)) {
+          resolution = await recordLegacyDrift(finalCapture, resolution.ledger);
+          continue;
+        }
+        invalidateDurableAuthority();
+        authority = 'recovery';
+        lifecycleResult = result;
+        notifyAuthorityLost(result);
+        return result;
+      }
+      throw new LegacyCaptureError('Legacy storage changed repeatedly during drift detection.');
     }).catch(async error => {
       const superseding = supersedingLifecycleResult();
       if (superseding) return superseding;
@@ -824,16 +890,18 @@ export const createLocalWorkspaceStore = (
     acceptedSource: LegacySnapshot,
     acceptedDigest: string,
   ): Promise<boolean> => {
-    const afterPriorDigest = captureLegacySnapshot(environment.legacyStorage);
-    if (!sameLegacySnapshot(afterPriorDigest, acceptedSource)
-      || await digestLegacySnapshot(afterPriorDigest, environment.crypto.subtle)
-        !== acceptedDigest) {
+    let current: ObservedLegacyCapture;
+    try {
+      current = await captureObservedLegacy();
+    } catch (error) {
+      if (error instanceof LegacyCaptureError) return false;
+      throw error;
+    }
+    if (!sameLegacySnapshot(current.snapshot, acceptedSource)
+      || current.digest !== acceptedDigest) {
       return false;
     }
-    return sameLegacySnapshot(
-      captureLegacySnapshot(environment.legacyStorage),
-      acceptedSource,
-    );
+    return true;
   };
 
   const classifyInspection = (
@@ -898,20 +966,14 @@ export const createLocalWorkspaceStore = (
         return verificationFailure(error);
       }
 
-      let current: Awaited<ReturnType<typeof captureStableLegacySnapshotWithDigest>>;
+      let current: ObservedLegacyCapture;
       try {
-        current = await captureStableLegacySnapshotWithDigest(
-          environment.legacyStorage,
-          environment.crypto.subtle,
-        );
+        current = await captureObservedLegacy();
       } catch (error) {
         if (!(error instanceof LegacyCaptureError)) return recovery('split-brain');
         try {
-          current = await captureStableLegacySnapshotWithDigest(
-            environment.legacyStorage,
-            environment.crypto.subtle,
-          );
-          const recorded = await recordLegacyDrift(current.digest, ledger);
+          current = await captureObservedLegacy();
+          const recorded = await recordLegacyDrift(current, ledger);
           return recorded.marker ? storedRecovery(recorded.marker) : recovery('legacy-changing');
         } catch {
           return recovery('legacy-changing');
@@ -921,7 +983,7 @@ export const createLocalWorkspaceStore = (
         || current.digest !== ledger.acceptedLegacyDigest
         || !sameLegacySnapshot(current.snapshot, inputs.acceptedBackup.snapshot)) {
         try {
-          const recorded = await recordLegacyDrift(current.digest, ledger);
+          const recorded = await recordLegacyDrift(current, ledger);
           if (recorded.marker) return storedRecovery(recorded.marker);
         } catch (error) {
           if (error instanceof WorkspaceStoreError && error.code === 'unavailable') {
@@ -933,13 +995,10 @@ export const createLocalWorkspaceStore = (
 
       emit('finishing-upgrade');
       try {
-        const finalSource = await captureStableLegacySnapshotWithDigest(
-          environment.legacyStorage,
-          environment.crypto.subtle,
-        );
+        const finalSource = await captureObservedLegacy();
         if (finalSource.digest !== ledger.acceptedLegacyDigest
           || !sameLegacySnapshot(finalSource.snapshot, inputs.acceptedBackup.snapshot)) {
-          const recorded = await recordLegacyDrift(finalSource.digest, ledger);
+          const recorded = await recordLegacyDrift(finalSource, ledger);
           if (recorded.marker) return storedRecovery(recorded.marker);
         }
       } catch (error) {
@@ -975,7 +1034,6 @@ export const createLocalWorkspaceStore = (
         throw error;
       }
 
-      const retainedSourceVersion = observedLegacyChange;
       const currentLegacy = captureLegacySnapshot(environment.legacyStorage);
       let snapshot: WorkspaceSnapshot;
       try {
@@ -1000,11 +1058,10 @@ export const createLocalWorkspaceStore = (
       } catch (error) {
         return verificationFailure(error);
       }
-      if (observedLegacyChange !== retainedSourceVersion) return verificationFailure();
       if (!await retainedLegacyMatches(
         inputs.acceptedBackup.snapshot,
         ledger.acceptedLegacyDigest,
-      ) || observedLegacyChange !== retainedSourceVersion) {
+      )) {
         return verificationFailure();
       }
 
@@ -1033,7 +1090,6 @@ export const createLocalWorkspaceStore = (
         }
         return verificationFailure(error);
       }
-      if (observedLegacyChange !== retainedSourceVersion) return verificationFailure();
       if (!isRecognizedLedger(verifiedLedger)
         || verifiedLedger.state !== 'verified'
         || verifiedLedger.unresolvedRecovery !== null) {
@@ -1042,7 +1098,7 @@ export const createLocalWorkspaceStore = (
       if (!await retainedLegacyMatches(
         inputs.acceptedBackup.snapshot,
         verifiedLedger.acceptedLegacyDigest,
-      ) || observedLegacyChange !== retainedSourceVersion) {
+      )) {
         return verificationFailure();
       }
 
@@ -1072,6 +1128,7 @@ export const createLocalWorkspaceStore = (
           createBlankProject: environment.createBlankProject,
         }),
         environment.crypto.subtle,
+        { generation: () => observedLegacyChange },
       );
     } catch (error) {
       if (error instanceof LegacyCaptureError || error instanceof WorkspaceMigrationError) {
@@ -1340,13 +1397,26 @@ export const createLocalWorkspaceStore = (
   });
 
   const executeRecoveryCommand = async (recoveryId: string): Promise<WorkspaceSnapshot> => {
+    const recoveryLifecycleGeneration = lifecycleGeneration;
+    const recoveryLifecycleIsCurrent = (): boolean =>
+      lifecycleGeneration === recoveryLifecycleGeneration && authority === 'recovery';
+    const assertRecoveryLifecycle = (): void => {
+      if (!recoveryLifecycleIsCurrent()) {
+        throw new WorkspaceStoreError(
+          'Local workspace lifecycle changed during legacy recovery.',
+          'authority-lost',
+        );
+      }
+    };
     let prepared: Awaited<ReturnType<typeof prepareLegacyRecovery>>;
     try {
       prepared = await captureStableLegacySnapshot(
         environment.legacyStorage,
         async source => {
           const sourceDigest = await digestLegacySnapshot(source, environment.crypto.subtle);
+          assertRecoveryLifecycle();
           const ledger = await readRecognizedLedger();
+          assertRecoveryLifecycle();
           const marker = ledger.unresolvedRecovery;
           if (ledger.state !== 'verified'
             || marker?.kind !== 'legacy-drift'
@@ -1365,13 +1435,15 @@ export const createLocalWorkspaceStore = (
               getAdapter().readWorkspaceRecords(),
               getAdapter().readLegacyBackup(ledger.acceptedLegacyBackupId),
             ]);
+            assertRecoveryLifecycle();
             reconstructWorkspace(records);
             acceptedBackup = await validateBackup(acceptedBackup, {
               id: ledger.acceptedLegacyBackupId,
               digest: ledger.acceptedLegacyDigest,
             });
+            assertRecoveryLifecycle();
           } catch (error) {
-            if (error instanceof WorkspaceStoreError && error.code === 'unavailable') throw error;
+            if (error instanceof WorkspaceStoreError) throw error;
             throw new WorkspaceStoreError(
               'Recovery authorities could not be validated independently.',
               'unavailable',
@@ -1380,7 +1452,7 @@ export const createLocalWorkspaceStore = (
           }
 
           try {
-            return await prepareLegacyRecovery(
+            const recovery = await prepareLegacyRecovery(
               source,
               sourceDigest,
               acceptedBackup.snapshot,
@@ -1393,7 +1465,10 @@ export const createLocalWorkspaceStore = (
                 randomUUID: environment.randomUUID,
               },
             );
+            assertRecoveryLifecycle();
+            return recovery;
           } catch (error) {
+            if (error instanceof WorkspaceStoreError) throw error;
             throw new WorkspaceStoreError(
               'Changed legacy workspace is invalid and cannot be recovered as copies.',
               'validation',
@@ -1402,7 +1477,12 @@ export const createLocalWorkspaceStore = (
           }
         },
         environment.crypto.subtle,
+        {
+          generation: () => observedLegacyChange,
+          assertCurrent: assertRecoveryLifecycle,
+        },
       );
+      assertRecoveryLifecycle();
     } catch (error) {
       if (error instanceof WorkspaceStoreError) throw error;
       if (error instanceof LegacyCaptureError) {
@@ -1416,12 +1496,15 @@ export const createLocalWorkspaceStore = (
     }
 
     const nextLedger = await getAdapter().recoverLegacyAsCopies(prepared);
+    assertRecoveryLifecycle();
     let records: WorkspaceRecords;
     let snapshot: WorkspaceSnapshot;
     try {
       records = await getAdapter().readWorkspaceRecords();
+      assertRecoveryLifecycle();
       snapshot = reconstructWorkspace(records);
     } catch (error) {
+      if (!recoveryLifecycleIsCurrent()) throw error;
       const failure = new WorkspaceStoreError(
         'Recovered workspace failed independent validation.',
         'unavailable',
@@ -1430,31 +1513,57 @@ export const createLocalWorkspaceStore = (
       handleAuthorityLost(failure);
       throw failure;
     }
-    installDurableState(records, snapshot);
 
     try {
-      const current = await captureStableLegacySnapshotWithDigest(
-        environment.legacyStorage,
-        environment.crypto.subtle,
-      );
-      if (current.digest !== nextLedger.acceptedLegacyDigest
-        || !sameLegacySnapshot(current.snapshot, prepared.backup.snapshot)) {
-        const recorded = await recordLegacyDrift(current.digest, nextLedger);
-        if (recorded.marker) {
-          const result = await populateCapabilities(
-            storedRecovery(recorded.marker),
-            recorded.ledger,
-          );
-          invalidateDurableAuthority();
-          authority = 'recovery';
-          lifecycleResult = result;
-          notifyAuthorityLost(result);
+      let current = await captureObservedLegacy(assertRecoveryLifecycle);
+      let currentLedger = nextLedger;
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        assertRecoveryLifecycle();
+        if (currentLedger.unresolvedRecovery === null
+          && current.digest === currentLedger.acceptedLegacyDigest
+          && sameLegacySnapshot(current.snapshot, prepared.backup.snapshot)) {
+          installDurableState(records, snapshot);
+          const readyResult = ready(snapshot, currentLedger);
+          assertRecoveryLifecycle();
+          authority = 'ready';
+          cachedReady = readyResult;
+          lifecycleResult = undefined;
+          resetCommandQueue?.();
           return structuredClone(snapshot);
         }
+
+        const recorded = await recordLegacyDrift(current, currentLedger);
+        assertRecoveryLifecycle();
+        currentLedger = recorded.ledger;
+        if (!recorded.marker) {
+          current = await captureObservedLegacy(assertRecoveryLifecycle);
+          continue;
+        }
+        const result = await populateCapabilities(
+          storedRecovery(recorded.marker),
+          recorded.ledger,
+        );
+        assertRecoveryLifecycle();
+        const finalCapture = await captureObservedLegacy(assertRecoveryLifecycle);
+        if (!sameObservedLegacy(finalCapture, recorded.capture)) {
+          current = finalCapture;
+          continue;
+        }
+        assertRecoveryLifecycle();
+        invalidateDurableAuthority();
+        authority = 'recovery';
+        lifecycleResult = result;
+        notifyAuthorityLost(result);
+        return structuredClone(snapshot);
       }
+      throw new LegacyCaptureError(
+        'Legacy storage changed repeatedly after recovery.',
+      );
     } catch (error) {
+      if (!recoveryLifecycleIsCurrent()) throw error;
       if (error instanceof LegacyCaptureError) {
         const result = await populateCapabilities(recovery('legacy-changing'));
+        assertRecoveryLifecycle();
         invalidateDurableAuthority();
         authority = 'recovery';
         lifecycleResult = result;
@@ -1471,13 +1580,6 @@ export const createLocalWorkspaceStore = (
       handleAuthorityLost(failure);
       throw failure;
     }
-
-    const readyResult = ready(snapshot, nextLedger);
-    authority = 'ready';
-    cachedReady = readyResult;
-    lifecycleResult = undefined;
-    resetCommandQueue?.();
-    return structuredClone(snapshot);
   };
 
   const createCommandQueue = (): MutationQueue => createMutationQueue({
@@ -1518,7 +1620,7 @@ export const createLocalWorkspaceStore = (
         .then(() => priorQueue?.drain())
         .then(() => bootstrapOperation(emit))
         .then(async (result): Promise<WorkspaceBootstrapResult> =>
-          result.status === 'ready' ? result : populateCapabilities(result))
+          result.status === 'ready' ? result : populateStableNonReadyResult(result))
         .then(result => {
           const effectiveResult = lifecycleGeneration !== startingLifecycleGeneration
             && lifecycleResult
@@ -1629,7 +1731,7 @@ export const createLocalWorkspaceStore = (
           );
           return createLegacyRecoveryBundle(
             backup.snapshot,
-            environment.now(),
+            backup.capturedAt,
             environment.crypto.subtle,
           );
         } catch (error) {

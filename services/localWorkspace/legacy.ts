@@ -22,6 +22,12 @@ export class LegacyCaptureError extends Error {
   }
 }
 
+export interface StableLegacyCaptureOptions {
+  generation?: () => number;
+  assertCurrent?: () => void;
+  generationRetries?: number;
+}
+
 export function captureLegacySnapshot(storage: LegacyStorage): LegacySnapshot {
   return Object.fromEntries(LEGACY_DOCUMENT_KEYS.map(key => {
     const raw = storage.getItem(key);
@@ -33,28 +39,42 @@ export async function captureStableLegacySnapshot<T>(
   storage: LegacyStorage,
   prepare: (source: LegacySnapshot) => T | Promise<T>,
   subtle?: SubtleCrypto,
+  options: StableLegacyCaptureOptions = {},
 ): Promise<T> {
-  const source = captureLegacySnapshot(storage);
-  const sourceDigest = await digestLegacySnapshot(source, subtle);
-  const prepared = await prepare(source);
-  const current = captureLegacySnapshot(storage);
-  const currentDigest = await digestLegacySnapshot(current, subtle);
-
-  if (currentDigest !== sourceDigest || LEGACY_DOCUMENT_KEYS.some(key =>
-    current[key].present !== source[key].present || current[key].raw !== source[key].raw)) {
+  const retries = options.generationRetries ?? 3;
+  for (let attempt = 0; ; attempt += 1) {
+    const generation = options.generation?.();
+    const source = captureLegacySnapshot(storage);
+    const sourceDigest = await digestLegacySnapshot(source, subtle);
+    options.assertCurrent?.();
+    const prepared = await prepare(source);
+    options.assertCurrent?.();
+    const current = captureLegacySnapshot(storage);
+    const currentDigest = await digestLegacySnapshot(current, subtle);
+    options.assertCurrent?.();
+    const afterHash = captureLegacySnapshot(storage);
+    const generationChanged = generation !== undefined
+      && options.generation?.() !== generation;
+    const sourceChanged = currentDigest !== sourceDigest || LEGACY_DOCUMENT_KEYS.some(key =>
+      current[key].present !== source[key].present
+      || current[key].raw !== source[key].raw
+      || afterHash[key].present !== current[key].present
+      || afterHash[key].raw !== current[key].raw);
+    if (!sourceChanged && !generationChanged) return prepared;
+    if (generationChanged && attempt < retries) continue;
     throw new LegacyCaptureError('Legacy storage changed during migration preparation.');
   }
-  return prepared;
 }
 
 export async function captureStableLegacySnapshotWithDigest(
   storage: LegacyStorage,
   subtle?: SubtleCrypto,
+  options?: StableLegacyCaptureOptions,
 ): Promise<{ snapshot: LegacySnapshot; digest: string }> {
   return captureStableLegacySnapshot(storage, async source => ({
     snapshot: structuredClone(source),
     digest: await digestLegacySnapshot(source, subtle),
-  }), subtle);
+  }), subtle, options);
 }
 
 export function monitorLegacyKeys(

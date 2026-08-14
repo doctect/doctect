@@ -33,3 +33,41 @@ Complete. IndexedDB remains authoritative after migration, divergent legacy data
 - Added malformed-source capability validation, post-transaction independent target validation, versionchange generation guards, and cold legacy export typing during review.
 - Added and fixed a race where legacy could change after marker persistence but before capability calculation.
 - No unresolved Task 6 findings.
+
+## Critical and Important Review Fixes
+
+### Status
+
+All requested Critical and Important findings are fixed in one follow-up wave. The unrelated reviewer Minor concerning the recovery-store assertion was intentionally not changed and remains queued for final-review triage.
+
+### Implementation
+
+- Stable legacy capture now checks event generation, hashes a recapture, and synchronously captures once more after hashing. Byte-identical events retry; byte changes never publish stale ready state, drift markers, or recovery capabilities.
+- Drift-marker CAS conflicts now reread the winning ledger and recapture live legacy bytes before retrying. Persisted marker digest and returned recovery capabilities therefore describe the same stable source generation.
+- Recovery commands retain a lifecycle generation and assert it after every asynchronous boundary, after the recovery transaction, and before restoring ready authority. Lifecycle loss remains unavailable, and ready is impossible while a recovery marker remains unresolved.
+- Recovery preparation now builds and validates the complete target write set outside IndexedDB transactions. The transaction compares exact expected ledger and workspace records, then writes only prepared projects, workspace, presets, imports, backup, and ledger.
+- Recovery ID allocation uses one reservation namespace covering durable, current-source, accepted-source, pending-target, and private consumed-import identities before generating any project, preset, import, or target ID.
+- `legacy-original` exports the original backup's persisted `capturedAt`; live exports continue to use export time.
+- Legacy storage remains read-only, raw backup bytes remain exact, queue freeze/drain behavior remains intact, and recovery still never auto-merges or deletes either authority.
+
+### Review-Fix RED
+
+- Eleven requested regressions were added and observed failing in focused runs before production changes. Failures demonstrated late-hash ready publication, stale drift-marker publication, stale CAS snapshots, post-recovery lifecycle restoration, invalid target writes entering a transaction, cross-namespace/source-only ID reuse, and export-time substitution for original capture time.
+- Intermediate five-suite run after the first implementation passed 180/191 tests. The 11 failures were superseded read-count and transaction-timing expectations; updating those expectations exposed no additional production failure.
+- Self-review added two more regressions. `npx vitest run tests/unit/localWorkspace/bootstrap.test.ts tests/unit/localWorkspace/recovery.test.ts -t "refuses copied ready|keeps recovery open"` failed 2/2 because copied bootstrap returned ready after a reentrant finishing-phase source change and post-recovery returned ready with a persisted drift marker after source reversion.
+
+### Review-Fix GREEN
+
+- The same two self-review regressions passed 2/2 after restoring the final synchronous copied-source check and requiring `unresolvedRecovery === null` before post-recovery ready publication.
+- Required five-suite command passed 193/193 tests across 5 files in 4.55 seconds.
+- Required Task 6 focused command passed 75/75 tests across 3 files in 3.91 seconds.
+- Full `tests/unit/localWorkspace` sweep passed 314/314 tests across 9 files in 4.52 seconds.
+- `npx tsc --noEmit` reports only the same five unrelated baseline test diagnostics: one in `changePassword.test.tsx`, three in `loginEmailVerification.test.tsx`, and one in `svgEditing.test.ts`.
+- `git diff --check` passes.
+
+### Review-Fix Self-Review
+
+- Standards axis: no documented repository-standard violation or blocking smell found. Hashing, parsing, and target validation remain outside active write transactions; transaction code is limited to exact CAS reads and prepared writes.
+- Spec axis: each Critical/Important finding has direct regression coverage. Stable capture, marker publication, capability reporting, recovery lifecycle, complete target validation, global ID reservation, and original capture metadata now match the requested behavior.
+- Additional authority review found and fixed two ready-publication gaps: reentrant source mutation after copied verification and source reversion while a post-recovery marker remained persisted.
+- No unresolved Critical or Important finding remains. Deferred Minor: recovery-store assertion triage only.

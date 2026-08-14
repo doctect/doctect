@@ -30,6 +30,7 @@ import {
   createIndexedDbAdapter,
   type IndexedDbInspection,
 } from '../../../services/localWorkspace/indexedDbAdapter';
+import { digestLegacySnapshot } from '../../../services/localWorkspace/canonical';
 import { captureLegacySnapshot } from '../../../services/localWorkspace/legacy';
 import {
   prepareInitialCopy,
@@ -398,6 +399,7 @@ describe('public store surface', () => {
     expect((harness.storage as MemoryStorage).reads).toEqual([
       ...LEGACY_DOCUMENT_KEYS,
       ...LEGACY_DOCUMENT_KEYS,
+      ...LEGACY_DOCUMENT_KEYS,
     ]);
     expect((harness.storage as MemoryStorage).mutations).toEqual([]);
   });
@@ -438,7 +440,7 @@ describe('initial bootstrap and authority transition', () => {
     const originalGetItem = storage.getItem.bind(storage);
     storage.getItem = (key: string) => {
       if (storage.reads.length === 0) events.push('capture-legacy');
-      if (storage.reads.length === 8) events.push('rehash-legacy');
+      if (storage.reads.length === 16) events.push('rehash-legacy');
       return originalGetItem(key);
     };
     let nowCalls = 0;
@@ -642,8 +644,8 @@ describe('initial bootstrap and authority transition', () => {
 
     const result = await createLocalWorkspaceStore(harness.environment).bootstrap();
 
-    expect(recoveryResult(result).recovery.kind).toBe('verification-failed');
-    expect((await inspect(harness)).migrationLedger[0].state).toBe('copied');
+    expect(recoveryResult(result).recovery.kind).toBe('legacy-changing');
+    expect((await inspect(harness)).migrationLedger).toEqual([]);
   });
 
   it.each(['start', 'complete'] as const)(
@@ -742,6 +744,56 @@ describe('initial bootstrap and authority transition', () => {
     harness.dispatchStorage(LEGACY_KEYS.projects);
   });
 
+  it('revalidates copied source after a byte-identical event during the final hash', async () => {
+    const sourceHashStarted = deferred();
+    const releaseSourceHash = deferred();
+    let legacyDigestCalls = 0;
+    const crypto = {
+      subtle: {
+        digest: async (algorithm: AlgorithmIdentifier, data: BufferSource) => {
+          const text = new TextDecoder().decode(data as never);
+          if (text.includes('doctect-legacy-source')) {
+            legacyDigestCalls += 1;
+            if (legacyDigestCalls === 6) {
+              sourceHashStarted.resolve();
+              await releaseSourceHash.promise;
+            }
+          }
+          return webcrypto.subtle.digest(algorithm, data as never);
+        },
+      },
+    } as unknown as Crypto;
+    const harness = createHarness({ crypto });
+    const bootstrap = createLocalWorkspaceStore(harness.environment).bootstrap();
+    await sourceHashStarted.promise;
+
+    harness.dispatchStorage(LEGACY_KEYS.projects);
+    releaseSourceHash.resolve();
+
+    await expect(bootstrap).resolves.toMatchObject({ status: 'ready' });
+    expect(legacyDigestCalls).toBeGreaterThan(6);
+  });
+
+  it('refuses copied ready when legacy changes in the finishing phase observer', async () => {
+    const storage = memoryStorage(validLegacyValues());
+    const harness = createHarness({ storage });
+    const store = createLocalWorkspaceStore(harness.environment);
+
+    const result = await store.bootstrap({
+      onPhase(phase) {
+        if (phase === 'finishing-upgrade') {
+          storage.seed(
+            LEGACY_KEYS.projects,
+            JSON.stringify([legacyProject(), secondProject()]),
+          );
+        }
+      },
+    });
+
+    expect(recoveryResult(result).recovery.kind).toBe('verification-failed');
+    expect((await inspect(harness)).migrationLedger[0].state).toBe('verified');
+  });
+
   it('refuses authority when source changes during the verified CAS', async () => {
     const indexedDB = new IDBFactory();
     const storage = memoryStorage(validLegacyValues());
@@ -838,7 +890,7 @@ describe('initial bootstrap and authority transition', () => {
     const storage = {
       getItem(key: string) {
         reads += 1;
-        if (crash && reads === 9) throw new Error('fault after committed copy');
+        if (crash && reads === 13) throw new Error('fault after committed copy');
         return baseStorage.getItem(key);
       },
     };
@@ -900,6 +952,7 @@ describe('existing target decision table', () => {
       expect((harness.storage as MemoryStorage).reads).toEqual([
         ...LEGACY_DOCUMENT_KEYS,
         ...LEGACY_DOCUMENT_KEYS,
+        ...LEGACY_DOCUMENT_KEYS,
       ]);
       expect((await inspect(harness))[storeName]).toHaveLength(1);
     },
@@ -937,6 +990,7 @@ describe('existing target decision table', () => {
     expect(recoveryResult(result).recovery.kind).toBe('unrecognized-target');
     expect(harness.createBlankProject).not.toHaveBeenCalled();
     expect((harness.storage as MemoryStorage).reads).toEqual([
+      ...LEGACY_DOCUMENT_KEYS,
       ...LEGACY_DOCUMENT_KEYS,
       ...LEGACY_DOCUMENT_KEYS,
     ]);
@@ -1110,6 +1164,85 @@ describe('existing target decision table', () => {
     const result = await bootstrap;
     expect(recoveryResult(result).recovery.kind).toBe('split-brain');
     harness.dispatchStorage(LEGACY_KEYS.projects);
+  });
+
+  it('never publishes verified ready after legacy changes during the final hash', async () => {
+    const sourceHashStarted = deferred();
+    const releaseSourceHash = deferred();
+    let legacyDigestCalls = 0;
+    const crypto = {
+      subtle: {
+        digest: async (algorithm: AlgorithmIdentifier, data: BufferSource) => {
+          const text = new TextDecoder().decode(data as never);
+          if (text.includes('doctect-legacy-source')) {
+            legacyDigestCalls += 1;
+            if (legacyDigestCalls === 7) {
+              sourceHashStarted.resolve();
+              await releaseSourceHash.promise;
+            }
+          }
+          return webcrypto.subtle.digest(algorithm, data as never);
+        },
+      },
+    } as unknown as Crypto;
+    const storage = memoryStorage(validLegacyValues());
+    const harness = createHarness({ storage });
+    await seedCopy(harness, { state: 'verified' });
+    harness.environment.crypto = crypto;
+    const bootstrap = createLocalWorkspaceStore(harness.environment).bootstrap();
+    await sourceHashStarted.promise;
+
+    storage.seed(LEGACY_KEYS.projects, JSON.stringify([legacyProject(), secondProject()]));
+    harness.dispatchStorage(LEGACY_KEYS.projects);
+    releaseSourceHash.resolve();
+
+    const result = await bootstrap;
+    expect(recoveryResult(result).recovery.kind).toBe('split-brain');
+  });
+
+  it('refreshes verified recovery when legacy changes during capability hashing', async () => {
+    const sourceHashStarted = deferred();
+    const releaseSourceHash = deferred();
+    let legacyDigestCalls = 0;
+    const crypto = {
+      subtle: {
+        digest: async (algorithm: AlgorithmIdentifier, data: BufferSource) => {
+          const text = new TextDecoder().decode(data as never);
+          if (text.includes('doctect-legacy-source')) {
+            legacyDigestCalls += 1;
+            if (legacyDigestCalls === 12) {
+              sourceHashStarted.resolve();
+              await releaseSourceHash.promise;
+            }
+          }
+          return webcrypto.subtle.digest(algorithm, data as never);
+        },
+      },
+    } as unknown as Crypto;
+    const storage = memoryStorage(validLegacyValues());
+    const harness = createHarness({ storage });
+    await seedCopy(harness, { state: 'verified' });
+    storage.seed(LEGACY_KEYS.projects, JSON.stringify([
+      legacyProject('project-a', 11, { name: 'First bootstrap drift' }),
+    ]));
+    harness.environment.crypto = crypto;
+    const bootstrap = createLocalWorkspaceStore(harness.environment).bootstrap();
+    await sourceHashStarted.promise;
+
+    storage.seed(LEGACY_KEYS.projects, JSON.stringify([
+      legacyProject('project-a', 11, { name: 'Latest bootstrap drift' }),
+    ]));
+    harness.dispatchStorage(LEGACY_KEYS.projects);
+    releaseSourceHash.resolve();
+
+    const result = recoveryResult(await bootstrap);
+    const latestDigest = await digestLegacySnapshot(
+      captureLegacySnapshot(storage),
+      webcrypto.subtle as unknown as SubtleCrypto,
+    );
+    expect(result.recovery.kind).toBe('split-brain');
+    expect((await inspect(harness)).migrationLedger[0].unresolvedRecovery)
+      .toMatchObject({ observedLegacyDigest: latestDigest });
   });
 
   it.each([

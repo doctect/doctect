@@ -74,7 +74,11 @@ describe('legacy source capture', () => {
 
     expect(result.prepared).toBe(true);
     expect(prepare).toHaveBeenCalledOnce();
-    expect(storage.reads).toEqual([...LEGACY_DOCUMENT_KEYS, ...LEGACY_DOCUMENT_KEYS]);
+    expect(storage.reads).toEqual([
+      ...LEGACY_DOCUMENT_KEYS,
+      ...LEGACY_DOCUMENT_KEYS,
+      ...LEGACY_DOCUMENT_KEYS,
+    ]);
     expect(storage.mutations).toEqual([]);
   });
 
