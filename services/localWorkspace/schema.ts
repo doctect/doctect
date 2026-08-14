@@ -1,0 +1,90 @@
+import type {
+  WorkspaceCustomPreset,
+  WorkspacePendingImport,
+  WorkspaceProject,
+} from './contracts';
+import type { LegacyDocumentKey, LegacySnapshot } from './legacyTypes';
+
+export const WORKSPACE_DB_NAME = 'doctect-local-workspace';
+export const WORKSPACE_DB_VERSION = 1;
+export const WORKSPACE_MIGRATION_ID = 'local-storage-to-indexeddb-v1';
+export const PERSISTENCE_ROLLOUT_EPOCH = 1;
+
+export interface StoredProject {
+  id: string;
+  project: WorkspaceProject;
+  storageRevision: number;
+  updatedAt: string;
+}
+
+export interface StoredWorkspace {
+  id: 'current';
+  projectOrder: string[];
+  activeProjectId: string;
+  revision: number;
+}
+
+export interface StoredPreset {
+  id: string;
+  preset: WorkspaceCustomPreset;
+  position: number;
+}
+
+export interface StoredPendingImport {
+  id: string;
+  pendingImport: WorkspacePendingImport;
+  position: number;
+}
+
+export interface KeyFingerprint {
+  key: LegacyDocumentKey;
+  present: boolean;
+  digest: string;
+}
+
+export interface ItemFingerprint {
+  sourceIndex: number;
+  id: string;
+  digest: string;
+}
+
+export interface RecoveryMarker {
+  id: string;
+  kind: 'legacy-drift' | 'target-mismatch' | 'unknown-target';
+  detectedAt: string;
+  observedLegacyDigest?: string;
+}
+
+export interface MigrationLedger {
+  id: 'local-storage-to-indexeddb-v1';
+  indexedDbVersion: 1;
+  state: 'copied' | 'verified' | 'cleanup-started' | 'cleanup-complete';
+  origin: 'legacy' | 'native';
+  ledgerRevision: number;
+  sourceDigest: string;
+  expectedTargetDigest: string;
+  acceptedLegacyDigest: string;
+  originalLegacyBackupId: string;
+  acceptedLegacyBackupId: string;
+  keyFingerprints: KeyFingerprint[];
+  projectFingerprints: ItemFingerprint[];
+  presetFingerprints: ItemFingerprint[];
+  counts: {
+    sourceProjects: number;
+    targetProjects: number;
+    customPresets: number;
+    pendingImports: number;
+  };
+  migratedAt: string;
+  verifiedAt: string | null;
+  persistenceRolloutEpoch: 1;
+  unresolvedRecovery: RecoveryMarker | null;
+}
+
+export interface LegacyBackupRecord {
+  id: string;
+  kind: 'original' | 'conflict';
+  capturedAt: string;
+  snapshot: LegacySnapshot;
+  digest: string;
+}

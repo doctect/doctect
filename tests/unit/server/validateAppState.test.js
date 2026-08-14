@@ -1,6 +1,11 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest';
-import { validateAppState } from '../../../server/validateAppState.js';
+import {
+    MAX_STATE_BYTES,
+    validateAppState,
+} from '../../../server/validateAppState.js';
+import { validateAppState as validateSharedAppState } from '../../../shared/validateAppState.js';
+import { MAX_STATE_BYTES as SHARED_MAX_STATE_BYTES } from '../../../shared/projectLimits.js';
 
 const goodState = () => ({
     nodes: { root: { id: 'root', parentId: null, type: 'page', title: 'Root', data: {}, children: [] } },
@@ -18,6 +23,21 @@ const validGenerator = () => ({
 });
 
 describe('validateAppState', () => {
+    it('keeps the server path as a compatibility re-export of the shared implementation', () => {
+        expect(validateAppState).toBe(validateSharedAppState);
+        expect(MAX_STATE_BYTES).toBe(SHARED_MAX_STATE_BYTES);
+    });
+
+    it('runs without the Node Buffer global', () => {
+        const buffer = globalThis.Buffer;
+        try {
+            globalThis.Buffer = undefined;
+            expect(validateSharedAppState(goodState())).toEqual({ ok: true });
+        } finally {
+            globalThis.Buffer = buffer;
+        }
+    });
+
     it('accepts a minimal valid state', () => {
         expect(validateAppState(goodState()).ok).toBe(true);
     });
@@ -45,6 +65,11 @@ describe('validateAppState', () => {
         const s = goodState();
         s.nodes.root.data.big = 'x'.repeat(5 * 1024 * 1024);
         expect(validateAppState(s).ok).toBe(false);
+    });
+    it('reports cyclic state as non-serializable', () => {
+        const s = goodState();
+        s.cycle = s;
+        expect(validateAppState(s)).toEqual({ ok: false, error: 'state is not serializable' });
     });
     it('accepts pre-migration states with no layers/layerId (legacy)', () => {
         expect(validateAppState(goodState()).ok).toBe(true);

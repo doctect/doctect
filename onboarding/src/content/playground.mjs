@@ -24,7 +24,7 @@ export const PLAYGROUND = {
               answer: 3, why: 'Publishing pins published_commit_id; private saves never move public content. The “pinned snapshot” tour walks it.' },
             { q: 'What lives in shared/?',
               options: ['CSS shared by pages', 'Plain ESM imported by BOTH client and server — generator metadata and shared validation rules', 'React context providers', 'Test fixtures'],
-              answer: 1, why: 'shared/generatorMetadata.js is imported by services/generatorSandbox.ts on the client AND server/validateAppState.js on the server; shared/passwordPolicy.js by pages/LoginPage.tsx AND server/auth.js. shared/diff.js is server-side today — the client renders the ChangeSet the server computed.' },
+              answer: 1, why: 'shared/generatorMetadata.js is imported by services/generatorSandbox.ts and the browser-safe shared/validateAppState.js implementation; server/validateAppState.js is its compatibility re-export. shared/passwordPolicy.js is imported by pages/LoginPage.tsx AND server/auth.js. shared/diff.js is server-side today — the client renders the ChangeSet the server computed.' },
         ] },
         { title: 'L2 · the client', questions: [
             { q: 'The editor canvas is technically…',

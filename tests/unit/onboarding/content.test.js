@@ -68,6 +68,15 @@ describe('CODE_MAP annotations', () => {
         }
     });
 
+    it('identifies shared validator implementation and server compatibility path', () => {
+        const shared = CODE_MAP.annotations.find(a => a.path === 'shared/validateAppState.js');
+        const server = CODE_MAP.annotations.find(a => a.path === 'server/validateAppState.js');
+        expect(shared?.note).toMatch(/implementation/i);
+        expect(server?.note).toMatch(/compatibility re-export/i);
+        expect(CODE_MAP.anchors.find(a => a.id === 'validate-appstate')?.file)
+            .toBe('shared/validateAppState.js');
+    });
+
     // "Only the server imports the engine" is the story the reader is GRADED on
     // (quiz L1, "What lives in shared/?"). The opposite claim has shipped FOUR
     // times in four different phrasings, so this guard is built to a rule the
@@ -295,10 +304,10 @@ describe('countable claims still agree with the repo', () => {
     // Shipped as "every path that accepts an AppState: commits, publish, …" and
     // "Every write path funnels through it — saves, publishes, merges". Publish takes
     // listing fields and an If-Match head; it never accepts an AppState.
-    it('validateAppState still has exactly three call sites', () => {
+    it('validateAppState still has exactly three server call sites', () => {
         const sites = {};
         for (const rel of flattenTreePaths(scanTree(REPO_ROOT))) {
-            if (!/\.[cm]?[jt]sx?$/.test(rel) || /\.test\./.test(rel) || rel.startsWith('onboarding/')) continue;
+            if (!rel.startsWith('server/') || !/\.[cm]?[jt]sx?$/.test(rel) || /\.test\./.test(rel)) continue;
             const calls = readRepo(rel).split(/(?<![A-Za-z])validateAppState\(/).length - 1;
             if (calls) sites[rel] = calls;
         }
@@ -320,6 +329,8 @@ describe('deep dives + anchors', () => {
             ['diff-engine', 'text-layout', 'generator-sandbox', 'migrations',
              'publication-pinning', 'validate-appstate', 'dotenv-seals', 'auth-stack']);
         const excerpts = extractExcerpts(ROOT2, CODE_MAP.anchors); // throws AnchorError on rot
+        expect(CODE_MAP.anchors.find(a => a.id === 'validate-appstate')?.file)
+            .toBe('shared/validateAppState.js');
         expect(excerpts.length).toBe(CODE_MAP.anchors.length);
         for (const dive of CODE_MAP.deepDives) {
             expect(dive.sections.length).toBeGreaterThanOrEqual(2);

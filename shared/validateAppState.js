@@ -1,0 +1,96 @@
+import {
+    MAX_ELEMENTS,
+    MAX_LAYERS_PER_TEMPLATE,
+    MAX_NODES,
+    MAX_STATE_BYTES,
+    MAX_TEMPLATE_DIMENSION,
+    MAX_VARIANTS,
+} from './projectLimits.js';
+import { validateGeneratorProvenance } from './generatorMetadata.js';
+
+const fail = (error) => ({ ok: false, error });
+const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+const isStr = (v) => typeof v === 'string';
+const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
+const utf8ByteLength = value => new TextEncoder().encode(value).byteLength;
+const TEXT_OVERFLOW_VALUES = ['clip', 'ellipsis', 'shrink', 'visible'];
+const TEXT_PADDING_SIDES = ['top', 'right', 'bottom', 'left'];
+
+export const validateAppState = (state) => {
+    if (!isObj(state)) return fail('state must be an object');
+
+    let serialized;
+    try { serialized = JSON.stringify(state); }
+    catch { return fail('state is not serializable'); }
+    if (serialized === undefined) return fail('state is not serializable');
+    if (utf8ByteLength(serialized) > MAX_STATE_BYTES) {
+        return fail(`state exceeds ${MAX_STATE_BYTES} bytes`);
+    }
+
+    if (state.generator !== undefined) {
+        const generatorResult = validateGeneratorProvenance(state.generator, { strictUnknownFields: true });
+        if (!generatorResult.ok) return fail(generatorResult.message);
+    }
+
+    if (!isObj(state.nodes)) return fail('nodes must be an object');
+    if (!isStr(state.rootId) || !state.nodes[state.rootId]) return fail('rootId must reference an existing node');
+    if (Object.keys(state.nodes).length > MAX_NODES) return fail('too many nodes (max 20000)');
+
+    for (const [id, node] of Object.entries(state.nodes)) {
+        if (!isObj(node)) return fail(`node ${id} must be an object`);
+        if (!isStr(node.id) || node.id !== id) return fail(`node ${id} has mismatched id`);
+        if (node.parentId !== null && !isStr(node.parentId)) return fail(`node ${id} parentId invalid`);
+        if (!isStr(node.type)) return fail(`node ${id} missing type`);
+        if (!isStr(node.title)) return fail(`node ${id} missing title`);
+        if (!isObj(node.data)) return fail(`node ${id} data must be an object`);
+        if (!Array.isArray(node.children) || node.children.some(c => !isStr(c))) return fail(`node ${id} children invalid`);
+    }
+
+    if (!isObj(state.variants) || Object.keys(state.variants).length === 0) return fail('variants must be a non-empty object');
+    if (Object.keys(state.variants).length > MAX_VARIANTS) return fail('too many variants (max 50)');
+
+    let totalElements = 0;
+    for (const [vid, variant] of Object.entries(state.variants)) {
+        if (!isObj(variant)) return fail(`variant ${vid} must be an object`);
+        if (!isStr(variant.id) || !isStr(variant.name)) return fail(`variant ${vid} missing id/name`);
+        if (!isObj(variant.templates)) return fail(`variant ${vid} templates must be an object`);
+        for (const [tid, tpl] of Object.entries(variant.templates)) {
+            if (!isObj(tpl)) return fail(`template ${vid}/${tid} must be an object`);
+            if (!isStr(tpl.id) || !isStr(tpl.name)) return fail(`template ${vid}/${tid} missing id/name`);
+            if (!isNum(tpl.width) || !isNum(tpl.height) || tpl.width <= 0 || tpl.height <= 0 || tpl.width > MAX_TEMPLATE_DIMENSION || tpl.height > MAX_TEMPLATE_DIMENSION) {
+                return fail(`template ${vid}/${tid} has invalid dimensions`);
+            }
+            if (!Array.isArray(tpl.elements)) return fail(`template ${vid}/${tid} elements must be an array`);
+            // Layers (v8+): light, optional checks — legacy/un-migrated states must still validate
+            if (tpl.layers !== undefined) {
+                if (!Array.isArray(tpl.layers)) return fail(`template ${vid}/${tid} layers must be an array`);
+                if (tpl.layers.length > MAX_LAYERS_PER_TEMPLATE) return fail(`template ${vid}/${tid} has too many layers (max 200)`);
+            }
+            for (const el of tpl.elements) {
+                if (el && typeof el === 'object' && el.layerId !== undefined && !isStr(el.layerId)) {
+                    return fail(`template ${vid}/${tid} has an element with a non-string layerId`);
+                }
+                if (Number.isInteger(state.schemaVersion) && state.schemaVersion >= 10
+                    && el && typeof el === 'object' && (el.type === 'text' || el.type === 'grid')) {
+                    if (el.textOverflow !== undefined && !TEXT_OVERFLOW_VALUES.includes(el.textOverflow)) {
+                        return fail(`template ${vid}/${tid} has an element with invalid textOverflow`);
+                    }
+                    if (el.textWrap !== undefined && typeof el.textWrap !== 'boolean') {
+                        return fail(`template ${vid}/${tid} has an element with invalid textWrap`);
+                    }
+                }
+                if (Number.isInteger(state.schemaVersion) && state.schemaVersion >= 11
+                    && el && typeof el === 'object' && el.type === 'text' && el.textPadding !== undefined) {
+                    if (!isObj(el.textPadding)
+                        || TEXT_PADDING_SIDES.some(side => !isNum(el.textPadding[side]) || el.textPadding[side] < 0)) {
+                        return fail(`template ${vid}/${tid} has an element with invalid textPadding`);
+                    }
+                }
+            }
+            totalElements += tpl.elements.length;
+        }
+    }
+    if (totalElements > MAX_ELEMENTS) return fail('too many elements (max 50000)');
+
+    return { ok: true };
+};
