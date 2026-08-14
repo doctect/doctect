@@ -186,3 +186,139 @@ export const workspaceSnapshot = (
 
   return clone({ ...snapshot, ...overrides });
 };
+
+export class MemoryStorage implements Storage {
+  readonly reads: string[] = [];
+  readonly mutations: Array<{ operation: 'set' | 'remove' | 'clear'; key?: string }> = [];
+
+  private readonly values = new Map<string, string>();
+
+  constructor(
+    initial: Record<string, string> = {},
+    private readonly afterRead?: (readCount: number, storage: MemoryStorage) => void,
+  ) {
+    for (const [key, value] of Object.entries(initial)) this.values.set(key, value);
+  }
+
+  get length(): number {
+    return this.values.size;
+  }
+
+  clear(): void {
+    this.mutations.push({ operation: 'clear' });
+    this.values.clear();
+  }
+
+  getItem(key: string): string | null {
+    const value = this.values.get(key) ?? null;
+    this.reads.push(key);
+    this.afterRead?.(this.reads.length, this);
+    return value;
+  }
+
+  key(index: number): string | null {
+    return [...this.values.keys()][index] ?? null;
+  }
+
+  removeItem(key: string): void {
+    this.mutations.push({ operation: 'remove', key });
+    this.values.delete(key);
+  }
+
+  setItem(key: string, value: string): void {
+    this.mutations.push({ operation: 'set', key });
+    this.values.set(key, value);
+  }
+
+  seed(key: string, value: string | null): void {
+    if (value === null) this.values.delete(key);
+    else this.values.set(key, value);
+  }
+}
+
+export const memoryStorage = (initial: Record<string, string> = {}): MemoryStorage =>
+  new MemoryStorage(initial);
+
+export const changingStorage = (
+  initial: Record<string, string>,
+  change: {
+    afterRead: number;
+    key: string;
+    value: string | null;
+  },
+): MemoryStorage => new MemoryStorage(initial, (readCount, storage) => {
+  if (readCount === change.afterRead) storage.seed(change.key, change.value);
+});
+
+export const legacyProject = (
+  id = 'project-a',
+  version = 11,
+  overrides: Record<string, unknown> = {},
+) => clone({
+  id,
+  name: 'Café project ☕',
+  initialState: historicalState(version),
+  cloud: { projectId: `cloud-${id}`, lastSyncedCommitId: `commit-${id}` },
+  revision: 4,
+  retainedWrapperField: { source: 'legacy' },
+  ...overrides,
+});
+
+export const secondProject = (version = 11) => {
+  const initialState = historicalState(version);
+  initialState.nodes.root.title = 'Second project 😀';
+  return legacyProject('project-b', version, {
+    name: '',
+    initialState,
+    cloud: undefined,
+    revision: undefined,
+  });
+};
+
+export const legacyCustomPreset = (
+  id = 'preset-a',
+  version = 11,
+  overrides: Record<string, unknown> = {},
+) => clone({
+  id,
+  title: 'Résumé',
+  desc: 'Saved layout 😀',
+  color: 'text-amber-500',
+  isCustom: true,
+  initialState: historicalState(version),
+  retainedPresetField: ['one', 'two'],
+  ...overrides,
+});
+
+export const legacyPendingImport = (
+  version = 11,
+  overrides: Record<string, unknown> = {},
+) => clone({
+  name: 'Imported 😀',
+  state: historicalState(version),
+  cloud: { projectId: 'cloud-import', lastSyncedCommitId: 'commit-import' },
+  ...overrides,
+});
+
+export const validLegacyValues = (
+  overrides: Partial<Record<LegacyDocumentKey, string>> = {},
+): Record<LegacyDocumentKey, string> => ({
+  [LEGACY_KEYS.projects]: JSON.stringify([legacyProject()]),
+  [LEGACY_KEYS.activeProject]: 'project-a',
+  [LEGACY_KEYS.customPresets]: JSON.stringify([legacyCustomPreset()]),
+  [LEGACY_KEYS.pendingImport]: JSON.stringify(legacyPendingImport()),
+  ...overrides,
+});
+
+export const deterministicEnvironment = (overrides: Partial<{
+  crypto: Crypto;
+  now: () => string;
+  randomUUID: () => string;
+  createBlankProject: () => AppState;
+}> = {}) => ({
+  crypto: globalThis.crypto,
+  now: () => '2026-08-14T15:00:00.000Z',
+  randomUUID: () => 'fixture-uuid',
+  createBlankProject: currentState,
+  ...overrides,
+});
