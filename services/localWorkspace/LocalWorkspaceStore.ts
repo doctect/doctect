@@ -1,5 +1,5 @@
 import type { AppState } from '../../types';
-import { digestLegacySnapshot } from './canonical';
+import { canonicalStringify, digestLegacySnapshot } from './canonical';
 import {
   WorkspaceStoreError,
   type LocalWorkspaceStore,
@@ -1522,8 +1522,28 @@ export const createLocalWorkspaceStore = (
         if (currentLedger.unresolvedRecovery === null
           && current.digest === currentLedger.acceptedLegacyDigest
           && sameLegacySnapshot(current.snapshot, prepared.backup.snapshot)) {
+          const persistedLedger = await readRecognizedLedger();
+          assertRecoveryLifecycle();
+          if (persistedLedger.unresolvedRecovery !== null) {
+            const result = await populateCapabilities(
+              storedRecovery(persistedLedger.unresolvedRecovery),
+              persistedLedger,
+            );
+            assertRecoveryLifecycle();
+            invalidateDurableAuthority();
+            authority = 'recovery';
+            lifecycleResult = result;
+            notifyAuthorityLost(result);
+            return structuredClone(snapshot);
+          }
+          if (canonicalStringify(persistedLedger) !== canonicalStringify(nextLedger)) {
+            throw new WorkspaceStoreError(
+              'Resolved legacy recovery ledger changed before authority was restored.',
+              'conflict',
+            );
+          }
           installDurableState(records, snapshot);
-          const readyResult = ready(snapshot, currentLedger);
+          const readyResult = ready(snapshot, persistedLedger);
           assertRecoveryLifecycle();
           authority = 'ready';
           cachedReady = readyResult;

@@ -71,3 +71,26 @@ All requested Critical and Important findings are fixed in one follow-up wave. T
 - Spec axis: each Critical/Important finding has direct regression coverage. Stable capture, marker publication, capability reporting, recovery lifecycle, complete target validation, global ID reservation, and original capture metadata now match the requested behavior.
 - Additional authority review found and fixed two ready-publication gaps: reentrant source mutation after copied verification and source reversion while a post-recovery marker remained persisted.
 - No unresolved Critical or Important finding remains. Deferred Minor: recovery-store assertion triage only.
+
+## Remaining Critical and Important Fixes
+
+### RED
+
+- `npx vitest run tests/unit/localWorkspace/recovery.test.ts -t "appends recovered|retains a concurrent"` failed 2/2 selected tests with 21 skipped in 2.11 seconds.
+- Concurrent post-commit marker regression received `ready` instead of `recovery` after legacy bytes changed and ABA-reverted around the final hash.
+- Gapped-position regression rejected recovery with `Preset record positions must be unique and contiguous.` before it could prove max-position append behavior.
+
+### Implementation
+
+- Recovery now independently rereads the recognized ledger after target and legacy postchecks. A persisted marker immediately restores recovery authority; otherwise the complete ledger must exactly match the transaction's resolved ledger and retain `unresolvedRecovery: null` before ready publication.
+- Preset and pending-import recovery positions start after the maximum persisted position. Multiple recovered presets retain source order through consecutive positions.
+- Target reconstruction now accepts gaps while retaining nonnegative-integer and uniqueness checks, allowing stable persisted-order reconstruction and recovery without position reuse.
+
+### GREEN
+
+- The selected regressions passed 2/2 with 21 skipped in 2.15 seconds.
+- Requested recovery/drift/bootstrap command passed 109/109 tests across 3 files in 4.21 seconds.
+- Original Task 6 drift/recovery/commit command passed 77/77 tests across 3 files in 4.26 seconds.
+- Migration preparation passed 47/47 tests; full local-workspace sweep passed 316/316 tests across 9 files.
+- `npx tsc --noEmit` retains only the same five unrelated baseline test diagnostics. `git diff --check` passes.
+- Deferred Minor unchanged: repeated-store assertion remains queued for final-review triage.

@@ -212,7 +212,7 @@ const inspect = async (harness: Harness): Promise<IndexedDbInspection> => {
 
 const putRaw = async (
   harness: Harness,
-  storeName: 'workspace' | 'migrationLedger',
+  storeName: 'workspace' | 'migrationLedger' | 'presets' | 'pendingImports',
   value: unknown,
 ): Promise<void> => {
   const database = await requestResult(harness.indexedDB.open(WORKSPACE_DB_NAME));
@@ -470,6 +470,74 @@ describe('explicit recover legacy as copies', () => {
     expect(harness.records.some(record => record.mode === 'readonly'
       && record.stores.includes('projects')
       && record.stores.includes('workspace'))).toBe(true);
+  });
+
+  it('appends recovered presets and imports after gapped persisted positions', async () => {
+    const original = validLegacyValues({
+      [LEGACY_KEYS.customPresets]: JSON.stringify([
+        legacyCustomPreset('preset-a', 11, { title: 'Original A' }),
+        legacyCustomPreset('preset-b', 11, { title: 'Original B' }),
+      ]),
+    });
+    const current = validLegacyValues({
+      [LEGACY_KEYS.customPresets]: JSON.stringify([
+        legacyCustomPreset('preset-a', 11, { title: 'Original A' }),
+        legacyCustomPreset('preset-b', 11, { title: 'Changed B' }),
+        legacyCustomPreset('preset-c', 11, { title: 'New C' }),
+      ]),
+      [LEGACY_KEYS.pendingImport]: JSON.stringify(legacyPendingImport(11, {
+        name: 'Changed pending import',
+      })),
+    });
+    const harness = createHarness({ values: original });
+    const { store } = await readyStore(harness);
+    const recovery = await observeDrift(harness, store, current);
+    const storedBefore = await inspect(harness);
+    const presetPositions = new Map([
+      ['preset-a', 4],
+      ['preset-b', 9],
+    ]);
+    for (const preset of storedBefore.presets) {
+      await putRaw(harness, 'presets', {
+        ...preset,
+        position: presetPositions.get(preset.id),
+      });
+    }
+    await putRaw(harness, 'pendingImports', {
+      ...storedBefore.pendingImports[0],
+      position: 7,
+    });
+
+    const snapshot = await store.commit({
+      type: 'recover-legacy-as-copies',
+      recoveryId: recovery.recoveryId,
+    });
+
+    expect(snapshot.customPresets.map(preset => preset.title)).toEqual([
+      'Original A',
+      'Original B',
+      'Changed B',
+      'New C',
+    ]);
+    expect(snapshot.pendingImports.map(item => item.name)).toEqual([
+      'Imported 😀',
+      'Changed pending import',
+    ]);
+    const storedAfter = await inspect(harness);
+    expect([...storedAfter.presets]
+      .sort((left, right) => left.position - right.position)
+      .map(record => [record.preset.title, record.position])).toEqual([
+      ['Original A', 4],
+      ['Original B', 9],
+      ['Changed B', 10],
+      ['New C', 11],
+    ]);
+    expect([...storedAfter.pendingImports]
+      .sort((left, right) => left.position - right.position)
+      .map(record => [record.pendingImport.name, record.position])).toEqual([
+      ['Imported 😀', 7],
+      ['Changed pending import', 8],
+    ]);
   });
 
   it('generates collision-safe project, preset, import, and import-target IDs', async () => {
@@ -794,6 +862,109 @@ describe('explicit recover legacy as copies', () => {
     expect(committed.migrationLedger[0].unresolvedRecovery).toBeNull();
     expect(committed.projects.some(record => record.project.name.startsWith('Recovered — ')))
       .toBe(true);
+    await expect(store.commit({
+      type: 'activate-project',
+      projectId: 'project-a',
+    })).rejects.toMatchObject({ code: 'authority-lost' });
+  });
+
+  it('retains a concurrent post-commit marker when legacy bytes ABA-revert', async () => {
+    const hashStarted = deferred();
+    const releaseHash = deferred();
+    let armed = false;
+    let armOnRecoveryWrite = false;
+    const crypto = {
+      subtle: {
+        digest: async (algorithm: AlgorithmIdentifier, data: BufferSource) => {
+          const text = new TextDecoder().decode(data as never);
+          if (armed && text.includes('doctect-legacy-source')) {
+            armed = false;
+            hashStarted.resolve();
+            await releaseHash.promise;
+          }
+          return webcrypto.subtle.digest(algorithm, data as never);
+        },
+      },
+    } as unknown as Crypto;
+    const allStores = [
+      'projects',
+      'workspace',
+      'presets',
+      'pendingImports',
+      'migrationLedger',
+      'legacyBackup',
+    ];
+    const harness = createHarness({
+      crypto,
+      hook(stores, mode) {
+        if (armOnRecoveryWrite
+          && mode === 'readwrite'
+          && allStores.every(store => stores.includes(store))) {
+          armed = true;
+        }
+      },
+    });
+    const onAuthorityLost = vi.fn();
+    const { store } = await readyStore(harness, onAuthorityLost);
+    const accepted = validLegacyValues({
+      [LEGACY_KEYS.projects]: JSON.stringify([
+        legacyProject('project-a', 11, { name: 'Accepted recovery source' }),
+      ]),
+    });
+    const recovery = await observeDrift(harness, store, accepted);
+    onAuthorityLost.mockClear();
+    armOnRecoveryWrite = true;
+    const commit = store.commit({
+      type: 'recover-legacy-as-copies',
+      recoveryId: recovery.recoveryId,
+    });
+    await hashStarted.promise;
+    const intermediate = validLegacyValues({
+      [LEGACY_KEYS.projects]: JSON.stringify([
+        legacyProject('project-a', 11, { name: 'Concurrent intermediate source' }),
+      ]),
+    });
+    harness.replace(intermediate);
+    harness.dispatch(LEGACY_KEYS.projects);
+    const intermediateDigest = await digestLegacySnapshot(
+      captureLegacySnapshot(harness.storage),
+      webcrypto.subtle as unknown as SubtleCrypto,
+    );
+    const concurrentMarker = {
+      id: 'concurrent-post-commit-marker',
+      kind: 'legacy-drift' as const,
+      detectedAt: TEST_NOW,
+      observedLegacyDigest: intermediateDigest,
+    };
+    const adapter = createIndexedDbAdapter({
+      indexedDB: harness.indexedDB,
+      now: () => TEST_NOW,
+    });
+    await adapter.open();
+    const resolvedLedger = await adapter.readMigrationLedger();
+    if (!resolvedLedger) throw new Error('Expected resolved recovery ledger.');
+    await adapter.markLegacyDrift({
+      expectedLedgerRevision: resolvedLedger.ledgerRevision,
+      expectedAcceptedLegacyDigest: resolvedLedger.acceptedLegacyDigest,
+      expectedRecoveryId: null,
+      marker: concurrentMarker,
+    });
+    adapter.close();
+    harness.replace(accepted);
+    harness.dispatch(LEGACY_KEYS.projects);
+    releaseHash.resolve();
+    await commit;
+
+    await vi.waitFor(() => expect(onAuthorityLost).toHaveBeenCalled());
+    const result = recoveryResult(
+      onAuthorityLost.mock.calls.at(-1)?.[0] as WorkspaceBootstrapResult,
+    );
+    expect(result.recovery).toMatchObject({
+      recoveryId: concurrentMarker.id,
+      kind: 'split-brain',
+    });
+    expect((await inspect(harness)).migrationLedger[0].unresolvedRecovery)
+      .toEqual(concurrentMarker);
     await expect(store.commit({
       type: 'activate-project',
       projectId: 'project-a',

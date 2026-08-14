@@ -376,7 +376,7 @@ describe('target reconstruction', () => {
     ['negative storage revision', (records: any) => { records.projects[0].storageRevision = -1; }],
     ['fractional workspace revision', (records: any) => { records.workspace.revision = 0.5; }],
     ['malformed project state', (records: any) => { records.projects[0].project.initialState = {}; }],
-    ['invalid preset position', (records: any) => { records.presets[0].position = 2; }],
+    ['invalid preset position', (records: any) => { records.presets[0].position = 0.5; }],
     ['duplicate preset record', (records: any) => { records.presets.push(structuredClone(records.presets[0])); }],
     ['invalid pending position', (records: any) => { records.pendingImports[0].position = -1; }],
     ['unknown pending payload field', (records: any) => {

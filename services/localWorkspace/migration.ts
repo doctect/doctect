@@ -481,9 +481,7 @@ const orderedByPosition = <T extends { position: number }>(records: T[], label: 
   const positions = new Set<number>();
   for (const record of records) {
     requireNonNegativeInteger(record.position, `${label} position`);
-    if (record.position >= records.length || positions.has(record.position)) {
-      throw targetError(`${label} positions must be unique and contiguous.`);
-    }
+    if (positions.has(record.position)) throw targetError(`${label} positions must be unique.`);
     positions.add(record.position);
   }
   return [...records].sort((left, right) => left.position - right.position);

@@ -390,12 +390,16 @@ export async function prepareLegacyRecovery(
     } satisfies StoredProject;
   });
 
+  const firstPresetPosition = Math.max(
+    -1,
+    ...records.presets.map(record => record.position),
+  ) + 1;
   const presets = changedItems(current.presets, accepted.presets).map((item, index) => {
     const id = nextUniqueId('preset_recovered_', usedIds, environment.randomUUID);
     return {
       id,
       preset: { ...item.value, id },
-      position: records.presets.length + index,
+      position: firstPresetPosition + index,
     } satisfies StoredPreset;
   });
 
@@ -418,7 +422,10 @@ export async function prepareLegacyRecovery(
     pendingImports.push({
       id,
       pendingImport,
-      position: records.pendingImports.length,
+      position: Math.max(
+        -1,
+        ...records.pendingImports.map(record => record.position),
+      ) + 1,
     });
   }
 
