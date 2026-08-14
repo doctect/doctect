@@ -127,6 +127,10 @@ const isLegacySnapshot = (value: unknown): value is LegacySnapshot => {
   });
 };
 
+const sameLegacySnapshot = (left: LegacySnapshot, right: LegacySnapshot): boolean =>
+  LEGACY_DOCUMENT_KEYS.every(key =>
+    left[key].present === right[key].present && left[key].raw === right[key].raw);
+
 const isRecoveryMarker = (value: unknown): value is RecoveryMarker => {
   if (!isPlainObject(value)) return false;
   const required = ['id', 'kind', 'detectedAt'];
@@ -282,6 +286,19 @@ const recoveryDetails: Record<WorkspaceRecovery['kind'], {
   },
 };
 
+interface RecoveryCapabilities {
+  exporterAvailable: boolean;
+  validatedSources: readonly RecoverySource[];
+}
+
+const availableExports = (capabilities: RecoveryCapabilities): RecoverySource[] =>
+  capabilities.exporterAvailable ? [...new Set(capabilities.validatedSources)] : [];
+
+const TASK_4_RECOVERY_CAPABILITIES: RecoveryCapabilities = {
+  exporterAvailable: false,
+  validatedSources: [],
+};
+
 const recovery = (
   kind: WorkspaceRecovery['kind'],
   options: {
@@ -293,10 +310,6 @@ const recovery = (
   } = {},
 ): Extract<WorkspaceBootstrapResult, { status: 'recovery' }> => {
   const details = recoveryDetails[kind];
-  const availableExports: RecoverySource[] = kind === 'migration-failed'
-    || kind === 'legacy-changing'
-    ? ['legacy-current']
-    : ['legacy-current', 'legacy-original', 'indexeddb-workspace'];
   return {
     status: 'recovery',
     recovery: {
@@ -306,19 +319,17 @@ const recovery = (
       message: options.message ?? details.message,
       ...(options.affectedKey ? { affectedKey: options.affectedKey } : {}),
       ...(options.affectedItem ? { affectedItem: options.affectedItem } : {}),
-      availableExports,
+      availableExports: availableExports(TASK_4_RECOVERY_CAPABILITIES),
       canRetry: details.canRetry,
       canRecoverLegacyAsCopies: details.canRecoverLegacyAsCopies,
     },
   };
 };
 
-const unavailable = (
-  hasDurableWorkspace: boolean,
-): Extract<WorkspaceBootstrapResult, { status: 'unavailable' }> => ({
+const unavailable = (): Extract<WorkspaceBootstrapResult, { status: 'unavailable' }> => ({
   status: 'unavailable',
   message: 'Local workspace storage is unavailable.',
-  availableExports: hasDurableWorkspace ? ['indexeddb-workspace'] : [],
+  availableExports: availableExports(TASK_4_RECOVERY_CAPABILITIES),
 });
 
 const migrationFailure = (
@@ -394,7 +405,7 @@ export const createLocalWorkspaceStore = (
   let inFlight: Promise<WorkspaceBootstrapResult> | undefined;
   let cachedReady: Extract<WorkspaceBootstrapResult, { status: 'ready' }> | undefined;
   let lifecycleResult: NonReadyResult | undefined;
-  let hasDurableWorkspace = false;
+  let lifecycleGeneration = 0;
   let stopLegacyMonitor: (() => void) | undefined;
   let observedLegacyChange = 0;
   const observers = new Set<WorkspaceBootstrapObserver>();
@@ -417,7 +428,8 @@ export const createLocalWorkspaceStore = (
   const handleAuthorityLost = (error: WorkspaceStoreError): void => {
     cachedReady = undefined;
     authority = error.code === 'authority-lost' ? 'frozen' : 'unavailable';
-    lifecycleResult = unavailable(hasDurableWorkspace);
+    lifecycleGeneration += 1;
+    lifecycleResult = unavailable();
     notifyAuthorityLost(lifecycleResult);
   };
 
@@ -439,23 +451,33 @@ export const createLocalWorkspaceStore = (
       if (authority === 'ready') {
         authority = 'frozen';
         cachedReady = undefined;
+        notifyAuthorityLost(recovery('legacy-changing', {
+          message: 'Legacy workspace activity requires authority revalidation.',
+        }));
       }
     });
   };
 
   const validateBackup = async (
-    ledger: MigrationLedger,
     backup: LegacyBackupRecord | undefined,
+    expected: {
+      id: string;
+      digest: string;
+      kind?: LegacyBackupRecord['kind'];
+      capturedAt?: string;
+    },
   ): Promise<LegacyBackupRecord> => {
     if (!isPlainObject(backup)
       || !hasExactKeys(backup, ['id', 'kind', 'capturedAt', 'snapshot', 'digest'])
-      || backup.id !== ledger.originalLegacyBackupId
-      || backup.kind !== 'original'
-      || backup.capturedAt !== ledger.migratedAt
-      || backup.digest !== ledger.sourceDigest
+      || backup.id !== expected.id
+      || !(backup.kind === 'original' || backup.kind === 'conflict')
+      || (expected.kind !== undefined && backup.kind !== expected.kind)
+      || !isCanonicalTimestamp(backup.capturedAt)
+      || (expected.capturedAt !== undefined && backup.capturedAt !== expected.capturedAt)
+      || backup.digest !== expected.digest
       || !isLegacySnapshot(backup.snapshot)
       || await digestLegacySnapshot(backup.snapshot, environment.crypto.subtle)
-        !== ledger.sourceDigest) {
+        !== expected.digest) {
       throw verificationError('Stored legacy backup does not match the migration ledger.');
     }
     return backup;
@@ -463,18 +485,65 @@ export const createLocalWorkspaceStore = (
 
   const readVerificationInputs = async (
     ledger: MigrationLedger,
-  ): Promise<{ records: WorkspaceRecords; backup: LegacyBackupRecord }> => {
+  ): Promise<{
+    records: WorkspaceRecords;
+    originalBackup: LegacyBackupRecord;
+    acceptedBackup: LegacyBackupRecord;
+  }> => {
     const activeAdapter = getAdapter();
     let records: WorkspaceRecords;
-    let backup: LegacyBackupRecord | undefined;
+    let originalBackup: LegacyBackupRecord | undefined;
+    let acceptedBackup: LegacyBackupRecord | undefined;
     try {
       records = await activeAdapter.readWorkspaceRecords();
-      backup = await activeAdapter.readLegacyBackup(ledger.originalLegacyBackupId);
+      originalBackup = await activeAdapter.readLegacyBackup(ledger.originalLegacyBackupId);
+      acceptedBackup = ledger.acceptedLegacyBackupId === ledger.originalLegacyBackupId
+        ? originalBackup
+        : await activeAdapter.readLegacyBackup(ledger.acceptedLegacyBackupId);
     } catch (error) {
       if (error instanceof WorkspaceStoreError && error.code === 'unavailable') throw error;
       throw verificationError('Durable workspace records could not be read independently.');
     }
-    return { records, backup: await validateBackup(ledger, backup) };
+    const validatedOriginal = await validateBackup(originalBackup, {
+      id: ledger.originalLegacyBackupId,
+      digest: ledger.sourceDigest,
+      kind: 'original',
+      capturedAt: ledger.migratedAt,
+    });
+    if (ledger.acceptedLegacyBackupId === ledger.originalLegacyBackupId) {
+      if (validatedOriginal.digest !== ledger.acceptedLegacyDigest) {
+        throw verificationError('Accepted legacy source does not match its backup.');
+      }
+      return {
+        records,
+        originalBackup: validatedOriginal,
+        acceptedBackup: validatedOriginal,
+      };
+    }
+    return {
+      records,
+      originalBackup: validatedOriginal,
+      acceptedBackup: await validateBackup(acceptedBackup, {
+        id: ledger.acceptedLegacyBackupId,
+        digest: ledger.acceptedLegacyDigest,
+      }),
+    };
+  };
+
+  const retainedLegacyMatches = async (
+    acceptedSource: LegacySnapshot,
+    acceptedDigest: string,
+  ): Promise<boolean> => {
+    const afterPriorDigest = captureLegacySnapshot(environment.legacyStorage);
+    if (!sameLegacySnapshot(afterPriorDigest, acceptedSource)
+      || await digestLegacySnapshot(afterPriorDigest, environment.crypto.subtle)
+        !== acceptedDigest) {
+      return false;
+    }
+    return sameLegacySnapshot(
+      captureLegacySnapshot(environment.legacyStorage),
+      acceptedSource,
+    );
   };
 
   const classifyInspection = (
@@ -502,7 +571,7 @@ export const createLocalWorkspaceStore = (
     try {
       await adapter.open();
     } catch (error) {
-      if (error instanceof WorkspaceStoreError) return unavailable(hasDurableWorkspace);
+      if (error instanceof WorkspaceStoreError) return unavailable();
       throw error;
     }
 
@@ -511,7 +580,7 @@ export const createLocalWorkspaceStore = (
     try {
       initialInspection = await adapter.inspect();
     } catch (error) {
-      if (error instanceof WorkspaceStoreError) return unavailable(hasDurableWorkspace);
+      if (error instanceof WorkspaceStoreError) return unavailable();
       throw error;
     }
 
@@ -520,11 +589,11 @@ export const createLocalWorkspaceStore = (
     ): Promise<WorkspaceBootstrapResult> => {
       if (ledger.unresolvedRecovery) return storedRecovery(ledger.unresolvedRecovery);
       emit('verifying-projects');
-      let inputs: { records: WorkspaceRecords; backup: LegacyBackupRecord };
+      let inputs: Awaited<ReturnType<typeof readVerificationInputs>>;
       try {
         inputs = await readVerificationInputs(ledger);
       } catch (error) {
-        if (error instanceof WorkspaceStoreError) return unavailable(hasDurableWorkspace);
+        if (error instanceof WorkspaceStoreError) return unavailable();
         if (error instanceof WorkspaceMigrationError) return verificationFailure(error);
         throw error;
       }
@@ -545,8 +614,20 @@ export const createLocalWorkspaceStore = (
         || observedLegacyChange !== retainedSourceVersion) {
         return recovery('split-brain');
       }
+      if (!await retainedLegacyMatches(
+        inputs.acceptedBackup.snapshot,
+        ledger.acceptedLegacyDigest,
+      ) || observedLegacyChange !== retainedSourceVersion) {
+        return recovery('split-brain');
+      }
 
       emit('finishing-upgrade');
+      if (!sameLegacySnapshot(
+        captureLegacySnapshot(environment.legacyStorage),
+        inputs.acceptedBackup.snapshot,
+      )) {
+        return recovery('split-brain');
+      }
       return ready(snapshot, ledger);
     };
 
@@ -558,18 +639,18 @@ export const createLocalWorkspaceStore = (
         return recovery('unrecognized-target');
       }
       const ledger = classification.ledger;
-      hasDurableWorkspace = true;
       if (ledger.state === 'cleanup-started' || ledger.state === 'cleanup-complete') {
         return recovery('unsupported-cleanup-state');
       }
+      if (ledger.unresolvedRecovery) return storedRecovery(ledger.unresolvedRecovery);
       if (ledger.state === 'verified') return processVerified(ledger);
 
       emit('verifying-projects');
-      let inputs: { records: WorkspaceRecords; backup: LegacyBackupRecord };
+      let inputs: Awaited<ReturnType<typeof readVerificationInputs>>;
       try {
         inputs = await readVerificationInputs(ledger);
       } catch (error) {
-        if (error instanceof WorkspaceStoreError) return unavailable(hasDurableWorkspace);
+        if (error instanceof WorkspaceStoreError) return unavailable();
         if (error instanceof WorkspaceMigrationError) return verificationFailure(error);
         throw error;
       }
@@ -580,14 +661,14 @@ export const createLocalWorkspaceStore = (
       try {
         const prepared: PreparedInitialCopy = {
           origin: ledger.origin,
-          source: inputs.backup.snapshot,
+          source: inputs.originalBackup.snapshot,
           sourceDigest: ledger.sourceDigest,
           targetDigest: ledger.expectedTargetDigest,
           projects: inputs.records.projects,
           workspace: inputs.records.workspace,
           presets: inputs.records.presets,
           pendingImports: inputs.records.pendingImports,
-          backup: inputs.backup,
+          backup: inputs.originalBackup,
           ledger,
         };
         snapshot = await verifyPreparedCopy(
@@ -600,6 +681,12 @@ export const createLocalWorkspaceStore = (
         return verificationFailure(error);
       }
       if (observedLegacyChange !== retainedSourceVersion) return verificationFailure();
+      if (!await retainedLegacyMatches(
+        inputs.acceptedBackup.snapshot,
+        ledger.acceptedLegacyDigest,
+      ) || observedLegacyChange !== retainedSourceVersion) {
+        return verificationFailure();
+      }
 
       let verifiedLedger: MigrationLedger;
       try {
@@ -615,23 +702,37 @@ export const createLocalWorkspaceStore = (
             latest = await adapter.inspect();
           } catch (inspectionError) {
             if (inspectionError instanceof WorkspaceStoreError) {
-              return unavailable(hasDurableWorkspace);
+              return unavailable();
             }
             throw inspectionError;
           }
           return followInspection(latest);
         }
         if (error instanceof WorkspaceStoreError && error.code === 'unavailable') {
-          return unavailable(hasDurableWorkspace);
+          return unavailable();
         }
         return verificationFailure(error);
       }
       if (observedLegacyChange !== retainedSourceVersion) return verificationFailure();
-      if (!isRecognizedLedger(verifiedLedger) || verifiedLedger.state !== 'verified') {
+      if (!isRecognizedLedger(verifiedLedger)
+        || verifiedLedger.state !== 'verified'
+        || verifiedLedger.unresolvedRecovery !== null) {
+        return verificationFailure();
+      }
+      if (!await retainedLegacyMatches(
+        inputs.acceptedBackup.snapshot,
+        verifiedLedger.acceptedLegacyDigest,
+      ) || observedLegacyChange !== retainedSourceVersion) {
         return verificationFailure();
       }
 
       emit('finishing-upgrade');
+      if (!sameLegacySnapshot(
+        captureLegacySnapshot(environment.legacyStorage),
+        inputs.acceptedBackup.snapshot,
+      )) {
+        return verificationFailure();
+      }
       return ready(snapshot, verifiedLedger);
     };
 
@@ -664,7 +765,7 @@ export const createLocalWorkspaceStore = (
       copyResult = await adapter.writeInitialCopy(prepared);
     } catch (error) {
       if (error instanceof WorkspaceStoreError && error.code === 'unavailable') {
-        return unavailable(hasDurableWorkspace);
+        return unavailable();
       }
       if (error instanceof WorkspaceStoreError) return migrationFailure(error);
       throw error;
@@ -676,13 +777,12 @@ export const createLocalWorkspaceStore = (
       try {
         winner = await adapter.inspect();
       } catch (error) {
-        if (error instanceof WorkspaceStoreError) return unavailable(hasDurableWorkspace);
+        if (error instanceof WorkspaceStoreError) return unavailable();
         throw error;
       }
       return followInspection(winner);
     }
 
-    hasDurableWorkspace = true;
     const result = await followInspection({
       projects: prepared.projects,
       workspace: [prepared.workspace],
@@ -715,9 +815,11 @@ export const createLocalWorkspaceStore = (
         }
       };
 
+      const startingLifecycleGeneration = lifecycleGeneration;
       let operation!: Promise<WorkspaceBootstrapResult>;
-      operation = bootstrapOperation(emit).then(result => {
-        const effectiveResult = result.status === 'ready' && lifecycleResult
+      operation = Promise.resolve().then(() => bootstrapOperation(emit)).then(result => {
+        const effectiveResult = lifecycleGeneration !== startingLifecycleGeneration
+          && lifecycleResult
           ? lifecycleResult
           : result;
         if (effectiveResult.status === 'ready') {
@@ -730,6 +832,11 @@ export const createLocalWorkspaceStore = (
         }
         return effectiveResult;
       }, error => {
+        if (lifecycleGeneration !== startingLifecycleGeneration && lifecycleResult) {
+          cachedReady = undefined;
+          authority = lifecycleResult.status === 'recovery' ? 'recovery' : 'unavailable';
+          return lifecycleResult;
+        }
         cachedReady = undefined;
         authority = lifecycleResult?.status === 'unavailable' ? 'unavailable' : 'cold';
         throw error;

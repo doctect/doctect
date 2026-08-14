@@ -702,6 +702,39 @@ describe('initial bootstrap and authority transition', () => {
     expect((await inspect(harness)).migrationLedger[0].state).toBe('copied');
   });
 
+  it('recaptures copied source after hashing when storage event delivery is delayed', async () => {
+    const sourceHashStarted = deferred();
+    const releaseSourceHash = deferred();
+    let legacyDigestCalls = 0;
+    const crypto = {
+      subtle: {
+        digest: async (algorithm: AlgorithmIdentifier, data: BufferSource) => {
+          const text = new TextDecoder().decode(data as never);
+          if (text.includes('doctect-legacy-source')) {
+            legacyDigestCalls += 1;
+            if (legacyDigestCalls === 5) {
+              sourceHashStarted.resolve();
+              await releaseSourceHash.promise;
+            }
+          }
+          return webcrypto.subtle.digest(algorithm, data as never);
+        },
+      },
+    } as unknown as Crypto;
+    const storage = memoryStorage(validLegacyValues());
+    const harness = createHarness({ crypto, storage });
+    const bootstrap = createLocalWorkspaceStore(harness.environment).bootstrap();
+    await sourceHashStarted.promise;
+
+    storage.seed(LEGACY_KEYS.projects, JSON.stringify([legacyProject(), secondProject()]));
+    releaseSourceHash.resolve();
+
+    const result = await bootstrap;
+    expect(recoveryResult(result).recovery.kind).toBe('verification-failed');
+    expect((await inspect(harness)).migrationLedger[0].state).toBe('copied');
+    harness.dispatchStorage(LEGACY_KEYS.projects);
+  });
+
   it('refuses authority when source changes during the verified CAS', async () => {
     const indexedDB = new IDBFactory();
     const storage = memoryStorage(validLegacyValues());
@@ -724,6 +757,30 @@ describe('initial bootstrap and authority transition', () => {
 
     expect(recoveryResult(result).recovery.kind).toBe('verification-failed');
     expect((await inspect(harness)).migrationLedger[0].state).toBe('verified');
+  });
+
+  it('recaptures copied source after verified CAS when storage event delivery is delayed', async () => {
+    const indexedDB = new IDBFactory();
+    const storage = memoryStorage(validLegacyValues());
+    const harness = createHarness({ indexedDB, storage });
+    let changed = false;
+    instrumentFactory(indexedDB, {
+      onTransactionStart(_database, storeNames, mode) {
+        if (changed
+          || mode !== 'readwrite'
+          || !sameStores(storeNames, ['migrationLedger'])) {
+          return;
+        }
+        changed = true;
+        storage.seed(LEGACY_KEYS.projects, JSON.stringify([legacyProject(), secondProject()]));
+      },
+    });
+
+    const result = await createLocalWorkspaceStore(harness.environment).bootstrap();
+
+    expect(recoveryResult(result).recovery.kind).toBe('verification-failed');
+    expect((await inspect(harness)).migrationLedger[0].state).toBe('verified');
+    harness.dispatchStorage(LEGACY_KEYS.projects);
   });
 
   it('does not reject a matching source merely because a storage event was observed', async () => {
@@ -838,6 +895,20 @@ describe('existing target decision table', () => {
     },
   );
 
+  it('does not advertise recovery exports for an unrecognized target without a backup', async () => {
+    const harness = createHarness({ values: {} });
+    const copy = await prepareFor(createHarness());
+    await ensureSchema(harness);
+    await putRaw(harness.indexedDB, 'projects', copy.projects[0]);
+
+    const result = await createLocalWorkspaceStore(harness.environment).bootstrap();
+
+    expect(recoveryResult(result).recovery).toMatchObject({
+      kind: 'unrecognized-target',
+      availableExports: [],
+    });
+  });
+
   it.each([
     ['unknown', { id: WORKSPACE_MIGRATION_ID, indexedDbVersion: 99 }],
     ['malformed', {
@@ -890,6 +961,31 @@ describe('existing target decision table', () => {
     expect(result.receipt?.id).toBe(`${WORKSPACE_MIGRATION_ID}:${copy.sourceDigest}`);
     expect(harness.createBlankProject).not.toHaveBeenCalled();
     expect((await inspect(harness)).migrationLedger[0].state).toBe('verified');
+  });
+
+  it('returns a stored recovery marker from a copied ledger without verifying it', async () => {
+    const harness = createHarness();
+    const copy = await seedCopy(harness);
+    const marker = {
+      id: 'copied-recovery',
+      kind: 'target-mismatch' as const,
+      detectedAt: VERIFIED_NOW,
+    };
+    await putRaw(harness.indexedDB, 'migrationLedger', {
+      ...copy.ledger,
+      unresolvedRecovery: marker,
+    });
+
+    const result = await createLocalWorkspaceStore(harness.environment).bootstrap();
+
+    expect(recoveryResult(result).recovery).toMatchObject({
+      recoveryId: marker.id,
+      kind: 'verification-failed',
+    });
+    expect((await inspect(harness)).migrationLedger[0]).toMatchObject({
+      state: 'copied',
+      unresolvedRecovery: marker,
+    });
   });
 
   it('returns verification-failed for a copied target read-back mismatch', async () => {
@@ -967,6 +1063,40 @@ describe('existing target decision table', () => {
     const result = await createLocalWorkspaceStore(harness.environment).bootstrap();
 
     expect(recoveryResult(result).recovery.kind).toBe('split-brain');
+  });
+
+  it('recaptures verified source after hashing when storage event delivery is delayed', async () => {
+    const sourceHashStarted = deferred();
+    const releaseSourceHash = deferred();
+    let legacyDigestCalls = 0;
+    const crypto = {
+      subtle: {
+        digest: async (algorithm: AlgorithmIdentifier, data: BufferSource) => {
+          const text = new TextDecoder().decode(data as never);
+          if (text.includes('doctect-legacy-source')) {
+            legacyDigestCalls += 1;
+            if (legacyDigestCalls === 2) {
+              sourceHashStarted.resolve();
+              await releaseSourceHash.promise;
+            }
+          }
+          return webcrypto.subtle.digest(algorithm, data as never);
+        },
+      },
+    } as unknown as Crypto;
+    const storage = memoryStorage(validLegacyValues());
+    const harness = createHarness({ storage });
+    await seedCopy(harness, { state: 'verified' });
+    harness.environment.crypto = crypto;
+    const bootstrap = createLocalWorkspaceStore(harness.environment).bootstrap();
+    await sourceHashStarted.promise;
+
+    storage.seed(LEGACY_KEYS.projects, JSON.stringify([legacyProject(), secondProject()]));
+    releaseSourceHash.resolve();
+
+    const result = await bootstrap;
+    expect(recoveryResult(result).recovery.kind).toBe('split-brain');
+    harness.dispatchStorage(LEGACY_KEYS.projects);
   });
 
   it.each([
@@ -1106,6 +1236,40 @@ describe('concurrency, retries, and observers', () => {
     upgraded.close();
   });
 
+  it('publishes the in-flight promise before invoking a reentrant phase observer', async () => {
+    const indexedDB = new IDBFactory();
+    let opens = 0;
+    let copies = 0;
+    instrumentFactory(indexedDB, {
+      onOpen() {
+        opens += 1;
+      },
+      onTransactionStart(_database, storeNames, mode) {
+        if (mode === 'readwrite' && sameStores(storeNames, STORE_NAMES)) copies += 1;
+      },
+    });
+    const harness = createHarness({ indexedDB });
+    const store = createLocalWorkspaceStore(harness.environment);
+    let reentered = false;
+    let reentrant: Promise<WorkspaceBootstrapResult> | undefined;
+    const phaseObserved = deferred();
+
+    const first = store.bootstrap({
+      onPhase() {
+        if (reentered) return;
+        reentered = true;
+        reentrant = store.bootstrap();
+        phaseObserved.resolve();
+      },
+    });
+
+    await phaseObserved.promise;
+    expect(reentrant).toBe(first);
+    await expect(first).resolves.toMatchObject({ status: 'ready' });
+    expect(opens).toBe(1);
+    expect(copies).toBe(1);
+  });
+
   it('caches only ready data while registering cached-call observers before return', async () => {
     const indexedDB = new IDBFactory();
     const opened = trackOpened(indexedDB);
@@ -1127,6 +1291,27 @@ describe('concurrency, retries, and observers', () => {
     forceCloseDatabase(rawDatabase as never);
     await vi.waitFor(() => expect(onAuthorityLost).toHaveBeenCalledOnce());
     await expect(store.bootstrap()).resolves.toMatchObject({ status: 'unavailable' });
+  });
+
+  it('synchronously freezes and notifies observers for a matching post-ready legacy event', async () => {
+    const harness = createHarness();
+    const onAuthorityLost = vi.fn();
+    const store = createLocalWorkspaceStore(harness.environment);
+    await store.bootstrap({ onAuthorityLost });
+
+    harness.dispatchStorage(LEGACY_KEYS.projects);
+
+    expect(onAuthorityLost).toHaveBeenCalledOnce();
+    expect(onAuthorityLost).toHaveBeenCalledWith({
+      status: 'recovery',
+      recovery: expect.objectContaining({
+        kind: 'legacy-changing',
+        availableExports: [],
+      }),
+    });
+    await expect(store.commit({ type: 'activate-project', projectId: 'project-a' }))
+      .rejects.toMatchObject({ code: 'authority-lost' });
+    await expect(store.bootstrap()).resolves.toMatchObject({ status: 'ready' });
   });
 
   it('does not cache recovery and succeeds after invalid legacy data is repaired', async () => {
@@ -1229,5 +1414,92 @@ describe('IndexedDB availability and lifecycle loss', () => {
       expect.objectContaining({ status: 'unavailable' }),
     );
     expect((await inspect(harness)).migrationLedger).toEqual([]);
+  });
+
+  it('lets lifecycle loss dominate migration recovery raised during copy', async () => {
+    const indexedDB = new IDBFactory();
+    let database: IDBDatabase | undefined;
+    instrumentFactory(indexedDB, {
+      onOpen(opened) {
+        database = opened;
+      },
+    });
+    const harness = createHarness({
+      indexedDB,
+      fault(point) {
+        if (point !== 'copy.after-projects') return;
+        forceCloseDatabase(database as never);
+        throw new Error('copy failed after lifecycle loss');
+      },
+    });
+    const onAuthorityLost = vi.fn();
+
+    const result = await createLocalWorkspaceStore(harness.environment)
+      .bootstrap({ onAuthorityLost });
+
+    expect(onAuthorityLost).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'unavailable' }),
+    );
+    expect(result.status).toBe('unavailable');
+  });
+
+  it('lets lifecycle loss dominate verification recovery raised after independent reads', async () => {
+    const indexedDB = new IDBFactory();
+    const harness = createHarness({ indexedDB });
+    const copy = await seedCopy(harness);
+    await putRaw(indexedDB, 'projects', {
+      ...copy.projects[0],
+      project: { ...copy.projects[0].project, name: 'Corrupt read-back' },
+    });
+    let terminated = false;
+    instrumentFactory(indexedDB, {
+      onTransactionStart(database, storeNames, mode, transaction) {
+        if (terminated
+          || mode !== 'readonly'
+          || !sameStores(storeNames, ['legacyBackup'])) {
+          return;
+        }
+        terminated = true;
+        transaction.addEventListener('complete', () => {
+          forceCloseDatabase(database as never);
+        }, { once: true });
+      },
+    });
+    const onAuthorityLost = vi.fn();
+
+    const result = await createLocalWorkspaceStore(harness.environment)
+      .bootstrap({ onAuthorityLost });
+
+    expect(onAuthorityLost).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'unavailable' }),
+    );
+    expect(result.status).toBe('unavailable');
+  });
+
+  it('lets lifecycle loss dominate verification recovery raised during CAS', async () => {
+    const indexedDB = new IDBFactory();
+    let database: IDBDatabase | undefined;
+    instrumentFactory(indexedDB, {
+      onOpen(opened) {
+        database = opened;
+      },
+    });
+    const harness = createHarness({
+      indexedDB,
+      fault(point) {
+        if (point !== 'mutation.before-complete') return;
+        forceCloseDatabase(database as never);
+        throw new Error('CAS failed after lifecycle loss');
+      },
+    });
+    const onAuthorityLost = vi.fn();
+
+    const result = await createLocalWorkspaceStore(harness.environment)
+      .bootstrap({ onAuthorityLost });
+
+    expect(onAuthorityLost).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'unavailable' }),
+    );
+    expect(result.status).toBe('unavailable');
   });
 });

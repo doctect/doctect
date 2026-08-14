@@ -616,6 +616,33 @@ describe('independent reads and ledger transition', () => {
     expect((await adapter.inspect()).migrationLedger).toEqual([copy.ledger]);
   });
 
+  it('rejects verification while copied-ledger recovery is unresolved', async () => {
+    const indexedDB = new IDBFactory();
+    const tracked = trackFactory(indexedDB);
+    const adapter = createTestAdapter({ indexedDB });
+    const copy = preparedCopy();
+    await adapter.open();
+    await adapter.writeInitialCopy(copy);
+    const unresolvedLedger: MigrationLedger = {
+      ...copy.ledger,
+      unresolvedRecovery: {
+        id: 'copied-recovery',
+        kind: 'target-mismatch',
+        detectedAt: TEST_NOW,
+      },
+    };
+    await seedRawRecord(
+      indexedDB,
+      tracked.names[0],
+      'migrationLedger',
+      unresolvedLedger,
+    );
+
+    await expect(adapter.markVerified(verificationExpectation(copy)))
+      .rejects.toMatchObject({ code: 'conflict' });
+    expect((await adapter.inspect()).migrationLedger).toEqual([unresolvedLedger]);
+  });
+
   it('lets only one concurrent tab mark the copied ledger verified', async () => {
     const indexedDB = new IDBFactory();
     const left = createTestAdapter({ indexedDB });

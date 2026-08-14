@@ -465,6 +465,7 @@ export const createIndexedDbAdapter = (
       const ledger = await ledgerTransaction.store.get(WORKSPACE_MIGRATION_ID);
       if (!recognizedLedger(ledger)
         || ledger.state !== 'copied'
+        || ledger.unresolvedRecovery !== null
         || ledger.ledgerRevision !== expected.ledgerRevision
         || ledger.sourceDigest !== expected.sourceDigest
         || ledger.expectedTargetDigest !== expected.expectedTargetDigest) {
