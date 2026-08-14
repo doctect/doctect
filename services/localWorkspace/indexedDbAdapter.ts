@@ -5,6 +5,8 @@ import {
 } from 'idb';
 import {
   WorkspaceStoreError,
+  type WorkspaceCustomPreset,
+  type WorkspacePendingImport,
   type WorkspaceProject,
 } from './contracts';
 import type { FaultInjector } from './faults';
@@ -87,6 +89,24 @@ export interface IndexedDbAdapter {
   markVerified(expected: VerificationExpectation): Promise<MigrationLedger>;
   saveProject(project: WorkspaceProject, expectedStorageRevision: number): Promise<StoredProject>;
   saveWorkspace(workspace: StoredWorkspace, expectedRevision: number): Promise<StoredWorkspace>;
+  createAndActivateProject(
+    project: WorkspaceProject,
+    expectedWorkspaceRevision: number,
+  ): Promise<StoredWorkspace>;
+  activateProject(projectId: string, expectedWorkspaceRevision: number): Promise<StoredWorkspace>;
+  closeProject(
+    projectId: string,
+    successor: WorkspaceProject | undefined,
+    expectedWorkspaceRevision: number,
+  ): Promise<StoredWorkspace>;
+  saveCustomPreset(preset: WorkspaceCustomPreset): Promise<void>;
+  deleteCustomPreset(presetId: string): Promise<void>;
+  stageImport(pendingImport: WorkspacePendingImport): Promise<void>;
+  consumeImport(
+    importId: string,
+    expectedWorkspaceRevision: number,
+    knownTargetProjectId?: string,
+  ): Promise<{ targetProjectId: string; consumed: boolean }>;
 }
 
 const recognizedLedger = (value: unknown): value is MigrationLedger => {
@@ -138,6 +158,9 @@ const mappedError = (
 const conflict = (message: string): WorkspaceStoreError =>
   new WorkspaceStoreError(message, 'conflict');
 
+const validation = (message: string): WorkspaceStoreError =>
+  new WorkspaceStoreError(message, 'validation');
+
 const unverifiedAuthority = (): WorkspaceStoreError =>
   new WorkspaceStoreError('IndexedDB workspace authority is not verified.', 'authority-lost');
 
@@ -188,6 +211,16 @@ const requireVerifiedAuthority: (
     || ledger.unresolvedRecovery !== null) {
     throw unverifiedAuthority();
   }
+};
+
+const requireWorkspaceRevision = (
+  workspace: StoredWorkspace | undefined,
+  expectedRevision: number,
+): StoredWorkspace => {
+  if (!workspace || workspace.revision !== expectedRevision) {
+    throw conflict('Workspace revision changed.');
+  }
+  return workspace;
 };
 
 export const createIndexedDbAdapter = (
@@ -555,6 +588,325 @@ export const createIndexedDbAdapter = (
     }
   };
 
+  const createAndActivateProject = async (
+    project: WorkspaceProject,
+    expectedWorkspaceRevision: number,
+  ): Promise<StoredWorkspace> => {
+    const activeDatabase = await getDatabase();
+    const updatedAt = environment.now();
+    const storeNames = ['projects', 'workspace', 'migrationLedger'] as const;
+    let transaction: WriteTransaction | undefined;
+    const requests: Promise<unknown>[] = [];
+    try {
+      const projectTransaction = activeDatabase.transaction(storeNames, 'readwrite');
+      transaction = projectTransaction as WriteTransaction;
+      const ledger = await projectTransaction.objectStore('migrationLedger')
+        .get(WORKSPACE_MIGRATION_ID);
+      requireVerifiedAuthority(ledger);
+      const workspace = requireWorkspaceRevision(
+        await projectTransaction.objectStore('workspace').get('current'),
+        expectedWorkspaceRevision,
+      );
+      if (await projectTransaction.objectStore('projects').get(project.id)) {
+        throw validation(`Project ${project.id} already exists.`);
+      }
+
+      const storedProject: StoredProject = {
+        id: project.id,
+        project,
+        storageRevision: 0,
+        updatedAt,
+      };
+      const nextWorkspace: StoredWorkspace = {
+        ...workspace,
+        projectOrder: [...workspace.projectOrder, project.id],
+        activeProjectId: project.id,
+        revision: workspace.revision + 1,
+      };
+      requests.push(projectTransaction.objectStore('projects').add(storedProject));
+      requests.push(projectTransaction.objectStore('workspace').put(nextWorkspace));
+      environment.fault?.('mutation.before-complete');
+      await Promise.all(requests);
+      await projectTransaction.done;
+      return nextWorkspace;
+    } catch (error) {
+      return abortTransaction(transaction, requests, error);
+    }
+  };
+
+  const activateProject = async (
+    projectId: string,
+    expectedWorkspaceRevision: number,
+  ): Promise<StoredWorkspace> => {
+    const activeDatabase = await getDatabase();
+    const storeNames = ['projects', 'workspace', 'migrationLedger'] as const;
+    let transaction: WriteTransaction | undefined;
+    const requests: Promise<unknown>[] = [];
+    try {
+      const workspaceTransaction = activeDatabase.transaction(storeNames, 'readwrite');
+      transaction = workspaceTransaction as WriteTransaction;
+      const ledger = await workspaceTransaction.objectStore('migrationLedger')
+        .get(WORKSPACE_MIGRATION_ID);
+      requireVerifiedAuthority(ledger);
+      const workspace = requireWorkspaceRevision(
+        await workspaceTransaction.objectStore('workspace').get('current'),
+        expectedWorkspaceRevision,
+      );
+      if (!await workspaceTransaction.objectStore('projects').get(projectId)
+        || !workspace.projectOrder.includes(projectId)) {
+        throw validation(`Project ${projectId} does not exist.`);
+      }
+      const nextWorkspace: StoredWorkspace = {
+        ...workspace,
+        activeProjectId: projectId,
+        revision: workspace.revision + 1,
+      };
+      requests.push(workspaceTransaction.objectStore('workspace').put(nextWorkspace));
+      environment.fault?.('mutation.before-complete');
+      await Promise.all(requests);
+      await workspaceTransaction.done;
+      return nextWorkspace;
+    } catch (error) {
+      return abortTransaction(transaction, requests, error);
+    }
+  };
+
+  const closeProject = async (
+    projectId: string,
+    successor: WorkspaceProject | undefined,
+    expectedWorkspaceRevision: number,
+  ): Promise<StoredWorkspace> => {
+    const activeDatabase = await getDatabase();
+    const updatedAt = environment.now();
+    const storeNames = ['projects', 'workspace', 'migrationLedger'] as const;
+    let transaction: WriteTransaction | undefined;
+    const requests: Promise<unknown>[] = [];
+    try {
+      const workspaceTransaction = activeDatabase.transaction(storeNames, 'readwrite');
+      transaction = workspaceTransaction as WriteTransaction;
+      const ledger = await workspaceTransaction.objectStore('migrationLedger')
+        .get(WORKSPACE_MIGRATION_ID);
+      requireVerifiedAuthority(ledger);
+      const workspace = requireWorkspaceRevision(
+        await workspaceTransaction.objectStore('workspace').get('current'),
+        expectedWorkspaceRevision,
+      );
+      const projectStore = workspaceTransaction.objectStore('projects');
+      const target = await projectStore.get(projectId);
+      const targetIndex = workspace.projectOrder.indexOf(projectId);
+      if (!target || targetIndex < 0) throw validation(`Project ${projectId} does not exist.`);
+
+      const remainingOrder = workspace.projectOrder.filter(id => id !== projectId);
+      let nextOrder: string[];
+      let activeProjectId: string;
+      requests.push(projectStore.delete(projectId));
+      if (remainingOrder.length === 0) {
+        if (!successor) {
+          throw validation('Closing the last project requires a successor.');
+        }
+        if (successor.id === projectId || await projectStore.get(successor.id)) {
+          throw validation(`Successor project ${successor.id} is not unique.`);
+        }
+        requests.push(projectStore.add({
+          id: successor.id,
+          project: successor,
+          storageRevision: 0,
+          updatedAt,
+        }));
+        nextOrder = [successor.id];
+        activeProjectId = successor.id;
+      } else {
+        nextOrder = remainingOrder;
+        activeProjectId = remainingOrder[Math.max(0, targetIndex - 1)];
+      }
+
+      const nextWorkspace: StoredWorkspace = {
+        ...workspace,
+        projectOrder: nextOrder,
+        activeProjectId,
+        revision: workspace.revision + 1,
+      };
+      requests.push(workspaceTransaction.objectStore('workspace').put(nextWorkspace));
+      environment.fault?.('mutation.before-complete');
+      await Promise.all(requests);
+      await workspaceTransaction.done;
+      return nextWorkspace;
+    } catch (error) {
+      return abortTransaction(transaction, requests, error);
+    }
+  };
+
+  const saveCustomPreset = async (
+    preset: WorkspaceCustomPreset,
+  ): Promise<void> => {
+    const activeDatabase = await getDatabase();
+    const storeNames = ['presets', 'migrationLedger'] as const;
+    let transaction: WriteTransaction | undefined;
+    const requests: Promise<unknown>[] = [];
+    try {
+      const presetTransaction = activeDatabase.transaction(storeNames, 'readwrite');
+      transaction = presetTransaction as WriteTransaction;
+      const ledger = await presetTransaction.objectStore('migrationLedger')
+        .get(WORKSPACE_MIGRATION_ID);
+      requireVerifiedAuthority(ledger);
+      const presetStore = presetTransaction.objectStore('presets');
+      const [stored, allPresets] = await Promise.all([
+        presetStore.get(preset.id),
+        presetStore.getAll(),
+      ]);
+      const position = stored?.position
+        ?? Math.max(-1, ...allPresets.map(record => record.position)) + 1;
+      requests.push(presetStore.put({ id: preset.id, preset, position }));
+      environment.fault?.('mutation.before-complete');
+      await Promise.all(requests);
+      await presetTransaction.done;
+    } catch (error) {
+      return abortTransaction(transaction, requests, error);
+    }
+  };
+
+  const deleteCustomPreset = async (presetId: string): Promise<void> => {
+    const activeDatabase = await getDatabase();
+    const storeNames = ['presets', 'migrationLedger'] as const;
+    let transaction: WriteTransaction | undefined;
+    const requests: Promise<unknown>[] = [];
+    try {
+      const presetTransaction = activeDatabase.transaction(storeNames, 'readwrite');
+      transaction = presetTransaction as WriteTransaction;
+      const ledger = await presetTransaction.objectStore('migrationLedger')
+        .get(WORKSPACE_MIGRATION_ID);
+      requireVerifiedAuthority(ledger);
+      const presetStore = presetTransaction.objectStore('presets');
+      const allPresets = await presetStore.getAll();
+      const target = allPresets.find(record => record.id === presetId);
+      if (!target) throw validation(`Custom preset ${presetId} does not exist.`);
+      requests.push(presetStore.delete(presetId));
+      for (const record of allPresets) {
+        if (record.position <= target.position) continue;
+        requests.push(presetStore.put({ ...record, position: record.position - 1 }));
+      }
+      environment.fault?.('mutation.before-complete');
+      await Promise.all(requests);
+      await presetTransaction.done;
+    } catch (error) {
+      return abortTransaction(transaction, requests, error);
+    }
+  };
+
+  const stageImport = async (pendingImport: WorkspacePendingImport): Promise<void> => {
+    const activeDatabase = await getDatabase();
+    const storeNames = ['pendingImports', 'migrationLedger'] as const;
+    let transaction: WriteTransaction | undefined;
+    const requests: Promise<unknown>[] = [];
+    try {
+      const importTransaction = activeDatabase.transaction(storeNames, 'readwrite');
+      transaction = importTransaction as WriteTransaction;
+      const ledger = await importTransaction.objectStore('migrationLedger')
+        .get(WORKSPACE_MIGRATION_ID);
+      requireVerifiedAuthority(ledger);
+      const importStore = importTransaction.objectStore('pendingImports');
+      const pendingImports = await importStore.getAll();
+      if (pendingImports.some(record => record.id === pendingImport.id)) {
+        throw validation(`Pending import ${pendingImport.id} already exists.`);
+      }
+      if (pendingImports.some(record =>
+        record.pendingImport.targetProjectId === pendingImport.targetProjectId)) {
+        throw validation(`Pending import target ${pendingImport.targetProjectId} already exists.`);
+      }
+      const position = Math.max(-1, ...pendingImports.map(record => record.position)) + 1;
+      requests.push(importStore.add({
+        id: pendingImport.id,
+        pendingImport,
+        position,
+      }));
+      environment.fault?.('mutation.before-complete');
+      await Promise.all(requests);
+      await importTransaction.done;
+    } catch (error) {
+      return abortTransaction(transaction, requests, error);
+    }
+  };
+
+  const consumeImport = async (
+    importId: string,
+    expectedWorkspaceRevision: number,
+    knownTargetProjectId?: string,
+  ): Promise<{ targetProjectId: string; consumed: boolean }> => {
+    const activeDatabase = await getDatabase();
+    const updatedAt = environment.now();
+    const storeNames = [
+      'pendingImports',
+      'projects',
+      'workspace',
+      'migrationLedger',
+    ] as const;
+    let transaction: WriteTransaction | undefined;
+    const requests: Promise<unknown>[] = [];
+    try {
+      const importTransaction = activeDatabase.transaction(storeNames, 'readwrite');
+      transaction = importTransaction as WriteTransaction;
+      const ledger = await importTransaction.objectStore('migrationLedger')
+        .get(WORKSPACE_MIGRATION_ID);
+      requireVerifiedAuthority(ledger);
+      const workspace = requireWorkspaceRevision(
+        await importTransaction.objectStore('workspace').get('current'),
+        expectedWorkspaceRevision,
+      );
+      const importStore = importTransaction.objectStore('pendingImports');
+      const projectStore = importTransaction.objectStore('projects');
+      const [storedImport, pendingImports] = await Promise.all([
+        importStore.get(importId),
+        importStore.getAll(),
+      ]);
+      if (!storedImport) {
+        if (!knownTargetProjectId
+          || !await projectStore.get(knownTargetProjectId)
+          || !workspace.projectOrder.includes(knownTargetProjectId)) {
+          throw validation(`Pending import ${importId} does not exist.`);
+        }
+        await importTransaction.done;
+        return { targetProjectId: knownTargetProjectId, consumed: false };
+      }
+
+      const pending = storedImport.pendingImport;
+      if (knownTargetProjectId && knownTargetProjectId !== pending.targetProjectId) {
+        throw conflict(`Pending import ${importId} target changed.`);
+      }
+      if (await projectStore.get(pending.targetProjectId)) {
+        throw validation(`Project ${pending.targetProjectId} already exists.`);
+      }
+      const project: WorkspaceProject = {
+        id: pending.targetProjectId,
+        name: pending.name,
+        initialState: pending.state,
+        ...(pending.cloud ? { cloud: pending.cloud } : {}),
+      };
+      requests.push(projectStore.add({
+        id: project.id,
+        project,
+        storageRevision: 0,
+        updatedAt,
+      }));
+      requests.push(importStore.delete(importId));
+      for (const record of pendingImports) {
+        if (record.position <= storedImport.position) continue;
+        requests.push(importStore.put({ ...record, position: record.position - 1 }));
+      }
+      requests.push(importTransaction.objectStore('workspace').put({
+        ...workspace,
+        projectOrder: [...workspace.projectOrder, project.id],
+        activeProjectId: project.id,
+        revision: workspace.revision + 1,
+      }));
+      environment.fault?.('mutation.before-complete');
+      await Promise.all(requests);
+      await importTransaction.done;
+      return { targetProjectId: project.id, consumed: true };
+    } catch (error) {
+      return abortTransaction(transaction, requests, error);
+    }
+  };
+
   return {
     open,
     close() {
@@ -572,5 +924,12 @@ export const createIndexedDbAdapter = (
     markVerified,
     saveProject,
     saveWorkspace,
+    createAndActivateProject,
+    activateProject,
+    closeProject,
+    saveCustomPreset,
+    deleteCustomPreset,
+    stageImport,
+    consumeImport,
   };
 };

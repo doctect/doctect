@@ -9,6 +9,8 @@ import {
   type WorkspaceBootstrapPhase,
   type WorkspaceBootstrapResult,
   type WorkspaceCommand,
+  type WorkspacePendingImport,
+  type WorkspaceProject,
   type WorkspaceRecovery,
   type WorkspaceSnapshot,
 } from './contracts';
@@ -37,6 +39,10 @@ import {
   type WorkspaceRecords,
 } from './migration';
 import {
+  createMutationQueue,
+  type MutationQueue,
+} from './mutationQueue';
+import {
   PERSISTENCE_ROLLOUT_EPOCH,
   WORKSPACE_DB_VERSION,
   WORKSPACE_MIGRATION_ID,
@@ -44,6 +50,11 @@ import {
   type MigrationLedger,
   type RecoveryMarker,
 } from './schema';
+import {
+  preparePendingImport,
+  validateCustomPreset,
+  validateWorkspaceProject,
+} from './validation';
 
 export interface LocalWorkspaceEnvironment {
   indexedDB: IDBFactory;
@@ -409,6 +420,11 @@ export const createLocalWorkspaceStore = (
   let stopLegacyMonitor: (() => void) | undefined;
   let observedLegacyChange = 0;
   const observers = new Set<WorkspaceBootstrapObserver>();
+  let durableSnapshot: WorkspaceSnapshot | undefined;
+  let expectedWorkspaceRevision: number | undefined;
+  let expectedProjectRevisions = new Map<string, number>();
+  const consumedImportTargets = new Map<string, string>();
+  let mutationQueue: MutationQueue | undefined;
 
   const registerObserver = (observer?: WorkspaceBootstrapObserver): void => {
     if (observer && !observer.signal?.aborted) observers.add(observer);
@@ -426,6 +442,7 @@ export const createLocalWorkspaceStore = (
   };
 
   const handleAuthorityLost = (error: WorkspaceStoreError): void => {
+    mutationQueue?.freeze();
     cachedReady = undefined;
     authority = error.code === 'authority-lost' ? 'frozen' : 'unavailable';
     lifecycleGeneration += 1;
@@ -449,6 +466,7 @@ export const createLocalWorkspaceStore = (
     stopLegacyMonitor = monitorLegacyKeys(environment.addStorageListener, () => {
       observedLegacyChange += 1;
       if (authority === 'ready') {
+        mutationQueue?.freeze();
         authority = 'frozen';
         cachedReady = undefined;
         notifyAuthorityLost(recovery('legacy-changing', {
@@ -456,6 +474,25 @@ export const createLocalWorkspaceStore = (
         }));
       }
     });
+  };
+
+  const installDurableState = (
+    records: WorkspaceRecords,
+    snapshot: WorkspaceSnapshot,
+    updateCachedReady = false,
+  ): WorkspaceSnapshot => {
+    const nextSnapshot = structuredClone(snapshot);
+    const nextProjectRevisions = new Map(
+      records.projects.map(record => [record.id, record.storageRevision]),
+    );
+    const nextWorkspaceRevision = records.workspace.revision;
+    durableSnapshot = nextSnapshot;
+    expectedProjectRevisions = nextProjectRevisions;
+    expectedWorkspaceRevision = nextWorkspaceRevision;
+    if (updateCachedReady && cachedReady) {
+      cachedReady = { ...cachedReady, snapshot: structuredClone(nextSnapshot) };
+    }
+    return nextSnapshot;
   };
 
   const validateBackup = async (
@@ -628,6 +665,7 @@ export const createLocalWorkspaceStore = (
       )) {
         return recovery('split-brain');
       }
+      installDurableState(inputs.records, snapshot);
       return ready(snapshot, ledger);
     };
 
@@ -733,6 +771,7 @@ export const createLocalWorkspaceStore = (
       )) {
         return verificationFailure();
       }
+      installDurableState(inputs.records, snapshot);
       return ready(snapshot, verifiedLedger);
     };
 
@@ -794,6 +833,194 @@ export const createLocalWorkspaceStore = (
     return result;
   };
 
+  const validationError = (error: unknown): WorkspaceStoreError =>
+    error instanceof WorkspaceStoreError
+      ? error
+      : new WorkspaceStoreError('Workspace command is invalid.', 'validation', error);
+
+  const requireCommandId = (value: unknown, label: string): string => {
+    if (typeof value !== 'string' || value.length === 0) {
+      throw new WorkspaceStoreError(`${label} must be a non-empty string.`, 'validation');
+    }
+    return value;
+  };
+
+  const prepareCommand = (command: WorkspaceCommand): WorkspaceCommand => {
+    try {
+      switch (command.type) {
+        case 'save-project':
+        case 'create-and-activate-project':
+          return {
+            ...command,
+            project: validateWorkspaceProject(command.project, { warningPolicy: 'reject' }),
+          };
+        case 'activate-project':
+          return { ...command, projectId: requireCommandId(command.projectId, 'Project id') };
+        case 'close-project':
+          return {
+            ...command,
+            projectId: requireCommandId(command.projectId, 'Project id'),
+            ...(command.successor
+              ? {
+                  successor: validateWorkspaceProject(command.successor, {
+                    warningPolicy: 'reject',
+                  }),
+                }
+              : {}),
+          };
+        case 'save-custom-preset': {
+          const existingIds = new Set(
+            (durableSnapshot?.customPresets ?? [])
+              .map(preset => preset.id)
+              .filter(id => id !== command.preset.id),
+          );
+          return {
+            ...command,
+            preset: validateCustomPreset(command.preset, {
+              warningPolicy: 'reject',
+              existingIds,
+            }),
+          };
+        }
+        case 'delete-custom-preset':
+          return { ...command, presetId: requireCommandId(command.presetId, 'Preset id') };
+        case 'stage-import':
+          return {
+            ...command,
+            pendingImport: preparePendingImport(command.pendingImport, {
+              warningPolicy: 'retain',
+            }),
+          };
+        case 'consume-import':
+          return { ...command, importId: requireCommandId(command.importId, 'Import id') };
+        case 'recover-legacy-as-copies':
+          return {
+            ...command,
+            recoveryId: requireCommandId(command.recoveryId, 'Recovery id'),
+          };
+      }
+    } catch (error) {
+      throw validationError(error);
+    }
+  };
+
+  const readPostCommandSnapshot = async (): Promise<WorkspaceSnapshot> => {
+    let records: WorkspaceRecords;
+    let snapshot: WorkspaceSnapshot;
+    try {
+      records = await getAdapter().readWorkspaceRecords();
+      snapshot = reconstructWorkspace(records);
+    } catch (error) {
+      if (error instanceof WorkspaceStoreError) throw error;
+      throw new WorkspaceStoreError(
+        'Durable workspace failed post-command validation.',
+        'io',
+        error,
+      );
+    }
+    return installDurableState(records, snapshot, true);
+  };
+
+  const runCommandOperation = async (
+    operation: () => Promise<WorkspaceSnapshot>,
+  ): Promise<WorkspaceSnapshot> => {
+    try {
+      return await operation();
+    } catch (error) {
+      const mapped = error instanceof WorkspaceStoreError
+        ? error
+        : new WorkspaceStoreError('Workspace command failed.', 'io', error);
+      if (mapped.code === 'authority-lost' && authority === 'ready') {
+        handleAuthorityLost(mapped);
+      }
+      throw mapped;
+    }
+  };
+
+  const currentWorkspaceRevision = (): number => {
+    if (expectedWorkspaceRevision === undefined) {
+      throw new WorkspaceStoreError(
+        'Verified workspace revision is unavailable.',
+        'authority-lost',
+      );
+    }
+    return expectedWorkspaceRevision;
+  };
+
+  const executeProjectSave = (project: WorkspaceProject): Promise<WorkspaceSnapshot> =>
+    runCommandOperation(async () => {
+      const expectedRevision = expectedProjectRevisions.get(project.id);
+      if (expectedRevision === undefined) {
+        throw new WorkspaceStoreError(`Project ${project.id} does not exist.`, 'validation');
+      }
+      await getAdapter().saveProject(project, expectedRevision);
+      return readPostCommandSnapshot();
+    });
+
+  const executeExclusiveCommand = (
+    command: Exclude<WorkspaceCommand, { type: 'save-project' }>,
+  ): Promise<WorkspaceSnapshot> => runCommandOperation(async () => {
+    let consumedTarget: { importId: string; targetProjectId: string } | undefined;
+    switch (command.type) {
+      case 'create-and-activate-project':
+        await getAdapter().createAndActivateProject(
+          command.project,
+          currentWorkspaceRevision(),
+        );
+        break;
+      case 'activate-project':
+        await getAdapter().activateProject(command.projectId, currentWorkspaceRevision());
+        break;
+      case 'close-project':
+        await getAdapter().closeProject(
+          command.projectId,
+          command.successor,
+          currentWorkspaceRevision(),
+        );
+        break;
+      case 'save-custom-preset':
+        await getAdapter().saveCustomPreset(command.preset);
+        break;
+      case 'delete-custom-preset':
+        await getAdapter().deleteCustomPreset(command.presetId);
+        break;
+      case 'stage-import':
+        await getAdapter().stageImport(command.pendingImport as WorkspacePendingImport);
+        break;
+      case 'consume-import': {
+        const knownTargetProjectId = consumedImportTargets.get(command.importId)
+          ?? durableSnapshot?.pendingImports.find(item => item.id === command.importId)
+            ?.targetProjectId;
+        const result = await getAdapter().consumeImport(
+          command.importId,
+          currentWorkspaceRevision(),
+          knownTargetProjectId,
+        );
+        consumedTarget = {
+          importId: command.importId,
+          targetProjectId: result.targetProjectId,
+        };
+        break;
+      }
+      case 'recover-legacy-as-copies':
+        throw new WorkspaceStoreError(
+          'Legacy copy recovery is not available in this storage rollout step.',
+          'unavailable',
+        );
+    }
+
+    const snapshot = await readPostCommandSnapshot();
+    if (consumedTarget) {
+      consumedImportTargets.set(consumedTarget.importId, consumedTarget.targetProjectId);
+    }
+    return snapshot;
+  });
+
+  const createCommandQueue = (): MutationQueue => createMutationQueue({
+    saveProject: executeProjectSave,
+    runExclusive: executeExclusiveCommand,
+  });
+
   return {
     bootstrap(observer) {
       registerObserver(observer);
@@ -826,17 +1053,21 @@ export const createLocalWorkspaceStore = (
           authority = 'ready';
           cachedReady = effectiveResult;
           lifecycleResult = undefined;
+          mutationQueue = createCommandQueue();
         } else {
+          mutationQueue?.freeze();
           cachedReady = undefined;
           authority = effectiveResult.status === 'recovery' ? 'recovery' : 'unavailable';
         }
         return effectiveResult;
       }, error => {
         if (lifecycleGeneration !== startingLifecycleGeneration && lifecycleResult) {
+          mutationQueue?.freeze();
           cachedReady = undefined;
           authority = lifecycleResult.status === 'recovery' ? 'recovery' : 'unavailable';
           return lifecycleResult;
         }
+        mutationQueue?.freeze();
         cachedReady = undefined;
         authority = lifecycleResult?.status === 'unavailable' ? 'unavailable' : 'cold';
         throw error;
@@ -847,17 +1078,29 @@ export const createLocalWorkspaceStore = (
       return operation;
     },
 
-    commit(_command: WorkspaceCommand): Promise<WorkspaceSnapshot> {
-      if (authority !== 'ready') {
+    commit(command: WorkspaceCommand): Promise<WorkspaceSnapshot> {
+      const queue = mutationQueue;
+      if (authority !== 'ready' || !queue) {
         return Promise.reject(new WorkspaceStoreError(
           'Local workspace authority is not ready.',
           'authority-lost',
         ));
       }
-      return Promise.reject(new WorkspaceStoreError(
-        'Workspace commands are unavailable until durable command handling is installed.',
-        'unavailable',
-      ));
+      if (command.type === 'recover-legacy-as-copies') {
+        return Promise.reject(new WorkspaceStoreError(
+          'Legacy copy recovery is not available in this storage rollout step.',
+          'unavailable',
+        ));
+      }
+      let prepared: WorkspaceCommand;
+      try {
+        prepared = prepareCommand(command);
+      } catch (error) {
+        return Promise.reject(validationError(error));
+      }
+      return prepared.type === 'save-project'
+        ? queue.enqueueProjectSave(prepared.project)
+        : queue.runExclusive(prepared);
     },
 
     exportRecoveryBundle(_source: RecoverySource): Promise<Blob> {
