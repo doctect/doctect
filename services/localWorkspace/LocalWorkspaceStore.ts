@@ -25,6 +25,7 @@ import {
   LegacyCaptureError,
   captureLegacySnapshot,
   captureStableLegacySnapshot,
+  captureStableLegacySnapshotWithDigest,
   monitorLegacyKeys,
 } from './legacy';
 import {
@@ -43,6 +44,12 @@ import {
   createMutationQueue,
   type MutationQueue,
 } from './mutationQueue';
+import {
+  createIndexedDbRecoveryBundle,
+  createLegacyRecoveryBundle,
+  prepareLegacyRecovery,
+  validateLegacyRecoveryPreparationSources,
+} from './recovery';
 import {
   PERSISTENCE_ROLLOUT_EPOCH,
   WORKSPACE_DB_VERSION,
@@ -289,7 +296,7 @@ const recoveryDetails: Record<WorkspaceRecovery['kind'], {
     category: 'verification-failed',
     message: 'Durable workspace verification failed.',
     canRetry: true,
-    canRecoverLegacyAsCopies: true,
+    canRecoverLegacyAsCopies: false,
   },
   'unsupported-cleanup-state': {
     category: 'unsupported-cleanup-state',
@@ -297,19 +304,6 @@ const recoveryDetails: Record<WorkspaceRecovery['kind'], {
     canRetry: false,
     canRecoverLegacyAsCopies: false,
   },
-};
-
-interface RecoveryCapabilities {
-  exporterAvailable: boolean;
-  validatedSources: readonly RecoverySource[];
-}
-
-const availableExports = (capabilities: RecoveryCapabilities): RecoverySource[] =>
-  capabilities.exporterAvailable ? [...new Set(capabilities.validatedSources)] : [];
-
-const TASK_4_RECOVERY_CAPABILITIES: RecoveryCapabilities = {
-  exporterAvailable: false,
-  validatedSources: [],
 };
 
 const recovery = (
@@ -320,6 +314,7 @@ const recovery = (
     message?: string;
     affectedKey?: string;
     affectedItem?: string;
+    availableExports?: RecoverySource[];
   } = {},
 ): Extract<WorkspaceBootstrapResult, { status: 'recovery' }> => {
   const details = recoveryDetails[kind];
@@ -332,17 +327,19 @@ const recovery = (
       message: options.message ?? details.message,
       ...(options.affectedKey ? { affectedKey: options.affectedKey } : {}),
       ...(options.affectedItem ? { affectedItem: options.affectedItem } : {}),
-      availableExports: availableExports(TASK_4_RECOVERY_CAPABILITIES),
+      availableExports: options.availableExports ?? [],
       canRetry: details.canRetry,
       canRecoverLegacyAsCopies: details.canRecoverLegacyAsCopies,
     },
   };
 };
 
-const unavailable = (): Extract<WorkspaceBootstrapResult, { status: 'unavailable' }> => ({
+const unavailable = (
+  availableExports: RecoverySource[] = ['legacy-current'],
+): Extract<WorkspaceBootstrapResult, { status: 'unavailable' }> => ({
   status: 'unavailable',
   message: 'Local workspace storage is unavailable.',
-  availableExports: availableExports(TASK_4_RECOVERY_CAPABILITIES),
+  availableExports,
 });
 
 const migrationFailure = (
@@ -416,6 +413,7 @@ export const createLocalWorkspaceStore = (
 ): LocalWorkspaceStore => {
   let authority: AuthorityState = 'cold';
   let inFlight: Promise<WorkspaceBootstrapResult> | undefined;
+  let authorityValidation: Promise<WorkspaceBootstrapResult> | undefined;
   let cachedReady: Extract<WorkspaceBootstrapResult, { status: 'ready' }> | undefined;
   let lifecycleResult: NonReadyResult | undefined;
   let lifecycleGeneration = 0;
@@ -427,6 +425,8 @@ export const createLocalWorkspaceStore = (
   let expectedProjectRevisions = new Map<string, number>();
   const consumedImportTargets = new Map<string, string>();
   let mutationQueue: MutationQueue | undefined;
+  let startReadyLegacyRevalidation: (() => void) | undefined;
+  let resetCommandQueue: (() => void) | undefined;
 
   const registerObserver = (observer?: WorkspaceBootstrapObserver): void => {
     if (observer && !observer.signal?.aborted) observers.add(observer);
@@ -475,14 +475,7 @@ export const createLocalWorkspaceStore = (
     if (stopLegacyMonitor) return;
     stopLegacyMonitor = monitorLegacyKeys(environment.addStorageListener, () => {
       observedLegacyChange += 1;
-      if (authority === 'ready') {
-        mutationQueue?.freeze();
-        authority = 'frozen';
-        cachedReady = undefined;
-        notifyAuthorityLost(recovery('legacy-changing', {
-          message: 'Legacy workspace activity requires authority revalidation.',
-        }));
-      }
+      if (authority === 'ready') startReadyLegacyRevalidation?.();
     });
   };
 
@@ -587,6 +580,246 @@ export const createLocalWorkspaceStore = (
     };
   };
 
+  const readRecognizedLedger = async (): Promise<MigrationLedger> => {
+    let ledger: MigrationLedger | undefined;
+    try {
+      ledger = await getAdapter().readMigrationLedger();
+    } catch (error) {
+      if (error instanceof WorkspaceStoreError) throw error;
+      throw new WorkspaceStoreError('Migration ledger could not be read.', 'unavailable', error);
+    }
+    if (!isRecognizedLedger(ledger)) {
+      throw new WorkspaceStoreError('Migration ledger is unavailable.', 'unavailable');
+    }
+    return ledger;
+  };
+
+  const validatedRecoverySources = async (
+    knownLedger?: MigrationLedger,
+  ): Promise<RecoverySource[]> => {
+    const sources: RecoverySource[] = [];
+    try {
+      await captureStableLegacySnapshotWithDigest(
+        environment.legacyStorage,
+        environment.crypto.subtle,
+      );
+      sources.push('legacy-current');
+    } catch {
+      // A changing or inaccessible source is not currently callable.
+    }
+
+    let ledger = knownLedger;
+    if (!ledger) {
+      try {
+        const candidate = await getAdapter().readMigrationLedger();
+        if (isRecognizedLedger(candidate)) ledger = candidate;
+      } catch {
+        // Durable exports remain unavailable when their ledger cannot be read.
+      }
+    }
+    if (ledger) {
+      try {
+        const backup = await getAdapter().readLegacyBackup(ledger.originalLegacyBackupId);
+        await validateBackup(backup, {
+          id: ledger.originalLegacyBackupId,
+          digest: ledger.sourceDigest,
+          kind: 'original',
+          capturedAt: ledger.migratedAt,
+        });
+        sources.push('legacy-original');
+      } catch {
+        // Invalid or missing backup must not be advertised.
+      }
+    }
+    try {
+      reconstructWorkspace(await getAdapter().readWorkspaceRecords());
+      sources.push('indexeddb-workspace');
+    } catch {
+      // Invalid or missing target must not be advertised.
+    }
+    return sources;
+  };
+
+  const populateCapabilities = async (
+    result: NonReadyResult,
+    knownLedger?: MigrationLedger,
+  ): Promise<NonReadyResult> => {
+    const exports = await validatedRecoverySources(knownLedger);
+    if (result.status !== 'recovery') return { ...result, availableExports: exports };
+
+    let ledger = knownLedger;
+    if (!ledger) {
+      try {
+        ledger = await readRecognizedLedger();
+      } catch {
+        // Recovery command stays unavailable without a validated ledger.
+      }
+    }
+    let canRecoverLegacyAsCopies = false;
+    const marker = ledger?.unresolvedRecovery;
+    if (result.recovery.kind === 'split-brain'
+      && ledger?.state === 'verified'
+      && marker?.kind === 'legacy-drift'
+      && marker.id === result.recovery.recoveryId
+      && marker.observedLegacyDigest !== undefined
+      && exports.includes('legacy-current')
+      && exports.includes('indexeddb-workspace')) {
+      try {
+        const acceptedBackup = await validateBackup(
+          await getAdapter().readLegacyBackup(ledger.acceptedLegacyBackupId),
+          {
+            id: ledger.acceptedLegacyBackupId,
+            digest: ledger.acceptedLegacyDigest,
+          },
+        );
+        const current = await captureStableLegacySnapshotWithDigest(
+          environment.legacyStorage,
+          environment.crypto.subtle,
+        );
+        if (current.digest === marker.observedLegacyDigest) {
+          await validateLegacyRecoveryPreparationSources(
+            current.snapshot,
+            acceptedBackup.snapshot,
+            {
+              crypto: environment.crypto,
+              now: environment.now,
+              randomUUID: environment.randomUUID,
+            },
+          );
+          canRecoverLegacyAsCopies = true;
+        }
+      } catch {
+        // Accepted baseline is required to prepare changed-only copies.
+      }
+    }
+    return {
+      ...result,
+      recovery: {
+        ...result.recovery,
+        availableExports: exports,
+        canRecoverLegacyAsCopies,
+      },
+    };
+  };
+
+  const driftMarker = (
+    observedLegacyDigest: string,
+    nextLedgerRevision: number,
+  ): RecoveryMarker => ({
+    id: `${WORKSPACE_MIGRATION_ID}:legacy-drift:${nextLedgerRevision}:${observedLegacyDigest}:${environment.randomUUID()}`,
+    kind: 'legacy-drift',
+    detectedAt: environment.now(),
+    observedLegacyDigest,
+  });
+
+  const recordLegacyDrift = async (
+    observedLegacyDigest: string,
+    knownLedger?: MigrationLedger,
+  ): Promise<{ ledger: MigrationLedger; marker?: RecoveryMarker }> => {
+    let ledger = knownLedger ?? await readRecognizedLedger();
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      if (ledger.state !== 'verified') {
+        throw new WorkspaceStoreError('Verified migration ledger is unavailable.', 'conflict');
+      }
+      const existing = ledger.unresolvedRecovery;
+      if (existing?.kind !== 'legacy-drift' && existing !== null) {
+        throw new WorkspaceStoreError('Another recovery marker is already active.', 'conflict');
+      }
+      if (existing?.observedLegacyDigest === observedLegacyDigest) {
+        return { ledger, marker: existing };
+      }
+      if (existing === null && ledger.acceptedLegacyDigest === observedLegacyDigest) {
+        return { ledger };
+      }
+      try {
+        const marker = existing && existing.observedLegacyDigest === undefined
+          ? { ...existing, observedLegacyDigest }
+          : driftMarker(observedLegacyDigest, ledger.ledgerRevision + 1);
+        const updated = await getAdapter().markLegacyDrift({
+          expectedLedgerRevision: ledger.ledgerRevision,
+          expectedAcceptedLegacyDigest: ledger.acceptedLegacyDigest,
+          expectedRecoveryId: existing?.id ?? null,
+          marker: marker as RecoveryMarker & {
+            observedLegacyDigest: string;
+          },
+        });
+        return { ledger: updated, marker: updated.unresolvedRecovery ?? undefined };
+      } catch (error) {
+        if (!(error instanceof WorkspaceStoreError) || error.code !== 'conflict') throw error;
+        ledger = await readRecognizedLedger();
+      }
+    }
+    throw new WorkspaceStoreError('Legacy recovery marker changed repeatedly.', 'conflict');
+  };
+
+  startReadyLegacyRevalidation = () => {
+    if (authority !== 'ready' || authorityValidation) return;
+    const queue = mutationQueue;
+    queue?.freeze();
+    authority = 'frozen';
+    lifecycleGeneration += 1;
+    const validationGeneration = lifecycleGeneration;
+    const supersedingLifecycleResult = (): NonReadyResult | undefined =>
+      lifecycleGeneration !== validationGeneration ? lifecycleResult : undefined;
+
+    let operation!: Promise<WorkspaceBootstrapResult>;
+    operation = Promise.resolve().then(() => queue?.drain()).then(async () => {
+      let captured = await captureStableLegacySnapshotWithDigest(
+        environment.legacyStorage,
+        environment.crypto.subtle,
+      );
+      const supersedingAfterCapture = supersedingLifecycleResult();
+      if (supersedingAfterCapture) return supersedingAfterCapture;
+      let resolution = await recordLegacyDrift(captured.digest);
+      const after = await captureStableLegacySnapshotWithDigest(
+        environment.legacyStorage,
+        environment.crypto.subtle,
+      );
+      const supersedingAfterRecapture = supersedingLifecycleResult();
+      if (supersedingAfterRecapture) return supersedingAfterRecapture;
+      if (after.digest !== captured.digest) {
+        captured = after;
+        resolution = await recordLegacyDrift(captured.digest, resolution.ledger);
+      }
+
+      if (!resolution.marker) {
+        authority = 'ready';
+        lifecycleResult = undefined;
+        resetCommandQueue?.();
+        if (!cachedReady || !durableSnapshot) {
+          throw new WorkspaceStoreError('Ready workspace snapshot is unavailable.', 'unavailable');
+        }
+        return cachedReady;
+      }
+
+      const result = await populateCapabilities(
+        storedRecovery(resolution.marker),
+        resolution.ledger,
+      );
+      const supersedingAfterCapabilities = supersedingLifecycleResult();
+      if (supersedingAfterCapabilities) return supersedingAfterCapabilities;
+      invalidateDurableAuthority();
+      authority = 'recovery';
+      lifecycleResult = result;
+      notifyAuthorityLost(result);
+      return result;
+    }).catch(async error => {
+      const superseding = supersedingLifecycleResult();
+      if (superseding) return superseding;
+      const result = error instanceof LegacyCaptureError
+        ? await populateCapabilities(recovery('legacy-changing'))
+        : await populateCapabilities(unavailable());
+      invalidateDurableAuthority();
+      authority = result.status === 'recovery' ? 'recovery' : 'unavailable';
+      lifecycleResult = result;
+      notifyAuthorityLost(result);
+      return result;
+    }).finally(() => {
+      if (authorityValidation === operation) authorityValidation = undefined;
+    });
+    authorityValidation = operation;
+  };
+
   const retainedLegacyMatches = async (
     acceptedSource: LegacySnapshot,
     acceptedDigest: string,
@@ -644,7 +877,10 @@ export const createLocalWorkspaceStore = (
     const processVerified = async (
       ledger: MigrationLedger,
     ): Promise<WorkspaceBootstrapResult> => {
-      if (ledger.unresolvedRecovery) return storedRecovery(ledger.unresolvedRecovery);
+      if (ledger.unresolvedRecovery?.kind !== 'legacy-drift'
+        && ledger.unresolvedRecovery !== null) {
+        return storedRecovery(ledger.unresolvedRecovery);
+      }
       emit('verifying-projects');
       let inputs: Awaited<ReturnType<typeof readVerificationInputs>>;
       try {
@@ -661,29 +897,55 @@ export const createLocalWorkspaceStore = (
       } catch (error) {
         return verificationFailure(error);
       }
-      const retainedSourceVersion = observedLegacyChange;
-      const currentLegacy = captureLegacySnapshot(environment.legacyStorage);
-      const currentDigest = await digestLegacySnapshot(
-        currentLegacy,
-        environment.crypto.subtle,
-      );
-      if (currentDigest !== ledger.acceptedLegacyDigest
-        || observedLegacyChange !== retainedSourceVersion) {
-        return recovery('split-brain');
+
+      let current: Awaited<ReturnType<typeof captureStableLegacySnapshotWithDigest>>;
+      try {
+        current = await captureStableLegacySnapshotWithDigest(
+          environment.legacyStorage,
+          environment.crypto.subtle,
+        );
+      } catch (error) {
+        if (!(error instanceof LegacyCaptureError)) return recovery('split-brain');
+        try {
+          current = await captureStableLegacySnapshotWithDigest(
+            environment.legacyStorage,
+            environment.crypto.subtle,
+          );
+          const recorded = await recordLegacyDrift(current.digest, ledger);
+          return recorded.marker ? storedRecovery(recorded.marker) : recovery('legacy-changing');
+        } catch {
+          return recovery('legacy-changing');
+        }
       }
-      if (!await retainedLegacyMatches(
-        inputs.acceptedBackup.snapshot,
-        ledger.acceptedLegacyDigest,
-      ) || observedLegacyChange !== retainedSourceVersion) {
-        return recovery('split-brain');
+      if (ledger.unresolvedRecovery
+        || current.digest !== ledger.acceptedLegacyDigest
+        || !sameLegacySnapshot(current.snapshot, inputs.acceptedBackup.snapshot)) {
+        try {
+          const recorded = await recordLegacyDrift(current.digest, ledger);
+          if (recorded.marker) return storedRecovery(recorded.marker);
+        } catch (error) {
+          if (error instanceof WorkspaceStoreError && error.code === 'unavailable') {
+            return unavailable();
+          }
+          return recovery('split-brain');
+        }
       }
 
       emit('finishing-upgrade');
-      if (!sameLegacySnapshot(
-        captureLegacySnapshot(environment.legacyStorage),
-        inputs.acceptedBackup.snapshot,
-      )) {
-        return recovery('split-brain');
+      try {
+        const finalSource = await captureStableLegacySnapshotWithDigest(
+          environment.legacyStorage,
+          environment.crypto.subtle,
+        );
+        if (finalSource.digest !== ledger.acceptedLegacyDigest
+          || !sameLegacySnapshot(finalSource.snapshot, inputs.acceptedBackup.snapshot)) {
+          const recorded = await recordLegacyDrift(finalSource.digest, ledger);
+          if (recorded.marker) return storedRecovery(recorded.marker);
+        }
+      } catch (error) {
+        return error instanceof LegacyCaptureError
+          ? recovery('legacy-changing')
+          : recovery('split-brain');
       }
       installDurableState(inputs.records, snapshot);
       return ready(snapshot, ledger);
@@ -700,8 +962,8 @@ export const createLocalWorkspaceStore = (
       if (ledger.state === 'cleanup-started' || ledger.state === 'cleanup-complete') {
         return recovery('unsupported-cleanup-state');
       }
-      if (ledger.unresolvedRecovery) return storedRecovery(ledger.unresolvedRecovery);
       if (ledger.state === 'verified') return processVerified(ledger);
+      if (ledger.unresolvedRecovery) return storedRecovery(ledger.unresolvedRecovery);
 
       emit('verifying-projects');
       let inputs: Awaited<ReturnType<typeof readVerificationInputs>>;
@@ -1077,14 +1339,159 @@ export const createLocalWorkspaceStore = (
     return snapshot;
   });
 
+  const executeRecoveryCommand = async (recoveryId: string): Promise<WorkspaceSnapshot> => {
+    let prepared: Awaited<ReturnType<typeof prepareLegacyRecovery>>;
+    try {
+      prepared = await captureStableLegacySnapshot(
+        environment.legacyStorage,
+        async source => {
+          const sourceDigest = await digestLegacySnapshot(source, environment.crypto.subtle);
+          const ledger = await readRecognizedLedger();
+          const marker = ledger.unresolvedRecovery;
+          if (ledger.state !== 'verified'
+            || marker?.kind !== 'legacy-drift'
+            || marker.id !== recoveryId
+            || marker.observedLegacyDigest !== sourceDigest) {
+            throw new WorkspaceStoreError(
+              'Legacy recovery confirmation no longer matches current authority.',
+              'conflict',
+            );
+          }
+
+          let records: WorkspaceRecords;
+          let acceptedBackup: LegacyBackupRecord | undefined;
+          try {
+            [records, acceptedBackup] = await Promise.all([
+              getAdapter().readWorkspaceRecords(),
+              getAdapter().readLegacyBackup(ledger.acceptedLegacyBackupId),
+            ]);
+            reconstructWorkspace(records);
+            acceptedBackup = await validateBackup(acceptedBackup, {
+              id: ledger.acceptedLegacyBackupId,
+              digest: ledger.acceptedLegacyDigest,
+            });
+          } catch (error) {
+            if (error instanceof WorkspaceStoreError && error.code === 'unavailable') throw error;
+            throw new WorkspaceStoreError(
+              'Recovery authorities could not be validated independently.',
+              'unavailable',
+              error,
+            );
+          }
+
+          try {
+            return await prepareLegacyRecovery(
+              source,
+              sourceDigest,
+              acceptedBackup.snapshot,
+              ledger,
+              records,
+              recoveryId,
+              {
+                crypto: environment.crypto,
+                now: environment.now,
+                randomUUID: environment.randomUUID,
+              },
+            );
+          } catch (error) {
+            throw new WorkspaceStoreError(
+              'Changed legacy workspace is invalid and cannot be recovered as copies.',
+              'validation',
+              error,
+            );
+          }
+        },
+        environment.crypto.subtle,
+      );
+    } catch (error) {
+      if (error instanceof WorkspaceStoreError) throw error;
+      if (error instanceof LegacyCaptureError) {
+        throw new WorkspaceStoreError(
+          'Legacy workspace changed during recovery preparation.',
+          'conflict',
+          error,
+        );
+      }
+      throw new WorkspaceStoreError('Legacy recovery preparation failed.', 'validation', error);
+    }
+
+    const nextLedger = await getAdapter().recoverLegacyAsCopies(prepared);
+    let records: WorkspaceRecords;
+    let snapshot: WorkspaceSnapshot;
+    try {
+      records = await getAdapter().readWorkspaceRecords();
+      snapshot = reconstructWorkspace(records);
+    } catch (error) {
+      const failure = new WorkspaceStoreError(
+        'Recovered workspace failed independent validation.',
+        'unavailable',
+        error,
+      );
+      handleAuthorityLost(failure);
+      throw failure;
+    }
+    installDurableState(records, snapshot);
+
+    try {
+      const current = await captureStableLegacySnapshotWithDigest(
+        environment.legacyStorage,
+        environment.crypto.subtle,
+      );
+      if (current.digest !== nextLedger.acceptedLegacyDigest
+        || !sameLegacySnapshot(current.snapshot, prepared.backup.snapshot)) {
+        const recorded = await recordLegacyDrift(current.digest, nextLedger);
+        if (recorded.marker) {
+          const result = await populateCapabilities(
+            storedRecovery(recorded.marker),
+            recorded.ledger,
+          );
+          invalidateDurableAuthority();
+          authority = 'recovery';
+          lifecycleResult = result;
+          notifyAuthorityLost(result);
+          return structuredClone(snapshot);
+        }
+      }
+    } catch (error) {
+      if (error instanceof LegacyCaptureError) {
+        const result = await populateCapabilities(recovery('legacy-changing'));
+        invalidateDurableAuthority();
+        authority = 'recovery';
+        lifecycleResult = result;
+        notifyAuthorityLost(result);
+        return structuredClone(snapshot);
+      }
+      const failure = error instanceof WorkspaceStoreError
+        ? error
+        : new WorkspaceStoreError(
+            'Legacy workspace could not be revalidated after recovery.',
+            'unavailable',
+            error,
+          );
+      handleAuthorityLost(failure);
+      throw failure;
+    }
+
+    const readyResult = ready(snapshot, nextLedger);
+    authority = 'ready';
+    cachedReady = readyResult;
+    lifecycleResult = undefined;
+    resetCommandQueue?.();
+    return structuredClone(snapshot);
+  };
+
   const createCommandQueue = (): MutationQueue => createMutationQueue({
     saveProject: executeProjectSave,
     runExclusive: executeExclusiveCommand,
   });
+  resetCommandQueue = () => {
+    mutationQueue = createCommandQueue();
+  };
 
   return {
     bootstrap(observer) {
       registerObserver(observer);
+      if (authorityValidation) return authorityValidation;
       if (cachedReady) return Promise.resolve(cachedReady);
       if (inFlight) return inFlight;
 
@@ -1109,34 +1516,37 @@ export const createLocalWorkspaceStore = (
       let operation!: Promise<WorkspaceBootstrapResult>;
       operation = Promise.resolve()
         .then(() => priorQueue?.drain())
-        .then(() => bootstrapOperation(emit)).then(result => {
-        const effectiveResult = lifecycleGeneration !== startingLifecycleGeneration
-          && lifecycleResult
-          ? lifecycleResult
-          : result;
-        if (effectiveResult.status === 'ready') {
-          authority = 'ready';
-          cachedReady = effectiveResult;
-          lifecycleResult = undefined;
-          mutationQueue = createCommandQueue();
-        } else {
+        .then(() => bootstrapOperation(emit))
+        .then(async (result): Promise<WorkspaceBootstrapResult> =>
+          result.status === 'ready' ? result : populateCapabilities(result))
+        .then(result => {
+          const effectiveResult = lifecycleGeneration !== startingLifecycleGeneration
+            && lifecycleResult
+            ? lifecycleResult
+            : result;
+          if (effectiveResult.status === 'ready') {
+            authority = 'ready';
+            cachedReady = effectiveResult;
+            lifecycleResult = undefined;
+            resetCommandQueue?.();
+          } else {
+            mutationQueue?.freeze();
+            cachedReady = undefined;
+            authority = effectiveResult.status === 'recovery' ? 'recovery' : 'unavailable';
+          }
+          return effectiveResult;
+        }, error => {
+          if (lifecycleGeneration !== startingLifecycleGeneration && lifecycleResult) {
+            mutationQueue?.freeze();
+            cachedReady = undefined;
+            authority = lifecycleResult.status === 'recovery' ? 'recovery' : 'unavailable';
+            return lifecycleResult;
+          }
           mutationQueue?.freeze();
           cachedReady = undefined;
-          authority = effectiveResult.status === 'recovery' ? 'recovery' : 'unavailable';
-        }
-        return effectiveResult;
-      }, error => {
-        if (lifecycleGeneration !== startingLifecycleGeneration && lifecycleResult) {
-          mutationQueue?.freeze();
-          cachedReady = undefined;
-          authority = lifecycleResult.status === 'recovery' ? 'recovery' : 'unavailable';
-          return lifecycleResult;
-        }
-        mutationQueue?.freeze();
-        cachedReady = undefined;
-        authority = lifecycleResult?.status === 'unavailable' ? 'unavailable' : 'cold';
-        throw error;
-      }).finally(() => {
+          authority = lifecycleResult?.status === 'unavailable' ? 'unavailable' : 'cold';
+          throw error;
+        }).finally(() => {
         if (inFlight === operation) inFlight = undefined;
       });
       inFlight = operation;
@@ -1144,17 +1554,32 @@ export const createLocalWorkspaceStore = (
     },
 
     commit(command: WorkspaceCommand): Promise<WorkspaceSnapshot> {
+      if (command.type === 'recover-legacy-as-copies') {
+        let recoveryId: string;
+        try {
+          recoveryId = requireCommandId(command.recoveryId, 'Recovery id');
+        } catch (error) {
+          return Promise.reject(validationError(error));
+        }
+        if (authority === 'ready') {
+          return Promise.reject(new WorkspaceStoreError(
+            'No unresolved legacy recovery is available.',
+            'unavailable',
+          ));
+        }
+        if (authority !== 'recovery') {
+          return Promise.reject(new WorkspaceStoreError(
+            'Local workspace authority is not ready for recovery.',
+            'authority-lost',
+          ));
+        }
+        return executeRecoveryCommand(recoveryId);
+      }
       const queue = mutationQueue;
       if (authority !== 'ready' || !queue) {
         return Promise.reject(new WorkspaceStoreError(
           'Local workspace authority is not ready.',
           'authority-lost',
-        ));
-      }
-      if (command.type === 'recover-legacy-as-copies') {
-        return Promise.reject(new WorkspaceStoreError(
-          'Legacy copy recovery is not available in this storage rollout step.',
-          'unavailable',
         ));
       }
       let prepared: WorkspaceCommand;
@@ -1168,9 +1593,69 @@ export const createLocalWorkspaceStore = (
         : queue.runExclusive(prepared);
     },
 
-    exportRecoveryBundle(_source: RecoverySource): Promise<Blob> {
+    async exportRecoveryBundle(source: RecoverySource): Promise<Blob> {
+      if (source === 'legacy-current') {
+        try {
+          const captured = await captureStableLegacySnapshotWithDigest(
+            environment.legacyStorage,
+            environment.crypto.subtle,
+          );
+          return createLegacyRecoveryBundle(
+            captured.snapshot,
+            environment.now(),
+            environment.crypto.subtle,
+          );
+        } catch (error) {
+          if (error instanceof LegacyCaptureError) throw error;
+          throw new WorkspaceStoreError(
+            'Current legacy recovery source is unavailable.',
+            'unavailable',
+            error,
+          );
+        }
+      }
+
+      if (source === 'legacy-original') {
+        try {
+          const ledger = await readRecognizedLedger();
+          const backup = await validateBackup(
+            await getAdapter().readLegacyBackup(ledger.originalLegacyBackupId),
+            {
+              id: ledger.originalLegacyBackupId,
+              digest: ledger.sourceDigest,
+              kind: 'original',
+              capturedAt: ledger.migratedAt,
+            },
+          );
+          return createLegacyRecoveryBundle(
+            backup.snapshot,
+            environment.now(),
+            environment.crypto.subtle,
+          );
+        } catch (error) {
+          throw new WorkspaceStoreError(
+            'Original legacy recovery source is unavailable.',
+            'unavailable',
+            error,
+          );
+        }
+      }
+
+      if (source === 'indexeddb-workspace') {
+        try {
+          const snapshot = reconstructWorkspace(await getAdapter().readWorkspaceRecords());
+          return createIndexedDbRecoveryBundle(snapshot, environment.now());
+        } catch (error) {
+          throw new WorkspaceStoreError(
+            'IndexedDB workspace recovery source is unavailable.',
+            'unavailable',
+            error,
+          );
+        }
+      }
+
       return Promise.reject(new WorkspaceStoreError(
-        'Recovery export is not available in this storage rollout step.',
+        'Recovery source is unavailable.',
         'unavailable',
       ));
     },

@@ -12,7 +12,9 @@ export type LegacyStorageListener = (
 ) => () => void;
 
 export class LegacyCaptureError extends Error {
+  readonly kind = 'legacy-changing' as const;
   readonly category = 'legacy-changing' as const;
+  readonly canRetry = true;
 
   constructor(message: string) {
     super(message);
@@ -38,10 +40,21 @@ export async function captureStableLegacySnapshot<T>(
   const current = captureLegacySnapshot(storage);
   const currentDigest = await digestLegacySnapshot(current, subtle);
 
-  if (currentDigest !== sourceDigest) {
+  if (currentDigest !== sourceDigest || LEGACY_DOCUMENT_KEYS.some(key =>
+    current[key].present !== source[key].present || current[key].raw !== source[key].raw)) {
     throw new LegacyCaptureError('Legacy storage changed during migration preparation.');
   }
   return prepared;
+}
+
+export async function captureStableLegacySnapshotWithDigest(
+  storage: LegacyStorage,
+  subtle?: SubtleCrypto,
+): Promise<{ snapshot: LegacySnapshot; digest: string }> {
+  return captureStableLegacySnapshot(storage, async source => ({
+    snapshot: structuredClone(source),
+    digest: await digestLegacySnapshot(source, subtle),
+  }), subtle);
 }
 
 export function monitorLegacyKeys(

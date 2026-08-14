@@ -14,6 +14,7 @@ import type {
   PreparedInitialCopy,
   WorkspaceRecords,
 } from './migration';
+import type { PreparedLegacyRecovery } from './recovery';
 import {
   WORKSPACE_DB_NAME,
   WORKSPACE_DB_VERSION,
@@ -21,6 +22,7 @@ import {
   type LegacyBackupRecord,
   type LocalWorkspaceDatabase,
   type MigrationLedger,
+  type RecoveryMarker,
   type StoredPendingImport,
   type StoredPreset,
   type StoredProject,
@@ -83,6 +85,13 @@ export interface PreparedImportConsumption {
   project: StoredProject;
 }
 
+export interface LegacyDriftExpectation {
+  expectedLedgerRevision: number;
+  expectedAcceptedLegacyDigest: string;
+  expectedRecoveryId: string | null;
+  marker: RecoveryMarker & { observedLegacyDigest: string };
+}
+
 export interface IndexedDbAdapter {
   open(): Promise<void>;
   close(): void;
@@ -91,7 +100,10 @@ export interface IndexedDbAdapter {
   writeInitialCopy(prepared: PreparedInitialCopy): Promise<InitialCopyResult>;
   readWorkspaceRecords(): Promise<WorkspaceRecords>;
   readLegacyBackup(id: string): Promise<LegacyBackupRecord | undefined>;
+  readMigrationLedger(): Promise<MigrationLedger | undefined>;
   markVerified(expected: VerificationExpectation): Promise<MigrationLedger>;
+  markLegacyDrift(expected: LegacyDriftExpectation): Promise<MigrationLedger>;
+  recoverLegacyAsCopies(prepared: PreparedLegacyRecovery): Promise<MigrationLedger>;
   saveProject(project: WorkspaceProject, expectedStorageRevision: number): Promise<StoredProject>;
   saveWorkspace(workspace: StoredWorkspace, expectedRevision: number): Promise<StoredWorkspace>;
   createAndActivateProject(
@@ -492,6 +504,20 @@ export const createIndexedDbAdapter = (
     }
   };
 
+  const readMigrationLedger = async (): Promise<MigrationLedger | undefined> => {
+    const activeDatabase = await getDatabase();
+    let transaction;
+    try {
+      transaction = activeDatabase.transaction('migrationLedger', 'readonly');
+      const ledger = await transaction.store.get(WORKSPACE_MIGRATION_ID);
+      await transaction.done;
+      return ledger;
+    } catch (error) {
+      if (transaction) await transaction.done.catch(() => {});
+      throw mappedError(error);
+    }
+  };
+
   const markVerified = async (
     expected: VerificationExpectation,
   ): Promise<MigrationLedger> => {
@@ -522,6 +548,149 @@ export const createIndexedDbAdapter = (
       await Promise.all(requests);
       await ledgerTransaction.done;
       return verifiedLedger;
+    } catch (error) {
+      return abortTransaction(transaction, requests, error);
+    }
+  };
+
+  const markLegacyDrift = async (
+    expected: LegacyDriftExpectation,
+  ): Promise<MigrationLedger> => {
+    const activeDatabase = await getDatabase();
+    let transaction: WriteTransaction | undefined;
+    const requests: Promise<unknown>[] = [];
+    try {
+      const ledgerTransaction = activeDatabase.transaction('migrationLedger', 'readwrite');
+      transaction = ledgerTransaction as WriteTransaction;
+      const ledger = await ledgerTransaction.store.get(WORKSPACE_MIGRATION_ID);
+      if (!recognizedLedger(ledger)
+        || ledger.state !== 'verified'
+        || ledger.acceptedLegacyDigest !== expected.expectedAcceptedLegacyDigest) {
+        throw conflict('Verified migration ledger changed before legacy drift was recorded.');
+      }
+      if (ledger.unresolvedRecovery?.kind === 'legacy-drift'
+        && ledger.unresolvedRecovery.observedLegacyDigest === expected.marker.observedLegacyDigest) {
+        await ledgerTransaction.done;
+        return ledger;
+      }
+      if (ledger.ledgerRevision !== expected.expectedLedgerRevision
+        || (expected.expectedRecoveryId === null
+          ? ledger.unresolvedRecovery !== null
+          : ledger.unresolvedRecovery?.id !== expected.expectedRecoveryId)) {
+        throw conflict('Legacy recovery marker changed before drift was recorded.');
+      }
+      const next: MigrationLedger = {
+        ...ledger,
+        ledgerRevision: ledger.ledgerRevision + 1,
+        unresolvedRecovery: expected.marker,
+      };
+      requests.push(ledgerTransaction.store.put(next));
+      await Promise.all(requests);
+      await ledgerTransaction.done;
+      return next;
+    } catch (error) {
+      return abortTransaction(transaction, requests, error);
+    }
+  };
+
+  const recoverLegacyAsCopies = async (
+    prepared: PreparedLegacyRecovery,
+  ): Promise<MigrationLedger> => {
+    const activeDatabase = await getDatabase();
+    let transaction: WriteTransaction | undefined;
+    const requests: Promise<unknown>[] = [];
+    try {
+      transaction = activeDatabase.transaction(STORE_NAMES, 'readwrite');
+      const ledgerStore = transaction.objectStore('migrationLedger');
+      const projectStore = transaction.objectStore('projects');
+      const workspaceStore = transaction.objectStore('workspace');
+      const presetStore = transaction.objectStore('presets');
+      const importStore = transaction.objectStore('pendingImports');
+      const [ledger, workspace, projects, presets, pendingImports] = await Promise.all([
+        ledgerStore.get(WORKSPACE_MIGRATION_ID),
+        workspaceStore.get('current'),
+        projectStore.getAll(),
+        presetStore.getAll(),
+        importStore.getAll(),
+      ]);
+      if (!recognizedLedger(ledger)
+        || ledger.state !== 'verified'
+        || ledger.ledgerRevision !== prepared.expectedLedgerRevision
+        || ledger.acceptedLegacyDigest !== prepared.expectedAcceptedLegacyDigest
+        || ledger.acceptedLegacyBackupId !== prepared.expectedAcceptedLegacyBackupId
+        || ledger.unresolvedRecovery?.kind !== 'legacy-drift'
+        || ledger.unresolvedRecovery.id !== prepared.recoveryId
+        || ledger.unresolvedRecovery.observedLegacyDigest !== prepared.observedLegacyDigest
+        || prepared.backup.digest !== prepared.observedLegacyDigest) {
+        throw conflict('Legacy recovery authority changed before copies were written.');
+      }
+      if (!workspace) throw conflict('Workspace record changed before legacy recovery.');
+
+      const projectIds = new Set(projects.map(record => record.id));
+      const pendingTargets = new Set(pendingImports.map(record =>
+        record.pendingImport.targetProjectId));
+      for (const record of prepared.projects) {
+        if (projectIds.has(record.id) || pendingTargets.has(record.id)) {
+          throw conflict(`Recovered project id ${record.id} is no longer unique.`);
+        }
+        projectIds.add(record.id);
+      }
+      const presetIds = new Set(presets.map(record => record.id));
+      for (const record of prepared.presets) {
+        if (presetIds.has(record.id)) {
+          throw conflict(`Recovered preset id ${record.id} is no longer unique.`);
+        }
+        presetIds.add(record.id);
+      }
+      const importIds = new Set(pendingImports.map(record => record.id));
+      for (const record of projects) {
+        if (record.consumedImportId) importIds.add(record.consumedImportId);
+      }
+      for (const record of prepared.pendingImports) {
+        if (importIds.has(record.id)
+          || projectIds.has(record.pendingImport.targetProjectId)
+          || pendingTargets.has(record.pendingImport.targetProjectId)) {
+          throw conflict(`Recovered pending import ${record.id} is no longer unique.`);
+        }
+        importIds.add(record.id);
+        pendingTargets.add(record.pendingImport.targetProjectId);
+      }
+
+      for (const record of prepared.projects) requests.push(projectStore.add(record));
+      if (prepared.projects.length > 0) {
+        requests.push(workspaceStore.put({
+          ...workspace,
+          projectOrder: [
+            ...workspace.projectOrder,
+            ...prepared.projects.map(record => record.id),
+          ],
+          revision: workspace.revision + 1,
+        }));
+      }
+      const firstPresetPosition = Math.max(-1, ...presets.map(record => record.position)) + 1;
+      prepared.presets.forEach((record, index) => {
+        requests.push(presetStore.add({ ...record, position: firstPresetPosition + index }));
+      });
+      const firstImportPosition = Math.max(
+        -1,
+        ...pendingImports.map(record => record.position),
+      ) + 1;
+      prepared.pendingImports.forEach((record, index) => {
+        requests.push(importStore.add({ ...record, position: firstImportPosition + index }));
+      });
+      requests.push(transaction.objectStore('legacyBackup').add(prepared.backup));
+      const nextLedger: MigrationLedger = {
+        ...ledger,
+        ledgerRevision: ledger.ledgerRevision + 1,
+        acceptedLegacyDigest: prepared.observedLegacyDigest,
+        acceptedLegacyBackupId: prepared.backup.id,
+        unresolvedRecovery: null,
+      };
+      requests.push(ledgerStore.put(nextLedger));
+      environment.fault?.('recovery.before-complete');
+      await Promise.all(requests);
+      await transaction.done;
+      return nextLedger;
     } catch (error) {
       return abortTransaction(transaction, requests, error);
     }
@@ -941,7 +1110,10 @@ export const createIndexedDbAdapter = (
     writeInitialCopy,
     readWorkspaceRecords,
     readLegacyBackup,
+    readMigrationLedger,
     markVerified,
+    markLegacyDrift,
+    recoverLegacyAsCopies,
     saveProject,
     saveWorkspace,
     createAndActivateProject,

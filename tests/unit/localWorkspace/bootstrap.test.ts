@@ -36,6 +36,9 @@ import {
   type PreparedInitialCopy,
 } from '../../../services/localWorkspace/migration';
 import {
+  LEGACY_DOCUMENT_KEYS,
+} from '../../../services/localWorkspace/legacyTypes';
+import {
   WORKSPACE_DB_NAME,
   WORKSPACE_MIGRATION_ID,
   type MigrationLedger,
@@ -385,13 +388,17 @@ describe('public store surface', () => {
     await expect(bootstrap).resolves.toMatchObject({ status: 'ready' });
   });
 
-  it('reports deferred recovery export honestly without touching legacy storage', async () => {
+  it('exports current legacy recovery without opening IndexedDB or writing legacy storage', async () => {
     const harness = createHarness();
     const store = createLocalWorkspaceStore(harness.environment);
 
-    await expect(store.exportRecoveryBundle('legacy-current')).rejects.toMatchObject({
-      code: 'unavailable',
+    await expect(store.exportRecoveryBundle('legacy-current')).resolves.toMatchObject({
+      type: 'application/json;charset=utf-8',
     });
+    expect((harness.storage as MemoryStorage).reads).toEqual([
+      ...LEGACY_DOCUMENT_KEYS,
+      ...LEGACY_DOCUMENT_KEYS,
+    ]);
     expect((harness.storage as MemoryStorage).mutations).toEqual([]);
   });
 });
@@ -890,12 +897,15 @@ describe('existing target decision table', () => {
 
       expect(recoveryResult(result).recovery.kind).toBe('unrecognized-target');
       expect(harness.createBlankProject).not.toHaveBeenCalled();
-      expect((harness.storage as MemoryStorage).reads).toEqual([]);
+      expect((harness.storage as MemoryStorage).reads).toEqual([
+        ...LEGACY_DOCUMENT_KEYS,
+        ...LEGACY_DOCUMENT_KEYS,
+      ]);
       expect((await inspect(harness))[storeName]).toHaveLength(1);
     },
   );
 
-  it('does not advertise recovery exports for an unrecognized target without a backup', async () => {
+  it('advertises only current legacy recovery for an unrecognized target without a backup', async () => {
     const harness = createHarness({ values: {} });
     const copy = await prepareFor(createHarness());
     await ensureSchema(harness);
@@ -905,7 +915,7 @@ describe('existing target decision table', () => {
 
     expect(recoveryResult(result).recovery).toMatchObject({
       kind: 'unrecognized-target',
-      availableExports: [],
+      availableExports: ['legacy-current'],
     });
   });
 
@@ -926,7 +936,10 @@ describe('existing target decision table', () => {
 
     expect(recoveryResult(result).recovery.kind).toBe('unrecognized-target');
     expect(harness.createBlankProject).not.toHaveBeenCalled();
-    expect((harness.storage as MemoryStorage).reads).toEqual([]);
+    expect((harness.storage as MemoryStorage).reads).toEqual([
+      ...LEGACY_DOCUMENT_KEYS,
+      ...LEGACY_DOCUMENT_KEYS,
+    ]);
   });
 
   it.each(['cleanup-started', 'cleanup-complete'] as const)(
@@ -1293,7 +1306,7 @@ describe('concurrency, retries, and observers', () => {
     await expect(store.bootstrap()).resolves.toMatchObject({ status: 'unavailable' });
   });
 
-  it('synchronously freezes and notifies observers for a matching post-ready legacy event', async () => {
+  it('synchronously freezes then restores authority for a byte-identical legacy event', async () => {
     const harness = createHarness();
     const onAuthorityLost = vi.fn();
     const store = createLocalWorkspaceStore(harness.environment);
@@ -1301,17 +1314,11 @@ describe('concurrency, retries, and observers', () => {
 
     harness.dispatchStorage(LEGACY_KEYS.projects);
 
-    expect(onAuthorityLost).toHaveBeenCalledOnce();
-    expect(onAuthorityLost).toHaveBeenCalledWith({
-      status: 'recovery',
-      recovery: expect.objectContaining({
-        kind: 'legacy-changing',
-        availableExports: [],
-      }),
-    });
+    expect(onAuthorityLost).not.toHaveBeenCalled();
     await expect(store.commit({ type: 'activate-project', projectId: 'project-a' }))
       .rejects.toMatchObject({ code: 'authority-lost' });
     await expect(store.bootstrap()).resolves.toMatchObject({ status: 'ready' });
+    expect(onAuthorityLost).not.toHaveBeenCalled();
   });
 
   it('does not cache recovery and succeeds after invalid legacy data is repaired', async () => {
