@@ -1,3 +1,4 @@
+import type { DBSchema } from 'idb';
 import type {
   WorkspaceCustomPreset,
   WorkspacePendingImport,
@@ -87,4 +88,13 @@ export interface LegacyBackupRecord {
   capturedAt: string;
   snapshot: LegacySnapshot;
   digest: string;
+}
+
+export interface LocalWorkspaceDatabase extends DBSchema {
+  projects: { key: string; value: StoredProject };
+  workspace: { key: 'current'; value: StoredWorkspace };
+  presets: { key: string; value: StoredPreset };
+  pendingImports: { key: string; value: StoredPendingImport };
+  migrationLedger: { key: typeof WORKSPACE_MIGRATION_ID; value: MigrationLedger };
+  legacyBackup: { key: string; value: LegacyBackupRecord };
 }
