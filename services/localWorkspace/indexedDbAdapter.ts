@@ -78,6 +78,11 @@ export type InitialCopyResult = {
   status: 'copied' | 'existing-ledger' | 'orphaned-target';
 };
 
+export interface PreparedImportConsumption {
+  pendingImportIdentity: string;
+  project: StoredProject;
+}
+
 export interface IndexedDbAdapter {
   open(): Promise<void>;
   close(): void;
@@ -98,6 +103,7 @@ export interface IndexedDbAdapter {
     projectId: string,
     successor: WorkspaceProject | undefined,
     expectedWorkspaceRevision: number,
+    expectedStorageRevision: number,
   ): Promise<StoredWorkspace>;
   saveCustomPreset(preset: WorkspaceCustomPreset): Promise<void>;
   deleteCustomPreset(presetId: string): Promise<void>;
@@ -105,6 +111,7 @@ export interface IndexedDbAdapter {
   consumeImport(
     importId: string,
     expectedWorkspaceRevision: number,
+    prepared?: PreparedImportConsumption,
     knownTargetProjectId?: string,
   ): Promise<{ targetProjectId: string; consumed: boolean }>;
 }
@@ -540,6 +547,7 @@ export const createIndexedDbAdapter = (
         throw conflict(`Project ${project.id} storage revision changed.`);
       }
       const next: StoredProject = {
+        ...stored,
         id: project.id,
         project,
         storageRevision: stored.storageRevision + 1,
@@ -675,6 +683,7 @@ export const createIndexedDbAdapter = (
     projectId: string,
     successor: WorkspaceProject | undefined,
     expectedWorkspaceRevision: number,
+    expectedStorageRevision: number,
   ): Promise<StoredWorkspace> => {
     const activeDatabase = await getDatabase();
     const updatedAt = environment.now();
@@ -694,7 +703,10 @@ export const createIndexedDbAdapter = (
       const projectStore = workspaceTransaction.objectStore('projects');
       const target = await projectStore.get(projectId);
       const targetIndex = workspace.projectOrder.indexOf(projectId);
-      if (!target || targetIndex < 0) throw validation(`Project ${projectId} does not exist.`);
+      if (!target || target.storageRevision !== expectedStorageRevision) {
+        throw conflict(`Project ${projectId} storage revision changed.`);
+      }
+      if (targetIndex < 0) throw validation(`Project ${projectId} does not exist.`);
 
       const remainingOrder = workspace.projectOrder.filter(id => id !== projectId);
       let nextOrder: string[];
@@ -830,10 +842,10 @@ export const createIndexedDbAdapter = (
   const consumeImport = async (
     importId: string,
     expectedWorkspaceRevision: number,
+    prepared?: PreparedImportConsumption,
     knownTargetProjectId?: string,
   ): Promise<{ targetProjectId: string; consumed: boolean }> => {
     const activeDatabase = await getDatabase();
-    const updatedAt = environment.now();
     const storeNames = [
       'pendingImports',
       'projects',
@@ -859,34 +871,42 @@ export const createIndexedDbAdapter = (
         importStore.getAll(),
       ]);
       if (!storedImport) {
-        if (!knownTargetProjectId
-          || !await projectStore.get(knownTargetProjectId)
-          || !workspace.projectOrder.includes(knownTargetProjectId)) {
+        const consumedTargets = (await projectStore.getAll()).filter(record =>
+          record.consumedImportId === importId);
+        if (consumedTargets.length === 0) {
           throw validation(`Pending import ${importId} does not exist.`);
         }
+        if (consumedTargets.length > 1) {
+          throw validation(`Consumed import ${importId} provenance is ambiguous.`);
+        }
+        const consumedTarget = consumedTargets[0];
+        if ((knownTargetProjectId && knownTargetProjectId !== consumedTarget.id)
+          || !workspace.projectOrder.includes(consumedTarget.id)) {
+          throw conflict(`Consumed import ${importId} target changed.`);
+        }
         await importTransaction.done;
-        return { targetProjectId: knownTargetProjectId, consumed: false };
+        return { targetProjectId: consumedTarget.id, consumed: false };
       }
 
       const pending = storedImport.pendingImport;
-      if (knownTargetProjectId && knownTargetProjectId !== pending.targetProjectId) {
+      let storedPendingIdentity: string | undefined;
+      try {
+        storedPendingIdentity = JSON.stringify(pending);
+      } catch {
+        // Invalid changed records cannot match the independently prepared identity.
+      }
+      if (!prepared
+        || storedPendingIdentity !== prepared.pendingImportIdentity
+        || prepared.project.id !== pending.targetProjectId
+        || prepared.project.project.id !== pending.targetProjectId
+        || prepared.project.consumedImportId !== importId
+        || (knownTargetProjectId && knownTargetProjectId !== pending.targetProjectId)) {
         throw conflict(`Pending import ${importId} target changed.`);
       }
       if (await projectStore.get(pending.targetProjectId)) {
         throw validation(`Project ${pending.targetProjectId} already exists.`);
       }
-      const project: WorkspaceProject = {
-        id: pending.targetProjectId,
-        name: pending.name,
-        initialState: pending.state,
-        ...(pending.cloud ? { cloud: pending.cloud } : {}),
-      };
-      requests.push(projectStore.add({
-        id: project.id,
-        project,
-        storageRevision: 0,
-        updatedAt,
-      }));
+      requests.push(projectStore.add(prepared.project));
       requests.push(importStore.delete(importId));
       for (const record of pendingImports) {
         if (record.position <= storedImport.position) continue;
@@ -894,14 +914,14 @@ export const createIndexedDbAdapter = (
       }
       requests.push(importTransaction.objectStore('workspace').put({
         ...workspace,
-        projectOrder: [...workspace.projectOrder, project.id],
-        activeProjectId: project.id,
+        projectOrder: [...workspace.projectOrder, prepared.project.id],
+        activeProjectId: prepared.project.id,
         revision: workspace.revision + 1,
       }));
       environment.fault?.('mutation.before-complete');
       await Promise.all(requests);
       await importTransaction.done;
-      return { targetProjectId: project.id, consumed: true };
+      return { targetProjectId: prepared.project.id, consumed: true };
     } catch (error) {
       return abortTransaction(transaction, requests, error);
     }

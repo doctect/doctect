@@ -422,15 +422,33 @@ export async function prepareInitialCopy(
 const validateProjectRecords = (records: unknown): Map<string, WorkspaceProject> => {
   if (!Array.isArray(records)) throw targetError('Project records must be an array.');
   const projects = new Map<string, WorkspaceProject>();
+  const consumedImportIds = new Set<string>();
   for (const [index, rawRecord] of records.entries()) {
     if (!isPlainObject(rawRecord)) throw targetError(`Project record ${index} must be an object.`);
-    requireExactKeys(rawRecord, ['id', 'project', 'storageRevision', 'updatedAt'], [], `Project record ${index}`);
+    requireExactKeys(
+      rawRecord,
+      ['id', 'project', 'storageRevision', 'updatedAt'],
+      ['consumedImportId'],
+      `Project record ${index}`,
+    );
     if (typeof rawRecord.id !== 'string' || rawRecord.id.length === 0) {
       throw targetError(`Project record ${index} id must be a non-empty string.`);
     }
     if (projects.has(rawRecord.id)) throw targetError(`Duplicate project record id ${rawRecord.id}.`);
     requireNonNegativeInteger(rawRecord.storageRevision, `Project record ${rawRecord.id} storageRevision`);
     validateTimestamp(rawRecord.updatedAt, `Project record ${rawRecord.id} updatedAt`);
+    if (Object.hasOwn(rawRecord, 'consumedImportId')) {
+      if (typeof rawRecord.consumedImportId !== 'string'
+        || rawRecord.consumedImportId.length === 0) {
+        throw targetError(
+          `Project record ${rawRecord.id} consumedImportId must be a non-empty string.`,
+        );
+      }
+      if (consumedImportIds.has(rawRecord.consumedImportId)) {
+        throw targetError(`Duplicate consumed import id ${rawRecord.consumedImportId}.`);
+      }
+      consumedImportIds.add(rawRecord.consumedImportId);
+    }
     try {
       if (!isPlainObject(rawRecord.project)) throw new Error('Project payload must be an object.');
       validateMigratedState(rawRecord.project.initialState);

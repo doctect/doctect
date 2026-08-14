@@ -5,6 +5,7 @@ import { CURRENT_SCHEMA_VERSION } from '../../../services/migration';
 import {
   canonicalStringify,
   digestLegacySnapshot,
+  digestWorkspaceContent,
   sha256Hex,
 } from '../../../services/localWorkspace/canonical';
 import {
@@ -389,6 +390,45 @@ describe('target reconstruction', () => {
     corrupt(records);
 
     expect(() => reconstructWorkspace(records)).toThrow();
+  });
+
+  it('validates private consume provenance without exposing or hashing it publicly', async () => {
+    const prepared = await prepareInitialCopy(validSource(), deterministicEnvironment({
+      crypto: webcrypto as Crypto,
+    }));
+    const withoutProvenance = recordsFrom(prepared);
+    const withProvenance: any = recordsFrom(prepared);
+    withProvenance.projects[0].consumedImportId = 'import-1';
+
+    const publicWithout = reconstructWorkspace(withoutProvenance);
+    const publicWith = reconstructWorkspace(withProvenance);
+
+    expect(publicWith).toEqual(publicWithout);
+    expect(Object.hasOwn(publicWith.projects[0], 'consumedImportId')).toBe(false);
+    await expect(digestWorkspaceContent(publicWith, testSubtle))
+      .resolves.toBe(await digestWorkspaceContent(publicWithout, testSubtle));
+  });
+
+  it('rejects empty and duplicate private consume provenance', async () => {
+    const source = sourceFrom({
+      ...validLegacyValues(),
+      [LEGACY_KEYS.projects]: JSON.stringify([legacyProject(), secondProject()]),
+    });
+    const prepared = await prepareInitialCopy(source, deterministicEnvironment({
+      crypto: webcrypto as Crypto,
+    }));
+    const empty: any = recordsFrom(prepared);
+    empty.projects[0].consumedImportId = '';
+    expect(() => reconstructWorkspace(empty)).toThrow(/non-empty/i);
+
+    const undefinedValue: any = recordsFrom(prepared);
+    undefinedValue.projects[0].consumedImportId = undefined;
+    expect(() => reconstructWorkspace(undefinedValue)).toThrow(/non-empty/i);
+
+    const duplicate: any = recordsFrom(prepared);
+    duplicate.projects[0].consumedImportId = 'same-import';
+    duplicate.projects[1].consumedImportId = 'same-import';
+    expect(() => reconstructWorkspace(duplicate)).toThrow(/duplicate.*consume/i);
   });
 });
 

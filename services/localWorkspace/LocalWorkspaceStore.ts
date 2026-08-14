@@ -19,6 +19,7 @@ import {
   createIndexedDbAdapter,
   type IndexedDbAdapter,
   type IndexedDbInspection,
+  type PreparedImportConsumption,
 } from './indexedDbAdapter';
 import {
   LegacyCaptureError,
@@ -49,6 +50,7 @@ import {
   type LegacyBackupRecord,
   type MigrationLedger,
   type RecoveryMarker,
+  type StoredProject,
 } from './schema';
 import {
   preparePendingImport,
@@ -441,9 +443,17 @@ export const createLocalWorkspaceStore = (
     }
   };
 
+  const invalidateDurableAuthority = (): void => {
+    cachedReady = undefined;
+    durableSnapshot = undefined;
+    expectedWorkspaceRevision = undefined;
+    expectedProjectRevisions = new Map();
+    consumedImportTargets.clear();
+  };
+
   const handleAuthorityLost = (error: WorkspaceStoreError): void => {
     mutationQueue?.freeze();
-    cachedReady = undefined;
+    invalidateDurableAuthority();
     authority = error.code === 'authority-lost' ? 'frozen' : 'unavailable';
     lifecycleGeneration += 1;
     lifecycleResult = unavailable();
@@ -485,10 +495,20 @@ export const createLocalWorkspaceStore = (
     const nextProjectRevisions = new Map(
       records.projects.map(record => [record.id, record.storageRevision]),
     );
+    const nextConsumedImportTargets = new Map<string, string>();
+    for (const record of records.projects) {
+      if (record.consumedImportId) {
+        nextConsumedImportTargets.set(record.consumedImportId, record.id);
+      }
+    }
     const nextWorkspaceRevision = records.workspace.revision;
     durableSnapshot = nextSnapshot;
     expectedProjectRevisions = nextProjectRevisions;
     expectedWorkspaceRevision = nextWorkspaceRevision;
+    consumedImportTargets.clear();
+    for (const [importId, projectId] of nextConsumedImportTargets) {
+      consumedImportTargets.set(importId, projectId);
+    }
     if (updateCachedReady && cachedReady) {
       cachedReady = { ...cachedReady, snapshot: structuredClone(nextSnapshot) };
     }
@@ -911,12 +931,24 @@ export const createLocalWorkspaceStore = (
       records = await getAdapter().readWorkspaceRecords();
       snapshot = reconstructWorkspace(records);
     } catch (error) {
-      if (error instanceof WorkspaceStoreError) throw error;
-      throw new WorkspaceStoreError(
-        'Durable workspace failed post-command validation.',
-        'io',
-        error,
-      );
+      const failure = error instanceof WorkspaceStoreError
+        ? error
+        : new WorkspaceStoreError(
+            'Durable workspace failed post-command validation.',
+            'io',
+            error,
+          );
+      if (authority === 'ready') {
+        handleAuthorityLost(new WorkspaceStoreError(
+          'Durable workspace authority could not be revalidated after commit.',
+          'authority-lost',
+          failure,
+        ));
+      } else {
+        mutationQueue?.freeze();
+        invalidateDurableAuthority();
+      }
+      throw failure;
     }
     return installDurableState(records, snapshot, true);
   };
@@ -957,10 +989,40 @@ export const createLocalWorkspaceStore = (
       return readPostCommandSnapshot();
     });
 
+  const prepareImportConsumption = (
+    importId: string,
+  ): PreparedImportConsumption | undefined => {
+    const pendingImport = durableSnapshot?.pendingImports.find(item => item.id === importId);
+    if (!pendingImport) return undefined;
+    const project = validateWorkspaceProject({
+      id: pendingImport.targetProjectId,
+      name: pendingImport.name,
+      initialState: pendingImport.state,
+      ...(pendingImport.cloud ? { cloud: pendingImport.cloud } : {}),
+    }, { warningPolicy: 'reject' });
+    const updatedAt = environment.now();
+    if (!isCanonicalTimestamp(updatedAt)) {
+      throw new WorkspaceStoreError(
+        'Consumed project timestamp must be a canonical ISO timestamp.',
+        'validation',
+      );
+    }
+    const storedProject: StoredProject = {
+      id: project.id,
+      project,
+      storageRevision: 0,
+      updatedAt,
+      consumedImportId: importId,
+    };
+    return {
+      pendingImportIdentity: JSON.stringify(pendingImport),
+      project: storedProject,
+    };
+  };
+
   const executeExclusiveCommand = (
     command: Exclude<WorkspaceCommand, { type: 'save-project' }>,
   ): Promise<WorkspaceSnapshot> => runCommandOperation(async () => {
-    let consumedTarget: { importId: string; targetProjectId: string } | undefined;
     switch (command.type) {
       case 'create-and-activate-project':
         await getAdapter().createAndActivateProject(
@@ -972,10 +1034,17 @@ export const createLocalWorkspaceStore = (
         await getAdapter().activateProject(command.projectId, currentWorkspaceRevision());
         break;
       case 'close-project':
+        if (!expectedProjectRevisions.has(command.projectId)) {
+          throw new WorkspaceStoreError(
+            `Project ${command.projectId} does not exist.`,
+            'validation',
+          );
+        }
         await getAdapter().closeProject(
           command.projectId,
           command.successor,
           currentWorkspaceRevision(),
+          expectedProjectRevisions.get(command.projectId) as number,
         );
         break;
       case 'save-custom-preset':
@@ -988,18 +1057,13 @@ export const createLocalWorkspaceStore = (
         await getAdapter().stageImport(command.pendingImport as WorkspacePendingImport);
         break;
       case 'consume-import': {
-        const knownTargetProjectId = consumedImportTargets.get(command.importId)
-          ?? durableSnapshot?.pendingImports.find(item => item.id === command.importId)
-            ?.targetProjectId;
-        const result = await getAdapter().consumeImport(
+        const knownTargetProjectId = consumedImportTargets.get(command.importId);
+        await getAdapter().consumeImport(
           command.importId,
           currentWorkspaceRevision(),
+          prepareImportConsumption(command.importId),
           knownTargetProjectId,
         );
-        consumedTarget = {
-          importId: command.importId,
-          targetProjectId: result.targetProjectId,
-        };
         break;
       }
       case 'recover-legacy-as-copies':
@@ -1010,9 +1074,6 @@ export const createLocalWorkspaceStore = (
     }
 
     const snapshot = await readPostCommandSnapshot();
-    if (consumedTarget) {
-      consumedImportTargets.set(consumedTarget.importId, consumedTarget.targetProjectId);
-    }
     return snapshot;
   });
 
@@ -1027,6 +1088,8 @@ export const createLocalWorkspaceStore = (
       if (cachedReady) return Promise.resolve(cachedReady);
       if (inFlight) return inFlight;
 
+      const priorQueue = mutationQueue;
+      priorQueue?.freeze();
       authority = 'bootstrapping';
       const emitted = new Set<WorkspaceBootstrapPhase>();
       const emit = (phase: WorkspaceBootstrapPhase): void => {
@@ -1044,7 +1107,9 @@ export const createLocalWorkspaceStore = (
 
       const startingLifecycleGeneration = lifecycleGeneration;
       let operation!: Promise<WorkspaceBootstrapResult>;
-      operation = Promise.resolve().then(() => bootstrapOperation(emit)).then(result => {
+      operation = Promise.resolve()
+        .then(() => priorQueue?.drain())
+        .then(() => bootstrapOperation(emit)).then(result => {
         const effectiveResult = lifecycleGeneration !== startingLifecycleGeneration
           && lifecycleResult
           ? lifecycleResult

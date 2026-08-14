@@ -31,8 +31,6 @@ import {
 } from '../../../services/localWorkspace/indexedDbAdapter';
 import {
   WORKSPACE_DB_NAME,
-  type MigrationLedger,
-  type StoredWorkspace,
 } from '../../../services/localWorkspace/schema';
 import {
   LEGACY_KEYS,
@@ -49,6 +47,14 @@ import {
 const originalCrypto = Object.getOwnPropertyDescriptor(globalThis, 'crypto');
 const TEST_NOW = '2026-08-14T17:00:00.000Z';
 const READ_ALL_SCOPE = ['projects', 'workspace', 'presets', 'pendingImports'] as const;
+const ALL_STORES = [
+  'projects',
+  'workspace',
+  'presets',
+  'pendingImports',
+  'migrationLedger',
+  'legacyBackup',
+] as const;
 
 beforeAll(() => Object.defineProperty(globalThis, 'crypto', {
   configurable: true,
@@ -162,6 +168,21 @@ const transactionCompletionHold = (scope: readonly string[]) => {
   };
 };
 
+const rebootstrapReadGuard = () => {
+  let armed = false;
+  let postCommandReadStarted = false;
+  return {
+    arm: () => { armed = true; },
+    hook(stores: string[], mode: IDBTransactionMode) {
+      if (!armed || mode !== 'readonly') return;
+      if (sameStores(stores, READ_ALL_SCOPE)) postCommandReadStarted = true;
+      if (sameStores(stores, ALL_STORES) && !postCommandReadStarted) {
+        throw new Error('Bootstrap read overlapped an undrained mutation queue.');
+      }
+    },
+  };
+};
+
 const requestResult = <T>(request: IDBRequest<T>): Promise<T> =>
   new Promise((resolve, reject) => {
     request.addEventListener('success', () => resolve(request.result), { once: true });
@@ -185,8 +206,8 @@ const transactionDone = (transaction: IDBTransaction): Promise<void> =>
 
 const putRaw = async (
   indexedDB: IDBFactory,
-  storeName: 'migrationLedger' | 'workspace',
-  value: MigrationLedger | StoredWorkspace,
+  storeName: 'migrationLedger' | 'workspace' | 'projects' | 'pendingImports',
+  value: unknown,
 ): Promise<void> => {
   const database = await requestResult(indexedDB.open(WORKSPACE_DB_NAME));
   const transaction = database.transaction(storeName, 'readwrite');
@@ -481,6 +502,60 @@ describe('project save queues', () => {
     expect((await inspect(harness)).projects.find(record => record.id === 'project-a')?.project.name)
       .toBe('Accepted');
   });
+
+  it('drains a queued save before rebootstrap reads and installs durable state', async () => {
+    const guard = rebootstrapReadGuard();
+    const { store, harness } = await readyStore({ hook: guard.hook });
+    useQueueTimers();
+    guard.arm();
+
+    const save = store.commit({ type: 'save-project', project: projectNamed('Before reload') });
+    harness.dispatchStorage(LEGACY_KEYS.projects);
+    const rebootstrap = store.bootstrap();
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    await save;
+    await expect(rebootstrap).resolves.toMatchObject({
+      status: 'ready',
+      snapshot: {
+        projects: expect.arrayContaining([
+          expect.objectContaining({ id: 'project-a', name: 'Before reload' }),
+        ]),
+      },
+    });
+  });
+
+  it('drains an in-flight save before rebootstrap starts a read transaction', async () => {
+    const hold = transactionCompletionHold(['projects', 'migrationLedger']);
+    const guard = rebootstrapReadGuard();
+    const hook: TransactionHook = (stores, mode, transaction) => {
+      hold.hook(stores, mode, transaction);
+      guard.hook(stores, mode);
+    };
+    const { store, harness } = await readyStore({ hook });
+    useQueueTimers();
+    hold.arm();
+    guard.arm();
+
+    const save = store.commit({ type: 'save-project', project: projectNamed('In flight') });
+    await vi.advanceTimersByTimeAsync(1_000);
+    await hold.started;
+    harness.dispatchStorage(LEGACY_KEYS.projects);
+    const rebootstrap = store.bootstrap();
+    await vi.advanceTimersByTimeAsync(0);
+    hold.release();
+
+    await save;
+    await expect(rebootstrap).resolves.toMatchObject({
+      status: 'ready',
+      snapshot: {
+        projects: expect.arrayContaining([
+          expect.objectContaining({ id: 'project-a', name: 'In flight' }),
+        ]),
+      },
+    });
+  });
 });
 
 describe('project structure commands', () => {
@@ -590,6 +665,28 @@ describe('project structure commands', () => {
     await vi.advanceTimersByTimeAsync(1_000);
     expect((await inspect(harness)).projects.map(record => record.id)).toEqual(['project-b']);
   });
+
+  it('rejects close when another same-version tab saved the target project', async () => {
+    const { store, harness } = await readyStore({ values: twoProjectValues() });
+    const other = createIndexedDbAdapter({ indexedDB: harness.indexedDB, now: () => TEST_NOW });
+    await other.saveProject(projectNamed('Saved elsewhere'), 0);
+
+    await expect(store.commit({
+      type: 'close-project',
+      projectId: 'project-a',
+    })).rejects.toMatchObject({ code: 'conflict' });
+
+    const stored = await inspect(harness);
+    expect(stored.projects.find(record => record.id === 'project-a')).toMatchObject({
+      project: { name: 'Saved elsewhere' },
+      storageRevision: 1,
+    });
+    expect(stored.workspace[0]).toMatchObject({
+      projectOrder: ['project-a', 'project-b'],
+      revision: 0,
+    });
+    other.close();
+  });
 });
 
 describe('preset and import commands', () => {
@@ -678,6 +775,123 @@ describe('preset and import commands', () => {
     expect(stored.projects.filter(record => record.id === 'target-1')).toHaveLength(1);
     expect(stored.pendingImports.some(record => record.id === 'import-1')).toBe(false);
     expect(stored.workspace[0].revision).toBe(1);
+  });
+
+  it('persists private consume provenance across a post-commit crash and reload retry', async () => {
+    let failPostCommitRead = false;
+    const hook: TransactionHook = (stores, mode) => {
+      if (failPostCommitRead && mode === 'readonly' && sameStores(stores, READ_ALL_SCOPE)) {
+        failPostCommitRead = false;
+        throw new Error('Injected post-commit read failure.');
+      }
+    };
+    const { store, harness } = await readyStore({ hook });
+    await store.commit({
+      type: 'stage-import',
+      pendingImport: pendingImport('restart-import', 'restart-target'),
+    });
+    failPostCommitRead = true;
+
+    await expect(store.commit({
+      type: 'consume-import',
+      importId: 'restart-import',
+    })).rejects.toMatchObject({ code: 'io' });
+
+    const committed = (await inspect(harness)).projects.find(record =>
+      record.id === 'restart-target') as {
+        consumedImportId?: string;
+        project: WorkspaceProject;
+      };
+    expect(committed.consumedImportId).toBe('restart-import');
+    expect(Object.hasOwn(committed.project, 'consumedImportId')).toBe(false);
+
+    const reloaded = createLocalWorkspaceStore(harness.environment);
+    await expect(reloaded.bootstrap()).resolves.toMatchObject({ status: 'ready' });
+    const retried = await reloaded.commit({
+      type: 'consume-import',
+      importId: 'restart-import',
+    });
+    expect(retried.projects.filter(project => project.id === 'restart-target')).toHaveLength(1);
+    expect(Object.hasOwn(
+      retried.projects.find(project => project.id === 'restart-target')!,
+      'consumedImportId',
+    )).toBe(false);
+  });
+
+  it('preserves private consume provenance on later public project saves', async () => {
+    const { store, harness } = await readyStore();
+    await store.commit({
+      type: 'stage-import',
+      pendingImport: pendingImport('saved-import', 'saved-target'),
+    });
+    const consumed = await store.commit({ type: 'consume-import', importId: 'saved-import' });
+    const target = consumed.projects.find(project => project.id === 'saved-target')!;
+    useQueueTimers();
+
+    const save = store.commit({
+      type: 'save-project',
+      project: { ...target, name: 'Saved after consume' },
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    await save;
+
+    expect((await inspect(harness)).projects.find(record => record.id === 'saved-target'))
+      .toMatchObject({
+        consumedImportId: 'saved-import',
+        project: { name: 'Saved after consume' },
+        storageRevision: 1,
+      });
+  });
+
+  it('rejects consume when cached pending identity changed before the transaction', async () => {
+    const { store, harness } = await readyStore();
+    await store.commit({
+      type: 'stage-import',
+      pendingImport: pendingImport('changed-import', 'changed-target'),
+    });
+    const storedImport = (await inspect(harness)).pendingImports.find(record =>
+      record.id === 'changed-import')!;
+    await putRaw(harness.indexedDB, 'pendingImports', {
+      ...storedImport,
+      pendingImport: { ...storedImport.pendingImport, name: 'Changed elsewhere' },
+    });
+
+    await expect(store.commit({
+      type: 'consume-import',
+      importId: 'changed-import',
+    })).rejects.toMatchObject({ code: 'conflict' });
+
+    const stored = await inspect(harness);
+    expect(stored.pendingImports.find(record => record.id === 'changed-import'))
+      .toMatchObject({ pendingImport: { name: 'Changed elsewhere' } });
+    expect(stored.projects.some(record => record.id === 'changed-target')).toBe(false);
+  });
+
+  it('prepares and validates the consumed target before its write transaction starts', async () => {
+    let consumeTransactionStarted = false;
+    const hook: TransactionHook = (stores, mode) => {
+      if (mode === 'readwrite' && sameStores(
+        stores,
+        ['pendingImports', 'projects', 'workspace', 'migrationLedger'],
+      )) {
+        consumeTransactionStarted = true;
+      }
+    };
+    const { store } = await readyStore({ hook });
+    await store.commit({
+      type: 'stage-import',
+      pendingImport: pendingImport('prepared-import', 'prepared-target'),
+    });
+    let preparedBeforeTransaction = false;
+    vi.mocked(console.log).mockImplementation(message => {
+      if (String(message).includes('[Migration] Migrating') && !consumeTransactionStarted) {
+        preparedBeforeTransaction = true;
+      }
+    });
+
+    await store.commit({ type: 'consume-import', importId: 'prepared-import' });
+
+    expect(preparedBeforeTransaction).toBe(true);
   });
 
   it('compacts later pending-import positions when consuming from the middle', async () => {
@@ -796,6 +1010,41 @@ describe('failure handling and private revisions', () => {
       projectId: 'project-a',
     })).rejects.toMatchObject({ code: 'authority-lost' });
     expect(writeTransactions(harness.records)).toHaveLength(writesAfterLoss);
+  });
+
+  it('freezes and invalidates authority when post-commit reconstruction cannot run', async () => {
+    let failPostCommitRead = false;
+    const hook: TransactionHook = (stores, mode) => {
+      if (failPostCommitRead && mode === 'readonly' && sameStores(stores, READ_ALL_SCOPE)) {
+        failPostCommitRead = false;
+        throw new Error('Injected post-commit read failure.');
+      }
+    };
+    const { store } = await readyStore({ hook });
+    const onAuthorityLost = vi.fn();
+    await store.bootstrap({ onAuthorityLost });
+    useQueueTimers();
+    failPostCommitRead = true;
+
+    const save = store.commit({ type: 'save-project', project: projectNamed('Committed') });
+    await vi.advanceTimersByTimeAsync(1_000);
+    await expect(save).rejects.toMatchObject({ code: 'io' });
+
+    expect(onAuthorityLost).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'unavailable',
+    }));
+    await expect(store.commit({
+      type: 'activate-project',
+      projectId: 'project-a',
+    })).rejects.toMatchObject({ code: 'authority-lost' });
+    await expect(store.bootstrap()).resolves.toMatchObject({
+      status: 'ready',
+      snapshot: {
+        projects: expect.arrayContaining([
+          expect.objectContaining({ id: 'project-a', name: 'Committed' }),
+        ]),
+      },
+    });
   });
 });
 
