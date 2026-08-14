@@ -14,7 +14,7 @@ export interface ProjectPreparationOptions {
 }
 
 export interface CustomPresetValidationOptions extends ProjectPreparationOptions {
-  existingIds?: ReadonlySet<string>;
+  existingIds: ReadonlySet<string>;
 }
 
 const DEFAULT_PREPARATION_OPTIONS: ProjectPreparationOptions = { warningPolicy: 'reject' };
@@ -128,11 +128,14 @@ export function validateWorkspaceProject(
 
 export function validateCustomPreset(
   raw: unknown,
-  options: CustomPresetValidationOptions = DEFAULT_PREPARATION_OPTIONS,
+  options: CustomPresetValidationOptions,
 ): WorkspaceCustomPreset {
+  if (!options?.existingIds || typeof options.existingIds.has !== 'function') {
+    throw new Error('Custom preset validation requires existingIds uniqueness context.');
+  }
   const preset = cloneJsonObject(raw, 'Custom preset');
   requireNonEmptyString(preset.id, 'Custom preset id');
-  if (options.existingIds?.has(preset.id)) {
+  if (options.existingIds.has(preset.id)) {
     throw new Error(`Duplicate custom preset id: ${preset.id}.`);
   }
   if (typeof preset.title !== 'string') throw new Error('Custom preset title must be a string.');

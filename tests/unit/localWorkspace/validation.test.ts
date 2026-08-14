@@ -21,6 +21,10 @@ import {
 } from '../../helpers/localWorkspaceFixtures';
 
 const rejectWarnings = { warningPolicy: 'reject' as const };
+const noExistingPresetIds = () => ({
+  ...rejectWarnings,
+  existingIds: new Set<string>(),
+});
 
 const project = () => ({
   id: 'project-1',
@@ -191,11 +195,16 @@ describe('workspace wrapper validation', () => {
 
   it('validates custom presets and preserves unknown JSON fields', () => {
     const input = preset();
-    const validated = validateCustomPreset(input, rejectWarnings);
+    const validated = validateCustomPreset(input, noExistingPresetIds());
 
     expect(validated).toEqual(input);
     expect(validated.title).toBe('');
     expect(validated.retained).toEqual({ source: 'legacy' });
+  });
+
+  it('requires explicit preset-ID uniqueness context', () => {
+    // @ts-expect-error Preset validation must be fail-closed when uniqueness context is omitted.
+    expect(() => validateCustomPreset(preset())).toThrow(/existingIds|uniqueness context/i);
   });
 
   it('rejects duplicate and malformed custom-preset IDs', () => {
@@ -203,7 +212,7 @@ describe('workspace wrapper validation', () => {
       ...rejectWarnings,
       existingIds: new Set(['preset-1']),
     })).toThrow(/duplicate/i);
-    expect(() => validateCustomPreset({ ...preset(), id: '' }, rejectWarnings)).toThrow(/id/i);
+    expect(() => validateCustomPreset({ ...preset(), id: '' }, noExistingPresetIds())).toThrow(/id/i);
   });
 
   it.each([
@@ -212,7 +221,7 @@ describe('workspace wrapper validation', () => {
     ['color', { color: 42 }],
     ['custom marker', { isCustom: false }],
   ])('rejects malformed custom-preset %s', (_label, override) => {
-    expect(() => validateCustomPreset({ ...preset(), ...override }, rejectWarnings)).toThrow();
+    expect(() => validateCustomPreset({ ...preset(), ...override }, noExistingPresetIds())).toThrow();
   });
 });
 
