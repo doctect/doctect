@@ -165,16 +165,18 @@ const openWithFactory = <T>(indexedDB: IDBFactory, operation: () => T): T => {
 };
 
 const abortTransaction = async (
-  transaction: WriteTransaction,
+  transaction: WriteTransaction | undefined,
   requests: Promise<unknown>[],
   error: unknown,
 ): Promise<never> => {
-  try {
-    transaction.abort();
-  } catch {
-    // Transaction may already have aborted because a request failed.
+  if (transaction) {
+    try {
+      transaction.abort();
+    } catch {
+      // Transaction may already have aborted because a request failed.
+    }
+    await Promise.allSettled([...requests, transaction.done]);
   }
-  await Promise.allSettled([...requests, transaction.done]);
   throw mappedError(error);
 };
 
@@ -193,6 +195,8 @@ export const createIndexedDbAdapter = (
 ): IndexedDbAdapter => {
   let database: IDBPDatabase<LocalWorkspaceDatabase> | undefined;
   let opening: Promise<void> | undefined;
+  let openingGeneration: number | undefined;
+  let openGeneration = 0;
   let authorityError: WorkspaceStoreError | undefined;
 
   const reportAuthorityLoss = (
@@ -207,7 +211,7 @@ export const createIndexedDbAdapter = (
     environment.onAuthorityLost?.(error);
   };
 
-  const openConnection = async (): Promise<void> => {
+  const openConnection = async (generation: number): Promise<void> => {
     if (authorityError) throw authorityError;
 
     let openedConnection: IDBPDatabase<LocalWorkspaceDatabase> | undefined;
@@ -265,7 +269,12 @@ export const createIndexedDbAdapter = (
     });
 
     try {
-      database = await Promise.race([guardedOpen, blocked]);
+      const opened = await Promise.race([guardedOpen, blocked]);
+      if (generation !== openGeneration) {
+        opened.close();
+        return;
+      }
+      database = opened;
     } catch (error) {
       throw mappedError(error, 'unavailable');
     }
@@ -275,8 +284,13 @@ export const createIndexedDbAdapter = (
     if (authorityError) return Promise.reject(authorityError);
     if (database) return Promise.resolve();
     if (!opening) {
-      opening = openConnection().finally(() => {
-        opening = undefined;
+      const generation = openGeneration;
+      openingGeneration = generation;
+      opening = openConnection(generation).finally(() => {
+        if (openingGeneration === generation) {
+          opening = undefined;
+          openingGeneration = undefined;
+        }
       });
     }
     return opening;
@@ -347,9 +361,10 @@ export const createIndexedDbAdapter = (
       throw mappedError(error);
     }
 
-    const transaction = activeDatabase.transaction(STORE_NAMES, 'readwrite');
+    let transaction: WriteTransaction | undefined;
     const requests: Promise<unknown>[] = [];
     try {
+      transaction = activeDatabase.transaction(STORE_NAMES, 'readwrite');
       const ledgerRequest = transaction.objectStore('migrationLedger').get(WORKSPACE_MIGRATION_ID);
       const countRequests = STORE_NAMES.map(storeName =>
         transaction.objectStore(storeName).count());
@@ -442,10 +457,12 @@ export const createIndexedDbAdapter = (
   ): Promise<MigrationLedger> => {
     const activeDatabase = await getDatabase();
     const verifiedAt = environment.now();
-    const transaction = activeDatabase.transaction('migrationLedger', 'readwrite');
+    let transaction: WriteTransaction | undefined;
     const requests: Promise<unknown>[] = [];
     try {
-      const ledger = await transaction.store.get(WORKSPACE_MIGRATION_ID);
+      const ledgerTransaction = activeDatabase.transaction('migrationLedger', 'readwrite');
+      transaction = ledgerTransaction as WriteTransaction;
+      const ledger = await ledgerTransaction.store.get(WORKSPACE_MIGRATION_ID);
       if (!recognizedLedger(ledger)
         || ledger.state !== 'copied'
         || ledger.ledgerRevision !== expected.ledgerRevision
@@ -459,13 +476,13 @@ export const createIndexedDbAdapter = (
         ledgerRevision: ledger.ledgerRevision + 1,
         verifiedAt,
       };
-      requests.push(transaction.store.put(verifiedLedger));
+      requests.push(ledgerTransaction.store.put(verifiedLedger));
       environment.fault?.('mutation.before-complete');
       await Promise.all(requests);
-      await transaction.done;
+      await ledgerTransaction.done;
       return verifiedLedger;
     } catch (error) {
-      return abortTransaction(transaction as WriteTransaction, requests, error);
+      return abortTransaction(transaction, requests, error);
     }
   };
 
@@ -476,12 +493,15 @@ export const createIndexedDbAdapter = (
     const activeDatabase = await getDatabase();
     const updatedAt = environment.now();
     const storeNames = ['migrationLedger', 'projects'] as const;
-    const transaction = activeDatabase.transaction(storeNames, 'readwrite');
+    let transaction: WriteTransaction | undefined;
     const requests: Promise<unknown>[] = [];
     try {
-      const ledger = await transaction.objectStore('migrationLedger').get(WORKSPACE_MIGRATION_ID);
+      const projectTransaction = activeDatabase.transaction(storeNames, 'readwrite');
+      transaction = projectTransaction as WriteTransaction;
+      const ledger = await projectTransaction.objectStore('migrationLedger')
+        .get(WORKSPACE_MIGRATION_ID);
       requireVerifiedAuthority(ledger);
-      const stored = await transaction.objectStore('projects').get(project.id);
+      const stored = await projectTransaction.objectStore('projects').get(project.id);
       if (!stored || stored.storageRevision !== expectedStorageRevision) {
         throw conflict(`Project ${project.id} storage revision changed.`);
       }
@@ -491,13 +511,13 @@ export const createIndexedDbAdapter = (
         storageRevision: stored.storageRevision + 1,
         updatedAt,
       };
-      requests.push(transaction.objectStore('projects').put(next));
+      requests.push(projectTransaction.objectStore('projects').put(next));
       environment.fault?.('mutation.before-complete');
       await Promise.all(requests);
-      await transaction.done;
+      await projectTransaction.done;
       return next;
     } catch (error) {
-      return abortTransaction(transaction as WriteTransaction, requests, error);
+      return abortTransaction(transaction, requests, error);
     }
   };
 
@@ -507,12 +527,15 @@ export const createIndexedDbAdapter = (
   ): Promise<StoredWorkspace> => {
     const activeDatabase = await getDatabase();
     const storeNames = ['migrationLedger', 'workspace'] as const;
-    const transaction = activeDatabase.transaction(storeNames, 'readwrite');
+    let transaction: WriteTransaction | undefined;
     const requests: Promise<unknown>[] = [];
     try {
-      const ledger = await transaction.objectStore('migrationLedger').get(WORKSPACE_MIGRATION_ID);
+      const workspaceTransaction = activeDatabase.transaction(storeNames, 'readwrite');
+      transaction = workspaceTransaction as WriteTransaction;
+      const ledger = await workspaceTransaction.objectStore('migrationLedger')
+        .get(WORKSPACE_MIGRATION_ID);
       requireVerifiedAuthority(ledger);
-      const stored = await transaction.objectStore('workspace').get('current');
+      const stored = await workspaceTransaction.objectStore('workspace').get('current');
       if (!stored || stored.revision !== expectedRevision) {
         throw conflict('Workspace revision changed.');
       }
@@ -521,19 +544,22 @@ export const createIndexedDbAdapter = (
         id: 'current',
         revision: stored.revision + 1,
       };
-      requests.push(transaction.objectStore('workspace').put(next));
+      requests.push(workspaceTransaction.objectStore('workspace').put(next));
       environment.fault?.('mutation.before-complete');
       await Promise.all(requests);
-      await transaction.done;
+      await workspaceTransaction.done;
       return next;
     } catch (error) {
-      return abortTransaction(transaction as WriteTransaction, requests, error);
+      return abortTransaction(transaction, requests, error);
     }
   };
 
   return {
     open,
     close() {
+      openGeneration += 1;
+      opening = undefined;
+      openingGeneration = undefined;
       database?.close();
       database = undefined;
     },

@@ -248,6 +248,17 @@ const changedProject = (project: WorkspaceProject, name: string): WorkspaceProje
   name,
 });
 
+const WRITE_OPERATIONS = [
+  ['initial copy', (adapter: IndexedDbAdapter, copy: PreparedInitialCopy) =>
+    adapter.writeInitialCopy(copy)],
+  ['ledger verification', (adapter: IndexedDbAdapter, copy: PreparedInitialCopy) =>
+    adapter.markVerified(verificationExpectation(copy))],
+  ['project save', (adapter: IndexedDbAdapter, copy: PreparedInitialCopy) =>
+    adapter.saveProject(copy.projects[0].project, 0)],
+  ['workspace save', (adapter: IndexedDbAdapter, copy: PreparedInitialCopy) =>
+    adapter.saveWorkspace(copy.workspace, 0)],
+] as const;
+
 describe('IndexedDB schema', () => {
   it('creates exactly six stores and no indexes', async () => {
     const adapter = createTestAdapter();
@@ -345,6 +356,68 @@ describe('open lifecycle', () => {
     );
     await expect(adapter.inspect()).rejects.toMatchObject({ code: 'authority-lost' });
     upgraded.close();
+  });
+
+  it('invalidates a pending open on close and lets a new open become active', async () => {
+    const indexedDB = new IDBFactory();
+    const tracked = trackFactory(indexedDB);
+    const close = vi.spyOn(FakeIDBDatabase.prototype, 'close');
+    const adapter = createTestAdapter({ indexedDB });
+
+    const staleOpen = adapter.open();
+    adapter.close();
+    const currentOpen = adapter.open();
+    await Promise.all([staleOpen, currentOpen]);
+
+    expect(tracked.opened).toHaveLength(2);
+    const [staleDatabase] = await Promise.all(tracked.opened);
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(close.mock.instances[0]).toBe(staleDatabase);
+    await expect(adapter.describeSchema()).resolves.toEqual({
+      projects: [],
+      workspace: [],
+      presets: [],
+      pendingImports: [],
+      migrationLedger: [],
+      legacyBackup: [],
+    });
+  });
+});
+
+describe('write transaction startup', () => {
+  it.each(WRITE_OPERATIONS)('maps closed-connection failure for %s', async (_label, write) => {
+    const indexedDB = new IDBFactory();
+    const tracked = trackFactory(indexedDB);
+    const adapter = createTestAdapter({ indexedDB });
+    await adapter.open();
+    const rawDatabase = await tracked.opened[0];
+    rawDatabase.close();
+
+    await expect(write(adapter, preparedCopy())).rejects.toMatchObject({
+      name: 'WorkspaceStoreError',
+      code: 'unavailable',
+      cause: expect.objectContaining({ name: 'InvalidStateError' }),
+    });
+  });
+
+  it('maps a missing-store transaction failure without trying to abort', async () => {
+    const indexedDB = new IDBFactory();
+    const tracked = trackFactory(indexedDB);
+    const setupAdapter = createTestAdapter({ indexedDB });
+    await setupAdapter.open();
+    const databaseName = tracked.names[0];
+    setupAdapter.close();
+    await requestResult(indexedDB.deleteDatabase(databaseName));
+    const malformedDatabase = await openRaw(indexedDB, databaseName, 1);
+    malformedDatabase.close();
+    const adapter = createTestAdapter({ indexedDB });
+    await adapter.open();
+
+    await expect(adapter.writeInitialCopy(preparedCopy())).rejects.toMatchObject({
+      name: 'WorkspaceStoreError',
+      code: 'unavailable',
+      cause: expect.objectContaining({ name: 'NotFoundError' }),
+    });
   });
 });
 
