@@ -18,12 +18,10 @@ import {
 import { downloadJson } from '../services/browserDownload';
 import { createGeneratedAppState } from '../services/generatedProjectState';
 import { trackEvent } from '../services/analytics';
-import { migrateState } from '../services/migration';
 import {
   createBlankProject,
   createNotebookProject,
   createPlannerProject,
-  getCustomPresets,
   type ProjectPreset,
 } from '../services/presets';
 import type { GeneratorSourceDraft } from '../services/generatorVisualPreview';
@@ -44,6 +42,7 @@ export interface EditorPageProps {
 }
 
 const newProjectId = (): string => `proj_${crypto.randomUUID()}`;
+const newCustomPresetId = (): string => `custom_${crypto.randomUUID()}`;
 
 const projectJsonFilename = (project: WorkspaceProject): string => {
   const safeName = project.name.trim().replace(/\s+/g, '_') || 'Project';
@@ -70,8 +69,10 @@ export function EditorPage({
   const [loadWarnings, setLoadWarnings] = useState(initialWarnings);
   const [commandError, setCommandError] = useState<string | null>(null);
   const [showNewProjectModal, setShowNewProjectModal] = useState(false);
+  const [presetCommandBusy, setPresetCommandBusy] = useState(false);
   const [closingProjectId, setClosingProjectId] = useState<string | null>(null);
   const editorShellRef = useRef<HTMLDivElement>(null);
+  const presetCommandBusyRef = useRef(false);
   const blocker = useBlocker(hasUnsavedWork);
   const navigationBlocked = blocker.state === 'blocked';
 
@@ -106,6 +107,7 @@ export function EditorPage({
   };
 
   const handleCreateProject = async (preset: ProjectPreset): Promise<void> => {
+    if (presetCommandBusyRef.current) return;
     let initialState: AppState;
     let name: string;
 
@@ -119,22 +121,66 @@ export function EditorPage({
       initialState = createBlankProject();
       name = 'Blank Project';
     } else {
-      const customPreset = getCustomPresets().find(candidate => candidate.id === preset);
-      if (!customPreset?.initialState) {
-        setCommandError(`Preset '${preset}' was not found. No project was created.`);
+      const customPreset = workspace.customPresets.find(candidate => candidate.id === preset);
+      if (!customPreset) {
+        setCommandError('This preset is no longer available. Nothing was created.');
         return;
       }
-      initialState = migrateState(structuredClone(customPreset.initialState));
+      initialState = structuredClone(customPreset.initialState);
       name = customPreset.title;
     }
 
-    const created = await commitAndApply({
-      type: 'create-and-activate-project',
-      project: { id: newProjectId(), name, initialState },
-    });
-    if (!created) return;
-    setShowNewProjectModal(false);
-    trackEvent('project_created', { preset, baseName: name });
+    presetCommandBusyRef.current = true;
+    setPresetCommandBusy(true);
+    try {
+      const created = await commitAndApply({
+        type: 'create-and-activate-project',
+        project: { id: newProjectId(), name, initialState },
+      });
+      if (!created) return;
+      setShowNewProjectModal(false);
+      trackEvent('project_created', { preset, baseName: name });
+    } finally {
+      presetCommandBusyRef.current = false;
+      setPresetCommandBusy(false);
+    }
+  };
+
+  const handleSaveCustomPreset = async (
+    title: string,
+    desc: string,
+    initialState: AppState,
+  ): Promise<boolean> => {
+    try {
+      await commitStructural({
+        type: 'save-custom-preset',
+        preset: {
+          id: newCustomPresetId(),
+          title,
+          desc,
+          isCustom: true,
+          initialState: structuredClone(initialState),
+        },
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const handleDeleteCustomPreset = async (presetId: string): Promise<void> => {
+    if (presetCommandBusyRef.current) return;
+    presetCommandBusyRef.current = true;
+    setPresetCommandBusy(true);
+    setCommandError(null);
+    try {
+      await commitStructural({ type: 'delete-custom-preset', presetId });
+    } catch {
+      setCommandError('Preset was not deleted. Nothing was changed.');
+    } finally {
+      presetCommandBusyRef.current = false;
+      setPresetCommandBusy(false);
+    }
   };
 
   const handleActivateProject = async (projectId: string): Promise<void> => {
@@ -250,7 +296,10 @@ export function EditorPage({
             activeProjectId={activeProjectId}
             onSelect={projectId => { void handleActivateProject(projectId); }}
             onClose={setClosingProjectId}
-            onNew={() => setShowNewProjectModal(true)}
+            onNew={() => {
+              setCommandError(null);
+              setShowNewProjectModal(true);
+            }}
           />
         </div>
 
@@ -317,7 +366,7 @@ export function EditorPage({
         </div>
       )}
 
-      {commandError && (
+      {commandError && !showNewProjectModal && (
         <div role="alert" className="flex items-center gap-2 border-b border-red-200 bg-red-50 px-4 py-2 text-xs text-red-800">
           <AlertTriangle size={15} className="shrink-0" />
           <span className="min-w-0 flex-1 break-words">{commandError}</span>
@@ -355,6 +404,7 @@ export function EditorPage({
               onCreateGeneratedProject={(name, generated, source) => (
                 handleCreateGeneratedProject(project.id, name, generated, source)
               )}
+              onSaveCustomPreset={handleSaveCustomPreset}
             />
           </div>
         ))}
@@ -362,8 +412,16 @@ export function EditorPage({
 
       <NewProjectModal
         isOpen={showNewProjectModal}
-        onClose={() => setShowNewProjectModal(false)}
-        onSelectPreset={preset => { void handleCreateProject(preset); }}
+        customPresets={workspace.customPresets}
+        busy={presetCommandBusy}
+        error={commandError}
+        onClose={() => {
+          if (presetCommandBusyRef.current) return;
+          setShowNewProjectModal(false);
+          setCommandError(null);
+        }}
+        onSelectPreset={handleCreateProject}
+        onDeleteCustomPreset={handleDeleteCustomPreset}
       />
 
       <CloseProjectConfirmModal

@@ -1,9 +1,9 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
+import * as presets from '../../services/presets';
 import {
   createBlankProject,
   createNotebookProject,
   createPlannerProject,
-  getCustomPresets,
   loadPreset,
 } from '../../services/presets';
 
@@ -18,7 +18,11 @@ const page = () => ({ id: 'page', name: 'Page', width: 500, height: 700, layers,
 const variants = () => ({ default: { id: 'default', name: 'Default', templates: { page: page() } } });
 
 describe('schema v11 presets', () => {
-  beforeEach(() => localStorage.clear());
+  it('exposes only pure preset loading, factories, and presentation contracts', () => {
+    expect(presets).not.toHaveProperty('saveCustomPreset');
+    expect(presets).not.toHaveProperty('deleteCustomPreset');
+    expect(presets).not.toHaveProperty('getCustomPresets');
+  });
 
   it.each([
     ['blank', createBlankProject],
@@ -89,20 +93,23 @@ describe('schema v11 presets', () => {
     expect(source).toEqual(before);
   });
 
-  it('isolates undeclared output node mutations from source and module presets', () => {
+  it('isolates undeclared output node mutations from source and every module preset use', () => {
     const source = { nodes: structuredClone(nodes), rootId: 'root', templates: { page: page() } };
     const state = loadPreset(source);
 
     state.nodes.root.title = 'Changed output';
     expect(source.nodes.root.title).toBe('Root');
 
-    const firstBlank = createBlankProject();
-    const moduleTitle = firstBlank.nodes.root.title;
-    firstBlank.nodes.root.title = 'Changed blank output';
-    const secondBlank = createBlankProject();
+    for (const createProject of [createBlankProject, createNotebookProject, createPlannerProject]) {
+      const first = createProject();
+      const moduleTitle = first.nodes[first.rootId].title;
+      first.nodes[first.rootId].title = 'Changed output';
+      const second = createProject();
 
-    expect(secondBlank.nodes).not.toBe(firstBlank.nodes);
-    expect(secondBlank.nodes.root.title).toBe(moduleTitle);
+      expect(second).not.toBe(first);
+      expect(second.nodes).not.toBe(first.nodes);
+      expect(second.nodes[second.rootId].title).toBe(moduleTitle);
+    }
   });
 
   it('uses legacy rendering defaults for presets explicitly declared as v9', () => {
@@ -119,53 +126,4 @@ describe('schema v11 presets', () => {
     expect(output[1]).toMatchObject({ type: 'grid', textOverflow: 'ellipsis', textWrap: false });
   });
 
-  it('preserves a custom project and warns when malformed generator metadata is detached', () => {
-    localStorage.setItem('hype_custom_presets', JSON.stringify([{
-      id: 'custom-1',
-      title: 'Custom',
-      desc: 'Saved project',
-      initialState: {
-        schemaVersion: 8,
-        nodes: { root: { id: 'root', parentId: null, type: 'page', title: 'Root', data: {}, children: [] } },
-        rootId: 'root',
-        variants: {},
-        activeVariantId: 'default',
-        generator: { formatVersion: 1, templateScript: null, hierarchyScript: '', generatedAt: '2026-07-13T12:00:00.000Z' },
-      },
-    }]));
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-
-    const [preset] = getCustomPresets();
-
-    expect(preset.title).toBe('Custom');
-    expect(preset.initialState?.rootId).toBe('root');
-    expect(preset.initialState?.schemaVersion).toBe(11);
-    expect(preset.initialState?.generator).toBeUndefined();
-    expect(warn).toHaveBeenCalledWith('Saved generator was detached: Template script must be text.');
-    warn.mockRestore();
-  });
-
-  it('normalizes malformed current-v10 custom preset values while retaining valid values', () => {
-    const currentVariants = variants();
-    currentVariants.default.templates.page.elements = [
-      { id: 'text', type: 'text', textOverflow: 'truncate', textWrap: 'true', layerId: 'content' } as any,
-      { id: 'grid', type: 'grid', textOverflow: 'visible', textWrap: true, layerId: 'content' },
-    ];
-    localStorage.setItem('hype_custom_presets', JSON.stringify([{
-      id: 'custom-v10',
-      title: 'Custom v10',
-      desc: 'Saved project',
-      initialState: { schemaVersion: 10, nodes, rootId: 'root', variants: currentVariants, activeVariantId: 'default' },
-    }]));
-
-    const [preset] = getCustomPresets();
-    const output = preset.initialState!.variants.default.templates.page.elements;
-
-    expect(preset.initialState?.schemaVersion).toBe(11);
-    expect(output[0]).toMatchObject({
-      textOverflow: 'clip', textWrap: true,
-      textPadding: { top: 0, right: 0, bottom: 0, left: 0 },
-    });
-    expect(output[1]).toMatchObject({ textOverflow: 'visible', textWrap: true });
-  });
 });

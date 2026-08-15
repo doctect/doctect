@@ -18,6 +18,7 @@ import {
   WorkspaceStoreError,
   type LocalWorkspaceStore,
   type WorkspaceCommand,
+  type WorkspaceCustomPreset,
   type WorkspaceProject,
   type WorkspaceSnapshot,
 } from '../../services/localWorkspace/index';
@@ -26,6 +27,7 @@ import type { AppState } from '../../types';
 const trackEvent = vi.hoisted(() => vi.fn());
 const downloadJson = vi.hoisted(() => vi.fn());
 const generatedResult = vi.hoisted(() => ({ current: undefined as boolean | undefined }));
+const presetSaveResult = vi.hoisted(() => ({ current: undefined as boolean | undefined }));
 const cloudResults = vi.hoisted(() => ({
   link: undefined as boolean | undefined,
   restore: undefined as boolean | undefined,
@@ -107,6 +109,27 @@ vi.mock('../../components/ProjectEditor', () => ({
       >
         Generate from {props.projectName}
       </button>
+      <button
+        type="button"
+        onClick={async () => {
+          if (typeof props.onSaveCustomPreset !== 'function') {
+            presetSaveResult.current = false;
+            return;
+          }
+          presetSaveResult.current = await props.onSaveCustomPreset(
+            `Saved ${props.projectName}`,
+            'Reusable project layout',
+            {
+              ...props.initialState,
+              selectedElementIds: [],
+              selectedNodeId: props.initialState.rootId,
+              clipboard: [],
+            },
+          );
+        }}
+      >
+        Save {props.projectName} as preset
+      </button>
     </section>
   ),
 }));
@@ -131,11 +154,33 @@ vi.mock('../../components/TabBar', () => ({
 }));
 
 vi.mock('../../components/NewProjectModal', () => ({
-  NewProjectModal: ({ isOpen, onClose, onSelectPreset }: any) => isOpen ? (
-    <div role="dialog" aria-label="New project">
-      <button type="button" onClick={() => onSelectPreset('blank')}>Create blank</button>
-      <button type="button" onClick={() => onSelectPreset('missing-preset')}>Create missing preset</button>
-      <button type="button" onClick={onClose}>Cancel new project</button>
+  NewProjectModal: ({
+    isOpen,
+    customPresets = [],
+    busy = false,
+    error,
+    onClose,
+    onSelectPreset,
+    onDeleteCustomPreset,
+  }: any) => isOpen ? (
+    <div role="dialog" aria-label="New project" aria-busy={busy || undefined}>
+      {error && <div role="alert">{error}</div>}
+      <output data-testid="custom-preset-order">
+        {customPresets.map((preset: WorkspaceCustomPreset) => preset.title).join('|')}
+      </output>
+      <button type="button" disabled={busy} onClick={() => onSelectPreset('blank')}>Create blank</button>
+      {customPresets.map((preset: WorkspaceCustomPreset) => (
+        <React.Fragment key={preset.id}>
+          <button type="button" disabled={busy} onClick={() => onSelectPreset(preset.id)}>
+            Create {preset.title}
+          </button>
+          <button type="button" disabled={busy} onClick={() => onDeleteCustomPreset(preset.id)}>
+            Delete {preset.title}
+          </button>
+        </React.Fragment>
+      ))}
+      <button type="button" disabled={busy} onClick={() => onSelectPreset('missing-preset')}>Create missing preset</button>
+      <button type="button" disabled={busy} onClick={onClose}>Cancel new project</button>
     </div>
   ) : null,
 }));
@@ -205,13 +250,22 @@ const project = (id: string, name: string, scale = 1): WorkspaceProject => ({
   initialState: { ...createBlankProject(), scale },
 });
 
+const customPreset = (id: string, title: string, scale = 1): WorkspaceCustomPreset => ({
+  id,
+  title,
+  desc: `${title} description`,
+  isCustom: true,
+  initialState: { ...createBlankProject(), scale },
+});
+
 const workspace = (
   projects: WorkspaceProject[] = [project('project-a', 'Project A')],
   activeProjectId = projects[0].id,
+  customPresets: WorkspaceCustomPreset[] = [],
 ): WorkspaceSnapshot => ({
   projects,
   activeProjectId,
-  customPresets: [],
+  customPresets,
   pendingImports: [],
 });
 
@@ -246,6 +300,18 @@ const applyCommand = (
           : current.activeProjectId,
       };
     }
+    case 'save-custom-preset': {
+      const existingIndex = current.customPresets.findIndex(item => item.id === command.preset.id);
+      const customPresets = current.customPresets.map(item => structuredClone(item));
+      if (existingIndex === -1) customPresets.push(structuredClone(command.preset));
+      else customPresets[existingIndex] = structuredClone(command.preset);
+      return { ...current, customPresets };
+    }
+    case 'delete-custom-preset':
+      return {
+        ...current,
+        customPresets: current.customPresets.filter(item => item.id !== command.presetId),
+      };
     default:
       return current;
   }
@@ -326,6 +392,7 @@ describe('EditorPage workspace commands', () => {
     trackEvent.mockReset();
     downloadJson.mockReset();
     generatedResult.current = undefined;
+    presetSaveResult.current = undefined;
     cloudResults.link = undefined;
     cloudResults.restore = undefined;
     localStorage.clear();
@@ -564,10 +631,138 @@ describe('EditorPage workspace commands', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Create missing preset' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
-      "Preset 'missing-preset' was not found. No project was created.",
+      'This preset is no longer available. Nothing was created.',
     );
     expect(commit).not.toHaveBeenCalled();
     expect(screen.getAllByTestId(/^editor-/)).toHaveLength(1);
+  });
+
+  it('creates a custom preset project from an independent clone after one durable command', async () => {
+    const sourcePreset = customPreset('custom-source', 'Saved Source', 4);
+    sourcePreset.initialState.nodes[sourcePreset.initialState.rootId].title = 'Saved root';
+    const initial = workspace(undefined, undefined, [sourcePreset]);
+    const pending = deferred<WorkspaceSnapshot>();
+    let durableNext: WorkspaceSnapshot | undefined;
+    const { store, commit } = commandStore(initial, (command, next) => {
+      if (command.type !== 'create-and-activate-project') return undefined;
+      durableNext = next;
+      return pending.promise;
+    });
+    renderEditor(store, initial);
+
+    fireEvent.click(screen.getByRole('button', { name: 'New project' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create Saved Source' }));
+
+    await waitFor(() => expect(commit).toHaveBeenCalledOnce());
+    expect(screen.getByRole('dialog', { name: 'New project' })).toHaveAttribute('aria-busy', 'true');
+    expect(screen.getByText('Active Project A')).toBeVisible();
+    const command = commit.mock.calls[0][0] as WorkspaceCommand;
+    expect(command).toEqual({
+      type: 'create-and-activate-project',
+      project: {
+        id: 'proj_00000000-0000-4000-8000-000000000001',
+        name: 'Saved Source',
+        initialState: expect.objectContaining({ scale: 4 }),
+      },
+    });
+    if (command.type !== 'create-and-activate-project') throw new Error('Unexpected command.');
+    expect(command.project.initialState).not.toBe(sourcePreset.initialState);
+    expect(command.project.initialState.nodes).not.toBe(sourcePreset.initialState.nodes);
+    command.project.initialState.nodes[command.project.initialState.rootId].title = 'Mutated command';
+    expect(sourcePreset.initialState.nodes[sourcePreset.initialState.rootId].title).toBe('Saved root');
+
+    await act(async () => {
+      pending.resolve(durableNext!);
+      await pending.promise;
+    });
+    expect(await screen.findByText('Active Saved Source')).toBeVisible();
+    expect(screen.queryByRole('dialog', { name: 'New project' })).not.toBeInTheDocument();
+  });
+
+  it('saves a cloned custom preset with a UUID and applies returned preset order', async () => {
+    const existing = customPreset('custom-existing', 'Existing Preset');
+    const initial = workspace(undefined, undefined, [existing]);
+    const { store, commit } = commandStore(initial);
+    renderEditor(store, initial);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save Project A as preset' }));
+
+    await waitFor(() => expect(presetSaveResult.current).toBe(true));
+    expect(commit).toHaveBeenCalledOnce();
+    const command = commit.mock.calls[0][0] as WorkspaceCommand;
+    expect(command).toEqual({
+      type: 'save-custom-preset',
+      preset: {
+        id: 'custom_00000000-0000-4000-8000-000000000001',
+        title: 'Saved Project A',
+        desc: 'Reusable project layout',
+        isCustom: true,
+        initialState: expect.objectContaining({
+          selectedElementIds: [],
+          selectedNodeId: 'root',
+          clipboard: [],
+        }),
+      },
+    });
+    if (command.type !== 'save-custom-preset') throw new Error('Unexpected command.');
+    expect(command.preset.initialState).not.toBe(initial.projects[0].initialState);
+    expect(command.preset.initialState.nodes).not.toBe(initial.projects[0].initialState.nodes);
+
+    fireEvent.click(screen.getByRole('button', { name: 'New project' }));
+    expect(screen.getByTestId('custom-preset-order')).toHaveTextContent(
+      'Existing Preset|Saved Project A',
+    );
+  });
+
+  it('retains ordered preset cards until delete commits', async () => {
+    const initial = workspace(undefined, undefined, [
+      customPreset('custom-a', 'Preset A'),
+      customPreset('custom-b', 'Preset B'),
+    ]);
+    const pending = deferred<WorkspaceSnapshot>();
+    let durableNext: WorkspaceSnapshot | undefined;
+    const { store, commit } = commandStore(initial, (command, next) => {
+      if (command.type !== 'delete-custom-preset') return undefined;
+      durableNext = next;
+      return pending.promise;
+    });
+    renderEditor(store, initial);
+    fireEvent.click(screen.getByRole('button', { name: 'New project' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete Preset A' }));
+
+    await waitFor(() => expect(commit).toHaveBeenCalledWith({
+      type: 'delete-custom-preset',
+      presetId: 'custom-a',
+    }));
+    expect(screen.getByRole('dialog', { name: 'New project' })).toHaveAttribute('aria-busy', 'true');
+    expect(screen.getByTestId('custom-preset-order')).toHaveTextContent('Preset A|Preset B');
+
+    await act(async () => {
+      pending.resolve(durableNext!);
+      await pending.promise;
+    });
+    await waitFor(() => expect(screen.getByTestId('custom-preset-order')).toHaveTextContent('Preset B'));
+    expect(screen.getByTestId('custom-preset-order')).not.toHaveTextContent('Preset A');
+  });
+
+  it('keeps a failed preset delete visible with exact recovery copy', async () => {
+    const initial = workspace(undefined, undefined, [customPreset('custom-a', 'Preset A')]);
+    const { store } = commandStore(initial, command => {
+      if (command.type === 'delete-custom-preset') {
+        throw new WorkspaceStoreError('Disk failed.', 'io');
+      }
+      return undefined;
+    });
+    renderEditor(store, initial);
+    fireEvent.click(screen.getByRole('button', { name: 'New project' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete Preset A' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Preset was not deleted. Nothing was changed.',
+    );
+    expect(screen.getByTestId('custom-preset-order')).toHaveTextContent('Preset A');
+    expect(screen.getByRole('dialog', { name: 'New project' })).not.toHaveAttribute('aria-busy');
   });
 
   it('keeps failed edits open and downloads JSON from the newest working copy', async () => {

@@ -21,55 +21,6 @@ export interface PresetDefinition {
     initialState?: AppState; // For custom presets
 }
 
-const STORAGE_KEY = 'hype_custom_presets';
-
-export const saveCustomPreset = (preset: PresetDefinition): boolean => {
-    try {
-        const existing = getCustomPresets();
-        const filtered = existing.filter(p => p.id !== preset.id);
-        const updated = [...filtered, preset];
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
-        return true;
-    } catch (e) {
-        console.error("Failed to save custom preset", e);
-        return false;
-    }
-};
-
-export const deleteCustomPreset = (id: string) => {
-    try {
-        const existing = getCustomPresets();
-        const updated = existing.filter(p => p.id !== id);
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
-    } catch (e) {
-        console.error("Failed to delete custom preset", e);
-    }
-};
-
-export const getCustomPresets = (): PresetDefinition[] => {
-    try {
-        const stored = localStorage.getItem(STORAGE_KEY);
-        if (stored) {
-            const presets = JSON.parse(stored);
-            // Migrate each custom preset's initialState to current schema
-            return presets.map((preset: PresetDefinition) => {
-                if (preset.initialState) {
-                    const loaded = loadProjectState(preset.initialState);
-                    loaded.warnings.forEach(warning => console.warn(warning));
-                    return {
-                        ...preset,
-                        initialState: loaded.state
-                    };
-                }
-                return preset;
-            });
-        }
-    } catch (e) {
-        console.warn("Failed to load custom presets", e);
-    }
-    return [];
-};
-
 // Helper to hydrate the loaded JSON into a full AppState.
 // Exported so tests can drive the same variants-shaped path the create*Project fns use.
 export const loadPreset = (data: any): AppState => {

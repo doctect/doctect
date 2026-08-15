@@ -73,6 +73,7 @@ const renderEditor = (variants: Record<string, Variant>) => render(
         onNameChange={vi.fn()}
         onStateChange={vi.fn()}
         onCreateGeneratedProject={vi.fn(async () => true)}
+        onSaveCustomPreset={vi.fn(async () => true)}
     />,
 );
 

@@ -1,11 +1,11 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import type { AppState, TemplateElement } from '../../types';
 import { createGeneratedAppState } from '../../services/generatedProjectState';
 import { segmentGraphemes } from '../../services/graphemes';
 import { loadProjectState } from '../../services/loadProjectState';
-import { createBlankProject, getCustomPresets, loadPreset } from '../../services/presets';
+import { createBlankProject, loadPreset } from '../../services/presets';
 import { snapshotDocument } from '../../services/projectDocumentSnapshot';
 import { validateGeneratedProject } from '../../services/validateGeneratedProject';
 import { MAX_STATE_BYTES } from '../../shared/projectLimits.js';
@@ -56,8 +56,6 @@ const nearestWrapBoundaryDistance = (request: ReturnType<typeof textOverflowFixt
 };
 
 describe('text overflow v10 persistence fixture', () => {
-  beforeEach(() => localStorage.clear());
-
   it('is a complete canonical, bounded parity matrix with stable document structure', () => {
     const template = fixture.variants.parity.templates['parity-page'];
     const fixedText = template.elements.filter(item => item.type === 'text' && !item.autoWidth);
@@ -260,17 +258,13 @@ describe('text overflow v10 persistence fixture', () => {
     element(custom, 'text-clip-nowrap').textWrap = false;
     element(custom, 'grid-clip').textOverflow = 'visible';
     element(custom, 'grid-clip').textWrap = true;
-    localStorage.setItem('hype_custom_presets', JSON.stringify([{
-      id: 'custom-v10-parity', title: 'Parity', desc: 'Current custom preset', initialState: custom,
-    }]));
-
-    const [loadedCustom] = getCustomPresets();
-    expect(loadedCustom.initialState?.schemaVersion).toBe(11);
-    expect(element(loadedCustom.initialState, 'text-clip-nowrap')).toMatchObject({
+    const loadedCustom = loadProjectState(custom).state;
+    expect(loadedCustom.schemaVersion).toBe(11);
+    expect(element(loadedCustom, 'text-clip-nowrap')).toMatchObject({
       textOverflow: 'ellipsis', textWrap: false,
       textPadding: { top: 0, right: 0, bottom: 0, left: 0 },
     });
-    expect(element(loadedCustom.initialState, 'grid-clip')).toMatchObject({ textOverflow: 'visible', textWrap: true });
-    expectCanonicalTextPadding(loadedCustom.initialState);
+    expect(element(loadedCustom, 'grid-clip')).toMatchObject({ textOverflow: 'visible', textWrap: true });
+    expectCanonicalTextPadding(loadedCustom);
   });
 });

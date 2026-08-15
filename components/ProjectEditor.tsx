@@ -13,7 +13,6 @@ import { generatePDF } from '../services/pdfService';
 import { CURRENT_SCHEMA_VERSION } from '../services/migration';
 import { Download, Code, Undo2, Redo2, Loader2, Contrast, Layers } from 'lucide-react';
 import { EditorToolbar } from './EditorToolbar';
-import { saveCustomPreset } from '../services/presets';
 import { SavePresetModal } from './SavePresetModal';
 import { NewVariantModal, NewVariantConfig } from './NewVariantModal';
 import { reflowTemplates } from '../services/reflow';
@@ -38,9 +37,10 @@ interface ProjectEditorProps {
     onNameChange: (name: string) => void;
     onStateChange?: (state: AppState) => void;
     onCreateGeneratedProject: (name: string, project: GeneratedProject, source: GeneratorSourceDraft) => Promise<boolean>;
+    onSaveCustomPreset: (title: string, description: string, initialState: AppState) => Promise<boolean>;
 }
 
-export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, projectName, initialState, isActive, onNameChange, onStateChange, onCreateGeneratedProject }) => {
+export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, projectName, initialState, isActive, onNameChange, onStateChange, onCreateGeneratedProject, onSaveCustomPreset }) => {
     const [state, setState] = useState<AppState>(initialState);
 
     const [deleteConfirmState, setDeleteConfirmState] = useState<{ isOpen: boolean, nodeIds: string[] }>({ isOpen: false, nodeIds: [] });
@@ -947,32 +947,19 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, project
         return true;
     };
 
-    const handleSavePreset = (title: string, desc: string) => {
-        // Clean up UI state before saving to minimize size
-        const stateToSave = {
+    const handleSavePreset = async (title: string, desc: string): Promise<boolean> => {
+        const stateToSave = structuredClone({
             ...state,
             selectedElementIds: [],
             selectedNodeId: state.rootId,
             clipboard: [],
-            // We don't save history or undo stack
-        };
-
-        const success = saveCustomPreset({
-            id: `custom_${Date.now()}`,
-            title,
-            desc: desc || "",
-            initialState: stateToSave,
-            isCustom: true
         });
 
-        setShowSavePresetModal(false);
-
+        const success = await onSaveCustomPreset(title, desc, stateToSave);
         if (success) {
-            trackEvent('preset_saved', { title: title });
-            alert("Preset saved successfully! You can now access it from the 'New Project' menu.");
-        } else {
-            alert("Failed to save preset. Local storage might be full.");
+            trackEvent('preset_saved', { title });
         }
+        return success;
     };
 
     const [exportGreyscale, setExportGreyscale] = useState(false);
