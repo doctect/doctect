@@ -1,0 +1,66 @@
+name: Local workspace migration gate
+
+on:
+  pull_request:
+    paths:
+      - 'App.tsx'
+      - 'components/**'
+      - 'hooks/**'
+      - 'pages/EditorPage.tsx'
+      - 'services/importProject.ts'
+      - 'services/localWorkspace/**'
+      - 'services/presets.ts'
+      - 'server/migrations/**'
+      - 'tests/e2e/fork.spec.js'
+      - 'tests/e2e/localWorkspaceHelpers.js'
+      - 'tests/e2e/local_workspace_migration.spec.js'
+      - 'tests/e2e/fixtures/localWorkspaceMigration.js'
+      - 'tests/helpers/localWorkspaceFixtures.ts'
+      - 'tests/unit/localWorkspace/**'
+      - 'tests/unit/localWorkspaceBoundary.test.ts'
+      - 'tests/unit/server/migrations*.test.js'
+      - 'playwright.config.cjs'
+      - 'package.json'
+      - '.github/workflows/local-workspace-migration.yml'
+
+jobs:
+  release-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --legacy-peer-deps
+      - run: npx playwright install --with-deps chromium firefox webkit
+      - run: npm run check:workspace-boundary --legacy-peer-deps
+      - name: Focused unit suites
+        run: >-
+          npx vitest run
+          tests/unit/localWorkspace
+          tests/unit/WorkspaceBootstrapGate.test.tsx
+          tests/unit/EditorPageWorkspaceCommands.test.tsx
+          tests/unit/importProject.test.ts
+          tests/unit/forkProject.test.ts
+          tests/unit/server/migrations.test.js
+          tests/unit/server/migrationsPostgres.test.js
+      - run: npm run build --legacy-peer-deps
+      - name: Browser migration matrix
+        run: >-
+          npx playwright test tests/e2e/local_workspace_migration.spec.js
+          --project=chromium
+          --project=firefox
+          --project=webkit
+          --project=workspace-large-chromium
+          --project=workspace-large-firefox
+      - name: Upload Playwright evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: local-workspace-playwright-report
+          if-no-files-found: ignore
+          path: |
+            playwright-report/
+            test-results/

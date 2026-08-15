@@ -7,8 +7,8 @@ import {
   digestWorkspaceContent,
   sha256Hex,
 } from '../../../services/localWorkspace/canonical';
-import { LEGACY_DOCUMENT_KEYS } from '../../../services/localWorkspace/legacyTypes';
 import {
+  LEGACY_DOCUMENT_KEYS,
   LEGACY_KEYS,
   legacySnapshot,
   workspaceSnapshot,
@@ -105,10 +105,10 @@ describe('canonicalStringify', () => {
 describe('canonical digests', () => {
   it('pins legacy document key order', () => {
     expect(LEGACY_DOCUMENT_KEYS).toEqual([
-      'hype_projects',
-      'hype_active_project',
-      'hype_custom_presets',
-      'hype_import_pending',
+      LEGACY_KEYS.projects,
+      LEGACY_KEYS.activeProject,
+      LEGACY_KEYS.customPresets,
+      LEGACY_KEYS.pendingImport,
     ]);
   });
 

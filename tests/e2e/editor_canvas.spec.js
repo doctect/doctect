@@ -1,11 +1,10 @@
 
 import { test, expect } from '@playwright/test';
+import { openFreshEditor } from './localWorkspaceHelpers.js';
 
 test.describe('Editor Canvas Interactions', () => {
     test.beforeEach(async ({ page }) => {
-        await page.goto('/app');
-        await page.evaluate(() => localStorage.clear());
-        await page.reload();
+        await openFreshEditor(page);
         // Wait for editor to load - Blank Project is default
         await expect(page.getByTestId('project-tab').filter({ hasText: 'Blank Project' })).toBeVisible();
     });

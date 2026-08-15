@@ -395,11 +395,6 @@ function generatorSupervisorMain(evaluatorSource: string) {
         try {
             evaluatorUrl = URL.createObjectURL(new Blob([evaluatorSource], { type: 'text/javascript' }));
             evaluator = new Worker(evaluatorUrl);
-            const urlToRevoke = evaluatorUrl;
-            try {
-                URL.revokeObjectURL(urlToRevoke);
-                evaluatorUrl = null;
-            } catch { /* Terminal cleanup retries this URL. */ }
             const channel = new MessageChannel();
             evaluatorPort = channel.port1;
             evaluatorPort.onmessage = evaluatorEvent => finish(evaluatorEvent.data);
@@ -461,11 +456,6 @@ const iframeDocument = (): string => {
     try {
       workerUrl = URL.createObjectURL(new Blob([workerSource], { type: 'text/javascript' }));
       worker = new Worker(workerUrl);
-      const urlToRevoke = workerUrl;
-      try {
-        URL.revokeObjectURL(urlToRevoke);
-        workerUrl = null;
-      } catch { /* Terminal disposal retries this URL without blocking Worker setup. */ }
       const channel = new MessageChannel();
       resultPort = channel.port1;
       resultPort.onmessage = event => {

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { canonicalStringify } from '../../services/localWorkspace/canonical';
 import { validateGeneratedProject } from '../../services/validateGeneratedProject';
 
 const template = (id = 'page', elements: unknown[] = []) => ({
@@ -30,6 +31,17 @@ const overflowElements = () => [
 const existingLayers = () => [{ id: 'content', name: 'Content', order: 0, visible: true, locked: false }];
 
 describe('validateGeneratedProject', () => {
+    it('returns canonical JSON suitable for durable persistence', () => {
+        const validation = validateGeneratedProject({
+            templates: validTemplates(),
+            hierarchy: validHierarchy(),
+        });
+
+        expect(validation.ok).toBe(true);
+        if (!validation.ok) throw new Error('Expected valid generated project');
+        expect(() => canonicalStringify(validation.project)).not.toThrow();
+    });
+
     it('accepts flat output, normalizes nodes and text settings at v11, and leaves input unchanged', () => {
         const raw = { templates: validTemplates(), hierarchy: validHierarchy() };
         const before = structuredClone(raw);

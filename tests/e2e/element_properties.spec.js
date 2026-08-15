@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { seedNativeProject } from './localWorkspaceHelpers.js';
 
 const fixture = {
     nodes: {
@@ -65,12 +66,11 @@ const canvasElement = (page, id) => activePane(page).locator(`[data-element-id="
 
 test.describe('Element Properties auto width and disclosure', () => {
     test.beforeEach(async ({ page }) => {
-        await page.addInitScript(projectState => {
-            localStorage.setItem('hype_projects', JSON.stringify([
-                { id: 'element-properties', name: 'Element Properties', initialState: projectState },
-            ]));
-            localStorage.setItem('hype_active_project', 'element-properties');
-        }, fixture);
+        await seedNativeProject(page, {
+            id: 'element-properties',
+            name: 'Element Properties',
+            initialState: fixture,
+        });
         await page.setViewportSize({ width: 1440, height: 1000 });
         await page.goto('/app');
         await expect(page).toHaveURL(`http://localhost:${process.env.E2E_WEB_PORT || 3000}/app`);

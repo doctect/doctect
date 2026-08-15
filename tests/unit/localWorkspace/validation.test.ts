@@ -14,6 +14,7 @@ import {
   validateWorkspaceProject,
 } from '../../../services/localWorkspace/validation';
 import {
+  LEGACY_KEYS,
   currentState,
   historicalState,
   legacySnapshot,
@@ -72,8 +73,8 @@ describe('foundational contracts and fixtures', () => {
     expect(workspaceSnapshot().projects[0].name).toBe('Café project ☕');
 
     const legacy = legacySnapshot();
-    legacy.hype_projects.present = true;
-    expect(legacySnapshot().hype_projects.present).toBe(false);
+    legacy[LEGACY_KEYS.projects].present = true;
+    expect(legacySnapshot()[LEGACY_KEYS.projects].present).toBe(false);
   });
 });
 

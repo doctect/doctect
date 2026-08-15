@@ -9,7 +9,8 @@ import {
   type LegacySnapshot,
 } from '../../services/localWorkspace/legacyTypes';
 
-export { LEGACY_KEYS };
+export { LEGACY_DOCUMENT_KEYS, LEGACY_KEYS };
+export type { LegacyDocumentKey, LegacySnapshot };
 
 type LegacyOverride = string | null | LegacySnapshot[LegacyDocumentKey];
 

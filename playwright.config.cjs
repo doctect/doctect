@@ -23,8 +23,8 @@ module.exports = defineConfig({
     forbidOnly: !!process.env.CI,
     /* Retry on CI only */
     retries: process.env.CI ? 2 : 0,
-    /* Opt out of parallel tests on CI. */
-    workers: process.env.CI ? 1 : undefined,
+    /* Shared dev server and SQLite state make cross-file browser concurrency nondeterministic. */
+    workers: 1,
     /* Reporter to use. See https://playwright.dev/docs/test-reporters */
     reporter: 'html',
     /* Shared settings for all the projects below. See https://playwright.dev/docs/api/class-testoptions. */
@@ -52,6 +52,24 @@ module.exports = defineConfig({
         {
             name: 'webkit',
             use: { ...devices['Desktop Safari'] },
+        },
+        {
+            name: 'workspace-large-chromium',
+            testMatch: /local_workspace_migration\.spec\.js/,
+            grep: /aggregate legacy JSON above 5 MiB/,
+            use: {
+                ...devices['Desktop Chrome'],
+                launchOptions: { args: ['--unlimited-storage'] },
+            },
+        },
+        {
+            name: 'workspace-large-firefox',
+            testMatch: /local_workspace_migration\.spec\.js/,
+            grep: /aggregate legacy JSON above 5 MiB/,
+            use: {
+                ...devices['Desktop Firefox'],
+                launchOptions: { firefoxUserPrefs: { 'dom.storage.default_quota': 20480 } },
+            },
         },
     ],
 

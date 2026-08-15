@@ -1,11 +1,9 @@
 import { test, expect } from '@playwright/test';
+import { openFreshEditor } from './localWorkspaceHelpers.js';
 
 test.describe('Editor Functionality', () => {
     test.beforeEach(async ({ page }) => {
-        // Clear local storage to ensure fresh start
-        await page.goto('/app');
-        await page.evaluate(() => localStorage.clear());
-        await page.reload();
+        await openFreshEditor(page);
     });
 
     test('should load default blank project', async ({ page }) => {

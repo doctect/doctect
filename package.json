@@ -7,6 +7,7 @@
     "dev": "concurrently \"vite\" \"node server/index.js\"",
     "server": "node server/index.js",
     "build": "vite build",
+    "check:workspace-boundary": "vitest run tests/unit/localWorkspaceBoundary.test.ts",
     "preview": "vite preview",
     "test": "vitest",
     "test:ui": "vitest --ui",

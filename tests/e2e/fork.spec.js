@@ -1,6 +1,10 @@
 
 import { test, expect } from '@playwright/test';
 import { signUpAndVerify, TEST_PASSWORD } from './helpers.js';
+import {
+    waitForPersistedCloudLink,
+    waitForPersistedGenerator,
+} from './localWorkspaceHelpers.js';
 
 // The API server (server/index.js) listens on a different origin than the Vite
 // dev server that Playwright's baseURL points at (see .env: VITE_API_BASE).
@@ -9,15 +13,6 @@ const API_BASE = process.env.E2E_API_BASE || 'http://localhost:3001';
 
 const unique = Date.now();
 const activePane = page => page.locator('[data-testid="project-pane"][data-active="true"]');
-
-const waitForPersistedGenerator = async (page, expected) => {
-    await expect.poll(() => page.evaluate(() => {
-        const projects = JSON.parse(localStorage.getItem('hype_projects') || '[]');
-        const activeId = localStorage.getItem('hype_active_project');
-        const generator = projects.find(project => project.id === activeId)?.initialState?.generator;
-        return generator && { templateScript: generator.templateScript, hierarchyScript: generator.hierarchyScript };
-    })).toEqual(expected);
-};
 
 const applyDistinctiveGenerator = async (page) => {
     await page.getByTitle('Generate Hierarchy via Script').click();
@@ -66,7 +61,11 @@ test.describe('Fork', () => {
             pageA.getByRole('button', { name: 'Save to cloud (new)' }).click(),
         ]);
         expect(createRes.ok()).toBeTruthy();
-        await expect(pageA.getByRole('button', { name: 'Save to cloud (new)' })).toBeHidden();
+        const created = await createRes.json();
+        await waitForPersistedCloudLink(pageA, {
+            projectId: created.project.id,
+            lastSyncedCommitId: created.commit.id,
+        });
 
         await pageA.getByTitle('Cloud').click();
         await pageA.getByRole('button', { name: /publish to gallery/i }).click();
@@ -164,6 +163,11 @@ test.describe('Fork', () => {
             pageB.getByRole('button', { name: 'Save to cloud', exact: true }).click(),
         ]);
         expect(saveRes.ok()).toBeTruthy();
+        const saved = await saveRes.json();
+        await waitForPersistedCloudLink(pageB, {
+            projectId: forkedProjectId,
+            lastSyncedCommitId: saved.commit.id,
+        });
 
         // ---------------------------------------------------------------
         // Verification: source's fork count incremented (both API and UI).

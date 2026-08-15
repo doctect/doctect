@@ -117,6 +117,13 @@ async function gotoProjectPage(t, name = PUBLISHED_NAME) {
 // while t.baseUrl is the vite origin on :5199.
 const API_BASE = 'http://localhost:3001';
 
+async function stageEditorImport(t, payload, sourceKey) {
+    await t.page.evaluate(async ({ nextPayload, nextSourceKey }) => {
+        const { stageImport } = await import('/services/importProject.ts');
+        await stageImport(nextPayload, { sourceKey: nextSourceKey });
+    }, { nextPayload: payload, nextSourceKey: sourceKey });
+}
+
 // A display-only identity for the signup-form still. Deliberately NEVER
 // submitted, so no account row ever exists for it and re-runs can't collide.
 const FORM_DEMO = { name: 'Mira Holloway', username: 'mira_makes', email: 'mira@docs.test' };
@@ -321,11 +328,11 @@ async function ensureForkOpen(t) {
             if (!r.ok) throw new Error('fetching fork head failed: ' + r.status);
             return (await r.json()).commit;
         }, { base: API_BASE, pid: fork.id, cid: fork.headCommitId });
-        await t.page.evaluate(({ name, state, pid, cid }) => {
-            localStorage.setItem('hype_import_pending', JSON.stringify({
-                name, state, cloud: { projectId: pid, lastSyncedCommitId: cid },
-            }));
-        }, { name: fork.name, state: commit.state, pid: fork.id, cid: fork.headCommitId });
+        await stageEditorImport(t, {
+            name: fork.name,
+            state: commit.state,
+            cloud: { projectId: fork.id, lastSyncedCommitId: fork.headCommitId },
+        }, `docs-fork:${fork.id}:${fork.headCommitId}`);
         await gotoEditor(t); // a fresh /app load consumes the staged import
     } else {
         // No fork yet -- create one through the gallery Fork button (the exact
@@ -456,9 +463,8 @@ async function ensureOpenCoverMr(t) {
 // Open OWNER's OWN "My Notebook" -- the upstream the merge request targets --
 // in the editor, cloud-linked, so a recolour + saveToCloud lands a new commit
 // on THAT project and moves its head (making the fork's still-teal proposal
-// conflict). PRECONDITION: OWNER is signed in. Re-stages the project exactly
-// the way the gallery fork/open path stages an import (localStorage
-// hype_import_pending WITH cloud linkage) -- identical to ensureForkOpen's
+// conflict). PRECONDITION: OWNER is signed in. Re-stages the project through
+// production stageImport with cloud linkage, identical to ensureForkOpen's
 // reuse branch, so the save updates the project rather than forking a detached
 // copy. Targets the non-fork project named PUBLISHED_NAME (OWNER forks nothing
 // in this wave, so that's unique).
@@ -474,11 +480,11 @@ async function ensureOwnerProjectOpen(t) {
         if (!r.ok) throw new Error('fetching OWNER project head failed: ' + r.status);
         return (await r.json()).commit;
     }, { base: API_BASE, pid: project.id, cid: project.headCommitId });
-    await t.page.evaluate(({ name, state, pid, cid }) => {
-        localStorage.setItem('hype_import_pending', JSON.stringify({
-            name, state, cloud: { projectId: pid, lastSyncedCommitId: cid },
-        }));
-    }, { name: project.name, state: commit.state, pid: project.id, cid: project.headCommitId });
+    await stageEditorImport(t, {
+        name: project.name,
+        state: commit.state,
+        cloud: { projectId: project.id, lastSyncedCommitId: project.headCommitId },
+    }, `docs-owner:${project.id}:${project.headCommitId}`);
     await gotoEditor(t); // a fresh /app load consumes the staged import
     // Second tab = the staged upstream, active (consumeImport sets it active) --
     // same 2-tabs guard ensureForkOpen uses so ACTIVE_PANE resolves to it.

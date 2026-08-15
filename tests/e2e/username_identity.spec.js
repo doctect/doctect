@@ -1,6 +1,7 @@
 
 import { test, expect } from '@playwright/test';
 import { signUpAndVerify, apiSignUpAndVerify, TEST_PASSWORD } from './helpers.js';
+import { waitForPersistedCloudLink } from './localWorkspaceHelpers.js';
 
 // The API server (server/index.js) listens on a different origin than the Vite
 // dev server that Playwright's baseURL points at (see .env: VITE_API_BASE).
@@ -34,14 +35,16 @@ test.describe('Username identity', () => {
 
         // Save + publish the default project.
         await page.getByTitle('Cloud').click();
-        await Promise.all([
+        const [createRes] = await Promise.all([
             page.waitForResponse(res => res.url().includes('/api/projects') && res.request().method() === 'POST'),
             page.getByRole('button', { name: 'Save to cloud (new)' }).click(),
         ]);
-        // CloudMenu's dropdown only closes once the save actually resolves (setOpen(false)
-        // runs after the awaited create call) -- wait for that before reopening it, otherwise
-        // a still-open menu would just toggle shut instead of opening for the next click.
-        await expect(page.getByRole('button', { name: 'Save to cloud (new)' })).toBeHidden();
+        expect(createRes.ok()).toBeTruthy();
+        const created = await createRes.json();
+        await waitForPersistedCloudLink(page, {
+            projectId: created.project.id,
+            lastSyncedCommitId: created.commit.id,
+        });
         await page.getByTitle('Cloud').click();
         await page.getByRole('button', { name: /publish to gallery/i }).click();
         await page.getByPlaceholder('What is this planner for?').fill(`Identity test planner ${unique}`);

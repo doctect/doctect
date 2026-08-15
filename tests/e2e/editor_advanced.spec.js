@@ -1,5 +1,12 @@
 
 import { test as base, expect } from '@playwright/test';
+import {
+    openFreshEditor,
+    readActiveProject,
+    readProject,
+    setActiveProjectCloud,
+    waitForPersistedGenerator,
+} from './localWorkspaceHelpers.js';
 import { MIN_NO_HIT_OBSERVATION_MS, startMarkerServer } from './markerServer.js';
 
 const test = base.extend({
@@ -110,11 +117,8 @@ const openGenerator = async (page) => {
 
 const activePane = page => page.locator('[data-testid="project-pane"][data-active="true"]');
 
-const readActiveGeneratedFields = page => page.evaluate(() => {
-    const projects = JSON.parse(localStorage.getItem('hype_projects') || '[]');
-    const activeId = localStorage.getItem('hype_active_project');
-    const state = projects.find(project => project.id === activeId)?.initialState;
-    if (!state) throw new Error('Active project state not found.');
+const readActiveGeneratedFields = async page => {
+    const state = (await readActiveProject(page)).initialState;
     return {
         nodes: state.nodes,
         rootId: state.rootId,
@@ -122,22 +126,7 @@ const readActiveGeneratedFields = page => page.evaluate(() => {
         activeVariantId: state.activeVariantId,
         generator: state.generator,
     };
-});
-
-const readProject = (page, projectId) => page.evaluate(id => {
-    const projects = JSON.parse(localStorage.getItem('hype_projects') || '[]');
-    const project = projects.find(candidate => candidate.id === id);
-    if (!project) throw new Error(`Project ${id} not found.`);
-    return project;
-}, projectId);
-
-const readActiveProject = page => page.evaluate(() => {
-    const projects = JSON.parse(localStorage.getItem('hype_projects') || '[]');
-    const activeId = localStorage.getItem('hype_active_project');
-    const project = projects.find(candidate => candidate.id === activeId);
-    if (!project) throw new Error('Active project not found.');
-    return project;
-});
+};
 
 const applyOnePageFixture = async page => {
     await openGenerator(page);
@@ -160,9 +149,7 @@ const applyOnePageFixture = async page => {
 
 test.describe('Editor Advanced Features', () => {
     test.beforeEach(async ({ page }) => {
-        await page.goto('/app');
-        await page.evaluate(() => localStorage.clear());
-        await page.reload();
+        await openFreshEditor(page);
         await expect(page.getByTestId('project-tab').filter({ hasText: 'Blank Project' })).toBeVisible();
     });
 
@@ -195,12 +182,10 @@ test.describe('Editor Advanced Features', () => {
     test('previews visually, creates separately, and replaces with one-checkpoint Undo', async ({ page }) => {
         await applyOnePageFixture(page);
         const original = await readActiveProject(page);
-        await page.evaluate(projectId => {
-            const projects = JSON.parse(localStorage.getItem('hype_projects') || '[]');
-            const project = projects.find(candidate => candidate.id === projectId);
-            project.cloud = { projectId: 'cloud-preserved', lastSyncedCommitId: 'commit-preserved' };
-            localStorage.setItem('hype_projects', JSON.stringify(projects));
-        }, original.id);
+        await setActiveProjectCloud(page, {
+            projectId: 'cloud-preserved',
+            lastSyncedCommitId: 'commit-preserved',
+        });
         await page.reload();
         const originalBefore = await readProject(page, original.id);
         const templateSource = VISUAL_PREVIEW_TEMPLATE_SOURCE;

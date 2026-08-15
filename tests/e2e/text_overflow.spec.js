@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { test, expect } from '@playwright/test';
+import { seedNativeProject } from './localWorkspaceHelpers.js';
 
 const fixture = JSON.parse(readFileSync(
     new URL('../fixtures/text-overflow-parity-v10.json', import.meta.url),
@@ -11,12 +12,11 @@ const element = (page, id) => activePane(page).locator(`[data-element-id="${id}"
 
 test.describe('Text overflow parity', () => {
     test.beforeEach(async ({ page }) => {
-        await page.addInitScript(projectState => {
-            localStorage.setItem('hype_projects', JSON.stringify([
-                { id: 'text-overflow', name: 'Text Overflow Parity', initialState: projectState },
-            ]));
-            localStorage.setItem('hype_active_project', 'text-overflow');
-        }, fixture);
+        await seedNativeProject(page, {
+            id: 'text-overflow',
+            name: 'Text Overflow Parity',
+            initialState: fixture,
+        });
         await page.setViewportSize({ width: 1440, height: 1100 });
         await page.goto('/app');
         await expect(page.getByTestId('project-tab').filter({ hasText: 'Text Overflow Parity' })).toBeVisible();

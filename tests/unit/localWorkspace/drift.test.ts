@@ -34,15 +34,13 @@ import {
 } from '../../../services/localWorkspace/schema';
 import {
   LEGACY_DOCUMENT_KEYS,
-  type LegacyDocumentKey,
-} from '../../../services/localWorkspace/legacyTypes';
-import {
   LEGACY_KEYS,
   MemoryStorage,
   currentState,
   legacyProject,
   memoryStorage,
   secondProject,
+  type LegacyDocumentKey,
   validLegacyValues,
 } from '../../helpers/localWorkspaceFixtures';
 
@@ -364,7 +362,7 @@ describe('old-tab drift lifecycle', () => {
     const harness = createHarness();
     const { store, onAuthorityLost } = await readyStore(harness);
 
-    harness.dispatch('hype_projects_backup');
+    harness.dispatch(`${LEGACY_KEYS.projects}_backup`);
 
     await expect(store.commit({
       type: 'activate-project',

@@ -23,6 +23,7 @@ import {
   type WorkspaceSnapshot,
 } from '../../services/localWorkspace/index';
 import type { AppState } from '../../types';
+import { LEGACY_KEYS } from '../helpers/localWorkspaceFixtures';
 
 const trackEvent = vi.hoisted(() => vi.fn());
 const downloadJson = vi.hoisted(() => vi.fn());
@@ -410,8 +411,8 @@ describe('EditorPage workspace commands', () => {
     expect(screen.getByText('Active Project A')).toBeVisible();
     expect(screen.getByText('Saved locally')).toBeVisible();
     expect(commit).not.toHaveBeenCalled();
-    expect(localStorage.getItem('hype_projects')).toBeNull();
-    expect(localStorage.getItem('hype_active_project')).toBeNull();
+    expect(localStorage.getItem(LEGACY_KEYS.projects)).toBeNull();
+    expect(localStorage.getItem(LEGACY_KEYS.activeProject)).toBeNull();
   });
 
   it('creates, activates, and closes projects only from returned durable snapshots', async () => {

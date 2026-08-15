@@ -1,6 +1,11 @@
 
 import { test as base, expect } from '@playwright/test';
 import { getCloudHead, signIn, signUpAndVerify, TEST_PASSWORD } from './helpers.js';
+import {
+    setActiveProjectGenerator,
+    waitForPersistedCloudLink,
+    waitForPersistedGenerator,
+} from './localWorkspaceHelpers.js';
 import { MIN_NO_HIT_OBSERVATION_MS, startMarkerServer } from './markerServer.js';
 
 const API_BASE = process.env.E2E_API_BASE || 'http://localhost:3001';
@@ -46,28 +51,8 @@ const listingState = title => ({
 // listing test is separated by this.
 const nextSecond = () => new Promise(resolve => { setTimeout(resolve, 1200); });
 
-const waitForPersistedGenerator = async (page, expected) => {
-    await expect.poll(() => page.evaluate(() => {
-        const projects = JSON.parse(localStorage.getItem('hype_projects') || '[]');
-        const activeId = localStorage.getItem('hype_active_project');
-        const generator = projects.find(project => project.id === activeId)?.initialState?.generator;
-        return generator && { templateScript: generator.templateScript, hierarchyScript: generator.hierarchyScript };
-    })).toEqual(expected);
-};
-
 const seedSavedGenerator = async (page, source) => {
-    await page.evaluate(generatorSource => {
-        const projects = JSON.parse(localStorage.getItem('hype_projects') || '[]');
-        const activeId = localStorage.getItem('hype_active_project');
-        const active = projects.find(project => project.id === activeId);
-        if (!active) throw new Error('Active project not found while seeding source.');
-        active.initialState.generator = {
-            formatVersion: 1,
-            generatedAt: new Date().toISOString(),
-            ...generatorSource,
-        };
-        localStorage.setItem('hype_projects', JSON.stringify(projects));
-    }, source);
+    await setActiveProjectGenerator(page, source);
     await page.reload();
     await waitForPersistedGenerator(page, source);
 };
@@ -295,11 +280,12 @@ test.describe('Gallery', () => {
             page.getByRole('button', { name: 'Save to cloud (new)' }).click(),
         ]);
         expect(createRes.ok()).toBeTruthy();
-        const projectId = (await createRes.json()).project.id;
-        // CloudMenu's dropdown only closes once the save actually resolves (setOpen(false)
-        // runs after the awaited create call) -- wait for that before reopening it, otherwise
-        // a still-open menu would just toggle shut instead of opening for the next click.
-        await expect(page.getByRole('button', { name: 'Save to cloud (new)' })).toBeHidden();
+        const created = await createRes.json();
+        const projectId = created.project.id;
+        await waitForPersistedCloudLink(page, {
+            projectId,
+            lastSyncedCommitId: created.commit.id,
+        });
 
         // Publish wizard must disclose that source becomes public.
         await page.getByTitle('Cloud').click();
@@ -386,7 +372,12 @@ test.describe('Gallery', () => {
             pageB.getByRole('button', { name: 'Save to cloud (new)' }).click(),
         ]);
         expect(editedCreateRes.ok()).toBeTruthy();
-        const editedProjectId = (await editedCreateRes.json()).project.id;
+        const edited = await editedCreateRes.json();
+        const editedProjectId = edited.project.id;
+        await waitForPersistedCloudLink(pageB, {
+            projectId: editedProjectId,
+            lastSyncedCommitId: edited.commit.id,
+        });
 
         const ctxC = await browser.newContext();
         const pageC = await ctxC.newPage();

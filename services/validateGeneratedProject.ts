@@ -300,17 +300,17 @@ export function validateGeneratedProject(raw: GeneratorSandboxRawResult): Genera
     }
     if (owned.size !== nodeEntries.length) return fail('hierarchy', 'Hierarchy contains nodes not owned by the root tree.');
 
-    const project: GeneratedProject = {
+    const serializedProject = JSON.stringify({
         nodes,
         rootId: cloned.hierarchy.rootId,
         variants,
         activeVariantId,
         schemaVersion: CURRENT_SCHEMA_VERSION,
-    };
-
-    if (utf8Bytes(JSON.stringify(project)) > MAX_STATE_BYTES) {
+    });
+    if (utf8Bytes(serializedProject) > MAX_STATE_BYTES) {
         return fail('limits', `Generated project exceeds ${MAX_STATE_BYTES} bytes after normalization.`);
     }
+    const project = JSON.parse(serializedProject) as GeneratedProject;
 
     let estimatedPageCount: number;
     try {

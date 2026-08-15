@@ -37,14 +37,12 @@ import {
   type PreparedInitialCopy,
 } from '../../../services/localWorkspace/migration';
 import {
-  LEGACY_DOCUMENT_KEYS,
-} from '../../../services/localWorkspace/legacyTypes';
-import {
   WORKSPACE_DB_NAME,
   WORKSPACE_MIGRATION_ID,
   type MigrationLedger,
 } from '../../../services/localWorkspace/schema';
 import {
+  LEGACY_DOCUMENT_KEYS,
   LEGACY_KEYS,
   MemoryStorage,
   currentState,

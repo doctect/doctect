@@ -55,6 +55,17 @@ const makeState = (): AppState => ({
 });
 
 describe('project document snapshots', () => {
+    it('omits absent optional generator metadata', () => {
+        const state = makeState();
+        delete state.generator;
+
+        const snapshot = snapshotDocument(state);
+        const restored = restoreDocument(state, snapshot);
+
+        expect(snapshot).not.toHaveProperty('generator');
+        expect(restored).not.toHaveProperty('generator');
+    });
+
     it('deeply snapshots generated document fields and provenance', () => {
         const state = makeState();
         const snapshot = snapshotDocument(state);

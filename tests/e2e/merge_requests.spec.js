@@ -1,6 +1,10 @@
 
 import { test, expect } from '@playwright/test';
 import { getCloudHead, signUpAndVerify as signUp } from './helpers.js';
+import {
+    waitForPersistedCloudLink,
+    waitForPersistedGenerator,
+} from './localWorkspaceHelpers.js';
 
 // The API server (server/index.js) listens on a different origin than the Vite
 // dev server that Playwright's baseURL points at (see .env: VITE_API_BASE).
@@ -15,15 +19,6 @@ const generatedFields = state => ({
     activeVariantId: state.activeVariantId,
     generator: state.generator,
 });
-
-const waitForPersistedGenerator = async (page, expected) => {
-    await expect.poll(() => page.evaluate(() => {
-        const projects = JSON.parse(localStorage.getItem('hype_projects') || '[]');
-        const activeId = localStorage.getItem('hype_active_project');
-        const generator = projects.find(project => project.id === activeId)?.initialState?.generator;
-        return generator && { templateScript: generator.templateScript, hierarchyScript: generator.hierarchyScript };
-    })).toEqual(expected);
-};
 
 const applyGeneratorSource = async (page, title, marker) => {
     await activePane(page).getByTitle('Generate Hierarchy via Script').click();
@@ -51,8 +46,12 @@ const createAndPublishProject = async (page, description) => {
         page.getByRole('button', { name: 'Save to cloud (new)' }).click(),
     ]);
     expect(createRes.ok()).toBeTruthy();
-    const projectId = (await createRes.json()).project.id;
-    await expect(page.getByRole('button', { name: 'Save to cloud (new)' })).toBeHidden();
+    const created = await createRes.json();
+    const projectId = created.project.id;
+    await waitForPersistedCloudLink(page, {
+        projectId,
+        lastSyncedCommitId: created.commit.id,
+    });
 
     await page.getByTitle('Cloud').click();
     await page.getByRole('button', { name: /publish to gallery/i }).click();
@@ -123,6 +122,11 @@ test.describe('Merge requests', () => {
             pageB.getByRole('button', { name: 'Save to cloud', exact: true }).click(),
         ]);
         expect(saveRes.ok()).toBeTruthy();
+        const saved = await saveRes.json();
+        await waitForPersistedCloudLink(pageB, {
+            projectId: forkedProjectId,
+            lastSyncedCommitId: saved.commit.id,
+        });
         const forkHeadBeforeMr = generatedFields(
             (await getCloudHead(pageB.request, API_BASE, forkedProjectId)).state,
         );
@@ -232,6 +236,7 @@ test.describe('Merge requests', () => {
             pageD.getByRole('button', { name: /fork this project/i }).click(),
         ]);
         expect(forkRes.ok()).toBeTruthy();
+        const forkedProjectId = (await forkRes.json()).project.id;
         await pageD.waitForURL('**/app', { timeout: 15000 });
         await expect(pageD.getByTitle('Close Project')).toHaveCount(2, { timeout: 10000 });
 
@@ -242,6 +247,11 @@ test.describe('Merge requests', () => {
             pageD.getByRole('button', { name: 'Save to cloud', exact: true }).click(),
         ]);
         expect(saveResD.ok()).toBeTruthy();
+        const savedFork = await saveResD.json();
+        await waitForPersistedCloudLink(pageD, {
+            projectId: forkedProjectId,
+            lastSyncedCommitId: savedFork.commit.id,
+        });
 
         await pageD.getByTitle('Cloud').click();
         const mrTitle = `Conflicting change ${u}`;
@@ -265,6 +275,11 @@ test.describe('Merge requests', () => {
             pageC.getByRole('button', { name: 'Save to cloud', exact: true }).click(),
         ]);
         expect(saveResC.ok()).toBeTruthy();
+        const savedUpstream = await saveResC.json();
+        await waitForPersistedCloudLink(pageC, {
+            projectId: upstreamId,
+            lastSyncedCommitId: savedUpstream.commit.id,
+        });
 
         // C opens the MR (live diff is recomputed server-side on GET) and sees the conflict.
         await pageC.goto(`/mr/${mrId}`);

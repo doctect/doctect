@@ -11,7 +11,7 @@ export const snapshotDocument = (state: AppState): DocumentSnapshot => structure
     variants: state.variants,
     activeVariantId: state.activeVariantId,
     schemaVersion: state.schemaVersion,
-    generator: state.generator,
+    ...(state.generator === undefined ? {} : { generator: state.generator }),
     selectedNodeId: state.selectedNodeId,
     selectedNodeIds: state.selectedNodeIds,
     selectedTemplateId: state.selectedTemplateId,

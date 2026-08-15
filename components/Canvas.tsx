@@ -1416,7 +1416,7 @@ export const Canvas: React.FC<CanvasProps> = ({
                 opacity: 1,
                 zIndex: nextZIndexInLayer(elements, layerId),
                 layerId,
-                text: tool === 'text' ? '' : undefined,
+                ...(tool === 'text' ? { text: '' } : {}),
                 ...(tool === 'text' || tool === 'grid'
                     ? { textOverflow: 'clip' as const, textWrap: tool === 'text' }
                     : {}),
@@ -1428,7 +1428,7 @@ export const Canvas: React.FC<CanvasProps> = ({
                 textDecoration: (localStorage.getItem('doctect_last_textDecoration') as 'none' | 'underline') || 'none',
                 textColor: localStorage.getItem('doctect_last_textColor') || '#000000',
                 align: (localStorage.getItem('doctect_last_align') as 'left' | 'center' | 'right') || 'center',
-                gridConfig: gridConfig as any,
+                ...(tool === 'grid' ? { gridConfig: gridConfig as any } : {}),
                 flip: flip
             };
             // Pass false for saveHistory because we already called onInteractionStart manually above

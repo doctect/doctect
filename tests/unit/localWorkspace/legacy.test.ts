@@ -16,8 +16,8 @@ import {
   monitorLegacyKeys,
 } from '../../../services/localWorkspace/legacy';
 import { prepareInitialCopy } from '../../../services/localWorkspace/migration';
-import { LEGACY_DOCUMENT_KEYS } from '../../../services/localWorkspace/legacyTypes';
 import {
+  LEGACY_DOCUMENT_KEYS,
   LEGACY_KEYS,
   changingStorage,
   memoryStorage,
@@ -105,7 +105,7 @@ describe('legacy source monitoring', () => {
       return unsubscribe;
     }, onChange);
 
-    listener?.({ key: 'hype_projects_backup' } as StorageEvent);
+    listener?.({ key: `${LEGACY_KEYS.projects}_backup` } as StorageEvent);
     listener?.({ key: LEGACY_KEYS.projects } as StorageEvent);
     listener?.({ key: LEGACY_KEYS.pendingImport } as StorageEvent);
     listener?.({ key: null } as StorageEvent);

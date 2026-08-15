@@ -35,10 +35,6 @@ import {
 } from '../../../services/localWorkspace/schema';
 import {
   LEGACY_DOCUMENT_KEYS,
-  type LegacyDocumentKey,
-  type LegacySnapshot,
-} from '../../../services/localWorkspace/legacyTypes';
-import {
   LEGACY_KEYS,
   MemoryStorage,
   currentState,
@@ -48,6 +44,8 @@ import {
   legacySnapshot,
   memoryStorage,
   secondProject,
+  type LegacyDocumentKey,
+  type LegacySnapshot,
   validLegacyValues,
 } from '../../helpers/localWorkspaceFixtures';
 
