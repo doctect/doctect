@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { downloadBlob } from '../../services/browserDownload';
 import type {
   LocalWorkspaceStore,
@@ -83,10 +83,13 @@ export function WorkspaceBootstrapGate({
   const attemptRef = useRef(0);
   const authorityVersionRef = useRef(0);
   const actionRef = useRef(0);
-  const currentStoreRef = useRef(store);
-  currentStoreRef.current = store;
-  const currentStateRef = useRef(state);
-  currentStateRef.current = state;
+  const committedStoreRef = useRef(store);
+  const committedStateRef = useRef(state);
+
+  useLayoutEffect(() => {
+    committedStoreRef.current = store;
+    committedStateRef.current = state;
+  }, [state, store]);
 
   const resetActions = () => {
     actionRef.current += 1;
@@ -127,7 +130,7 @@ export function WorkspaceBootstrapGate({
     });
     const isCurrent = () => !controller.signal.aborted
       && attemptRef.current === attempt
-      && currentStoreRef.current === bootstrapStore;
+      && committedStoreRef.current === bootstrapStore;
 
     try {
       const result = await bootstrapStore.bootstrap({
@@ -170,7 +173,7 @@ export function WorkspaceBootstrapGate({
     const controller = controllerRef.current;
     if (!controller
       || controller.signal.aborted
-      || state.store !== currentStoreRef.current) return;
+      || state.store !== committedStoreRef.current) return;
     void beginBootstrap(controller, state.store);
   };
 
@@ -178,7 +181,7 @@ export function WorkspaceBootstrapGate({
     actionStore: LocalWorkspaceStore,
     source: RecoverySource,
   ) => {
-    if (actionStore !== currentStoreRef.current) return;
+    if (actionStore !== committedStoreRef.current) return;
     const action = ++actionRef.current;
     const attempt = attemptRef.current;
     const authorityVersion = authorityVersionRef.current;
@@ -189,7 +192,7 @@ export function WorkspaceBootstrapGate({
       if (actionRef.current !== action
         || attemptRef.current !== attempt
         || authorityVersionRef.current !== authorityVersion
-        || currentStoreRef.current !== actionStore
+        || committedStoreRef.current !== actionStore
         || controllerRef.current?.signal.aborted) {
         return;
       }
@@ -198,11 +201,11 @@ export function WorkspaceBootstrapGate({
       if (actionRef.current === action
         && attemptRef.current === attempt
         && authorityVersionRef.current === authorityVersion
-        && currentStoreRef.current === actionStore) {
+        && committedStoreRef.current === actionStore) {
         setActionError('Backup download failed. Nothing was changed. Try again.');
       }
     } finally {
-      if (actionRef.current === action && currentStoreRef.current === actionStore) {
+      if (actionRef.current === action && committedStoreRef.current === actionStore) {
         setActiveExport(null);
       }
     }
@@ -212,12 +215,12 @@ export function WorkspaceBootstrapGate({
     actionStore: LocalWorkspaceStore,
     recoveryId: string,
   ) => {
-    const currentState = currentStateRef.current;
+    const currentState = committedStateRef.current;
     if (currentState.kind !== 'blocked'
       || currentState.result.status !== 'recovery'
       || currentState.result.recovery.recoveryId !== recoveryId
       || actionStore !== currentState.store
-      || actionStore !== currentStoreRef.current) return;
+      || actionStore !== committedStoreRef.current) return;
     const action = ++actionRef.current;
     const attempt = attemptRef.current;
     const authorityVersion = authorityVersionRef.current;
@@ -231,7 +234,7 @@ export function WorkspaceBootstrapGate({
       if (actionRef.current !== action
         || attemptRef.current !== attempt
         || authorityVersionRef.current !== authorityVersion
-        || currentStoreRef.current !== actionStore
+        || committedStoreRef.current !== actionStore
         || controllerRef.current?.signal.aborted) {
         return;
       }
@@ -245,13 +248,13 @@ export function WorkspaceBootstrapGate({
       if (actionRef.current === action
         && attemptRef.current === attempt
         && authorityVersionRef.current === authorityVersion
-        && currentStoreRef.current === actionStore) {
+        && committedStoreRef.current === actionStore) {
         setActionError(
           'Recovery failed. Nothing was overwritten. Try again or download a backup.',
         );
       }
     } finally {
-      if (actionRef.current === action && currentStoreRef.current === actionStore) {
+      if (actionRef.current === action && committedStoreRef.current === actionStore) {
         setIsRecovering(false);
       }
     }
@@ -260,7 +263,7 @@ export function WorkspaceBootstrapGate({
   const continueFromReceipt = () => {
     if (state.kind !== 'ready'
       || !state.result.receipt
-      || state.store !== currentStoreRef.current) return;
+      || state.store !== committedStoreRef.current) return;
     try {
       window.localStorage.setItem(receiptPreferenceKey(state.result.receipt), '1');
     } catch {

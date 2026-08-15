@@ -1,4 +1,4 @@
-import { useLayoutEffect } from 'react';
+import { Suspense, startTransition, useLayoutEffect, useState } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { downloadBlob } from '../../services/browserDownload';
@@ -49,6 +49,48 @@ function ReplacementActionProbe({
   }, [downloadDuringLayout, store]);
 
   return <WorkspaceBootstrapGate store={store} renderEditor={fakeEditorRenderer} />;
+}
+
+function SuspendedSibling({
+  pending,
+  onRender,
+}: {
+  pending: Promise<void>;
+  onRender: () => void;
+}): never {
+  onRender();
+  throw pending;
+}
+
+function InterruptedReplacementHarness({
+  firstStore,
+  replacementStore,
+  pending,
+  onReplacementRender,
+  control,
+}: {
+  firstStore: LocalWorkspaceStore;
+  replacementStore: LocalWorkspaceStore;
+  pending: Promise<void>;
+  onReplacementRender: () => void;
+  control: { replace?: () => void };
+}) {
+  const [replacement, setReplacement] = useState(false);
+
+  useLayoutEffect(() => {
+    control.replace = () => startTransition(() => setReplacement(true));
+    return () => { delete control.replace; };
+  }, [control]);
+
+  return (
+    <Suspense fallback={<div>Replacement suspended</div>}>
+      <WorkspaceBootstrapGate
+        store={replacement ? replacementStore : firstStore}
+        renderEditor={fakeEditorRenderer}
+      />
+      {replacement && <SuspendedSibling pending={pending} onRender={onReplacementRender} />}
+    </Suspense>
+  );
 }
 
 beforeEach(() => {
@@ -150,6 +192,41 @@ describe('WorkspaceBootstrapGate', () => {
     expect(screen.queryByRole('button', { name: 'Download current browser copy' }))
       .not.toBeInTheDocument();
     expect(screen.getByRole('status')).toHaveTextContent('Opening local storage');
+  });
+
+  it('keeps committed store authority active when a replacement render is interrupted', async () => {
+    const firstStore = fakeReadyStore({
+      snapshot: workspaceSnapshot({ activeProjectId: 'committed-project' }),
+    });
+    const replacementStore = fakeReadyStore({
+      snapshot: workspaceSnapshot({ activeProjectId: 'uncommitted-project' }),
+    });
+    const suspended = deferred<void>();
+    const replacementRendered = vi.fn();
+    const control: { replace?: () => void } = {};
+    render(<InterruptedReplacementHarness
+      firstStore={firstStore}
+      replacementStore={replacementStore}
+      pending={suspended.promise}
+      onReplacementRender={replacementRendered}
+      control={control}
+    />);
+    expect(await screen.findByTestId('editor-page')).toHaveTextContent('committed-project');
+
+    act(() => control.replace?.());
+    await waitFor(() => expect(replacementRendered).toHaveBeenCalled());
+    expect(screen.getByTestId('editor-page')).toHaveTextContent('committed-project');
+    expect(replacementStore.bootstrap).not.toHaveBeenCalled();
+
+    act(() => firstStore.emitAuthorityLost(recoveryResult(splitBrainRecovery({
+      recoveryId: 'committed-store-authority-lost',
+    }))));
+
+    expect(await screen.findByRole('heading', {
+      name: 'Project copies changed in another tab',
+    })).toBeVisible();
+    expect(screen.queryByTestId('editor-page')).not.toBeInTheDocument();
+    expect(replacementStore.bootstrap).not.toHaveBeenCalled();
   });
 
   it('shows the exact initial migration failure and offers retry and backup', async () => {
