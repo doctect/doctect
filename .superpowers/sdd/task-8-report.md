@@ -47,3 +47,30 @@ Complete. `/app` now waits for verified workspace authority, EditorPage consumes
 - Five unrelated TypeScript baseline diagnostics remain unchanged.
 - Build retains its existing large-chunk warning.
 - Desktop/mobile wired-surface screenshots and controller finish review remain the requested controller gate after implementation; they were not run here.
+
+## Critical and Important Review Fix Wave
+
+### Implementation
+
+- Project saves now reject stale generations before changing durable refs, working copies, save states, or rendered structure. Current save responses reconcile only their project into the latest structural snapshot.
+- Project writes now use synchronous updater functions over the newest working copy, so root-title and document-state effects compose instead of rebuilding from one render's stale project.
+- Cloud link and restore writes now use the same generation-aware hook path as editor changes, retain failed working copies for retry, and preserve newer edits across backward completions.
+- Structural create, activate, and close callbacks use one monotonic authority generation, so stale successes and errors cannot replace newer editor structure or messaging.
+- The unsaved-navigation alertdialog now captures and restores its opener, traps Tab and Shift+Tab, and makes the editor shell inert and hidden from accessibility APIs while open.
+- CloudMenu retains failed local-link IDs and updated heads without repeating remote creation or commit calls. Pending links are isolated by local project ID across tab switches.
+
+### TDD Evidence
+
+- Initial review RED: the exact seven-suite covering command reported 17 failing and 35 passing tests. Failures reproduced stale whole-snapshot replacement, non-composable updates, direct cloud writes, stale structural authority, missing dialog isolation, and repeated cloud remote writes.
+- Stale-error RED: the focused hook case failed with `expected false to be true`, proving a superseded save error still leaked failure to its caller.
+- Project-isolation RED: the focused CloudMenu rerender case exposed `Retry local link` on a different local project instead of `Save to cloud (new)`.
+- Final covering GREEN: the exact seven-suite command passed 53/53 tests across 7 files.
+- Original Task 8 regression GREEN: the exact nine-suite command passed 89/89 tests across 9 files.
+
+### Verification
+
+- Full Vitest run, exactly once for this fix wave: 220/220 files and 2,290/2,290 tests passed in 40.28 seconds.
+- `npm run build` passed after transforming 2,448 modules in 12.18 seconds; the existing large-chunk warning remains.
+- `npx tsc --noEmit` still reports only the same five unrelated baseline diagnostics in `changePassword.test.tsx`, `loginEmailVerification.test.tsx`, and `svgEditing.test.ts`.
+- Review found no remaining Critical or Important issue in the fix diff. No repository coding-standard file exists; the diff has no blocking Fowler-baseline smell.
+- The Impeccable detector was not rerun. Screenshots remain deferred to the requested controller gate.

@@ -16,7 +16,10 @@ export interface WorkspaceProjectWrites {
   workspace: WorkspaceSnapshot;
   saveStates: ReadonlyMap<string, ProjectSaveState>;
   hasUnsavedWork: boolean;
-  updateProject(project: WorkspaceProject): void;
+  updateProject(
+    projectId: string,
+    update: (project: WorkspaceProject) => WorkspaceProject,
+  ): Promise<boolean>;
   retryProject(projectId: string): void;
   applyDurableSnapshot(snapshot: WorkspaceSnapshot): void;
   discardProject(projectId: string): void;
@@ -76,43 +79,70 @@ export function useWorkspaceProjectWrites(
     });
   }, []);
 
-  const saveProject = useCallback((project: WorkspaceProject, generation: number) => {
-    void store.commit({ type: 'save-project', project }).then(snapshot => {
-      durableSnapshotRef.current = snapshot;
+  const saveProject = useCallback(async (
+    project: WorkspaceProject,
+    generation: number,
+  ): Promise<boolean> => {
+    try {
+      const snapshot = await store.commit({ type: 'save-project', project });
       const currentCopy = workingCopiesRef.current.get(project.id);
-      if (currentCopy?.generation === generation) {
-        workingCopiesRef.current.delete(project.id);
-        setSaveStates(current => {
-          const next = new Map(current);
-          next.set(project.id, { status: 'saved' });
-          return next;
-        });
-      }
-      setWorkspace(overlayWorkingCopies(snapshot, workingCopiesRef.current));
-    }, error => {
-      if (workingCopiesRef.current.get(project.id)?.generation !== generation) return;
+      if (generationsRef.current.get(project.id) !== generation
+        || currentCopy?.generation !== generation) return true;
+
+      const savedProject = snapshot.projects.find(item => item.id === project.id);
+      const durableSnapshot = durableSnapshotRef.current;
+      if (!savedProject
+        || !durableSnapshot.projects.some(item => item.id === project.id)) return true;
+
+      const nextDurableSnapshot = {
+        ...durableSnapshot,
+        projects: durableSnapshot.projects.map(item => (
+          item.id === project.id ? savedProject : item
+        )),
+      };
+      durableSnapshotRef.current = nextDurableSnapshot;
+      workingCopiesRef.current.delete(project.id);
+      setSaveStates(current => {
+        const next = new Map(current);
+        next.set(project.id, { status: 'saved' });
+        return next;
+      });
+      setWorkspace(overlayWorkingCopies(nextDurableSnapshot, workingCopiesRef.current));
+      return true;
+    } catch (error) {
+      if (generationsRef.current.get(project.id) !== generation
+        || workingCopiesRef.current.get(project.id)?.generation !== generation) return true;
       setSaveStates(current => {
         const next = new Map(current);
         next.set(project.id, saveFailure(error));
         return next;
       });
-    });
+      return false;
+    }
   }, [store]);
 
-  const updateProject = useCallback((project: WorkspaceProject) => {
-    const generation = (generationsRef.current.get(project.id) ?? 0) + 1;
-    generationsRef.current.set(project.id, generation);
-    workingCopiesRef.current.set(project.id, { generation, project });
+  const updateProject = useCallback((
+    projectId: string,
+    update: (project: WorkspaceProject) => WorkspaceProject,
+  ): Promise<boolean> => {
+    const currentProject = workingCopiesRef.current.get(projectId)?.project
+      ?? durableSnapshotRef.current.projects.find(project => project.id === projectId);
+    if (!currentProject) return Promise.resolve(false);
+
+    const project = update(currentProject);
+    const generation = (generationsRef.current.get(projectId) ?? 0) + 1;
+    generationsRef.current.set(projectId, generation);
+    workingCopiesRef.current.set(projectId, { generation, project });
     setWorkspace(current => ({
       ...current,
-      projects: current.projects.map(item => item.id === project.id ? project : item),
+      projects: current.projects.map(item => item.id === projectId ? project : item),
     }));
     setSaveStates(current => {
       const next = new Map(current);
-      next.set(project.id, { status: 'saving' });
+      next.set(projectId, { status: 'saving' });
       return next;
     });
-    saveProject(project, generation);
+    return saveProject(project, generation);
   }, [saveProject]);
 
   const retryProject = useCallback((projectId: string) => {
@@ -126,7 +156,7 @@ export function useWorkspaceProjectWrites(
       next.set(projectId, { status: 'saving' });
       return next;
     });
-    saveProject(workingCopy.project, generation);
+    void saveProject(workingCopy.project, generation);
   }, [saveProject]);
 
   const applyDurableSnapshot = useCallback((snapshot: WorkspaceSnapshot) => {

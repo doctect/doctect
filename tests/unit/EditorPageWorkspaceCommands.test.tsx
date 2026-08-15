@@ -26,6 +26,10 @@ import type { AppState } from '../../types';
 const trackEvent = vi.hoisted(() => vi.fn());
 const downloadJson = vi.hoisted(() => vi.fn());
 const generatedResult = vi.hoisted(() => ({ current: undefined as boolean | undefined }));
+const cloudResults = vi.hoisted(() => ({
+  link: undefined as boolean | undefined,
+  restore: undefined as boolean | undefined,
+}));
 
 const generatedProject = {
   schemaVersion: 11 as const,
@@ -81,6 +85,15 @@ vi.mock('../../components/ProjectEditor', () => ({
         onClick={() => props.onNameChange(`${props.projectName} renamed`)}
       >
         Rename {props.projectName}
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          props.onNameChange(`${props.projectName} renamed`);
+          props.onStateChange({ ...props.initialState, scale: 17 });
+        }}
+      >
+        Rename and edit {props.projectName}
       </button>
       <button
         type="button"
@@ -141,18 +154,26 @@ vi.mock('../../components/AccountMenu', () => ({ AccountMenu: () => null }));
 vi.mock('../../components/cloud/CloudMenu', () => ({
   CloudMenu: ({ project, onLinkCloud, onRestoreState }: any) => (
     <div>
+      <output data-testid={`cloud-${project.id}`}>{JSON.stringify(project.cloud ?? null)}</output>
       <button
         type="button"
-        onClick={() => onLinkCloud({ projectId: 'cloud-1', lastSyncedCommitId: 'commit-1' })}
+        onClick={async () => {
+          cloudResults.link = await onLinkCloud({
+            projectId: 'cloud-1',
+            lastSyncedCommitId: 'commit-1',
+          });
+        }}
       >
         Link {project.name} to cloud
       </button>
       <button
         type="button"
-        onClick={() => onRestoreState(
-          { ...project.initialState, scale: 13 },
-          { projectId: 'cloud-1', lastSyncedCommitId: 'commit-2' },
-        )}
+        onClick={async () => {
+          cloudResults.restore = await onRestoreState(
+            { ...project.initialState, scale: 13 },
+            { projectId: 'cloud-1', lastSyncedCommitId: 'commit-2' },
+          );
+        }}
       >
         Restore {project.name} from cloud
       </button>
@@ -296,6 +317,8 @@ describe('EditorPage workspace commands', () => {
     trackEvent.mockReset();
     downloadJson.mockReset();
     generatedResult.current = undefined;
+    cloudResults.link = undefined;
+    cloudResults.restore = undefined;
     localStorage.clear();
     vi.spyOn(globalThis.crypto, 'randomUUID').mockReturnValue(
       '00000000-0000-4000-8000-000000000001',
@@ -404,7 +427,7 @@ describe('EditorPage workspace commands', () => {
     },
   );
 
-  it('clears an older command failure when a newer command succeeds', async () => {
+  it('ignores an older command failure after a newer command starts', async () => {
     const initial = workspace([
       project('project-a', 'Project A'),
       project('project-b', 'Project B'),
@@ -421,13 +444,58 @@ describe('EditorPage workspace commands', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Open Project B' }));
     fireEvent.click(screen.getByRole('button', { name: 'Open Project B' }));
-    await act(async () => first.reject(new WorkspaceStoreError('First command failed.', 'io')));
-    expect(await screen.findByRole('alert')).toHaveTextContent('First command failed.');
-
     await act(async () => second.resolve({ ...initial, activeProjectId: 'project-b' }));
+    await act(async () => {
+      first.reject(new WorkspaceStoreError('First command failed.', 'io'));
+      await first.promise.catch(() => undefined);
+    });
 
     expect(await screen.findByText('Active Project B')).toBeVisible();
     expect(screen.queryByText('First command failed.')).not.toBeInTheDocument();
+  });
+
+  it('lets only the newest structural command completion update editor authority', async () => {
+    const initial = workspace([
+      project('project-a', 'Project A'),
+      project('project-b', 'Project B'),
+    ]);
+    const create = deferred<WorkspaceSnapshot>();
+    const activate = deferred<WorkspaceSnapshot>();
+    const close = deferred<WorkspaceSnapshot>();
+    const { store, commit } = commandStore(initial, command => {
+      if (command.type === 'create-and-activate-project') return create.promise;
+      if (command.type === 'activate-project') return activate.promise;
+      if (command.type === 'close-project') return close.promise;
+      return undefined;
+    });
+    renderEditor(store, initial);
+
+    fireEvent.click(screen.getByRole('button', { name: 'New project' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create blank' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open Project B' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Close Project A' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm close' }));
+
+    const closeCommand = commit.mock.calls.find(([command]) => command.type === 'close-project')?.[0];
+    const createCommand = commit.mock.calls.find(([command]) => command.type === 'create-and-activate-project')?.[0];
+    if (!closeCommand || !createCommand) throw new Error('Expected structural commands.');
+    await act(async () => {
+      close.resolve(applyCommand(initial, closeCommand));
+      await close.promise;
+    });
+    await act(async () => {
+      activate.reject(new WorkspaceStoreError('Stale activation failed.', 'io'));
+      await activate.promise.catch(() => undefined);
+    });
+    await act(async () => {
+      create.resolve(applyCommand(initial, createCommand));
+      await create.promise;
+    });
+
+    expect(screen.getByText('Active Project B')).toBeVisible();
+    expect(screen.queryByText('Open Project A')).not.toBeInTheDocument();
+    expect(screen.queryByText('Open Blank Project')).not.toBeInTheDocument();
+    expect(screen.queryByText('Stale activation failed.')).not.toBeInTheDocument();
   });
 
   it('rejects a missing custom preset instead of silently creating blank content', async () => {
@@ -507,6 +575,24 @@ describe('EditorPage workspace commands', () => {
       type: 'save-project',
       project: expect.objectContaining({ initialState: expect.objectContaining({ scale: 9 }) }),
     });
+  });
+
+  it('composes same-render name and state changes into the latest save', async () => {
+    const initial = workspace();
+    const { store, commit } = commandStore(initial);
+    renderEditor(store, initial);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Rename and edit Project A' }));
+
+    await screen.findByText('Active Project A renamed');
+    await waitFor(() => expect(commit).toHaveBeenLastCalledWith({
+      type: 'save-project',
+      project: expect.objectContaining({
+        name: 'Project A renamed',
+        initialState: expect.objectContaining({ scale: 17 }),
+      }),
+    }));
+    expect(activeState().scale).toBe(17);
   });
 
   it('creates generated projects with source metadata and tracks only durable success', async () => {
@@ -591,13 +677,109 @@ describe('EditorPage workspace commands', () => {
     await waitFor(() => expect(activeState().scale).toBe(13));
   });
 
+  it('keeps a cloud link and newer editor state when save completions arrive backward', async () => {
+    const initial = workspace();
+    const editSave = deferred<WorkspaceSnapshot>();
+    const linkSave = deferred<WorkspaceSnapshot>();
+    const savedProjects: WorkspaceProject[] = [];
+    const { store } = commandStore(initial, command => {
+      if (command.type !== 'save-project') return undefined;
+      savedProjects.push(command.project);
+      return savedProjects.length === 1 ? editSave.promise : linkSave.promise;
+    });
+    renderEditor(store, initial);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Project A' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Link Project A to cloud' }));
+    await waitFor(() => expect(savedProjects).toHaveLength(2));
+    expect(savedProjects[1]).toMatchObject({
+      initialState: { scale: 9 },
+      cloud: { projectId: 'cloud-1', lastSyncedCommitId: 'commit-1' },
+    });
+
+    await act(async () => {
+      linkSave.resolve({ ...initial, projects: [savedProjects[1]] });
+      await linkSave.promise;
+    });
+    await waitFor(() => expect(cloudResults.link).toBe(true));
+    await act(async () => {
+      editSave.resolve({ ...initial, projects: [savedProjects[0]] });
+      await editSave.promise;
+    });
+
+    expect(activeState().scale).toBe(9);
+    expect(screen.getByTestId('cloud-project-a')).toHaveTextContent('commit-1');
+    expect(screen.getByText('Saved locally')).toBeVisible();
+  });
+
+  it('retains a failed cloud link in the hook working copy for local retry', async () => {
+    const initial = workspace();
+    let attempts = 0;
+    const { store, commit } = commandStore(initial, (command, next) => {
+      if (command.type !== 'save-project') return undefined;
+      attempts += 1;
+      if (attempts === 1) throw new WorkspaceStoreError('Cloud link write failed.', 'io');
+      return next;
+    });
+    renderEditor(store, initial);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Link Project A to cloud' }));
+
+    expect(await screen.findByText('Not saved')).toBeVisible();
+    await waitFor(() => expect(cloudResults.link).toBe(false));
+    expect(screen.getByTestId('cloud-project-a')).toHaveTextContent('commit-1');
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+
+    await screen.findByText('Saved locally');
+    expect(commit).toHaveBeenLastCalledWith({
+      type: 'save-project',
+      project: expect.objectContaining({
+        cloud: { projectId: 'cloud-1', lastSyncedCommitId: 'commit-1' },
+      }),
+    });
+  });
+
+  it('keeps a cloud restore when a newer edit supersedes its completion', async () => {
+    const initial = workspace();
+    const restoreSave = deferred<WorkspaceSnapshot>();
+    const editSave = deferred<WorkspaceSnapshot>();
+    const savedProjects: WorkspaceProject[] = [];
+    const { store } = commandStore(initial, command => {
+      if (command.type !== 'save-project') return undefined;
+      savedProjects.push(command.project);
+      return savedProjects.length === 1 ? restoreSave.promise : editSave.promise;
+    });
+    renderEditor(store, initial);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Restore Project A from cloud' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Project A' }));
+    await waitFor(() => expect(savedProjects).toHaveLength(2));
+    expect(savedProjects[1]).toMatchObject({
+      revision: 1,
+      initialState: { scale: 9 },
+      cloud: { projectId: 'cloud-1', lastSyncedCommitId: 'commit-2' },
+    });
+
+    await act(async () => {
+      editSave.resolve({ ...initial, projects: [savedProjects[1]] });
+      await editSave.promise;
+    });
+    await act(async () => {
+      restoreSave.resolve({ ...initial, projects: [savedProjects[0]] });
+      await restoreSave.promise;
+    });
+
+    expect(activeState().scale).toBe(9);
+    expect(screen.getByTestId('cloud-project-a')).toHaveTextContent('commit-2');
+  });
+
   it('blocks router and beforeunload navigation while a save is pending', async () => {
     const initial = workspace();
     const save = deferred<WorkspaceSnapshot>();
     const { store } = commandStore(initial, (command, next) => (
       command.type === 'save-project' ? save.promise : next
     ));
-    const { router } = renderEditor(store, initial);
+    const { router, container } = renderEditor(store, initial);
     const cleanEvent = new Event('beforeunload', { cancelable: true });
     window.dispatchEvent(cleanEvent);
     expect(cleanEvent.defaultPrevented).toBe(false);
@@ -608,15 +790,28 @@ describe('EditorPage workspace commands', () => {
     window.dispatchEvent(dirtyEvent);
     expect(dirtyEvent.defaultPrevented).toBe(true);
 
-    fireEvent.click(screen.getByTitle('Back to Home'));
+    const opener = screen.getByTitle('Back to Home');
+    opener.focus();
+    fireEvent.click(opener);
     const dialog = await screen.findByRole('alertdialog', { name: 'Leave editor?' });
+    const shell = container.firstElementChild;
+    const stay = within(dialog).getByRole('button', { name: 'Stay' });
+    const leave = within(dialog).getByRole('button', { name: 'Leave editor' });
     expect(dialog).toHaveTextContent('Changes are still saving or are not saved. Leaving now may lose them.');
-    expect(within(dialog).getByRole('button', { name: 'Stay' })).toHaveFocus();
+    expect(stay).toHaveFocus();
+    expect(shell).toHaveAttribute('inert');
     expect(router.state.location.pathname).toBe('/app');
 
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Stay' }));
+    fireEvent.keyDown(dialog, { key: 'Tab' });
+    expect(leave).toHaveFocus();
+    fireEvent.keyDown(dialog, { key: 'Tab', shiftKey: true });
+    expect(stay).toHaveFocus();
+
+    fireEvent.click(stay);
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByTitle('Back to Home'));
+    await waitFor(() => expect(opener).toHaveFocus());
+    expect(shell).not.toHaveAttribute('inert');
+    fireEvent.click(opener);
     fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Leave editor' }));
     await waitFor(() => expect(router.state.location.pathname).toBe('/'));
 

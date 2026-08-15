@@ -19,6 +19,8 @@ interface CloudMenuProps {
     ) => Promise<boolean>;
 }
 
+type CloudLink = NonNullable<WorkspaceProject['cloud']>;
+
 export function CloudMenu({ project, onLinkCloud, onRestoreState }: CloudMenuProps) {
     const { data: session } = useSession();
     const [open, setOpen] = useState(false);
@@ -30,9 +32,11 @@ export function CloudMenu({ project, onLinkCloud, onRestoreState }: CloudMenuPro
     const [showPropose, setShowPropose] = useState(false);
     const [cloudProject, setCloudProject] = useState<CloudProject | null>(null);
     const [saveConflict, setSaveConflict] = useState(false);
+    const [pendingCloudLinks, setPendingCloudLinks] = useState<Record<string, CloudLink>>({});
     const ref = useRef<HTMLDivElement>(null);
     const location = useLocation();
     const navigate = useNavigate();
+    const pendingCloudLink = pendingCloudLinks[project.id] ?? null;
 
     useEffect(() => {
         const onClick = (e: MouseEvent) => {
@@ -49,22 +53,36 @@ export function CloudMenu({ project, onLinkCloud, onRestoreState }: CloudMenuPro
     }, [open, project.cloud, cloudProject]);
 
     const saveToCloud = async () => {
-        const message = window.prompt('Describe this save (commit message):', project.cloud ? 'Update' : 'Initial save');
-        if (message === null) return;
         setBusy(true); setError(null); setSaveConflict(false);
         try {
+            if (pendingCloudLink) {
+                if (await onLinkCloud(pendingCloudLink) === false) {
+                    setError('Cloud save succeeded, but its local link was not saved.');
+                    return;
+                }
+                setPendingCloudLinks(current => {
+                    const next = { ...current };
+                    delete next[project.id];
+                    return next;
+                });
+                setOpen(false);
+                return;
+            }
+
+            const message = window.prompt('Describe this save (commit message):', project.cloud ? 'Update' : 'Initial save');
+            if (message === null) return;
+            let cloudLink: CloudLink;
             if (!project.cloud) {
                 const res = await cloudApi.createProject({ name: project.name, state: project.initialState, message });
-                if (await onLinkCloud({ projectId: res.project.id, lastSyncedCommitId: res.commit.id }) === false) {
-                    setError('Cloud save succeeded, but its local link was not saved.');
-                    return;
-                }
+                cloudLink = { projectId: res.project.id, lastSyncedCommitId: res.commit.id };
             } else {
                 const res = await cloudApi.saveCommit(project.cloud.projectId, project.cloud.lastSyncedCommitId, { state: project.initialState, message });
-                if (await onLinkCloud({ projectId: project.cloud.projectId, lastSyncedCommitId: res.commit.id }) === false) {
-                    setError('Cloud save succeeded, but its local link was not saved.');
-                    return;
-                }
+                cloudLink = { projectId: project.cloud.projectId, lastSyncedCommitId: res.commit.id };
+            }
+            if (await onLinkCloud(cloudLink) === false) {
+                setPendingCloudLinks(current => ({ ...current, [project.id]: cloudLink }));
+                setError('Cloud save succeeded, but its local link was not saved.');
+                return;
             }
             setOpen(false);
         } catch (e) {
@@ -127,7 +145,7 @@ export function CloudMenu({ project, onLinkCloud, onRestoreState }: CloudMenuPro
                         <>
                             <button disabled={busy} onClick={saveToCloud}
                                 className="w-full text-left flex items-center gap-1.5 px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-50">
-                                <UploadCloud size={12} /> {project.cloud ? 'Save to cloud' : 'Save to cloud (new)'}
+                                <UploadCloud size={12} /> {pendingCloudLink ? 'Retry local link' : project.cloud ? 'Save to cloud' : 'Save to cloud (new)'}
                             </button>
                             {project.cloud && (
                                 <button onClick={() => { setShowHistory(true); setOpen(false); }}

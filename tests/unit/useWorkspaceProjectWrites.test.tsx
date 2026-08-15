@@ -72,9 +72,8 @@ describe('useWorkspaceProjectWrites', () => {
       .mockReturnValueOnce(first.promise)
       .mockReturnValueOnce(second.promise));
     const { result } = renderHook(() => useWorkspaceProjectWrites(store, snapshot()));
-
-    act(() => result.current.updateProject(project('First', 2)));
-    act(() => result.current.updateProject(project('Second', 3)));
+    act(() => { void result.current.updateProject('project-1', () => project('First', 2)); });
+    act(() => { void result.current.updateProject('project-1', () => project('Second', 3)); });
 
     await act(async () => {
       first.resolve(snapshot(project('First', 2)));
@@ -98,6 +97,104 @@ describe('useWorkspaceProjectWrites', () => {
     expect(result.current.hasUnsavedWork).toBe(false);
   });
 
+  it('ignores an older whole-snapshot success after a newer generation saves', async () => {
+    const first = deferred<WorkspaceSnapshot>();
+    const second = deferred<WorkspaceSnapshot>();
+    const secondProject = { ...project('Project 2'), id: 'project-2' };
+    const initial = {
+      ...snapshot(),
+      projects: [project('Original'), secondProject],
+      activeProjectId: 'project-2',
+    };
+    const store = storeWithCommit(vi.fn()
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise));
+    const { result } = renderHook(() => useWorkspaceProjectWrites(store, initial));
+
+    act(() => { void result.current.updateProject('project-1', () => project('First', 2)); });
+    act(() => { void result.current.updateProject('project-1', () => project('Second', 3)); });
+
+    await act(async () => {
+      second.resolve({
+        ...initial,
+        projects: [project('Second', 3), secondProject],
+      });
+      await second.promise;
+    });
+    await act(async () => {
+      first.resolve(snapshot(project('First', 2)));
+      await first.promise;
+    });
+
+    expect(result.current.workspace.projects).toHaveLength(2);
+    expect(result.current.workspace.projects[0]).toMatchObject({
+      name: 'Second',
+      initialState: { scale: 3 },
+    });
+    expect(result.current.workspace.projects[1]).toEqual(secondProject);
+    expect(result.current.workspace.activeProjectId).toBe('project-2');
+    expect(result.current.saveStates.get('project-1')).toEqual({ status: 'saved' });
+  });
+
+  it('preserves newer workspace structure when the current project save completes', async () => {
+    const save = deferred<WorkspaceSnapshot>();
+    const secondProject = { ...project('Project 2'), id: 'project-2' };
+    const initial = {
+      ...snapshot(),
+      projects: [project('Original'), secondProject],
+    };
+    const store = storeWithCommit(() => save.promise);
+    const { result } = renderHook(() => useWorkspaceProjectWrites(store, initial));
+
+    act(() => { void result.current.updateProject('project-1', () => project('Working', 4)); });
+    act(() => result.current.applyDurableSnapshot(snapshot(project('Durable old copy'))));
+    await act(async () => {
+      save.resolve({
+        ...initial,
+        activeProjectId: 'project-2',
+        projects: [project('Working', 4), secondProject],
+      });
+      await save.promise;
+    });
+
+    expect(result.current.workspace.projects).toHaveLength(1);
+    expect(result.current.workspace.projects[0]).toMatchObject({
+      name: 'Working',
+      initialState: { scale: 4 },
+    });
+    expect(result.current.workspace.activeProjectId).toBe('project-1');
+  });
+
+  it('ignores an older failure after a newer generation saves', async () => {
+    const first = deferred<WorkspaceSnapshot>();
+    const second = deferred<WorkspaceSnapshot>();
+    const store = storeWithCommit(vi.fn()
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise));
+    const { result } = renderHook(() => useWorkspaceProjectWrites(store, snapshot()));
+    let firstResult!: Promise<boolean>;
+
+    act(() => {
+      firstResult = result.current.updateProject('project-1', () => project('First', 2));
+    });
+    act(() => { void result.current.updateProject('project-1', () => project('Second', 3)); });
+    await act(async () => {
+      second.resolve(snapshot(project('Second', 3)));
+      await second.promise;
+    });
+    await act(async () => {
+      first.reject(new WorkspaceStoreError('Old failure.', 'io'));
+      await first.promise.catch(() => undefined);
+    });
+
+    expect(result.current.workspace.projects[0]).toMatchObject({
+      name: 'Second',
+      initialState: { scale: 3 },
+    });
+    expect(await firstResult).toBe(true);
+    expect(result.current.saveStates.get('project-1')).toEqual({ status: 'saved' });
+  });
+
   it.each([
     ['quota', 'failed'],
     ['io', 'failed'],
@@ -108,7 +205,7 @@ describe('useWorkspaceProjectWrites', () => {
     });
     const { result } = renderHook(() => useWorkspaceProjectWrites(store, snapshot()));
 
-    act(() => result.current.updateProject(project('Unsaved', 9)));
+    act(() => { void result.current.updateProject('project-1', () => project('Unsaved', 9)); });
 
     await waitFor(() => expect(result.current.saveStates.get('project-1')).toEqual({
       status,
@@ -129,7 +226,7 @@ describe('useWorkspaceProjectWrites', () => {
     const { result } = renderHook(() => useWorkspaceProjectWrites(store, snapshot()));
     const latest = project('Latest working copy', 12);
 
-    act(() => result.current.updateProject(latest));
+    act(() => { void result.current.updateProject('project-1', () => latest); });
     await waitFor(() => expect(result.current.saveStates.get('project-1')?.status).toBe('failed'));
 
     act(() => result.current.retryProject('project-1'));
@@ -152,7 +249,7 @@ describe('useWorkspaceProjectWrites', () => {
     const { result } = renderHook(() => useWorkspaceProjectWrites(store, snapshot()));
     const working = project('Working', 5);
 
-    act(() => result.current.updateProject(working));
+    act(() => { void result.current.updateProject('project-1', () => working); });
     act(() => result.current.applyDurableSnapshot({
       ...snapshot(project('Durable old copy', 1)),
       activeProjectId: 'project-2',

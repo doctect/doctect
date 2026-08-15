@@ -31,11 +31,11 @@ const project: WorkspaceProject = {
     } as any,
 };
 
-const renderMenu = (
+const menu = (
     menuProject: WorkspaceProject = project,
     onLinkCloud = vi.fn(async () => true),
     onRestoreState = vi.fn(async () => true),
-) => render(
+) => (
     <MemoryRouter initialEntries={['/app']}>
         <Routes>
             <Route path="/app" element={<CloudMenu project={menuProject} onLinkCloud={onLinkCloud} onRestoreState={onRestoreState} />} />
@@ -43,6 +43,12 @@ const renderMenu = (
         </Routes>
     </MemoryRouter>
 );
+
+const renderMenu = (
+    menuProject: WorkspaceProject = project,
+    onLinkCloud = vi.fn(async () => true),
+    onRestoreState = vi.fn(async () => true),
+) => render(menu(menuProject, onLinkCloud, onRestoreState));
 
 describe('CloudMenu', () => {
     beforeEach(() => vi.restoreAllMocks());
@@ -103,5 +109,87 @@ describe('CloudMenu', () => {
             { projectId: 'cloud-1', lastSyncedCommitId: 'head-2' },
         ));
         expect(onLinkCloud).not.toHaveBeenCalled();
+    });
+
+    it('retries a failed new-project local link without creating another remote project', async () => {
+        mockUseSession.mockReturnValue({ data: { user: { username: 'planner_pro' } } });
+        const onLinkCloud = vi.fn()
+            .mockResolvedValueOnce(false)
+            .mockResolvedValueOnce(true);
+        const createProject = vi.spyOn(cloudApi, 'createProject').mockResolvedValue({
+            project: { id: 'cloud-created' },
+            commit: { id: 'head-created' },
+        } as any);
+        const prompt = vi.spyOn(window, 'prompt').mockReturnValue('Initial save');
+        renderMenu(project, onLinkCloud);
+
+        fireEvent.click(screen.getByTitle('Cloud'));
+        fireEvent.click(screen.getByRole('button', { name: 'Save to cloud (new)' }));
+        expect(await screen.findByText('Cloud save succeeded, but its local link was not saved.')).toBeVisible();
+
+        fireEvent.click(screen.getByRole('button', { name: 'Retry local link' }));
+
+        await waitFor(() => expect(onLinkCloud).toHaveBeenCalledTimes(2));
+        expect(onLinkCloud).toHaveBeenNthCalledWith(1, {
+            projectId: 'cloud-created',
+            lastSyncedCommitId: 'head-created',
+        });
+        expect(onLinkCloud).toHaveBeenNthCalledWith(2, {
+            projectId: 'cloud-created',
+            lastSyncedCommitId: 'head-created',
+        });
+        expect(createProject).toHaveBeenCalledTimes(1);
+        expect(prompt).toHaveBeenCalledTimes(1);
+    });
+
+    it('retries a failed updated-head local link without another cloud commit', async () => {
+        mockUseSession.mockReturnValue({ data: { user: { username: 'planner_pro' } } });
+        const linked = { ...project, cloud: { projectId: 'cloud-1', lastSyncedCommitId: 'head-1' } };
+        const onLinkCloud = vi.fn()
+            .mockResolvedValueOnce(false)
+            .mockResolvedValueOnce(true);
+        vi.spyOn(cloudApi, 'getProject').mockResolvedValue({ id: 'cloud-1', headCommitId: 'head-1' } as any);
+        const saveCommit = vi.spyOn(cloudApi, 'saveCommit').mockResolvedValue({
+            commit: { id: 'head-2' },
+        } as any);
+        const prompt = vi.spyOn(window, 'prompt').mockReturnValue('Update');
+        renderMenu(linked, onLinkCloud);
+
+        fireEvent.click(screen.getByTitle('Cloud'));
+        fireEvent.click(screen.getByRole('button', { name: 'Save to cloud' }));
+        expect(await screen.findByText('Cloud save succeeded, but its local link was not saved.')).toBeVisible();
+
+        fireEvent.click(screen.getByRole('button', { name: 'Retry local link' }));
+
+        await waitFor(() => expect(onLinkCloud).toHaveBeenCalledTimes(2));
+        expect(onLinkCloud).toHaveBeenLastCalledWith({
+            projectId: 'cloud-1',
+            lastSyncedCommitId: 'head-2',
+        });
+        expect(saveCommit).toHaveBeenCalledTimes(1);
+        expect(prompt).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps pending local links isolated by local project', async () => {
+        mockUseSession.mockReturnValue({ data: { user: { username: 'planner_pro' } } });
+        const onLinkCloud = vi.fn().mockResolvedValue(false);
+        vi.spyOn(cloudApi, 'createProject').mockResolvedValue({
+            project: { id: 'cloud-created' },
+            commit: { id: 'head-created' },
+        } as any);
+        vi.spyOn(window, 'prompt').mockReturnValue('Initial save');
+        const view = renderMenu(project, onLinkCloud);
+
+        fireEvent.click(screen.getByTitle('Cloud'));
+        fireEvent.click(screen.getByRole('button', { name: 'Save to cloud (new)' }));
+        expect(await screen.findByRole('button', { name: 'Retry local link' })).toBeVisible();
+
+        const secondProject = { ...project, id: 'local-2', name: 'Second Project' };
+        view.rerender(menu(secondProject, onLinkCloud));
+        expect(screen.getByRole('button', { name: 'Save to cloud (new)' })).toBeVisible();
+        expect(screen.queryByRole('button', { name: 'Retry local link' })).not.toBeInTheDocument();
+
+        view.rerender(menu(project, onLinkCloud));
+        expect(screen.getByRole('button', { name: 'Retry local link' })).toBeVisible();
     });
 });

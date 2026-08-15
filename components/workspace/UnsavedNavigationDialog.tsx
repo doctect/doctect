@@ -1,33 +1,81 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useLayoutEffect, useRef } from 'react';
 
 export interface UnsavedNavigationDialogProps {
+  backgroundRef: React.RefObject<HTMLElement | null>;
   onStay: () => void;
   onLeave: () => void;
 }
 
 export function UnsavedNavigationDialog({
+  backgroundRef,
   onStay,
   onLeave,
 }: UnsavedNavigationDialogProps) {
+  const dialogRef = useRef<HTMLDivElement>(null);
   const stayRef = useRef<HTMLButtonElement>(null);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    const previousFocus = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+    const background = backgroundRef.current;
+    const wasInert = background?.hasAttribute('inert') ?? false;
+    const previousAriaHidden = background?.getAttribute('aria-hidden');
+    background?.setAttribute('inert', '');
+    background?.setAttribute('aria-hidden', 'true');
     stayRef.current?.focus();
-  }, []);
+    return () => {
+      if (!wasInert) background?.removeAttribute('inert');
+      if (previousAriaHidden == null) background?.removeAttribute('aria-hidden');
+      else background?.setAttribute('aria-hidden', previousAriaHidden);
+      if (!previousFocus?.isConnected) return;
+      previousFocus.focus();
+      queueMicrotask(() => {
+        if (previousFocus.isConnected && document.activeElement === document.body) {
+          previousFocus.focus();
+        }
+      });
+    };
+  }, [backgroundRef]);
+
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      onStay();
+      return;
+    }
+    if (event.key !== 'Tab') return;
+    const buttons = Array.from(
+      dialogRef.current?.querySelectorAll<HTMLButtonElement>('button:not([disabled])') ?? [],
+    );
+    if (buttons.length === 0) {
+      event.preventDefault();
+      dialogRef.current?.focus();
+      return;
+    }
+    const first = buttons[0];
+    const last = buttons[buttons.length - 1];
+    if (event.shiftKey && (document.activeElement === first
+      || !dialogRef.current?.contains(document.activeElement))) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && (document.activeElement === last
+      || !dialogRef.current?.contains(document.activeElement))) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
 
   return (
     <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/50 p-4">
       <div
+        ref={dialogRef}
         role="alertdialog"
         aria-modal="true"
         aria-labelledby="unsaved-navigation-title"
         aria-describedby="unsaved-navigation-description"
-        onKeyDown={event => {
-          if (event.key === 'Escape') {
-            event.preventDefault();
-            onStay();
-          }
-        }}
+        tabIndex={-1}
+        onKeyDown={handleKeyDown}
         className="w-full max-w-md rounded-xl bg-white p-5 shadow-2xl outline-none"
       >
         <h2 id="unsaved-navigation-title" className="text-lg font-bold text-slate-900">

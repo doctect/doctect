@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Link, useBlocker } from 'react-router-dom';
 import { AlertTriangle, Coffee, Github, Square, X } from 'lucide-react';
 import clsx from 'clsx';
@@ -70,7 +70,10 @@ export function EditorPage({
   const [commandError, setCommandError] = useState<string | null>(null);
   const [showNewProjectModal, setShowNewProjectModal] = useState(false);
   const [closingProjectId, setClosingProjectId] = useState<string | null>(null);
+  const commandGenerationRef = useRef(0);
+  const editorShellRef = useRef<HTMLDivElement>(null);
   const blocker = useBlocker(hasUnsavedWork);
+  const navigationBlocked = blocker.state === 'blocked';
 
   const { projects, activeProjectId } = workspace;
   const activeProject = projects.find(project => project.id === activeProjectId);
@@ -89,14 +92,18 @@ export function EditorPage({
   }, [hasUnsavedWork]);
 
   const commitAndApply = async (command: WorkspaceCommand): Promise<WorkspaceSnapshot | null> => {
+    const generation = ++commandGenerationRef.current;
     setCommandError(null);
     try {
       const snapshot = await store.commit(command);
+      if (commandGenerationRef.current !== generation) return null;
       setCommandError(null);
       applyDurableSnapshot(snapshot);
       return snapshot;
     } catch (error) {
-      setCommandError(commandErrorMessage(error));
+      if (commandGenerationRef.current === generation) {
+        setCommandError(commandErrorMessage(error));
+      }
       return null;
     }
   };
@@ -168,13 +175,11 @@ export function EditorPage({
   };
 
   const handleUpdateProjectName = (projectId: string, name: string): void => {
-    const project = projects.find(candidate => candidate.id === projectId);
-    if (project) updateProject({ ...project, name });
+    void updateProject(projectId, project => ({ ...project, name }));
   };
 
   const handleUpdateProjectState = (projectId: string, initialState: AppState): void => {
-    const project = projects.find(candidate => candidate.id === projectId);
-    if (project) updateProject({ ...project, initialState });
+    void updateProject(projectId, project => ({ ...project, initialState }));
   };
 
   const handleCreateGeneratedProject = async (
@@ -209,12 +214,7 @@ export function EditorPage({
     projectId: string,
     cloud: { projectId: string; lastSyncedCommitId: string },
   ): Promise<boolean> => {
-    const project = projects.find(candidate => candidate.id === projectId);
-    if (!project) return false;
-    return Boolean(await commitAndApply({
-      type: 'save-project',
-      project: { ...project, cloud },
-    }));
+    return updateProject(projectId, project => ({ ...project, cloud }));
   };
 
   const handleRestoreState = async (
@@ -222,21 +222,20 @@ export function EditorPage({
     initialState: AppState,
     cloud?: { projectId: string; lastSyncedCommitId: string },
   ): Promise<boolean> => {
-    const project = projects.find(candidate => candidate.id === projectId);
-    if (!project) return false;
-    return Boolean(await commitAndApply({
-      type: 'save-project',
-      project: {
-        ...project,
-        initialState,
-        revision: (project.revision ?? 0) + 1,
-        ...(cloud ? { cloud } : {}),
-      },
+    return updateProject(projectId, project => ({
+      ...project,
+      initialState,
+      revision: (project.revision ?? 0) + 1,
+      ...(cloud ? { cloud } : {}),
     }));
   };
 
   return (
-    <div className="flex h-screen w-screen flex-col overflow-hidden bg-slate-200">
+    <>
+    <div
+      ref={editorShellRef}
+      className="flex h-screen w-screen flex-col overflow-hidden bg-slate-200"
+    >
       <header className="z-20 flex h-12 shrink-0 items-center gap-3 border-b bg-white px-3 sm:gap-4 sm:px-4">
         <Link
           to="/"
@@ -379,12 +378,14 @@ export function EditorPage({
         projectName={closingProject?.name ?? 'Project'}
       />
 
-      {blocker.state === 'blocked' && (
-        <UnsavedNavigationDialog
-          onStay={() => blocker.reset()}
-          onLeave={() => blocker.proceed()}
-        />
-      )}
     </div>
+    {navigationBlocked && (
+      <UnsavedNavigationDialog
+        backgroundRef={editorShellRef}
+        onStay={() => blocker.reset()}
+        onLeave={() => blocker.proceed()}
+      />
+    )}
+    </>
   );
 }
