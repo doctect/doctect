@@ -1,10 +1,12 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { HierarchyGeneratorModal } from '../../components/HierarchyGeneratorModal';
+import { WorkspaceStoreError } from '../../services/localWorkspace/index';
 import type { GeneratorProvenance } from '../../types';
 
 const runGeneratorSandbox = vi.hoisted(() => vi.fn());
 const previewPayload = vi.hoisted(() => ({ current: null as any }));
+const generatedCreateResult = vi.hoisted(() => ({ current: undefined as boolean | 'rejected' | undefined }));
 
 vi.mock('../../services/generatorSandbox', () => ({ runGeneratorSandbox }));
 vi.mock('../../components/GeneratorVisualPreviewModal', () => ({
@@ -14,7 +16,13 @@ vi.mock('../../components/GeneratorVisualPreviewModal', () => ({
             <div role="dialog" aria-label="Generated Project Preview">
                 <button onClick={props.onBack}>Back to Scripts</button>
                 <button onClick={props.onReplace}>Replace Current Project</button>
-                <button onClick={() => props.onCreateProject('Separate Generated')}>Create Test Project</button>
+                <button onClick={async () => {
+                    try {
+                        generatedCreateResult.current = await props.onCreateProject('Separate Generated');
+                    } catch {
+                        generatedCreateResult.current = 'rejected';
+                    }
+                }}>Create Test Project</button>
             </div>
         );
     },
@@ -70,6 +78,7 @@ describe('HierarchyGeneratorModal', () => {
         vi.restoreAllMocks();
         runGeneratorSandbox.mockReset();
         runGeneratorSandbox.mockResolvedValue({ ok: true, value: validSandboxValue });
+        generatedCreateResult.current = undefined;
     });
 
     it('starts structure help closed and resets it after remount', () => {
@@ -244,8 +253,31 @@ describe('HierarchyGeneratorModal', () => {
 
         expect(props.onClose).not.toHaveBeenCalled();
         await act(async () => pending.resolve(false));
+        expect(generatedCreateResult.current).toBe(false);
         expect(props.onClose).not.toHaveBeenCalled();
         expect(screen.getByRole('dialog', { name: 'Generated Project Preview' })).toBeVisible();
+    });
+
+    it('keeps exact source and ready preview intact when generated project persistence rejects', async () => {
+        const props = renderModal({
+            onCreateGeneratedProject: vi.fn(async () => {
+                throw new WorkspaceStoreError('quota', 'quota');
+            }),
+        });
+        fireEvent.click(screen.getByRole('button', { name: 'Preview' }));
+        await screen.findByRole('dialog', { name: 'Generated Project Preview' });
+        const before = structuredClone(previewPayload.current);
+
+        fireEvent.click(screen.getByRole('button', { name: 'Create Test Project' }));
+
+        await waitFor(() => expect(generatedCreateResult.current).toBe(false));
+        expect(props.onClose).not.toHaveBeenCalled();
+        expect(screen.getByRole('dialog', { name: 'Generated Project Preview' })).toBeVisible();
+        expect(previewPayload.current).toEqual(before);
+
+        fireEvent.click(screen.getByRole('button', { name: 'Back to Scripts' }));
+        expect(screen.getByLabelText('Template script')).toHaveValue(saved.templateScript);
+        expect(screen.getByLabelText('Hierarchy script')).toHaveValue(saved.hierarchyScript);
     });
 
     it('shows failed previews and keeps Apply disabled', async () => {

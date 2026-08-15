@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { GeneratorVisualPreviewModal } from '../../components/GeneratorVisualPreviewModal';
 import { fitTemplateScale } from '../../services/generatorVisualPreview';
 import type { GeneratorPreviewPayload } from '../../services/generatorVisualPreview';
+import { WorkspaceStoreError } from '../../services/localWorkspace/index';
 import type { PageTemplate } from '../../types';
 
 vi.mock('../../components/canvas/ReadOnlyPagePreview', () => ({
@@ -82,6 +83,16 @@ const renderModal = (overrides: Record<string, unknown> = {}, payload = makePayl
   };
   const view = render(<GeneratorVisualPreviewModal {...props} />);
   return { ...view, props };
+};
+
+const deferred = <T,>() => {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
 };
 
 describe('GeneratorVisualPreviewModal', () => {
@@ -237,7 +248,7 @@ describe('GeneratorVisualPreviewModal', () => {
     expect(props.onReplace).toHaveBeenCalledOnce();
   });
 
-  it('validates, trims, and submits the generated project name', () => {
+  it('validates, trims, and submits the generated project name', async () => {
     const { props } = renderModal();
     const mainDialog = screen.getByRole('dialog', { name: 'Generated Project Preview' });
     fireEvent.click(screen.getByRole('button', { name: 'Create As New Project' }));
@@ -263,35 +274,66 @@ describe('GeneratorVisualPreviewModal', () => {
     expect(within(namingDialog).getByRole('alert')).toHaveTextContent('Project name must be 100 characters or fewer.');
 
     fireEvent.change(input, { target: { value: '  Generated copy  ' } });
-    fireEvent.click(within(namingDialog).getByRole('button', { name: 'Create Project' }));
+    await act(async () => {
+      fireEvent.click(within(namingDialog).getByRole('button', { name: 'Create Project' }));
+    });
     expect(props.onCreateProject).toHaveBeenCalledWith('Generated copy');
   });
 
-  it('keeps naming open and reports callback failure', async () => {
-    const { props } = renderModal({ onCreateProject: vi.fn(async () => false) });
+  it('keeps naming open, blocks duplicate submit, and disables dismissal and editing while creation is pending', async () => {
+    const pending = deferred<boolean>();
+    const { props } = renderModal({ onCreateProject: vi.fn(() => pending.promise) });
     fireEvent.click(screen.getByRole('button', { name: 'Create As New Project' }));
     const namingDialog = screen.getByRole('dialog', { name: 'Create Generated Project' });
+    const input = within(namingDialog).getByRole('textbox', { name: 'Project name' });
+    fireEvent.change(input, { target: { value: 'Separate Generated' } });
 
     fireEvent.click(within(namingDialog).getByRole('button', { name: 'Create Project' }));
 
-    expect(props.onCreateProject).toHaveBeenCalledWith('Current – Generated');
-    expect(await within(namingDialog).findByRole('alert')).toHaveTextContent('Could not create project. Try again.');
+    const creatingButton = within(namingDialog).getByRole('button', { name: 'Creating…' });
+    expect(creatingButton).toBeDisabled();
+    expect(input).toBeDisabled();
+    expect(within(namingDialog).getByRole('button', { name: 'Cancel' })).toBeDisabled();
+    expect(namingDialog).toHaveAttribute('aria-busy', 'true');
+    expect(props.onCreateProject).toHaveBeenCalledOnce();
+    expect(props.onCreateProject).toHaveBeenCalledWith('Separate Generated');
+
+    fireEvent.click(creatingButton);
+    fireEvent.submit(namingDialog.querySelector('form')!);
+    fireEvent.keyDown(namingDialog, { key: 'Escape' });
+
+    expect(props.onCreateProject).toHaveBeenCalledOnce();
+    expect(screen.getByRole('dialog', { name: 'Create Generated Project' })).toBeVisible();
+    expect(input).toHaveValue('Separate Generated');
+
+    await act(async () => pending.resolve(true));
+    expect(screen.queryByRole('dialog', { name: 'Create Generated Project' })).not.toBeInTheDocument();
   });
 
-  it('awaits project persistence before treating creation as successful', async () => {
-    let resolve!: (created: boolean) => void;
-    const pending = new Promise<boolean>(next => { resolve = next; });
-    const onCreateProject = vi.fn(() => pending);
-    renderModal({ onCreateProject });
+  it.each([
+    ['returns false', () => Promise.resolve(false)],
+    ['rejects', () => Promise.reject(new WorkspaceStoreError('quota', 'quota'))],
+  ])('retains the entered name and preview with exact recovery copy when creation %s', async (_case, create) => {
+    const { props } = renderModal({ onCreateProject: vi.fn(create) });
+    const previewDialog = screen.getByRole('dialog', { name: 'Generated Project Preview' });
     fireEvent.click(screen.getByRole('button', { name: 'Create As New Project' }));
     const namingDialog = screen.getByRole('dialog', { name: 'Create Generated Project' });
+    const input = within(namingDialog).getByRole('textbox', { name: 'Project name' });
+    fireEvent.change(input, { target: { value: 'Separate Generated' } });
 
     fireEvent.click(within(namingDialog).getByRole('button', { name: 'Create Project' }));
 
-    expect(onCreateProject).toHaveBeenCalledOnce();
-    expect(within(namingDialog).queryByRole('alert')).not.toBeInTheDocument();
-    await act(async () => resolve(false));
-    expect(await within(namingDialog).findByRole('alert')).toHaveTextContent('Could not create project. Try again.');
+    expect(await within(namingDialog).findByRole('alert')).toHaveTextContent(
+      'Could not create project. Your current project is unchanged. Try again.',
+    );
+    expect(input).toHaveValue('Separate Generated');
+    expect(input).toBeEnabled();
+    expect(within(namingDialog).getByRole('button', { name: 'Cancel' })).toBeEnabled();
+    expect(within(namingDialog).getByRole('button', { name: 'Create Project' })).toBeEnabled();
+    expect(namingDialog).not.toHaveAttribute('aria-busy');
+    expect(previewDialog).toBeInTheDocument();
+    expect(props.onBack).not.toHaveBeenCalled();
+    expect(props.onReplace).not.toHaveBeenCalled();
   });
 
   it('isolates preview render failures without disabling project actions', () => {

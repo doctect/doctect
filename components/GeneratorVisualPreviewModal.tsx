@@ -98,11 +98,13 @@ export const GeneratorVisualPreviewModal: React.FC<GeneratorVisualPreviewModalPr
   const [naming, setNaming] = useState(false);
   const [name, setName] = useState(`${currentProjectName} – Generated`);
   const [nameError, setNameError] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
   const dialogRef = useRef<HTMLDivElement>(null);
   const lightboxRef = useRef<HTMLDivElement>(null);
   const namingRef = useRef<HTMLDivElement>(null);
   const namingInputRef = useRef<HTMLInputElement>(null);
   const namingTriggerRef = useRef<HTMLButtonElement>(null);
+  const creatingRef = useRef(false);
   const lightboxTriggerRef = useRef<HTMLButtonElement | null>(null);
   const restoreLightboxFocusRef = useRef(false);
   const restoreNamingFocusRef = useRef(false);
@@ -200,6 +202,7 @@ export const GeneratorVisualPreviewModal: React.FC<GeneratorVisualPreviewModalPr
   };
 
   const closeNaming = () => {
+    if (creatingRef.current) return;
     restoreNamingFocusRef.current = true;
     setNaming(false);
     setNameError(null);
@@ -216,11 +219,26 @@ export const GeneratorVisualPreviewModal: React.FC<GeneratorVisualPreviewModalPr
   };
 
   const submitName = async () => {
+    if (creatingRef.current) return;
     const trimmed = name.trim();
     if (!trimmed) return setNameError('Project name is required.');
     if (trimmed.length > 100) return setNameError('Project name must be 100 characters or fewer.');
-    if (await onCreateProject(trimmed)) return;
-    setNameError('Could not create project. Try again.');
+    creatingRef.current = true;
+    setCreating(true);
+    setNameError(null);
+    try {
+      if (await onCreateProject(trimmed)) {
+        creatingRef.current = false;
+        setCreating(false);
+        closeNaming();
+        return;
+      }
+    } catch {
+      // Durable write failures share one recovery path and leave the generated preview intact.
+    }
+    creatingRef.current = false;
+    setCreating(false);
+    setNameError('Could not create project. Your current project is unchanged. Try again.');
   };
 
   const handleDialogKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -417,6 +435,7 @@ export const GeneratorVisualPreviewModal: React.FC<GeneratorVisualPreviewModalPr
               role="dialog"
               aria-modal="true"
               aria-labelledby="generator-name-title"
+              aria-busy={creating || undefined}
               tabIndex={-1}
               onKeyDown={handleNamingKeyDown}
               className="w-full max-w-md rounded-xl bg-white p-6 shadow-2xl outline-none"
@@ -434,17 +453,20 @@ export const GeneratorVisualPreviewModal: React.FC<GeneratorVisualPreviewModalPr
                   ref={namingInputRef}
                   id="generated-project-name"
                   value={name}
+                  disabled={creating}
                   aria-describedby={nameError ? 'generated-project-name-error' : undefined}
                   onChange={event => {
                     setName(event.target.value);
                     setNameError(null);
                   }}
-                  className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
+                  className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500"
                 />
                 {nameError && <p id="generated-project-name-error" role="alert" className="mt-2 text-sm text-red-700">{nameError}</p>}
                 <div className="mt-5 flex justify-end gap-3">
-                  <button type="button" onClick={closeNaming} className="rounded-md px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100">Cancel</button>
-                  <button type="submit" className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700">Create Project</button>
+                  <button type="button" disabled={creating} onClick={closeNaming} className="rounded-md px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50">Cancel</button>
+                  <button type="submit" disabled={creating} aria-live="polite" className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60">
+                    {creating ? 'Creating…' : 'Create Project'}
+                  </button>
                 </div>
               </form>
             </div>

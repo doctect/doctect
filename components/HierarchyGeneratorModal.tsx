@@ -2430,12 +2430,16 @@ const HierarchyGeneratorSession: React.FC<HierarchyGeneratorSessionProps> = ({
           onBack={() => setShowVisualPreview(false)}
           onReplace={applyPreview}
           onCreateProject={async name => {
-            const created = await onCreateGeneratedProject(name, previewState.project, previewState.source);
-            if (created) {
-              setShowVisualPreview(false);
-              onClose();
+            try {
+              const created = await onCreateGeneratedProject(name, previewState.project, previewState.source);
+              if (created) {
+                setShowVisualPreview(false);
+                onClose();
+              }
+              return created;
+            } catch {
+              return false;
             }
-            return created;
           }}
         />
       )}
