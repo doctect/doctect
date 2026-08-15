@@ -11,7 +11,10 @@ import { CloudMenu } from '../components/cloud/CloudMenu';
 import { LocalSaveStatus } from '../components/workspace/LocalSaveStatus';
 import { UnsavedNavigationDialog } from '../components/workspace/UnsavedNavigationDialog';
 import { KOFI_URL } from '../constants/editor';
-import { useWorkspaceProjectWrites } from '../hooks/useWorkspaceProjectWrites';
+import {
+  useWorkspaceProjectWrites,
+  type StructuralWorkspaceCommand,
+} from '../hooks/useWorkspaceProjectWrites';
 import { downloadJson } from '../services/browserDownload';
 import { createGeneratedAppState } from '../services/generatedProjectState';
 import { trackEvent } from '../services/analytics';
@@ -26,7 +29,6 @@ import {
 import type { GeneratorSourceDraft } from '../services/generatorVisualPreview';
 import type {
   LocalWorkspaceStore,
-  WorkspaceCommand,
   WorkspaceProject,
   WorkspaceSnapshot,
 } from '../services/localWorkspace/index';
@@ -62,15 +64,13 @@ export function EditorPage({
     saveStates,
     hasUnsavedWork,
     updateProject,
+    commitStructural,
     retryProject,
-    applyDurableSnapshot,
-    discardProject,
   } = useWorkspaceProjectWrites(store, initialWorkspace);
   const [loadWarnings, setLoadWarnings] = useState(initialWarnings);
   const [commandError, setCommandError] = useState<string | null>(null);
   const [showNewProjectModal, setShowNewProjectModal] = useState(false);
   const [closingProjectId, setClosingProjectId] = useState<string | null>(null);
-  const commandGenerationRef = useRef(0);
   const editorShellRef = useRef<HTMLDivElement>(null);
   const blocker = useBlocker(hasUnsavedWork);
   const navigationBlocked = blocker.state === 'blocked';
@@ -91,19 +91,16 @@ export function EditorPage({
     return () => window.removeEventListener('beforeunload', preventUnload);
   }, [hasUnsavedWork]);
 
-  const commitAndApply = async (command: WorkspaceCommand): Promise<WorkspaceSnapshot | null> => {
-    const generation = ++commandGenerationRef.current;
+  const commitAndApply = async (
+    command: StructuralWorkspaceCommand,
+  ): Promise<WorkspaceSnapshot | null> => {
     setCommandError(null);
     try {
-      const snapshot = await store.commit(command);
-      if (commandGenerationRef.current !== generation) return null;
+      const snapshot = await commitStructural(command);
       setCommandError(null);
-      applyDurableSnapshot(snapshot);
       return snapshot;
     } catch (error) {
-      if (commandGenerationRef.current === generation) {
-        setCommandError(commandErrorMessage(error));
-      }
+      setCommandError(commandErrorMessage(error));
       return null;
     }
   };
@@ -160,7 +157,6 @@ export function EditorPage({
       ...(successor ? { successor } : {}),
     });
     if (!closed) return;
-    discardProject(closingProjectId);
     setClosingProjectId(null);
   };
 

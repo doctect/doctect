@@ -275,7 +275,11 @@ const commandStore = (
     commit,
     exportRecoveryBundle: vi.fn(),
   };
-  return { store, commit };
+  return {
+    store,
+    commit,
+    getDurable: () => structuredClone(durable),
+  };
 };
 
 const renderEditor = (
@@ -308,6 +312,11 @@ const activeState = (): AppState => {
   const pane = screen.getAllByTestId(/^editor-/).find(item => item.dataset.active === 'true');
   if (!pane) throw new Error('No active project pane.');
   const output = within(pane).getByTestId(/^state-/);
+  return JSON.parse(output.textContent || '{}');
+};
+
+const projectState = (projectId: string): AppState => {
+  const output = screen.getByTestId(`state-${projectId}`);
   return JSON.parse(output.textContent || '{}');
 };
 
@@ -427,7 +436,7 @@ describe('EditorPage workspace commands', () => {
     },
   );
 
-  it('ignores an older command failure after a newer command starts', async () => {
+  it('applies a newer structural success after an older failure', async () => {
     const initial = workspace([
       project('project-a', 'Project A'),
       project('project-b', 'Project B'),
@@ -454,48 +463,96 @@ describe('EditorPage workspace commands', () => {
     expect(screen.queryByText('First command failed.')).not.toBeInTheDocument();
   });
 
-  it('lets only the newest structural command completion update editor authority', async () => {
+  it('applies stale structural shape without replacing a newer saved project', async () => {
     const initial = workspace([
       project('project-a', 'Project A'),
       project('project-b', 'Project B'),
     ]);
-    const create = deferred<WorkspaceSnapshot>();
-    const activate = deferred<WorkspaceSnapshot>();
-    const close = deferred<WorkspaceSnapshot>();
-    const { store, commit } = commandStore(initial, command => {
-      if (command.type === 'create-and-activate-project') return create.promise;
-      if (command.type === 'activate-project') return activate.promise;
-      if (command.type === 'close-project') return close.promise;
-      return undefined;
+    const activation = deferred<WorkspaceSnapshot>();
+    const { store, commit } = commandStore(initial, (command, next) => {
+      if (command.type === 'activate-project') return activation.promise;
+      return next;
     });
     renderEditor(store, initial);
 
-    fireEvent.click(screen.getByRole('button', { name: 'New project' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Create blank' }));
     fireEvent.click(screen.getByRole('button', { name: 'Open Project B' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Close Project A' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Confirm close' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Project A' }));
 
-    const closeCommand = commit.mock.calls.find(([command]) => command.type === 'close-project')?.[0];
-    const createCommand = commit.mock.calls.find(([command]) => command.type === 'create-and-activate-project')?.[0];
-    if (!closeCommand || !createCommand) throw new Error('Expected structural commands.');
-    await act(async () => {
-      close.resolve(applyCommand(initial, closeCommand));
-      await close.promise;
+    await screen.findByText('Saved locally');
+    expect(projectState('project-a').scale).toBe(9);
+    expect(commit).toHaveBeenNthCalledWith(1, {
+      type: 'activate-project',
+      projectId: 'project-b',
     });
-    await act(async () => {
-      activate.reject(new WorkspaceStoreError('Stale activation failed.', 'io'));
-      await activate.promise.catch(() => undefined);
-    });
-    await act(async () => {
-      create.resolve(applyCommand(initial, createCommand));
-      await create.promise;
+    expect(commit).toHaveBeenNthCalledWith(2, {
+      type: 'save-project',
+      project: expect.objectContaining({ initialState: expect.objectContaining({ scale: 9 }) }),
     });
 
+    await act(async () => {
+      activation.resolve({
+        ...initial,
+        projects: [initial.projects[1], initial.projects[0]],
+        activeProjectId: 'project-b',
+      });
+      await activation.promise;
+    });
+
+    expect(await screen.findByText('Active Project B')).toBeVisible();
+    expect(screen.getAllByRole('button', { name: /^Open / }).map(button => button.textContent)).toEqual([
+      'Open Project B',
+      'Open Project A',
+    ]);
+    expect(projectState('project-a').scale).toBe(9);
+    expect(screen.getByText('Saved locally')).toBeVisible();
+  });
+
+  it('applies an older structural success before reporting a newer failure', async () => {
+    const initial = workspace([
+      project('project-a', 'Project A'),
+      project('project-b', 'Project B'),
+    ]);
+    const first = deferred<WorkspaceSnapshot>();
+    const second = deferred<WorkspaceSnapshot>();
+    let activation = 0;
+    let firstSettled = false;
+    let secondStartedBeforeFirstSettled = false;
+    const { store, commit, getDurable } = commandStore(initial, command => {
+      if (command.type !== 'activate-project') return undefined;
+      activation += 1;
+      if (activation === 1) return first.promise;
+      secondStartedBeforeFirstSettled = !firstSettled;
+      return second.promise;
+    });
+    renderEditor(store, initial);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open Project B' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open Project B' }));
+
+    firstSettled = true;
+    await act(async () => {
+      first.resolve({
+        ...initial,
+        projects: [initial.projects[1], initial.projects[0]],
+        activeProjectId: 'project-b',
+      });
+      await first.promise;
+    });
+    await waitFor(() => expect(commit).toHaveBeenCalledTimes(2));
+    await act(async () => {
+      second.reject(new WorkspaceStoreError('Newer activation failed.', 'io'));
+      await second.promise.catch(() => undefined);
+    });
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Newer activation failed.');
     expect(screen.getByText('Active Project B')).toBeVisible();
-    expect(screen.queryByText('Open Project A')).not.toBeInTheDocument();
-    expect(screen.queryByText('Open Blank Project')).not.toBeInTheDocument();
-    expect(screen.queryByText('Stale activation failed.')).not.toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: /^Open / }).map(button => button.textContent)).toEqual([
+      'Open Project B',
+      'Open Project A',
+    ]);
+    expect(getDurable().activeProjectId).toBe('project-b');
+    expect(getDurable().projects.map(item => item.id)).toEqual(['project-b', 'project-a']);
+    expect(secondStartedBeforeFirstSettled).toBe(false);
   });
 
   it('rejects a missing custom preset instead of silently creating blank content', async () => {

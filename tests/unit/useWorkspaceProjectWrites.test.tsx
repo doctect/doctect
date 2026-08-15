@@ -143,11 +143,20 @@ describe('useWorkspaceProjectWrites', () => {
       ...snapshot(),
       projects: [project('Original'), secondProject],
     };
-    const store = storeWithCommit(() => save.promise);
+    const store = storeWithCommit(command => (
+      command.type === 'save-project'
+        ? save.promise
+        : Promise.resolve(snapshot(project('Durable old copy')))
+    ));
     const { result } = renderHook(() => useWorkspaceProjectWrites(store, initial));
 
     act(() => { void result.current.updateProject('project-1', () => project('Working', 4)); });
-    act(() => result.current.applyDurableSnapshot(snapshot(project('Durable old copy'))));
+    await act(async () => {
+      await result.current.commitStructural({
+        type: 'activate-project',
+        projectId: 'project-1',
+      });
+    });
     await act(async () => {
       save.resolve({
         ...initial,
@@ -163,6 +172,66 @@ describe('useWorkspaceProjectWrites', () => {
       initialState: { scale: 4 },
     });
     expect(result.current.workspace.activeProjectId).toBe('project-1');
+  });
+
+  it('applies structural shape without replacing authoritative surviving projects', async () => {
+    const structural = deferred<WorkspaceSnapshot>();
+    const save = deferred<WorkspaceSnapshot>();
+    const secondProject = { ...project('Project 2'), id: 'project-2' };
+    const removedProject = { ...project('Removed'), id: 'project-3' };
+    const addedProject = { ...project('Added', 7), id: 'project-4' };
+    const initial = {
+      ...snapshot(),
+      projects: [project('Original'), secondProject, removedProject],
+    };
+    const store = storeWithCommit(command => (
+      command.type === 'save-project' ? save.promise : structural.promise
+    ));
+    const { result } = renderHook(() => useWorkspaceProjectWrites(store, initial));
+    let structuralWrite!: Promise<WorkspaceSnapshot>;
+    let projectWrite!: Promise<boolean>;
+
+    act(() => {
+      structuralWrite = result.current.commitStructural({
+        type: 'activate-project',
+        projectId: 'project-2',
+      });
+    });
+    act(() => {
+      projectWrite = result.current.updateProject(
+        'project-1',
+        () => project('Latest saved', 9),
+      );
+    });
+    await act(async () => {
+      save.resolve({
+        ...initial,
+        projects: [project('Latest saved', 9), secondProject, removedProject],
+      });
+      await projectWrite;
+    });
+    await act(async () => {
+      structural.resolve({
+        ...initial,
+        projects: [secondProject, project('Captured old'), addedProject],
+        activeProjectId: 'project-2',
+      });
+      await structuralWrite;
+    });
+
+    expect(result.current.workspace.projects.map(item => item.id)).toEqual([
+      'project-2',
+      'project-1',
+      'project-4',
+    ]);
+    expect(result.current.workspace.projects[1]).toMatchObject({
+      name: 'Latest saved',
+      initialState: { scale: 9 },
+    });
+    expect(result.current.workspace.projects[2]).toEqual(addedProject);
+    expect(result.current.workspace.activeProjectId).toBe('project-2');
+    expect(result.current.saveStates.get('project-1')).toEqual({ status: 'saved' });
+    expect(result.current.saveStates.has('project-3')).toBe(false);
   });
 
   it('ignores an older failure after a newer generation saves', async () => {
@@ -243,26 +312,43 @@ describe('useWorkspaceProjectWrites', () => {
     expect(result.current.saveStates.get('project-1')).toEqual({ status: 'saved' });
   });
 
-  it('overlays working copies on structural snapshots and can discard a closed project', () => {
+  it('overlays working copies on structural snapshots and invalidates removed projects', async () => {
     const pending = new Promise<WorkspaceSnapshot>(() => {});
-    const store = storeWithCommit(() => pending);
+    const secondProject = { ...project('Second'), id: 'project-2' };
+    const store = storeWithCommit(command => {
+      if (command.type === 'save-project') return pending;
+      if (command.type === 'activate-project') {
+        return Promise.resolve({
+          ...snapshot(project('Durable old copy', 1)),
+          activeProjectId: 'project-2',
+          projects: [project('Durable old copy', 1), secondProject],
+        });
+      }
+      return Promise.resolve({
+        ...snapshot(secondProject),
+        projects: [secondProject],
+      });
+    });
     const { result } = renderHook(() => useWorkspaceProjectWrites(store, snapshot()));
     const working = project('Working', 5);
 
     act(() => { void result.current.updateProject('project-1', () => working); });
-    act(() => result.current.applyDurableSnapshot({
-      ...snapshot(project('Durable old copy', 1)),
-      activeProjectId: 'project-2',
-      projects: [
-        project('Durable old copy', 1),
-        { ...project('Second'), id: 'project-2' },
-      ],
-    }));
+    await act(async () => {
+      await result.current.commitStructural({
+        type: 'activate-project',
+        projectId: 'project-2',
+      });
+    });
 
     expect(result.current.workspace.projects[0]).toEqual(working);
     expect(result.current.workspace.activeProjectId).toBe('project-2');
 
-    act(() => result.current.discardProject('project-1'));
+    await act(async () => {
+      await result.current.commitStructural({
+        type: 'close-project',
+        projectId: 'project-1',
+      });
+    });
     expect(result.current.workspace.projects.map(item => item.id)).toEqual(['project-2']);
     expect(result.current.saveStates.has('project-1')).toBe(false);
   });

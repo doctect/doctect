@@ -74,3 +74,27 @@ Complete. `/app` now waits for verified workspace authority, EditorPage consumes
 - `npx tsc --noEmit` still reports only the same five unrelated baseline diagnostics in `changePassword.test.tsx`, `loginEmailVerification.test.tsx`, and `svgEditing.test.ts`.
 - Review found no remaining Critical or Important issue in the fix diff. No repository coding-standard file exists; the diff has no blocking Fowler-baseline smell.
 - The Impeccable detector was not rerun. Screenshots remain deferred to the requested controller gate.
+
+## Cross-Authority Review Fix
+
+### Implementation
+
+- Replaced EditorPage's independent structural generation clock and direct snapshot publication with `commitStructural` on the workspace-write hook.
+- Structural intents now enter one invocation-ordered queue. Each successful store result is reconciled and rendered before the next intent executes, while failures leave all earlier successful structure visible.
+- Structural reconciliation takes project order, additions, removals, active project, presets, and pending imports from the returned snapshot. Surviving project payloads come from the latest hook-owned durable generation, with current working copies overlaid.
+- Removed-project generations are invalidated inside reconciliation, preventing pending save completions from restoring closed projects or stale save states.
+
+### TDD Evidence
+
+- Focused RED: `npx vitest run tests/unit/useWorkspaceProjectWrites.test.tsx tests/unit/EditorPageWorkspaceCommands.test.tsx` reported 3 failing and 29 passing tests. Failures were missing `commitStructural`, stale structural content replacing scale 9 with scale 1, and an ignored successful activation leaving UI on Project A while mock durable state was Project B.
+- Focused GREEN: the same command passed 32/32 tests across 2 files.
+- Final covering GREEN: the exact seven-suite command passed 55/55 tests across 7 files.
+- Original Task 8 regression GREEN: the exact nine-suite command passed 91/91 tests across 9 files.
+
+### Verification
+
+- Full Vitest run, exactly once for this fix wave: 220/220 files and 2,292/2,292 tests passed in 39.21 seconds.
+- `npm run build` passed after transforming 2,448 modules in 11.45 seconds; the existing large-chunk warning remains.
+- `npx tsc --noEmit` still reports only the same five unrelated baseline diagnostics in `changePassword.test.tsx`, `loginEmailVerification.test.tsx`, and `svgEditing.test.ts`.
+- Review found no remaining Critical or Important cross-authority issue. No Minor finding was addressed.
+- The Impeccable detector was not rerun. Screenshots remain deferred.
