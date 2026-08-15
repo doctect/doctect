@@ -1,3 +1,4 @@
+import { useLayoutEffect } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { downloadBlob } from '../../services/browserDownload';
@@ -8,6 +9,7 @@ import {
 import { MigrationReceipt } from '../../components/workspace/MigrationReceipt';
 import { WorkspaceRecoveryScreen } from '../../components/workspace/WorkspaceRecoveryScreen';
 import type {
+  LocalWorkspaceStore,
   RecoverySource,
   WorkspaceBootstrapPhase,
 } from '../../services/localWorkspace/index';
@@ -32,6 +34,22 @@ vi.mock('../../services/browserDownload', () => ({
 const fakeEditorRenderer = ({ initialWorkspace }: WorkspaceEditorMount) => (
   <div data-testid="editor-page">{initialWorkspace.activeProjectId}</div>
 );
+
+function ReplacementActionProbe({
+  store,
+  downloadDuringLayout,
+}: {
+  store: LocalWorkspaceStore;
+  downloadDuringLayout: boolean;
+}) {
+  useLayoutEffect(() => {
+    if (downloadDuringLayout) {
+      screen.queryByRole('button', { name: 'Download current browser copy' })?.click();
+    }
+  }, [downloadDuringLayout, store]);
+
+  return <WorkspaceBootstrapGate store={store} renderEditor={fakeEditorRenderer} />;
+}
 
 beforeEach(() => {
   window.localStorage.clear();
@@ -90,6 +108,48 @@ describe('WorkspaceBootstrapGate', () => {
       initialWorkspace: snapshot,
       initialWarnings: [],
     });
+  });
+
+  it('fails closed synchronously while a replacement store bootstraps', async () => {
+    const firstSnapshot = workspaceSnapshot({ activeProjectId: 'first-store-project' });
+    const firstStore = fakeReadyStore({ snapshot: firstSnapshot });
+    const replacementBootstrap = deferred<ReturnType<typeof readyResult>>();
+    const replacementStore = fakeStore({ bootstrap: replacementBootstrap.promise });
+    const renderEditor = vi.fn(fakeEditorRenderer);
+    const view = render(
+      <WorkspaceBootstrapGate store={firstStore} renderEditor={renderEditor} />,
+    );
+    expect(await screen.findByTestId('editor-page')).toHaveTextContent('first-store-project');
+    renderEditor.mockClear();
+
+    view.rerender(
+      <WorkspaceBootstrapGate store={replacementStore} renderEditor={renderEditor} />,
+    );
+
+    expect(renderEditor).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('editor-page')).not.toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('Opening local storage');
+    expect(replacementStore.bootstrap).toHaveBeenCalledOnce();
+  });
+
+  it('does not let replacement-layout recovery controls invoke the new store', async () => {
+    const firstStore = fakeStore({ bootstrap: recoveryResult(splitBrainRecovery()) });
+    const replacementBootstrap = deferred<ReturnType<typeof readyResult>>();
+    const replacementStore = fakeStore({ bootstrap: replacementBootstrap.promise });
+    const view = render(
+      <ReplacementActionProbe store={firstStore} downloadDuringLayout={false} />,
+    );
+    await screen.findByRole('heading', { name: 'Project copies changed in another tab' });
+
+    view.rerender(
+      <ReplacementActionProbe store={replacementStore} downloadDuringLayout />,
+    );
+
+    expect(replacementStore.exportRecoveryBundle).not.toHaveBeenCalled();
+    expect(firstStore.exportRecoveryBundle).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: 'Download current browser copy' }))
+      .not.toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('Opening local storage');
   });
 
   it('shows the exact initial migration failure and offers retry and backup', async () => {
@@ -200,6 +260,38 @@ describe('WorkspaceBootstrapGate', () => {
       recoveryId: 'recovery-confirmed',
     }));
     expect(await screen.findByTestId('editor-page')).toHaveTextContent('recovered-project');
+  });
+
+  it('requires fresh confirmation when the recovery identity changes', async () => {
+    const recoveryA = splitBrainRecovery({ recoveryId: 'recovery-a' });
+    const recoveryB = splitBrainRecovery({ recoveryId: 'recovery-b' });
+    const store = fakeStore({ bootstrap: recoveryResult(recoveryA) });
+    render(<WorkspaceBootstrapGate store={store} renderEditor={fakeEditorRenderer} />);
+    await screen.findByRole('heading', { name: 'Project copies changed in another tab' });
+
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Recover changed projects as copies',
+    }));
+    const staleConfirm = screen.getByRole('button', { name: 'Recover as copies' });
+
+    act(() => store.emitAuthorityLost(recoveryResult(recoveryB)));
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    fireEvent.click(staleConfirm);
+    expect(store.commit).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Recover changed projects as copies',
+    }));
+    fireEvent.click(screen.getByRole('button', { name: 'Recover as copies' }));
+    await waitFor(() => expect(store.commit).toHaveBeenCalledWith({
+      type: 'recover-legacy-as-copies',
+      recoveryId: 'recovery-b',
+    }));
+    expect(store.commit).not.toHaveBeenCalledWith({
+      type: 'recover-legacy-as-copies',
+      recoveryId: 'recovery-a',
+    });
   });
 
   it('contains confirmation focus, closes on Escape, and restores the recovery trigger', async () => {
