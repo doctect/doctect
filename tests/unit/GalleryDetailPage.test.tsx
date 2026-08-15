@@ -215,7 +215,7 @@ describe('GalleryDetailPage generator source staging', () => {
         );
     });
 
-    it('retries a retained fork payload without repeating remote fork operations', async () => {
+    it('retries compact fork metadata without repeating the remote fork POST', async () => {
         mockUseSession.mockReturnValue({ data: { user: { id: 'user-2', username: 'planner_pro' } } });
         const fork = vi.spyOn(cloudApi, 'fork').mockResolvedValue({
             project: { id: 'fork-retry', name: 'Retained Fork', headCommitId: 'fork-commit-retry' },
@@ -237,7 +237,8 @@ describe('GalleryDetailPage generator source staging', () => {
 
         expect(await screen.findByText('APP_MARKER')).toBeInTheDocument();
         expect(fork).toHaveBeenCalledOnce();
-        expect(getCommit).toHaveBeenCalledOnce();
+        expect(getCommit).toHaveBeenCalledTimes(2);
+        expect(getCommit.mock.calls[1]).toEqual(getCommit.mock.calls[0]);
         expect(importProject.stageImport).toHaveBeenCalledTimes(2);
         expect(vi.mocked(importProject.stageImport).mock.calls[1])
             .toEqual(vi.mocked(importProject.stageImport).mock.calls[0]);

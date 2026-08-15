@@ -714,14 +714,15 @@ describe('normal mutation compare-and-swap', () => {
     const copy = preparedCopy();
     await copyAndVerify(adapter, copy);
     const pending = structuredClone(copy.pendingImports[0].pendingImport);
+    const digest = 'a'.repeat(64);
 
-    await expect(adapter.stageImport(structuredClone(pending))).resolves.toBeUndefined();
+    await expect(adapter.stageImport(structuredClone(pending), digest)).resolves.toBeUndefined();
     expect((await adapter.inspect()).pendingImports.filter(record => record.id === pending.id))
       .toHaveLength(1);
     await expect(adapter.stageImport({
       ...structuredClone(pending),
       createdAt: '2026-08-14T16:00:01.000Z',
-    })).rejects.toMatchObject({ code: 'conflict' });
+    }, 'b'.repeat(64))).rejects.toMatchObject({ code: 'conflict' });
 
     const project = {
       id: pending.targetProjectId,
@@ -738,16 +739,84 @@ describe('normal mutation compare-and-swap', () => {
         updatedAt: TEST_NOW,
         consumedImportId: pending.id,
         consumedImportCreatedAt: pending.createdAt,
+        consumedImportDigest: digest,
       } as StoredProject,
     });
-    await expect(adapter.stageImport(structuredClone(pending))).resolves.toBeUndefined();
+    await expect(adapter.stageImport(structuredClone(pending), digest)).resolves.toBeUndefined();
     const stored = await adapter.inspect();
     expect(stored.pendingImports.some(record => record.id === pending.id)).toBe(false);
     expect(stored.projects.filter(record => record.id === pending.targetProjectId)).toHaveLength(1);
     await expect(adapter.stageImport({
       ...structuredClone(pending),
       name: 'Conflicting consumed import',
-    } as WorkspacePendingImport)).rejects.toMatchObject({ code: 'conflict' });
+    } as WorkspacePendingImport, 'b'.repeat(64))).rejects.toMatchObject({ code: 'conflict' });
+  });
+
+  it('uses immutable consumed digest after later project edits', async () => {
+    const adapter = createTestAdapter();
+    const copy = preparedCopy();
+    await copyAndVerify(adapter, copy);
+    const pending = structuredClone(copy.pendingImports[0].pendingImport);
+    const digest = 'a'.repeat(64);
+    const project = {
+      id: pending.targetProjectId,
+      name: pending.name,
+      initialState: pending.state,
+      ...(pending.cloud ? { cloud: pending.cloud } : {}),
+    };
+
+    await adapter.consumeImport(pending.id, copy.workspace.revision, {
+      pendingImportIdentity: JSON.stringify(pending),
+      project: {
+        id: project.id,
+        project,
+        storageRevision: 0,
+        updatedAt: TEST_NOW,
+        consumedImportId: pending.id,
+        consumedImportCreatedAt: pending.createdAt,
+        consumedImportDigest: digest,
+      },
+    });
+    await adapter.saveProject({ ...project, name: 'Edited after import' }, 0);
+
+    await expect(adapter.stageImport(structuredClone(pending), digest)).resolves.toBeUndefined();
+    expect((await adapter.inspect()).projects.find(record => record.id === project.id))
+      .toMatchObject({
+        consumedImportDigest: digest,
+        project: { name: 'Edited after import' },
+        storageRevision: 1,
+      });
+  });
+
+  it('rejects consumed stage reuse when only normalized warnings differ', async () => {
+    const adapter = createTestAdapter();
+    const copy = preparedCopy();
+    await copyAndVerify(adapter, copy);
+    const pending = structuredClone(copy.pendingImports[0].pendingImport);
+    const digest = 'a'.repeat(64);
+    const project = {
+      id: pending.targetProjectId,
+      name: pending.name,
+      initialState: pending.state,
+      ...(pending.cloud ? { cloud: pending.cloud } : {}),
+    };
+    await adapter.consumeImport(pending.id, copy.workspace.revision, {
+      pendingImportIdentity: JSON.stringify(pending),
+      project: {
+        id: project.id,
+        project,
+        storageRevision: 0,
+        updatedAt: TEST_NOW,
+        consumedImportId: pending.id,
+        consumedImportCreatedAt: pending.createdAt,
+        consumedImportDigest: digest,
+      },
+    });
+
+    await expect(adapter.stageImport({
+      ...structuredClone(pending),
+      warnings: [...pending.warnings, 'Different retained warning.'],
+    }, 'b'.repeat(64))).rejects.toMatchObject({ code: 'conflict' });
   });
 
   it('rejects one of two stale same-project saves without overwriting the winner', async () => {

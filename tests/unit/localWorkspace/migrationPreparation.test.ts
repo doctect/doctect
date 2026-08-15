@@ -399,12 +399,16 @@ describe('target reconstruction', () => {
     const withoutProvenance = recordsFrom(prepared);
     const withProvenance: any = recordsFrom(prepared);
     withProvenance.projects[0].consumedImportId = 'import-1';
+    withProvenance.projects[0].consumedImportCreatedAt = '2026-08-15T12:00:00.000Z';
+    withProvenance.projects[0].consumedImportDigest = 'a'.repeat(64);
 
     const publicWithout = reconstructWorkspace(withoutProvenance);
     const publicWith = reconstructWorkspace(withProvenance);
 
     expect(publicWith).toEqual(publicWithout);
     expect(Object.hasOwn(publicWith.projects[0], 'consumedImportId')).toBe(false);
+    expect(Object.hasOwn(publicWith.projects[0], 'consumedImportCreatedAt')).toBe(false);
+    expect(Object.hasOwn(publicWith.projects[0], 'consumedImportDigest')).toBe(false);
     await expect(digestWorkspaceContent(publicWith, testSubtle))
       .resolves.toBe(await digestWorkspaceContent(publicWithout, testSubtle));
   });
@@ -429,6 +433,21 @@ describe('target reconstruction', () => {
     duplicate.projects[0].consumedImportId = 'same-import';
     duplicate.projects[1].consumedImportId = 'same-import';
     expect(() => reconstructWorkspace(duplicate)).toThrow(/duplicate.*consume/i);
+
+    const orphanDigest: any = recordsFrom(prepared);
+    orphanDigest.projects[0].consumedImportDigest = 'a'.repeat(64);
+    expect(() => reconstructWorkspace(orphanDigest)).toThrow(/digest.*requires/i);
+
+    const missingTimestamp: any = recordsFrom(prepared);
+    missingTimestamp.projects[0].consumedImportId = 'import-with-digest';
+    missingTimestamp.projects[0].consumedImportDigest = 'a'.repeat(64);
+    expect(() => reconstructWorkspace(missingTimestamp)).toThrow(/digest.*createdAt/i);
+
+    const malformedDigest: any = recordsFrom(prepared);
+    malformedDigest.projects[0].consumedImportId = 'import-with-bad-digest';
+    malformedDigest.projects[0].consumedImportCreatedAt = '2026-08-15T12:00:00.000Z';
+    malformedDigest.projects[0].consumedImportDigest = 'not-a-sha256-digest';
+    expect(() => reconstructWorkspace(malformedDigest)).toThrow(/digest.*sha-256/i);
   });
 });
 

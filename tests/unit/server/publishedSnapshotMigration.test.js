@@ -70,11 +70,13 @@ beforeAll(async () => {
     )`);
     await query(`CREATE TABLE projects (
         id TEXT PRIMARY KEY,
+        owner_id TEXT,
         name TEXT NOT NULL,
         description TEXT NOT NULL DEFAULT '',
         tags TEXT NOT NULL DEFAULT '[]',
         visibility TEXT NOT NULL,
         head_commit_id TEXT,
+        forked_from_project_id TEXT,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )`);
     await query(`CREATE TABLE commits (

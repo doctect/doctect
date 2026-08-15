@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { cloudApi, GalleryDetail, ApiError, MergeRequestDto, ReviewDto } from '../services/cloudApi';
 import { IMPORT_STAGE_ERROR_MESSAGE, stageImport } from '../services/importProject';
+import { stageForkImport } from '../services/forkProject';
 import { downloadVariantsZip } from '../services/pdfService';
 import { useSession } from '../lib/auth-client';
 
@@ -38,15 +39,6 @@ export function useGalleryDetail(id: string | undefined): UseGalleryDetailResult
     const [busy, setBusy] = useState<string | null>(null);
     const [mrs, setMrs] = useState<MergeRequestDto[]>([]);
     const [showHistory, setShowHistory] = useState(false);
-    const forkAttemptRef = useRef<{
-        sourceProjectId: string;
-        sourceKey: string;
-        payload: {
-            name: string;
-            state: unknown;
-            cloud: { projectId: string; lastSyncedCommitId: string };
-        };
-    } | null>(null);
     const isOwner = !!(session?.user && project && (session.user as any).id === project.ownerId);
 
     useEffect(() => {
@@ -57,10 +49,6 @@ export function useGalleryDetail(id: string | undefined): UseGalleryDetailResult
     useEffect(() => {
         if (isOwner && id) cloudApi.listIncomingMrs(id).then(setMrs).catch(() => {});
     }, [isOwner, id]);
-
-    useEffect(() => {
-        if (forkAttemptRef.current?.sourceProjectId !== id) forkAttemptRef.current = null;
-    }, [id]);
 
     const openInEditor = async () => {
         if (!id) return;
@@ -84,23 +72,7 @@ export function useGalleryDetail(id: string | undefined): UseGalleryDetailResult
         setBusy('fork');
         setImportError(null);
         try {
-            let attempt = forkAttemptRef.current;
-            if (!attempt || attempt.sourceProjectId !== id) {
-                const res = await cloudApi.fork(id);
-                const commit = await cloudApi.getCommit(res.project.id, res.project.headCommitId!);
-                attempt = {
-                    sourceProjectId: id,
-                    sourceKey: `gallery-fork:${res.project.id}:${commit.id}`,
-                    payload: {
-                        name: res.project.name,
-                        state: commit.state,
-                        cloud: { projectId: res.project.id, lastSyncedCommitId: commit.id },
-                    },
-                };
-                forkAttemptRef.current = attempt;
-            }
-            await stageImport(attempt.payload, { sourceKey: attempt.sourceKey });
-            forkAttemptRef.current = null;
+            await stageForkImport(id);
             navigate('/app');
         } catch (e) {
             if (e instanceof ApiError && e.code === 'USERNAME_REQUIRED') {

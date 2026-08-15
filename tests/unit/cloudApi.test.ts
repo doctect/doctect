@@ -122,6 +122,27 @@ describe('cloudApi save', () => {
     });
 });
 
+describe('cloudApi fork', () => {
+    afterEach(() => vi.unstubAllGlobals());
+
+    it('sends an optional idempotency key without changing ordinary callers', async () => {
+        const fetchMock = vi.fn().mockResolvedValue({
+            ok: true,
+            status: 201,
+            json: async () => ({ project: {} }),
+        });
+        vi.stubGlobal('fetch', fetchMock);
+
+        await cloudApi.fork('source-1', 'fork_00000000-0000-4000-8000-000000000001');
+        await cloudApi.fork('source-2');
+
+        expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+            idempotencyKey: 'fork_00000000-0000-4000-8000-000000000001',
+        });
+        expect(fetchMock.mock.calls[1][1]).not.toHaveProperty('body');
+    });
+});
+
 describe('gallery v2 api methods', () => {
     const okJson = (body: unknown) =>
         Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(body) } as Response);

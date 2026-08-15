@@ -123,7 +123,7 @@ export interface IndexedDbAdapter {
   ): Promise<StoredWorkspace>;
   saveCustomPreset(preset: WorkspaceCustomPreset): Promise<void>;
   deleteCustomPreset(presetId: string): Promise<void>;
-  stageImport(pendingImport: WorkspacePendingImport): Promise<void>;
+  stageImport(pendingImport: WorkspacePendingImport, pendingImportDigest: string): Promise<void>;
   consumeImport(
     importId: string,
     expectedWorkspaceRevision: number,
@@ -944,7 +944,13 @@ export const createIndexedDbAdapter = (
     }
   };
 
-  const stageImport = async (pendingImport: WorkspacePendingImport): Promise<void> => {
+  const stageImport = async (
+    pendingImport: WorkspacePendingImport,
+    pendingImportDigest: string,
+  ): Promise<void> => {
+    if (!/^[a-f0-9]{64}$/.test(pendingImportDigest)) {
+      throw validation('Pending import digest must be a lowercase SHA-256 digest.');
+    }
     const activeDatabase = await getDatabase();
     const storeNames = ['pendingImports', 'projects', 'migrationLedger'] as const;
     let transaction: WriteTransaction | undefined;
@@ -980,15 +986,9 @@ export const createIndexedDbAdapter = (
           throw conflict(`Consumed import ${pendingImport.id} provenance is ambiguous.`);
         }
         const consumed = consumedProjects[0];
-        const expectedProject: WorkspaceProject = {
-          id: pendingImport.targetProjectId,
-          name: pendingImport.name,
-          initialState: pendingImport.state,
-          ...(pendingImport.cloud ? { cloud: pendingImport.cloud } : {}),
-        };
         if (consumed.id !== pendingImport.targetProjectId
           || consumed.consumedImportCreatedAt !== pendingImport.createdAt
-          || canonicalStringify(consumed.project) !== canonicalStringify(expectedProject)) {
+          || consumed.consumedImportDigest !== pendingImportDigest) {
           throw conflict(`Consumed import ${pendingImport.id} changed.`);
         }
         await importTransaction.done;

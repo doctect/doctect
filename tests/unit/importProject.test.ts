@@ -47,6 +47,10 @@ describe('stageImport', () => {
       '00000000-0000-4000-8000-000000000002',
       '00000000-0000-4000-8000-000000000003',
       '00000000-0000-4000-8000-000000000004',
+      '00000000-0000-4000-8000-000000000005',
+      '00000000-0000-4000-8000-000000000006',
+      '00000000-0000-4000-8000-000000000007',
+      '00000000-0000-4000-8000-000000000008',
     ];
     vi.spyOn(globalThis.crypto, 'randomUUID')
       .mockImplementation(() => ids.shift() ?? '00000000-0000-4000-8000-000000000099');
@@ -114,6 +118,84 @@ describe('stageImport', () => {
     await expect(stageImport({ name: 'Remote Project', state: {} }))
       .rejects.toMatchObject({ code: 'authority-lost' });
     expect(workspaceStore.commit).not.toHaveBeenCalled();
+  });
+
+  it('creates no source attempt before ready bootstrap and accepts later changed payload', async () => {
+    workspaceStore.bootstrap
+      .mockResolvedValueOnce(recoveryResult())
+      .mockResolvedValueOnce({ status: 'ready', snapshot: workspaceSnapshot() });
+    workspaceStore.commit.mockResolvedValue(workspaceSnapshot());
+
+    await expect(stageForSource(stageImport, 'gallery-open:delayed-ready', {
+      name: 'Remote Project',
+      state: { revision: 1 },
+    })).rejects.toMatchObject({ code: 'authority-lost' });
+    expect(globalThis.crypto.randomUUID).not.toHaveBeenCalled();
+    expect(window.sessionStorage.length).toBe(0);
+
+    await expect(stageForSource(stageImport, 'gallery-open:delayed-ready', {
+      name: 'Remote Project',
+      state: { revision: 2 },
+    })).resolves.toBe('import_00000000-0000-4000-8000-000000000001');
+    expect(workspaceStore.commit).toHaveBeenCalledOnce();
+    expect(workspaceStore.commit.mock.calls[0][0].pendingImport.state).toEqual({ revision: 2 });
+  });
+
+  it('checks bootstrap before a changed payload and preserves a prior executable attempt', async () => {
+    workspaceStore.bootstrap
+      .mockResolvedValueOnce({ status: 'ready', snapshot: workspaceSnapshot() })
+      .mockResolvedValueOnce(unavailableResult())
+      .mockResolvedValueOnce({ status: 'ready', snapshot: workspaceSnapshot() });
+    workspaceStore.commit
+      .mockRejectedValueOnce(new Error('ambiguous stage result'))
+      .mockResolvedValueOnce(workspaceSnapshot());
+    const original = { name: 'Remote Project', state: { revision: 1 } };
+
+    await expect(stageForSource(stageImport, 'gallery-open:preserved', original))
+      .rejects.toThrow('ambiguous stage result');
+    const retained = window.sessionStorage.getItem('doctect_import_stage_attempt');
+    await expect(stageForSource(stageImport, 'gallery-open:preserved', {
+      name: 'Remote Project',
+      state: { revision: 2 },
+    })).rejects.toMatchObject({ code: 'authority-lost' });
+    expect(window.sessionStorage.getItem('doctect_import_stage_attempt')).toBe(retained);
+
+    await expect(stageForSource(stageImport, 'gallery-open:preserved', original))
+      .resolves.toBe('import_00000000-0000-4000-8000-000000000001');
+    expect(workspaceStore.commit.mock.calls[1][0]).toEqual(workspaceStore.commit.mock.calls[0][0]);
+    expect(globalThis.crypto.randomUUID).toHaveBeenCalledTimes(2);
+  });
+
+  it('retains exact executable attempts for multiple sources across module reload', async () => {
+    workspaceStore.bootstrap.mockResolvedValue({
+      status: 'ready',
+      snapshot: workspaceSnapshot(),
+    });
+    workspaceStore.commit
+      .mockRejectedValueOnce(new Error('source A ambiguous'))
+      .mockRejectedValueOnce(new Error('source B ambiguous'))
+      .mockResolvedValue(workspaceSnapshot());
+    const sourceA = { name: 'Source A', state: { source: 'A' } };
+    const sourceB = { name: 'Source B', state: { source: 'B' } };
+
+    await expect(stageForSource(stageImport, 'gallery-open:source-a', sourceA))
+      .rejects.toThrow('source A ambiguous');
+    await expect(stageForSource(stageImport, 'gallery-open:source-b', sourceB))
+      .rejects.toThrow('source B ambiguous');
+    const firstA = structuredClone(workspaceStore.commit.mock.calls[0][0]);
+    const firstB = structuredClone(workspaceStore.commit.mock.calls[1][0]);
+
+    vi.resetModules();
+    const reloaded = await import('../../services/importProject');
+    await expect(stageForSource(reloaded.stageImport, 'gallery-open:source-a', sourceA))
+      .resolves.toBe(firstA.pendingImport.id);
+    await expect(stageForSource(reloaded.stageImport, 'gallery-open:source-b', sourceB))
+      .resolves.toBe(firstB.pendingImport.id);
+
+    expect(workspaceStore.commit.mock.calls[2][0]).toEqual(firstA);
+    expect(workspaceStore.commit.mock.calls[3][0]).toEqual(firstB);
+    expect(globalThis.crypto.randomUUID).toHaveBeenCalledTimes(4);
+    expect(window.sessionStorage.length).toBe(0);
   });
 
   it('reuses exact attempt metadata after ambiguous post-commit failure and module reload', async () => {

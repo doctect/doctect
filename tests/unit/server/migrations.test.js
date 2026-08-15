@@ -25,6 +25,11 @@ describe('migration runner', () => {
         const rows = await query('SELECT id FROM app_migrations ORDER BY id');
         expect(rows.map(r => r.id)).toContain('001_auth_tables');
         expect(rows.map(r => r.id)).toContain('002_events');
+        expect(rows.map(r => r.id)).toContain('017_fork_idempotency');
+        const columns = await query('PRAGMA table_info("projects")');
+        expect(columns.map(column => column.name)).toContain('fork_idempotency_key');
+        const indexes = await query('PRAGMA index_list("projects")');
+        expect(indexes.map(index => index.name)).toContain('idx_projects_fork_idempotency');
     });
 
     it('creates auth tables usable by better-auth', async () => {

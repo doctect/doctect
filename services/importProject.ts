@@ -27,7 +27,7 @@ interface ImportStageAttempt {
   payloadHash: string;
 }
 
-let volatileAttempt: ImportStageAttempt | null = null;
+let volatileAttempts = new Map<string, ImportStageAttempt>();
 
 const isCanonicalTimestamp = (value: string): boolean => {
   const timestamp = Date.parse(value);
@@ -49,26 +49,41 @@ const isAttempt = (value: unknown): value is ImportStageAttempt => {
     && /^[a-f0-9]{64}$/.test(candidate.payloadHash);
 };
 
-const readPersistedAttempt = (): ImportStageAttempt | null => {
+const readPersistedAttempts = (): Map<string, ImportStageAttempt> => {
   try {
     const raw = window.sessionStorage.getItem(ATTEMPT_STORAGE_KEY);
-    if (!raw) return null;
+    if (!raw) return new Map();
     const parsed: unknown = JSON.parse(raw);
-    if (isAttempt(parsed)) return parsed;
+    if (Array.isArray(parsed) && parsed.every(isAttempt)) {
+      return new Map(parsed.map(attempt => [attempt.sourceKey, attempt]));
+    }
     window.sessionStorage.removeItem(ATTEMPT_STORAGE_KEY);
   } catch {
-    // Volatile metadata still protects retries while this module remains mounted.
+    // Volatile metadata still protects retries while this module remains loaded.
   }
-  return null;
+  return new Map();
 };
 
-const persistAttempt = (attempt: ImportStageAttempt): void => {
-  volatileAttempt = attempt;
+const persistAttempts = (attempts: Map<string, ImportStageAttempt>): void => {
   try {
-    window.sessionStorage.setItem(ATTEMPT_STORAGE_KEY, JSON.stringify(attempt));
+    if (attempts.size === 0) {
+      window.sessionStorage.removeItem(ATTEMPT_STORAGE_KEY);
+    } else {
+      window.sessionStorage.setItem(
+        ATTEMPT_STORAGE_KEY,
+        JSON.stringify([...attempts.values()]),
+      );
+    }
   } catch {
     // IndexedDB remains authoritative; session metadata only reconciles ambiguous retries.
   }
+};
+
+const persistAttempt = (attempt: ImportStageAttempt): void => {
+  const attempts = readPersistedAttempts();
+  attempts.set(attempt.sourceKey, attempt);
+  volatileAttempts.set(attempt.sourceKey, attempt);
+  persistAttempts(attempts);
 };
 
 const sameAttempt = (left: ImportStageAttempt, right: ImportStageAttempt): boolean =>
@@ -79,15 +94,12 @@ const sameAttempt = (left: ImportStageAttempt, right: ImportStageAttempt): boole
   && left.payloadHash === right.payloadHash;
 
 const clearAttempt = (attempt: ImportStageAttempt): void => {
-  if (volatileAttempt && sameAttempt(volatileAttempt, attempt)) volatileAttempt = null;
-  try {
-    const persisted = readPersistedAttempt();
-    if (persisted && sameAttempt(persisted, attempt)) {
-      window.sessionStorage.removeItem(ATTEMPT_STORAGE_KEY);
-    }
-  } catch {
-    // Failed cleanup can only cause an exact idempotent reconciliation on a later retry.
-  }
+  const attempts = readPersistedAttempts();
+  const persisted = attempts.get(attempt.sourceKey);
+  if (persisted && sameAttempt(persisted, attempt)) attempts.delete(attempt.sourceKey);
+  const volatile = volatileAttempts.get(attempt.sourceKey);
+  if (volatile && sameAttempt(volatile, attempt)) volatileAttempts.delete(attempt.sourceKey);
+  persistAttempts(attempts);
 };
 
 const createAttempt = (sourceKey: string, payloadHash: string): ImportStageAttempt => ({
@@ -109,16 +121,13 @@ const assertMatchingPayload = (
 };
 
 const attemptForSource = (sourceKey: string, payloadHash: string): ImportStageAttempt => {
-  if (volatileAttempt?.sourceKey === sourceKey) {
-    return assertMatchingPayload(volatileAttempt, payloadHash);
-  }
-  const persisted = readPersistedAttempt();
-  if (persisted?.sourceKey === sourceKey) {
-    volatileAttempt = persisted;
+  const persisted = readPersistedAttempts().get(sourceKey);
+  if (persisted) {
+    volatileAttempts.set(sourceKey, persisted);
     return assertMatchingPayload(persisted, payloadHash);
   }
-  if (volatileAttempt) clearAttempt(volatileAttempt);
-  else if (persisted) clearAttempt(persisted);
+  const volatile = volatileAttempts.get(sourceKey);
+  if (volatile) return assertMatchingPayload(volatile, payloadHash);
   const attempt = createAttempt(sourceKey, payloadHash);
   persistAttempt(attempt);
   return attempt;
@@ -128,14 +137,14 @@ export async function stageImport(
   payload: ImportPayload,
   options?: ImportStageOptions,
 ): Promise<string> {
-  const payloadHash = await sha256Hex(canonicalStringify(payload));
-  const attempt = options
-    ? attemptForSource(options.sourceKey, payloadHash)
-    : createAttempt('ordinary-caller', payloadHash);
   const bootstrap = await localWorkspaceStore.bootstrap();
   if (bootstrap.status !== 'ready') {
     throw new WorkspaceStoreError('Workspace is not ready.', 'authority-lost');
   }
+  const payloadHash = await sha256Hex(canonicalStringify(payload));
+  const attempt = options
+    ? attemptForSource(options.sourceKey, payloadHash)
+    : createAttempt('ordinary-caller', payloadHash);
 
   await localWorkspaceStore.commit({
     type: 'stage-import',

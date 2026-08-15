@@ -1,5 +1,5 @@
 import type { AppState } from '../../types';
-import { canonicalStringify, digestLegacySnapshot } from './canonical';
+import { canonicalStringify, digestLegacySnapshot, sha256Hex } from './canonical';
 import {
   WorkspaceStoreError,
   type LocalWorkspaceStore,
@@ -1308,9 +1308,9 @@ export const createLocalWorkspaceStore = (
       return readPostCommandSnapshot();
     });
 
-  const prepareImportConsumption = (
+  const prepareImportConsumption = async (
     importId: string,
-  ): PreparedImportConsumption | undefined => {
+  ): Promise<PreparedImportConsumption | undefined> => {
     const pendingImport = durableSnapshot?.pendingImports.find(item => item.id === importId);
     if (!pendingImport) return undefined;
     const project = validateWorkspaceProject({
@@ -1333,6 +1333,10 @@ export const createLocalWorkspaceStore = (
       updatedAt,
       consumedImportId: importId,
       consumedImportCreatedAt: pendingImport.createdAt,
+      consumedImportDigest: await sha256Hex(
+        canonicalStringify(pendingImport),
+        environment.crypto.subtle,
+      ),
     };
     return {
       pendingImportIdentity: JSON.stringify(pendingImport),
@@ -1374,14 +1378,20 @@ export const createLocalWorkspaceStore = (
         await getAdapter().deleteCustomPreset(command.presetId);
         break;
       case 'stage-import':
-        await getAdapter().stageImport(command.pendingImport as WorkspacePendingImport);
+        await getAdapter().stageImport(
+          command.pendingImport as WorkspacePendingImport,
+          await sha256Hex(
+            canonicalStringify(command.pendingImport),
+            environment.crypto.subtle,
+          ),
+        );
         break;
       case 'consume-import': {
         const knownTargetProjectId = consumedImportTargets.get(command.importId);
         await getAdapter().consumeImport(
           command.importId,
           currentWorkspaceRevision(),
-          prepareImportConsumption(command.importId),
+          await prepareImportConsumption(command.importId),
           knownTargetProjectId,
         );
         break;

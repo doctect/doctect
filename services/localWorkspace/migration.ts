@@ -428,7 +428,7 @@ const validateProjectRecords = (records: unknown): Map<string, WorkspaceProject>
     requireExactKeys(
       rawRecord,
       ['id', 'project', 'storageRevision', 'updatedAt'],
-      ['consumedImportId', 'consumedImportCreatedAt'],
+      ['consumedImportId', 'consumedImportCreatedAt', 'consumedImportDigest'],
       `Project record ${index}`,
     );
     if (typeof rawRecord.id !== 'string' || rawRecord.id.length === 0) {
@@ -459,6 +459,24 @@ const validateProjectRecords = (records: unknown): Map<string, WorkspaceProject>
         rawRecord.consumedImportCreatedAt,
         `Project record ${rawRecord.id} consumedImportCreatedAt`,
       );
+    }
+    if (Object.hasOwn(rawRecord, 'consumedImportDigest')) {
+      if (!Object.hasOwn(rawRecord, 'consumedImportId')) {
+        throw targetError(
+          `Project record ${rawRecord.id} consumedImportDigest requires consumedImportId.`,
+        );
+      }
+      if (!Object.hasOwn(rawRecord, 'consumedImportCreatedAt')) {
+        throw targetError(
+          `Project record ${rawRecord.id} consumedImportDigest requires consumedImportCreatedAt.`,
+        );
+      }
+      if (typeof rawRecord.consumedImportDigest !== 'string'
+        || !/^[a-f0-9]{64}$/.test(rawRecord.consumedImportDigest)) {
+        throw targetError(
+          `Project record ${rawRecord.id} consumedImportDigest must be a lowercase SHA-256 digest.`,
+        );
+      }
     }
     try {
       if (!isPlainObject(rawRecord.project)) throw new Error('Project payload must be an object.');

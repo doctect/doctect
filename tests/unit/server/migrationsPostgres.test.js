@@ -209,4 +209,20 @@ describe('PostgreSQL migration contract', () => {
             params: ['014_platform_audit_actions'],
         });
     });
+
+    it('adds private fork idempotency provenance and its scoped unique index', async () => {
+        migrationState.pendingId = '017_fork_idempotency';
+        const { runMigrations } = await import('../../../server/migrations.js');
+        await runMigrations();
+
+        const texts = dbCalls.map(call => call.text);
+        expect(texts).toContain('ALTER TABLE projects ADD COLUMN IF NOT EXISTS fork_idempotency_key TEXT');
+        expect(texts).toContain(`CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_fork_idempotency
+                ON projects(owner_id, forked_from_project_id, fork_idempotency_key)
+                WHERE fork_idempotency_key IS NOT NULL`);
+        expect(dbCalls).toContainEqual({
+            text: 'INSERT INTO app_migrations (id) VALUES ($1)',
+            params: ['017_fork_idempotency'],
+        });
+    });
 });

@@ -19,6 +19,21 @@ beforeAll(async () => {
     privateId = priv.body.project.id;
 });
 
+const createPublishedSource = async (name) => {
+    const created = await request(app).post('/api/projects').set('Cookie', ownerCookie)
+        .send({ name, state: minimalState(name) });
+    const projectId = created.body.project.id;
+    await request(app).post(`/api/projects/${projectId}/publish`).set('Cookie', ownerCookie)
+        .set('If-Match', `"${created.body.project.headCommitId}"`)
+        .send({ description: '', tags: [], thumbnails: [PNG_1X1] });
+    return projectId;
+};
+
+const keyedFork = (sourceId, key) => request(app)
+    .post(`/api/projects/${sourceId}/fork`)
+    .set('Cookie', forkerCookie)
+    .send({ idempotencyKey: key });
+
 describe('fork', () => {
     it('requires auth', async () => {
         const res = await request(app).post(`/api/projects/${publicId}/fork`);
@@ -46,5 +61,63 @@ describe('fork', () => {
     it('refuses to fork private projects of others', async () => {
         const res = await request(app).post(`/api/projects/${privateId}/fork`).set('Cookie', forkerCookie);
         expect(res.status).toBe(404);
+    });
+
+    it('returns one fork for concurrent repeats and increments the source once', async () => {
+        const sourceId = await createPublishedSource('Concurrent source');
+        const key = 'fork_10000000-0000-4000-8000-000000000001';
+        const before = await request(app).get(`/api/gallery/${sourceId}`);
+
+        const responses = await Promise.all([
+            keyedFork(sourceId, key),
+            keyedFork(sourceId, key),
+        ]);
+
+        expect(responses.map(res => res.status).sort()).toEqual([200, 201]);
+        expect(responses[0].body.project.id).toBe(responses[1].body.project.id);
+        expect(responses[0].body.project.headCommitId).toBe(responses[1].body.project.headCommitId);
+        expect(responses[0].body.project).not.toHaveProperty('forkIdempotencyKey');
+        expect(JSON.stringify(responses[0].body)).not.toContain(key);
+        const { query } = await import('../../../server/db.js');
+        const projects = await query(
+            'SELECT id, fork_idempotency_key FROM projects WHERE id = $1',
+            [responses[0].body.project.id],
+        );
+        const commits = await query('SELECT COUNT(*) AS n FROM commits WHERE project_id = $1', [projects[0].id]);
+        const after = await request(app).get(`/api/gallery/${sourceId}`);
+        expect(projects).toEqual([{ id: projects[0].id, fork_idempotency_key: key }]);
+        expect(Number(commits[0].n)).toBe(1);
+        expect(after.body.project.forkCount).toBe(before.body.project.forkCount + 1);
+    });
+
+    it('returns a completed keyed fork before rechecking project or storage allowances', async () => {
+        const sourceId = await createPublishedSource('Quota replay source');
+        const key = 'fork_20000000-0000-4000-8000-000000000002';
+        const first = await keyedFork(sourceId, key);
+        expect(first.status).toBe(201);
+        const previousProjectLimit = process.env.MAX_PROJECTS_PER_USER;
+        const previousStorageLimit = process.env.USER_STORAGE_QUOTA_MB;
+        process.env.MAX_PROJECTS_PER_USER = '1';
+        process.env.USER_STORAGE_QUOTA_MB = '0.000001';
+        try {
+            const replay = await keyedFork(sourceId, key);
+            expect(replay.status).toBe(200);
+            expect(replay.body.project.id).toBe(first.body.project.id);
+        } finally {
+            if (previousProjectLimit === undefined) delete process.env.MAX_PROJECTS_PER_USER;
+            else process.env.MAX_PROJECTS_PER_USER = previousProjectLimit;
+            if (previousStorageLimit === undefined) delete process.env.USER_STORAGE_QUOTA_MB;
+            else process.env.USER_STORAGE_QUOTA_MB = previousStorageLimit;
+        }
+    });
+
+    it.each([
+        ['too short', 'short'],
+        ['invalid characters', 'fork key with spaces'],
+        ['too long', `fork_${'a'.repeat(129)}`],
+    ])('rejects a malformed idempotency key: %s', async (_label, idempotencyKey) => {
+        const res = await keyedFork(publicId, idempotencyKey);
+        expect(res.status).toBe(400);
+        expect(res.body.code).toBe('INVALID_IDEMPOTENCY_KEY');
     });
 });

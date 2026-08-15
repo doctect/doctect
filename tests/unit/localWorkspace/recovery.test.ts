@@ -1137,11 +1137,17 @@ describe('explicit recover legacy as copies', () => {
     });
 
     const records = (await inspect(harness)).projects;
-    expect(records.find(record => record.id === 'private-target')?.consumedImportId)
-      .toBe('private-import');
+    const privateTarget = records.find(record => record.id === 'private-target');
+    expect(privateTarget?.consumedImportId).toBe('private-import');
+    expect(privateTarget?.consumedImportCreatedAt).toBe(TEST_NOW);
+    expect(privateTarget?.consumedImportDigest).toMatch(/^[a-f0-9]{64}$/);
     expect(records.filter(record => record.id !== 'private-target')
-      .every(record => record.consumedImportId === undefined)).toBe(true);
+      .every(record => record.consumedImportId === undefined
+        && record.consumedImportCreatedAt === undefined
+        && record.consumedImportDigest === undefined)).toBe(true);
     expect(recovered.projects.every(project => !Object.hasOwn(project, 'consumedImportId')))
+      .toBe(true);
+    expect(recovered.projects.every(project => !Object.hasOwn(project, 'consumedImportDigest')))
       .toBe(true);
   });
 

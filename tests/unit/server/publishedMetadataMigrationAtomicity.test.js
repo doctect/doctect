@@ -77,11 +77,13 @@ beforeAll(async () => {
     )`);
     await query(`CREATE TABLE projects (
         id TEXT PRIMARY KEY,
+        owner_id TEXT,
         name TEXT NOT NULL,
         description TEXT NOT NULL DEFAULT '',
         tags TEXT NOT NULL DEFAULT '[]',
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        published_commit_id TEXT
+        published_commit_id TEXT,
+        forked_from_project_id TEXT
     )`);
     // The ledger above claims 005_thumbnails_reports is applied, so the physical
     // schema must carry its table for later migrations that alter it.

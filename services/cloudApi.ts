@@ -293,8 +293,13 @@ export const cloudApi = {
 
     // Forks a public project into a new private project owned by the caller, seeded from
     // its head commit. Server endpoint implemented in Task 19 (Phase 4).
-    fork: (projectId: string) =>
-        api<{ project: CloudProject }>(`/api/projects/${projectId}/fork`, { method: 'POST' }),
+    fork: (projectId: string, idempotencyKey?: string) =>
+        api<{ project: CloudProject }>(`/api/projects/${projectId}/fork`, {
+            method: 'POST',
+            ...(idempotencyKey !== undefined
+                ? { body: JSON.stringify({ idempotencyKey }) }
+                : {}),
+        }),
 
     createMergeRequest: (args: { sourceProjectId: string; title: string; description?: string }) =>
         api<{ mergeRequest: MergeRequestDto }>('/api/merge-requests', { method: 'POST', body: JSON.stringify(args) }),

@@ -536,12 +536,43 @@ router.post('/api/projects/:id/unpublish', requireAuth, loadProject(true), async
     res.json({ project: projectDto(await getProjectRow(req.project.id)) });
 });
 
-router.post('/api/projects/:id/fork', requireAuth, requireUsername, userWriteLimiter, loadProject(false), async (req, res) => {
+const FORK_IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9_-]{16,128}$/;
+
+const forkIdempotencyKeyFromRequest = (req, res) => {
+    if (!Object.hasOwn(req.body || {}, 'idempotencyKey')) return { key: null };
+    const key = req.body.idempotencyKey;
+    if (typeof key !== 'string' || !FORK_IDEMPOTENCY_KEY_PATTERN.test(key)) {
+        res.status(400).json({
+            error: 'idempotencyKey must be 16-128 URL-safe characters.',
+            code: 'INVALID_IDEMPOTENCY_KEY',
+        });
+        return null;
+    }
+    return { key };
+};
+
+router.post('/api/projects/:id/fork', requireAuth, requireUsername, userWriteLimiter, async (req, res) => {
+    const parsedKey = forkIdempotencyKeyFromRequest(req, res);
+    if (!parsedKey) return;
+    const idempotencyKey = parsedKey.key;
     let forked;
     try {
         forked = await withTransaction(async txQuery => {
             const lockSuffix = dbType === 'postgres' ? ' FOR UPDATE' : '';
-            const sources = await txQuery(`SELECT * FROM projects WHERE id = $1${lockSuffix}`, [req.project.id]);
+            if (idempotencyKey) {
+                // Serialize keyed forks per owner so a concurrent replay observes the winner
+                // before any project/storage allowance is evaluated a second time.
+                await txQuery(`SELECT id FROM "user" WHERE id = $1${lockSuffix}`, [req.user.id]);
+                const existing = await txQuery(
+                    `SELECT * FROM projects
+                     WHERE owner_id = $1 AND forked_from_project_id = $2
+                       AND fork_idempotency_key = $3`,
+                    [req.user.id, req.params.id, idempotencyKey],
+                );
+                if (existing[0]) return { status: 'existing', row: existing[0] };
+            }
+
+            const sources = await txQuery(`SELECT * FROM projects WHERE id = $1${lockSuffix}`, [req.params.id]);
             const src = sources[0];
             const isOwner = src?.owner_id === req.user.id;
             if (!src || (!isOwner && src.visibility !== 'public')) return { status: 'missing' };
@@ -557,9 +588,20 @@ router.post('/api/projects/:id/fork', requireAuth, requireUsername, userWriteLim
             const sourceTags = src.visibility === 'public' ? src.published_tags : src.tags;
             const forkId = randomUUID();
             await txQuery(
-                `INSERT INTO projects (id, owner_id, name, description, tags, forked_from_project_id, forked_from_commit_id)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-                [forkId, req.user.id, sourceName, sourceDescription, sourceTags, src.id, sourceCommitId]
+                `INSERT INTO projects
+                    (id, owner_id, name, description, tags, forked_from_project_id,
+                     forked_from_commit_id, fork_idempotency_key)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+                [
+                    forkId,
+                    req.user.id,
+                    sourceName,
+                    sourceDescription,
+                    sourceTags,
+                    src.id,
+                    sourceCommitId,
+                    idempotencyKey,
+                ]
             );
             await insertCommit({
                 projectId: forkId,
@@ -578,7 +620,8 @@ router.post('/api/projects/:id/fork', requireAuth, requireUsername, userWriteLim
     if (forked.status === 'missing') return res.status(404).json({ error: 'Project not found' });
     if (forked.status === 'empty') return res.status(400).json({ error: 'Source project has no content' });
     if (forked.status === 'commit-missing') return res.status(404).json({ error: 'Source commit not found' });
-    res.status(201).json({ project: projectDto(forked.row) });
+    res.status(forked.status === 'existing' ? 200 : 201)
+        .json({ project: projectDto(forked.row) });
 });
 
 export default router;

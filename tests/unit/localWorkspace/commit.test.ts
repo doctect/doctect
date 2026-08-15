@@ -30,6 +30,10 @@ import {
   type IndexedDbInspection,
 } from '../../../services/localWorkspace/indexedDbAdapter';
 import {
+  canonicalStringify,
+  sha256Hex,
+} from '../../../services/localWorkspace/canonical';
+import {
   WORKSPACE_DB_NAME,
 } from '../../../services/localWorkspace/schema';
 import {
@@ -851,10 +855,18 @@ describe('preset and import commands', () => {
       }
     };
     const { store, harness } = await readyStore({ hook });
-    await store.commit({
+    const staged = await store.commit({
       type: 'stage-import',
-      pendingImport: pendingImport('restart-import', 'restart-target'),
+      pendingImport: pendingImport('restart-import', 'restart-target', {
+        ...historicalState(8),
+        generator: { formatVersion: 2 },
+      }),
     });
+    const normalizedPending = staged.pendingImports.find(item => item.id === 'restart-import')!;
+    const expectedDigest = await sha256Hex(
+      canonicalStringify(normalizedPending),
+      (webcrypto as unknown as Crypto).subtle,
+    );
     failPostCommitRead = true;
 
     await expect(store.commit({
@@ -865,10 +877,15 @@ describe('preset and import commands', () => {
     const committed = (await inspect(harness)).projects.find(record =>
       record.id === 'restart-target') as {
         consumedImportId?: string;
+        consumedImportCreatedAt?: string;
+        consumedImportDigest?: string;
         project: WorkspaceProject;
       };
     expect(committed.consumedImportId).toBe('restart-import');
+    expect(committed.consumedImportCreatedAt).toBe(TEST_NOW);
+    expect(committed.consumedImportDigest).toBe(expectedDigest);
     expect(Object.hasOwn(committed.project, 'consumedImportId')).toBe(false);
+    expect(Object.hasOwn(committed.project, 'consumedImportDigest')).toBe(false);
 
     const reloaded = createLocalWorkspaceStore(harness.environment);
     await expect(reloaded.bootstrap()).resolves.toMatchObject({ status: 'ready' });
@@ -885,11 +902,14 @@ describe('preset and import commands', () => {
 
   it('preserves private consume provenance on later public project saves', async () => {
     const { store, harness } = await readyStore();
-    await store.commit({
-      type: 'stage-import',
+    const stageCommand = {
+      type: 'stage-import' as const,
       pendingImport: pendingImport('saved-import', 'saved-target'),
-    });
+    };
+    await store.commit(stageCommand);
     const consumed = await store.commit({ type: 'consume-import', importId: 'saved-import' });
+    const beforeSave = (await inspect(harness)).projects.find(record => record.id === 'saved-target')!;
+    expect(beforeSave.consumedImportDigest).toMatch(/^[a-f0-9]{64}$/);
     const target = consumed.projects.find(project => project.id === 'saved-target')!;
     useQueueTimers();
 
@@ -899,13 +919,38 @@ describe('preset and import commands', () => {
     });
     await vi.advanceTimersByTimeAsync(1_000);
     await save;
+    const retried = await store.commit(structuredClone(stageCommand));
 
+    expect(retried.pendingImports.some(item => item.id === 'saved-import')).toBe(false);
+    expect(retried.projects.find(project => project.id === 'saved-target'))
+      .toMatchObject({ name: 'Saved after consume' });
     expect((await inspect(harness)).projects.find(record => record.id === 'saved-target'))
       .toMatchObject({
         consumedImportId: 'saved-import',
+        consumedImportCreatedAt: TEST_NOW,
+        consumedImportDigest: beforeSave.consumedImportDigest,
         project: { name: 'Saved after consume' },
         storageRevision: 1,
       });
+  });
+
+  it('does not expose private consumed digest through exact stage reconciliation', async () => {
+    const { store } = await readyStore();
+    const command = {
+      type: 'stage-import',
+      pendingImport: pendingImport('private-digest-import', 'private-digest-target'),
+    } as const;
+    await store.commit(command);
+    const consumed = await store.commit({
+      type: 'consume-import',
+      importId: 'private-digest-import',
+    });
+    const reconciled = await store.commit(structuredClone(command));
+
+    for (const snapshot of [consumed, reconciled]) {
+      const project = snapshot.projects.find(item => item.id === 'private-digest-target')!;
+      expect(Object.hasOwn(project, 'consumedImportDigest')).toBe(false);
+    }
   });
 
   it('rejects consume when cached pending identity changed before the transaction', async () => {

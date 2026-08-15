@@ -535,4 +535,19 @@ export const migrations = [
             ALTER TABLE thumbnails ADD COLUMN node_id TEXT
         `
     },
+    {
+        id: '017_fork_idempotency',
+        pg: `
+            ALTER TABLE projects ADD COLUMN IF NOT EXISTS fork_idempotency_key TEXT;
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_fork_idempotency
+                ON projects(owner_id, forked_from_project_id, fork_idempotency_key)
+                WHERE fork_idempotency_key IS NOT NULL
+        `,
+        sqlite: `
+            ALTER TABLE projects ADD COLUMN fork_idempotency_key TEXT;
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_fork_idempotency
+                ON projects(owner_id, forked_from_project_id, fork_idempotency_key)
+                WHERE fork_idempotency_key IS NOT NULL
+        `
+    },
 ];
