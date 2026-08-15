@@ -1,18 +1,34 @@
-const KEY = 'hype_import_pending';
+import {
+  localWorkspaceStore,
+  WorkspaceStoreError,
+} from './localWorkspace/index';
+
+export const IMPORT_STAGE_ERROR_MESSAGE =
+  'Could not prepare this project for the editor. Nothing was removed; try again.';
 
 export interface ImportPayload {
-    name: string;
-    state: any;
-    cloud?: { projectId: string; lastSyncedCommitId: string };
+  name: string;
+  state: unknown;
+  cloud?: { projectId: string; lastSyncedCommitId: string };
 }
 
-export const stageImport = (payload: ImportPayload) => {
-    localStorage.setItem(KEY, JSON.stringify(payload));
-};
+export async function stageImport(payload: ImportPayload): Promise<string> {
+  const bootstrap = await localWorkspaceStore.bootstrap();
+  if (bootstrap.status !== 'ready') {
+    throw new WorkspaceStoreError('Workspace is not ready.', 'authority-lost');
+  }
 
-export const consumeImport = (): ImportPayload | null => {
-    const raw = localStorage.getItem(KEY);
-    if (!raw) return null;
-    localStorage.removeItem(KEY);
-    try { return JSON.parse(raw); } catch { return null; }
-};
+  const importId = `import_${globalThis.crypto.randomUUID()}`;
+  await localWorkspaceStore.commit({
+    type: 'stage-import',
+    pendingImport: {
+      id: importId,
+      targetProjectId: `proj_${globalThis.crypto.randomUUID()}`,
+      name: payload.name,
+      state: payload.state,
+      ...(payload.cloud ? { cloud: payload.cloud } : {}),
+      createdAt: new Date().toISOString(),
+    },
+  });
+  return importId;
+}

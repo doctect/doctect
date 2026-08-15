@@ -1,13 +1,14 @@
 import { useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { cloudApi, GalleryDetail, ApiError, MergeRequestDto, ReviewDto } from '../services/cloudApi';
-import { stageImport } from '../services/importProject';
+import { IMPORT_STAGE_ERROR_MESSAGE, stageImport } from '../services/importProject';
 import { downloadVariantsZip } from '../services/pdfService';
 import { useSession } from '../lib/auth-client';
 
 export interface UseGalleryDetailResult {
     project: GalleryDetail | null;
     error: string | null;
+    importError: string | null;
     busy: string | null;
     mrs: MergeRequestDto[];
     isOwner: boolean;
@@ -19,7 +20,7 @@ export interface UseGalleryDetailResult {
     fork: () => Promise<void>;
     downloadAllVariants: () => Promise<void>;
     report: () => Promise<void>;
-    onCloneHistoryVersion: (args: { state: any }) => void;
+    onCloneHistoryVersion: (args: { state: unknown }) => Promise<void>;
     reviews: ReviewDto[];
     myReview: ReviewDto | null;
     saveReview: (args: { rating: number; body: string }) => Promise<void>;
@@ -33,6 +34,7 @@ export function useGalleryDetail(id: string | undefined): UseGalleryDetailResult
     const { data: session } = useSession();
     const [project, setProject] = useState<GalleryDetail | null>(null);
     const [error, setError] = useState<string | null>(null);
+    const [importError, setImportError] = useState<string | null>(null);
     const [busy, setBusy] = useState<string | null>(null);
     const [mrs, setMrs] = useState<MergeRequestDto[]>([]);
     const [showHistory, setShowHistory] = useState(false);
@@ -50,20 +52,25 @@ export function useGalleryDetail(id: string | undefined): UseGalleryDetailResult
     const openInEditor = async () => {
         if (!id) return;
         setBusy('open');
+        setImportError(null);
         try {
             const res = await cloudApi.galleryState(id);
-            stageImport({ name: res.name, state: res.state });
+            await stageImport({ name: res.name, state: res.state });
             navigate('/app');
-        } catch { setError('Could not load project'); setBusy(null); }
+        } catch {
+            setImportError(IMPORT_STAGE_ERROR_MESSAGE);
+            setBusy(null);
+        }
     };
 
     const fork = async () => {
         if (!id) return;
         setBusy('fork');
+        setImportError(null);
         try {
             const res = await cloudApi.fork(id);
             const commit = await cloudApi.getCommit(res.project.id, res.project.headCommitId!);
-            stageImport({
+            await stageImport({
                 name: res.project.name,
                 state: commit.state,
                 cloud: { projectId: res.project.id, lastSyncedCommitId: commit.id }
@@ -74,7 +81,7 @@ export function useGalleryDetail(id: string | undefined): UseGalleryDetailResult
                 navigate('/welcome', { state: { from: location.pathname } });
                 return;
             }
-            setError(e instanceof ApiError ? e.message : 'Fork failed');
+            setImportError(IMPORT_STAGE_ERROR_MESSAGE);
             setBusy(null);
         }
     };
@@ -99,10 +106,17 @@ export function useGalleryDetail(id: string | undefined): UseGalleryDetailResult
         catch { window.alert('Could not send report.'); }
     };
 
-    const onCloneHistoryVersion = ({ state }: { state: any }) => {
+    const onCloneHistoryVersion = async ({ state }: { state: unknown }): Promise<void> => {
         if (!project) return;
-        stageImport({ name: project.name, state });
-        navigate('/app');
+        setBusy('history');
+        try {
+            await stageImport({ name: project.name, state });
+            navigate('/app');
+        } catch {
+            throw new Error(IMPORT_STAGE_ERROR_MESSAGE);
+        } finally {
+            setBusy(null);
+        }
     };
 
     const [reviews, setReviews] = useState<ReviewDto[]>([]);
@@ -142,7 +156,7 @@ export function useGalleryDetail(id: string | undefined): UseGalleryDetailResult
     };
 
     return {
-        project, error, busy, mrs, isOwner, showHistory, setShowHistory,
+        project, error, importError, busy, mrs, isOwner, showHistory, setShowHistory,
         fromPath: location.pathname, session,
         openInEditor, fork, downloadAllVariants, report, onCloneHistoryVersion,
         reviews, myReview, saveReview, deleteMyReview, reportReview,

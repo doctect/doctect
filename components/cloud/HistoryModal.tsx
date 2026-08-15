@@ -2,13 +2,14 @@ import React, { useEffect, useState } from 'react';
 import { X, RotateCcw, ExternalLink } from 'lucide-react';
 import { cloudApi, CommitMeta, ApiError } from '../../services/cloudApi';
 import { loadProjectState } from '../../services/loadProjectState';
-import { AppState } from '../../types';
+import { IMPORT_STAGE_ERROR_MESSAGE } from '../../services/importProject';
+import type { AppState } from '../../types';
 
 type HistoryModalProps =
     { cloudProjectId: string; onClose: () => void } &
     (
         | { mode?: 'restore'; onRestore: (state: AppState) => void }
-        | { mode: 'clone'; onClone: (args: { state: AppState }) => void }
+        | { mode: 'clone'; onClone: (args: { state: unknown }) => Promise<void> }
     );
 
 export function HistoryModal(props: HistoryModalProps) {
@@ -33,11 +34,11 @@ export function HistoryModal(props: HistoryModalProps) {
         try {
             const commit = await cloudApi.getCommit(cloudProjectId, commitId);
             if (props.mode === 'clone') {
-                // Keep clone state raw: EditorPage runs loadProjectState exactly once when
-                // it consumes a staged import (see consumeImport() in pages/EditorPage.tsx),
-                // matching how GalleryDetailPage's existing openInEditor/fork handlers already
-                // pass raw state into stageImport without migrating it themselves.
-                props.onClone({ state: commit.state });
+                try {
+                    await props.onClone({ state: commit.state });
+                } catch {
+                    setError(IMPORT_STAGE_ERROR_MESSAGE);
+                }
             } else {
                 const loaded = loadProjectState(commit.state);
                 props.onRestore(loaded.state);
@@ -58,7 +59,7 @@ export function HistoryModal(props: HistoryModalProps) {
                     <button onClick={onClose} className="text-slate-400 hover:text-slate-700"><X size={16} /></button>
                 </div>
                 <div className="overflow-y-auto p-2">
-                    {error && <div className="text-xs text-red-600 p-2">{error}</div>}
+                    {error && <div role="alert" className="text-xs text-red-600 p-2">{error}</div>}
                     {!commits && !error && <div className="text-xs text-slate-400 p-2">Loading…</div>}
                     {commits?.map((c, i) => (
                         <div key={c.id} className="flex items-center justify-between gap-2 px-2 py-2 rounded hover:bg-slate-50">

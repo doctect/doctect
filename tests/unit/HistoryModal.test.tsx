@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { HistoryModal } from '../../components/cloud/HistoryModal';
 import { cloudApi, CommitMeta } from '../../services/cloudApi';
+import { deferred } from '../helpers/fakeLocalWorkspaceStore';
 
 const commits: CommitMeta[] = [
     { id: 'c2', parentCommitId: 'c1', message: 'Second save', schemaVersion: 1, createdBy: 'u1', createdAt: '2026-02-01T00:00:00.000Z' },
@@ -167,6 +168,34 @@ describe('HistoryModal', () => {
             fireEvent.click((await screen.findAllByRole('button', { name: 'Open in editor' }))[0]);
             await waitFor(() => expect(onClone).toHaveBeenCalled());
             expect(confirmSpy).not.toHaveBeenCalled();
+        });
+
+        it('keeps clone controls busy until durable staging finishes', async () => {
+            const staged = deferred<void>();
+            const onClone = vi.fn(() => staged.promise);
+            render(<HistoryModal cloudProjectId="proj-1" mode="clone" onClone={onClone} onClose={vi.fn()} />);
+            fireEvent.click((await screen.findAllByRole('button', { name: 'Open in editor' }))[0]);
+            await waitFor(() => expect(onClone).toHaveBeenCalledWith({ state: commitState }));
+
+            expect(screen.getByRole('button', { name: 'Loading…' })).toBeDisabled();
+            expect(screen.getAllByRole('button', { name: 'Open in editor' })[0]).toBeDisabled();
+
+            staged.resolve();
+            await waitFor(() => expect(screen.getAllByRole('button', { name: 'Open in editor' })[0]).toBeEnabled());
+        });
+
+        it('announces an exact staging failure without closing the modal', async () => {
+            const failure = Promise.reject(new Error('quota'));
+            void failure.catch(() => {});
+            const onClone = vi.fn(() => failure);
+            render(<HistoryModal cloudProjectId="proj-1" mode="clone" onClone={onClone} onClose={vi.fn()} />);
+            fireEvent.click((await screen.findAllByRole('button', { name: 'Open in editor' }))[0]);
+
+            expect(await screen.findByRole('alert')).toHaveTextContent(
+                'Could not prepare this project for the editor. Nothing was removed; try again.',
+            );
+            expect(screen.getByRole('heading', { name: 'Version history' })).toBeVisible();
+            expect(screen.getAllByRole('button', { name: 'Open in editor' })[0]).toBeEnabled();
         });
 
         it('keeps legacy malformed metadata raw for EditorPage to normalize once', async () => {

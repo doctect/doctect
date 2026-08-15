@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Sparkles } from 'lucide-react';
 import { cloudApi, GalleryItem } from '../../services/cloudApi';
-import { stageImport } from '../../services/importProject';
+import { IMPORT_STAGE_ERROR_MESSAGE, stageImport } from '../../services/importProject';
 import { GalleryLink } from './GalleryLink';
 import { RollingPreview } from './RollingPreview';
 import { StarRating } from './StarRating';
@@ -15,11 +15,15 @@ export function Spotlight({ item }: { item: GalleryItem }) {
     // Same sequence as useGalleryDetail.openInEditor — anonymous clone into the local editor.
     const openInEditor = async () => {
         setBusy(true);
+        setError(null);
         try {
             const res = await cloudApi.galleryState(item.id);
-            stageImport({ name: res.name, state: res.state });
+            await stageImport({ name: res.name, state: res.state });
             navigate('/app');
-        } catch { setError('Could not load project'); setBusy(false); }
+        } catch {
+            setError(IMPORT_STAGE_ERROR_MESSAGE);
+            setBusy(false);
+        }
     };
 
     return (
@@ -45,8 +49,12 @@ export function Spotlight({ item }: { item: GalleryItem }) {
                     <GalleryLink projectId={item.id} className="text-sm text-blue-600 hover:underline">
                         See details
                     </GalleryLink>
-                    {error && <span className="text-xs text-red-600">{error}</span>}
                 </div>
+                {error && (
+                    <p role="alert" className="mt-3 max-w-[65ch] text-xs leading-5 text-red-700">
+                        {error}
+                    </p>
+                )}
             </div>
         </section>
     );

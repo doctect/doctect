@@ -1,9 +1,20 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { GalleryDetailPage } from '../../pages/GalleryDetailPage';
 import { cloudApi, ApiError, GalleryDetail } from '../../services/cloudApi';
-import { consumeImport } from '../../services/importProject';
+import * as importProject from '../../services/importProject';
+import { deferred } from '../helpers/fakeLocalWorkspaceStore';
+
+vi.mock('../../services/importProject', () => ({
+    IMPORT_STAGE_ERROR_MESSAGE: 'Could not prepare this project for the editor. Nothing was removed; try again.',
+    stageImport: vi.fn(),
+}));
+
+const resetStageImport = () => {
+    vi.mocked(importProject.stageImport).mockReset();
+    vi.mocked(importProject.stageImport).mockResolvedValue('import-test');
+};
 
 const mockUseSession = vi.fn();
 vi.mock('../../lib/auth-client', () => ({
@@ -52,6 +63,7 @@ const renderAt = () => render(
 describe('GalleryDetailPage fork gating', () => {
     beforeEach(() => {
         vi.restoreAllMocks();
+        resetStageImport();
         vi.spyOn(cloudApi, 'galleryDetail').mockResolvedValue(detail);
         vi.spyOn(cloudApi, 'listIncomingMrs').mockResolvedValue([]);
     });
@@ -88,6 +100,7 @@ describe('GalleryDetailPage fork gating', () => {
 describe('GalleryDetailPage version history', () => {
     beforeEach(() => {
         vi.restoreAllMocks();
+        resetStageImport();
         vi.spyOn(cloudApi, 'galleryDetail').mockResolvedValue(detail);
         vi.spyOn(cloudApi, 'listIncomingMrs').mockResolvedValue([]);
         mockUseSession.mockReturnValue({ data: null });
@@ -119,29 +132,64 @@ describe('GalleryDetailPage version history', () => {
         const row = messageEl.parentElement!.parentElement!;
         fireEvent.click(within(row).getByRole('button', { name: 'Open in editor' }));
         expect(await screen.findByText('APP_MARKER')).toBeInTheDocument();
-        expect(consumeImport()).toEqual({
+        expect(importProject.stageImport).toHaveBeenCalledWith({
             name: 'Test Project',
             state: galleryState,
         });
+    });
+
+    it('keeps version history open and announces an exact staging failure', async () => {
+        vi.spyOn(cloudApi, 'listCommits').mockResolvedValue([
+            { id: 'c1', parentCommitId: null, message: 'Initial save', schemaVersion: 1, createdBy: 'owner-1', createdAt: '2026-01-01T00:00:00.000Z' },
+        ]);
+        vi.spyOn(cloudApi, 'getCommit').mockResolvedValue({
+            id: 'c1', message: 'Initial save', createdAt: '2026-01-01T00:00:00.000Z',
+            state: galleryState,
+        });
+        const failure = Promise.reject(new Error('quota'));
+        void failure.catch(() => {});
+        vi.mocked(importProject.stageImport).mockReturnValue(failure);
+        renderAt();
+        fireEvent.click(await screen.findByRole('button', { name: /version history/i }));
+        const messageEl = await screen.findByText(/Initial save/);
+        fireEvent.click(within(messageEl.parentElement!.parentElement!).getByRole('button', {
+            name: 'Open in editor',
+        }));
+
+        const importError = await screen.findByText(
+            'Could not prepare this project for the editor. Nothing was removed; try again.',
+        );
+        expect(importError.closest('[role="alert"]')).toBeInTheDocument();
+        expect(screen.getByRole('heading', { name: 'Version history' })).toBeVisible();
+        expect(screen.queryByText('APP_MARKER')).not.toBeInTheDocument();
     });
 });
 
 describe('GalleryDetailPage generator source staging', () => {
     beforeEach(() => {
         vi.restoreAllMocks();
+        resetStageImport();
         localStorage.clear();
         vi.spyOn(cloudApi, 'galleryDetail').mockResolvedValue(detail);
         vi.spyOn(cloudApi, 'listIncomingMrs').mockResolvedValue([]);
     });
 
-    it('stages gallery open source byte-for-byte without normalizing it', async () => {
+    it('stages gallery open source byte-for-byte before navigating', async () => {
         mockUseSession.mockReturnValue({ data: null });
         vi.spyOn(cloudApi, 'galleryState').mockResolvedValue({ name: 'Test Project', state: rawGalleryState });
+        const staged = deferred<string>();
+        vi.mocked(importProject.stageImport).mockReturnValue(staged.promise);
         renderAt();
 
         fireEvent.click(await screen.findByRole('button', { name: /open in editor/i }));
+        await waitFor(() => expect(importProject.stageImport).toHaveBeenCalledWith({
+            name: 'Test Project', state: rawGalleryState,
+        }));
+        expect(screen.queryByText('APP_MARKER')).not.toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Loading…' })).toBeDisabled();
+
+        await act(async () => staged.resolve('gallery-import'));
         expect(await screen.findByText('APP_MARKER')).toBeInTheDocument();
-        expect(consumeImport()).toEqual({ name: 'Test Project', state: rawGalleryState });
     });
 
     it('stages fork first-commit source byte-for-byte with cloud linkage', async () => {
@@ -156,11 +204,28 @@ describe('GalleryDetailPage generator source staging', () => {
 
         fireEvent.click(await screen.findByRole('button', { name: /fork this project/i }));
         expect(await screen.findByText('APP_MARKER')).toBeInTheDocument();
-        expect(consumeImport()).toEqual({
+        expect(importProject.stageImport).toHaveBeenCalledWith({
             name: 'Forked Project',
             state: rawGalleryState,
             cloud: { projectId: 'fork-1', lastSyncedCommitId: 'fork-commit-1' },
         });
+    });
+
+    it('keeps the gallery project visible and announces an exact staging failure', async () => {
+        mockUseSession.mockReturnValue({ data: null });
+        vi.spyOn(cloudApi, 'galleryState').mockResolvedValue({ name: 'Test Project', state: rawGalleryState });
+        vi.mocked(importProject.stageImport).mockRejectedValue(new Error('quota'));
+        renderAt();
+
+        fireEvent.click(await screen.findByRole('button', { name: /open in editor/i }));
+
+        const importError = await screen.findByText(
+            'Could not prepare this project for the editor. Nothing was removed; try again.',
+        );
+        expect(importError.closest('[role="alert"]')).toBeInTheDocument();
+        expect(screen.getByRole('heading', { name: 'Test Project' })).toBeVisible();
+        expect(screen.queryByText('APP_MARKER')).not.toBeInTheDocument();
+        expect(screen.getByRole('button', { name: /open in editor/i })).toBeEnabled();
     });
 });
 
@@ -169,6 +234,7 @@ describe('GalleryDetailPage reviews', () => {
 
     beforeEach(() => {
         vi.restoreAllMocks();
+        resetStageImport();
         vi.spyOn(cloudApi, 'galleryDetail').mockResolvedValue({ ...detail, ratingAvg: 4.0, ratingCount: 1 });
         vi.spyOn(cloudApi, 'listIncomingMrs').mockResolvedValue([]);
         vi.spyOn(cloudApi, 'listReviews').mockResolvedValue({ reviews: [review], myReview: null });

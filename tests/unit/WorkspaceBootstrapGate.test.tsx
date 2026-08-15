@@ -1,7 +1,8 @@
-import { Suspense, startTransition, useLayoutEffect, useState } from 'react';
+import { StrictMode, Suspense, startTransition, useLayoutEffect, useState } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { downloadBlob } from '../../services/browserDownload';
+import { trackEvent } from '../../services/analytics';
 import {
   WorkspaceBootstrapGate,
   type WorkspaceEditorMount,
@@ -12,6 +13,7 @@ import type {
   LocalWorkspaceStore,
   RecoverySource,
   WorkspaceBootstrapPhase,
+  WorkspacePendingImport,
 } from '../../services/localWorkspace/index';
 import {
   deferred,
@@ -30,6 +32,37 @@ vi.mock('../../services/browserDownload', () => ({
   downloadBlob: vi.fn(),
   downloadJson: vi.fn(),
 }));
+vi.mock('../../services/analytics', () => ({ trackEvent: vi.fn() }));
+
+const pendingImport = (
+  id: string,
+  targetProjectId: string,
+  warnings: string[] = [],
+): WorkspacePendingImport => ({
+  id,
+  targetProjectId,
+  name: `Imported ${id}`,
+  state: {} as WorkspacePendingImport['state'],
+  warnings,
+  createdAt: '2026-08-15T12:00:00.000Z',
+});
+
+const consumedSnapshot = (
+  initial: ReturnType<typeof workspaceSnapshot>,
+  imported: WorkspacePendingImport[],
+  remaining: WorkspacePendingImport[] = [],
+) => workspaceSnapshot({
+  projects: [
+    ...initial.projects,
+    ...imported.map(item => ({
+      id: item.targetProjectId,
+      name: item.name,
+      initialState: item.state,
+    })),
+  ],
+  activeProjectId: imported.at(-1)?.targetProjectId ?? initial.activeProjectId,
+  pendingImports: remaining,
+});
 
 const fakeEditorRenderer = ({ initialWorkspace }: WorkspaceEditorMount) => (
   <div data-testid="editor-page">{initialWorkspace.activeProjectId}</div>
@@ -96,6 +129,7 @@ function InterruptedReplacementHarness({
 beforeEach(() => {
   window.localStorage.clear();
   vi.mocked(downloadBlob).mockReset();
+  vi.mocked(trackEvent).mockReset();
 });
 
 afterEach(() => {
@@ -154,6 +188,154 @@ describe('WorkspaceBootstrapGate', () => {
       initialWorkspace: snapshot,
       initialWarnings: [],
     });
+  });
+
+  it('consumes one pending import once under React StrictMode before mounting the editor', async () => {
+    const pending = pendingImport('import-1', 'target-1');
+    const initial = workspaceSnapshot({ pendingImports: [pending] });
+    const consumed = consumedSnapshot(initial, [pending]);
+    const store = fakeReadyStore({ snapshot: initial });
+    store.commit.mockResolvedValue(consumed);
+
+    render(
+      <StrictMode>
+        <WorkspaceBootstrapGate store={store} renderEditor={fakeEditorRenderer} />
+      </StrictMode>,
+    );
+
+    expect(await screen.findByTestId('editor-page')).toHaveTextContent('target-1');
+    expect(store.commit).toHaveBeenCalledWith({ type: 'consume-import', importId: 'import-1' });
+    expect(store.commit.mock.calls.filter(([command]) => command.type === 'consume-import'))
+      .toHaveLength(1);
+  });
+
+  it('consumes multiple pending imports in stored position order', async () => {
+    const first = pendingImport('import-1', 'target-1');
+    const second = pendingImport('import-2', 'target-2');
+    const initial = workspaceSnapshot({ pendingImports: [first, second] });
+    const afterFirst = consumedSnapshot(initial, [first], [second]);
+    const afterSecond = consumedSnapshot(initial, [first, second]);
+    const store = fakeReadyStore({ snapshot: initial });
+    store.commit.mockImplementation(async command => (
+      command.type === 'consume-import' && command.importId === 'import-1'
+        ? afterFirst
+        : afterSecond
+    ));
+
+    render(<WorkspaceBootstrapGate store={store} renderEditor={fakeEditorRenderer} />);
+
+    expect(await screen.findByTestId('editor-page')).toHaveTextContent('target-2');
+    expect(store.commit.mock.calls.map(([command]) => command)).toEqual([
+      { type: 'consume-import', importId: 'import-1' },
+      { type: 'consume-import', importId: 'import-2' },
+    ]);
+  });
+
+  it('blocks editor mount on consume failure and retries the retained import', async () => {
+    const pending = pendingImport('import-retry', 'target-retry');
+    const initial = workspaceSnapshot({ pendingImports: [pending] });
+    const consumed = consumedSnapshot(initial, [pending]);
+    const store = fakeReadyStore({ snapshot: initial });
+    store.commit
+      .mockRejectedValueOnce(new Error('quota exhausted'))
+      .mockResolvedValueOnce(consumed);
+
+    render(<WorkspaceBootstrapGate store={store} renderEditor={fakeEditorRenderer} />);
+
+    const alert = await screen.findByRole('alert');
+    expect(within(alert).getByRole('button', { name: 'Retry' })).toBeEnabled();
+    expect(screen.queryByTestId('editor-page')).not.toBeInTheDocument();
+    expect(initial.pendingImports).toEqual([pending]);
+    expect(trackEvent).not.toHaveBeenCalled();
+
+    fireEvent.click(within(alert).getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByTestId('editor-page')).toHaveTextContent('target-retry');
+    expect(store.commit).toHaveBeenCalledTimes(2);
+    expect(store.commit).toHaveBeenNthCalledWith(2, {
+      type: 'consume-import',
+      importId: 'import-retry',
+    });
+    expect(trackEvent).toHaveBeenCalledOnce();
+  });
+
+  it('publishes each import warning once and emits analytics only after durable consume', async () => {
+    const pending = pendingImport('import-warning', 'target-warning', ['Saved generator was detached.']);
+    const initial = workspaceSnapshot({ pendingImports: [pending] });
+    const consumed = consumedSnapshot(initial, [pending]);
+    const commit = deferred<ReturnType<typeof workspaceSnapshot>>();
+    const store = fakeReadyStore({ snapshot: initial });
+    store.commit.mockReturnValue(commit.promise);
+    const renderEditor = vi.fn(({ initialWorkspace, initialWarnings }: WorkspaceEditorMount) => (
+      <div data-testid="editor-page">
+        <span>{initialWorkspace.activeProjectId}</span>
+        {initialWarnings.map(warning => <span key={warning}>{warning}</span>)}
+      </div>
+    ));
+
+    render(
+      <StrictMode>
+        <WorkspaceBootstrapGate store={store} renderEditor={renderEditor} />
+      </StrictMode>,
+    );
+    await waitFor(() => expect(store.commit).toHaveBeenCalledOnce());
+    expect(screen.queryByTestId('editor-page')).not.toBeInTheDocument();
+    expect(trackEvent).not.toHaveBeenCalled();
+
+    await act(async () => commit.resolve(consumed));
+
+    expect(await screen.findByText('Saved generator was detached.')).toBeVisible();
+    expect(renderEditor.mock.calls.at(-1)?.[0].initialWarnings)
+      .toEqual(['Saved generator was detached.']);
+    expect(trackEvent).toHaveBeenCalledOnce();
+    expect(trackEvent).toHaveBeenCalledWith('project_imported_from_gallery');
+  });
+
+  it('waits for receipt acknowledgement before consuming its pending import', async () => {
+    const pending = pendingImport('receipt-import', 'receipt-target');
+    const initial = workspaceSnapshot({ pendingImports: [pending] });
+    const store = fakeReadyStore({
+      snapshot: initial,
+      receipt: migrationReceipt({ id: 'receipt-before-import', pendingImportPreserved: true }),
+    });
+    store.commit.mockResolvedValue(consumedSnapshot(initial, [pending]));
+
+    render(<WorkspaceBootstrapGate store={store} renderEditor={fakeEditorRenderer} />);
+
+    expect(await screen.findByRole('heading', { name: 'Local projects upgraded' })).toBeVisible();
+    expect(store.commit).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to editor' }));
+
+    expect(await screen.findByTestId('editor-page')).toHaveTextContent('receipt-target');
+    expect(store.commit).toHaveBeenCalledWith({
+      type: 'consume-import',
+      importId: 'receipt-import',
+    });
+  });
+
+  it('reloads an already consumed public snapshot without duplicate or leaked provenance', async () => {
+    const pending = pendingImport('reload-import', 'reload-target');
+    const initial = workspaceSnapshot({ pendingImports: [pending] });
+    const consumed = consumedSnapshot(initial, [pending]);
+    const firstStore = fakeReadyStore({ snapshot: initial });
+    firstStore.commit.mockResolvedValue(consumed);
+    const first = render(
+      <WorkspaceBootstrapGate store={firstStore} renderEditor={fakeEditorRenderer} />,
+    );
+    expect(await screen.findByTestId('editor-page')).toHaveTextContent('reload-target');
+    first.unmount();
+
+    const reloadStore = fakeReadyStore({ snapshot: consumed });
+    const renderEditor = vi.fn(fakeEditorRenderer);
+    render(<WorkspaceBootstrapGate store={reloadStore} renderEditor={renderEditor} />);
+
+    expect(await screen.findByTestId('editor-page')).toHaveTextContent('reload-target');
+    expect(reloadStore.commit).not.toHaveBeenCalled();
+    const reloaded = renderEditor.mock.calls.at(-1)?.[0].initialWorkspace;
+    expect(reloaded.projects.filter(project => project.id === 'reload-target')).toHaveLength(1);
+    expect(Object.hasOwn(
+      reloaded.projects.find(project => project.id === 'reload-target')!,
+      'consumedImportId',
+    )).toBe(false);
   });
 
   it('fails closed synchronously while a replacement store bootstraps', async () => {

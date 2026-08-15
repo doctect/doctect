@@ -13,7 +13,7 @@ import { ReviewsSection } from './ReviewsSection';
 export function GalleryDetailBody({ detail }: { detail: UseGalleryDetailResult }) {
     const navigate = useNavigate();
     const {
-        project, busy, mrs, isOwner, session, fromPath,
+        project, importError, busy, mrs, isOwner, session, fromPath,
         openInEditor, fork, downloadAllVariants, report,
         showHistory, setShowHistory, onCloneHistoryVersion,
         reviews, myReview, saveReview, deleteMyReview, reportReview,
@@ -53,6 +53,14 @@ export function GalleryDetailBody({ detail }: { detail: UseGalleryDetailResult }
                     <span className="flex items-center gap-1"><GitFork size={12} /> {project.forkCount} forks</span>
                     <span className="flex items-center gap-1"><Download size={12} /> {project.downloadCount} downloads</span>
                 </div>
+                {importError && (
+                    <div
+                        role="alert"
+                        className="mt-4 max-w-xs rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs leading-5 text-red-800"
+                    >
+                        {importError}
+                    </div>
+                )}
                 <div className="flex flex-col gap-2 mt-6 max-w-xs">
                     <button onClick={openInEditor} disabled={busy !== null}
                         className="flex items-center justify-center gap-1.5 bg-blue-600 text-white rounded-lg px-4 py-2 text-sm font-medium disabled:opacity-50">
