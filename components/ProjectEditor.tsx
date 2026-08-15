@@ -37,7 +37,7 @@ interface ProjectEditorProps {
     isActive: boolean;
     onNameChange: (name: string) => void;
     onStateChange?: (state: AppState) => void;
-    onCreateGeneratedProject: (name: string, project: GeneratedProject, source: GeneratorSourceDraft) => boolean;
+    onCreateGeneratedProject: (name: string, project: GeneratedProject, source: GeneratorSourceDraft) => Promise<boolean>;
 }
 
 export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, projectName, initialState, isActive, onNameChange, onStateChange, onCreateGeneratedProject }) => {
@@ -59,6 +59,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, project
     const onNameChangeRef = useRef(onNameChange);
     const onStateChangeRef = useRef(onStateChange);
     const previousRootTitleRef = useRef(state.nodes[state.rootId]?.title);
+    const lastReportedStateRef = useRef(state);
 
     useEffect(() => {
         onNameChangeRef.current = onNameChange;
@@ -73,14 +74,10 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, project
         onNameChangeRef.current(rootNode.title);
     }, [state.nodes[state.rootId]?.title]);
 
-    // Debounce state changes to parent for persistence
     useEffect(() => {
-        const timer = setTimeout(() => {
-            if (onStateChangeRef.current) {
-                onStateChangeRef.current(state);
-            }
-        }, 1000);
-        return () => clearTimeout(timer);
+        if (lastReportedStateRef.current === state) return;
+        lastReportedStateRef.current = state;
+        onStateChangeRef.current?.(state);
     }, [state]);
 
     const saveToHistory = useCallback(() => {

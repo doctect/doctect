@@ -8,12 +8,15 @@ import { HistoryModal } from './HistoryModal';
 import { PublishModal } from './PublishModal';
 import { ProposeChangesModal } from './ProposeChangesModal';
 import { LazyEditListingModal } from './LazyEditListingModal';
-import type { Project } from '../../pages/EditorPage';
+import type { WorkspaceProject } from '../../services/localWorkspace/index';
 
 interface CloudMenuProps {
-    project: Project;
-    onLinkCloud: (cloud: { projectId: string; lastSyncedCommitId: string }) => void;
-    onRestoreState: (state: AppState) => void;
+    project: WorkspaceProject;
+    onLinkCloud: (cloud: { projectId: string; lastSyncedCommitId: string }) => Promise<boolean>;
+    onRestoreState: (
+        state: AppState,
+        cloud?: { projectId: string; lastSyncedCommitId: string },
+    ) => Promise<boolean>;
 }
 
 export function CloudMenu({ project, onLinkCloud, onRestoreState }: CloudMenuProps) {
@@ -52,10 +55,16 @@ export function CloudMenu({ project, onLinkCloud, onRestoreState }: CloudMenuPro
         try {
             if (!project.cloud) {
                 const res = await cloudApi.createProject({ name: project.name, state: project.initialState, message });
-                onLinkCloud({ projectId: res.project.id, lastSyncedCommitId: res.commit.id });
+                if (await onLinkCloud({ projectId: res.project.id, lastSyncedCommitId: res.commit.id }) === false) {
+                    setError('Cloud save succeeded, but its local link was not saved.');
+                    return;
+                }
             } else {
                 const res = await cloudApi.saveCommit(project.cloud.projectId, project.cloud.lastSyncedCommitId, { state: project.initialState, message });
-                onLinkCloud({ projectId: project.cloud.projectId, lastSyncedCommitId: res.commit.id });
+                if (await onLinkCloud({ projectId: project.cloud.projectId, lastSyncedCommitId: res.commit.id }) === false) {
+                    setError('Cloud save succeeded, but its local link was not saved.');
+                    return;
+                }
             }
             setOpen(false);
         } catch (e) {
@@ -81,8 +90,13 @@ export function CloudMenu({ project, onLinkCloud, onRestoreState }: CloudMenuPro
             const latest = await cloudApi.getProject(project.cloud.projectId);
             if (!latest.headCommitId) throw new Error('Cloud project has no saved version.');
             const commit = await cloudApi.getCommit(project.cloud.projectId, latest.headCommitId);
-            onRestoreState(commit.state);
-            onLinkCloud({ projectId: project.cloud.projectId, lastSyncedCommitId: latest.headCommitId });
+            if (await onRestoreState(commit.state, {
+                projectId: project.cloud.projectId,
+                lastSyncedCommitId: latest.headCommitId,
+            }) === false) {
+                setError('Cloud version loaded, but it was not saved locally.');
+                return;
+            }
             setCloudProject(latest);
             setSaveConflict(false);
             setOpen(false);
@@ -159,7 +173,9 @@ export function CloudMenu({ project, onLinkCloud, onRestoreState }: CloudMenuPro
             {showHistory && project.cloud && (
                 <HistoryModal
                     cloudProjectId={project.cloud.projectId}
-                    onRestore={(state) => { onRestoreState(state); setShowHistory(false); }}
+                    onRestore={async state => {
+                        if (await onRestoreState(state) !== false) setShowHistory(false);
+                    }}
                     onClose={() => setShowHistory(false)}
                 />
             )}

@@ -17,7 +17,7 @@ interface HierarchyGeneratorModalProps {
   savedGenerator?: GeneratorProvenance;
   onClose: () => void;
   onApplyGenerated: (project: GeneratedProject, source: GeneratorSourceDraft) => boolean;
-  onCreateGeneratedProject: (name: string, project: GeneratedProject, source: GeneratorSourceDraft) => boolean;
+  onCreateGeneratedProject: (name: string, project: GeneratedProject, source: GeneratorSourceDraft) => Promise<boolean>;
 }
 
 interface SimpleEditorProps {
@@ -2429,8 +2429,8 @@ const HierarchyGeneratorSession: React.FC<HierarchyGeneratorSessionProps> = ({
           currentProjectName={projectName}
           onBack={() => setShowVisualPreview(false)}
           onReplace={applyPreview}
-          onCreateProject={name => {
-            const created = onCreateGeneratedProject(name, previewState.project, previewState.source);
+          onCreateProject={async name => {
+            const created = await onCreateGeneratedProject(name, previewState.project, previewState.source);
             if (created) {
               setShowVisualPreview(false);
               onClose();

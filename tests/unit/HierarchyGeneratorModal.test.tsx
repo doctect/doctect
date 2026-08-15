@@ -58,7 +58,7 @@ const renderModal = (overrides: Record<string, unknown> = {}) => {
         savedGenerator: saved,
         onClose: vi.fn(),
         onApplyGenerated: vi.fn(() => true),
-        onCreateGeneratedProject: vi.fn(() => true),
+        onCreateGeneratedProject: vi.fn(async () => true),
         ...overrides,
     };
     render(<HierarchyGeneratorModal {...props} />);
@@ -79,7 +79,7 @@ describe('HierarchyGeneratorModal', () => {
             savedGenerator: saved,
             onClose: vi.fn(),
             onApplyGenerated: vi.fn(() => true),
-            onCreateGeneratedProject: vi.fn(() => true),
+            onCreateGeneratedProject: vi.fn(async () => true),
         };
         const view = render(<HierarchyGeneratorModal {...props} />);
         const templateHelp = screen.getByRole('button', { name: 'Template Structure help' });
@@ -230,8 +230,22 @@ describe('HierarchyGeneratorModal', () => {
             hierarchyScript: saved.hierarchyScript,
         });
         expect(previewPayload.current).toEqual(before);
-        expect(props.onClose).toHaveBeenCalledOnce();
+        await waitFor(() => expect(props.onClose).toHaveBeenCalledOnce());
         expect(screen.queryByRole('dialog', { name: 'Generated Project Preview' })).not.toBeInTheDocument();
+    });
+
+    it('keeps both dialogs open when generated project persistence fails', async () => {
+        const pending = deferred<boolean>();
+        const props = renderModal({ onCreateGeneratedProject: vi.fn(() => pending.promise) });
+        fireEvent.click(screen.getByRole('button', { name: 'Preview' }));
+        await screen.findByRole('dialog', { name: 'Generated Project Preview' });
+
+        fireEvent.click(screen.getByRole('button', { name: 'Create Test Project' }));
+
+        expect(props.onClose).not.toHaveBeenCalled();
+        await act(async () => pending.resolve(false));
+        expect(props.onClose).not.toHaveBeenCalled();
+        expect(screen.getByRole('dialog', { name: 'Generated Project Preview' })).toBeVisible();
     });
 
     it('shows failed previews and keeps Apply disabled', async () => {
@@ -323,7 +337,7 @@ describe('HierarchyGeneratorModal', () => {
             savedGenerator: saved,
             onClose: vi.fn(),
             onApplyGenerated: vi.fn(() => true),
-            onCreateGeneratedProject: vi.fn(() => true),
+            onCreateGeneratedProject: vi.fn(async () => true),
         };
         const view = render(<HierarchyGeneratorModal {...props} />);
         fireEvent.click(screen.getByRole('button', { name: 'Preview' }));
@@ -355,7 +369,7 @@ describe('HierarchyGeneratorModal', () => {
             savedGenerator: saved,
             onClose: vi.fn(),
             onApplyGenerated: vi.fn(() => true),
-            onCreateGeneratedProject: vi.fn(() => true),
+            onCreateGeneratedProject: vi.fn(async () => true),
         };
         const view = render(<HierarchyGeneratorModal {...props} />);
         fireEvent.click(screen.getByRole('button', { name: 'Preview' }));
@@ -414,7 +428,7 @@ describe('HierarchyGeneratorModal', () => {
                 savedGenerator={saved}
                 onClose={vi.fn()}
                 onApplyGenerated={vi.fn(() => true)}
-                onCreateGeneratedProject={vi.fn(() => true)}
+                onCreateGeneratedProject={vi.fn(async () => true)}
             />,
         );
         const dialog = screen.getByRole('dialog', { name: 'Hierarchy Generator' });

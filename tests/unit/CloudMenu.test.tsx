@@ -3,7 +3,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { CloudMenu } from '../../components/cloud/CloudMenu';
 import { cloudApi, ApiError } from '../../services/cloudApi';
-import type { Project } from '../../pages/EditorPage';
+import type { WorkspaceProject } from '../../services/localWorkspace/index';
 
 const mockUseSession = vi.fn();
 vi.mock('../../lib/auth-client', () => ({
@@ -20,7 +20,7 @@ vi.mock('../../services/thumbnailService', () => ({
     generateThumbnails: vi.fn(async () => []),
 }));
 
-const project: Project = {
+const project: WorkspaceProject = {
     id: 'local-1',
     name: 'Test Project',
     initialState: {
@@ -32,9 +32,9 @@ const project: Project = {
 };
 
 const renderMenu = (
-    menuProject: Project = project,
-    onLinkCloud = vi.fn(),
-    onRestoreState = vi.fn(),
+    menuProject: WorkspaceProject = project,
+    onLinkCloud = vi.fn(async () => true),
+    onRestoreState = vi.fn(async () => true),
 ) => render(
     <MemoryRouter initialEntries={['/app']}>
         <Routes>
@@ -84,8 +84,8 @@ describe('CloudMenu', () => {
         mockUseSession.mockReturnValue({ data: { user: { username: 'planner_pro' } } });
         const linked = { ...project, cloud: { projectId: 'cloud-1', lastSyncedCommitId: 'head-1' } };
         const latestState = { ...project.initialState, rootId: 'latest' } as any;
-        const onLinkCloud = vi.fn();
-        const onRestoreState = vi.fn();
+        const onLinkCloud = vi.fn(async () => true);
+        const onRestoreState = vi.fn(async () => true);
         vi.spyOn(cloudApi, 'getProject').mockResolvedValue({ id: 'cloud-1', headCommitId: 'head-2' } as any);
         vi.spyOn(cloudApi, 'saveCommit').mockRejectedValue(new ApiError(409, 'changed', 'PROJECT_HEAD_CHANGED'));
         vi.spyOn(cloudApi, 'getCommit').mockResolvedValue({ id: 'head-2', state: latestState } as any);
@@ -98,7 +98,10 @@ describe('CloudMenu', () => {
         expect(await screen.findByText(/changed since your last save/i)).toBeInTheDocument();
         expect(onRestoreState).not.toHaveBeenCalled();
         fireEvent.click(screen.getByRole('button', { name: 'Reload cloud version' }));
-        await waitFor(() => expect(onRestoreState).toHaveBeenCalledWith(latestState));
-        expect(onLinkCloud).toHaveBeenCalledWith({ projectId: 'cloud-1', lastSyncedCommitId: 'head-2' });
+        await waitFor(() => expect(onRestoreState).toHaveBeenCalledWith(
+            latestState,
+            { projectId: 'cloud-1', lastSyncedCommitId: 'head-2' },
+        ));
+        expect(onLinkCloud).not.toHaveBeenCalled();
     });
 });

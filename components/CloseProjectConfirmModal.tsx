@@ -5,8 +5,8 @@ import { AlertTriangle, Download, X, Trash2 } from 'lucide-react';
 interface CloseProjectConfirmModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onConfirmClose: () => void;
-  onSaveAndClose: () => void;
+  onConfirmClose: () => void | Promise<void>;
+  onSaveAndClose: () => void | Promise<void>;
   projectName: string;
 }
 

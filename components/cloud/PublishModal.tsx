@@ -4,10 +4,10 @@ import { cloudApi, ApiError } from '../../services/cloudApi';
 import { computePageOrder } from '../../services/pdfService';
 import { generateThumbnails } from '../../services/thumbnailService';
 import { PreviewPagePicker } from './PreviewPagePicker';
-import type { Project } from '../../pages/EditorPage';
+import type { WorkspaceProject } from '../../services/localWorkspace/index';
 
 interface PublishModalProps {
-    project: Project;
+    project: WorkspaceProject;
     cloudProjectId: string;
     onClose: () => void;
     onPublished: () => void;
@@ -15,7 +15,7 @@ interface PublishModalProps {
 
 type DisclosureState =
     | { status: 'loading'; projectId: string }
-    | { status: 'ready'; projectId: string; headCommitId: string; state: Project['initialState']; hasGenerator: boolean }
+    | { status: 'ready'; projectId: string; headCommitId: string; state: WorkspaceProject['initialState']; hasGenerator: boolean }
     | { status: 'error'; projectId: string; message: string };
 
 export function PublishModal({ project, cloudProjectId, onClose, onPublished }: PublishModalProps) {
@@ -58,7 +58,7 @@ export function PublishModal({ project, cloudProjectId, onClose, onPublished }: 
                 if (!cloudProject.headCommitId) throw new Error('Cloud project has no head commit.');
                 const head = await cloudApi.getCommit(cloudProjectId, cloudProject.headCommitId);
                 if (!cancelled) {
-                    const state = head.state as Project['initialState'];
+                    const state = head.state as WorkspaceProject['initialState'];
                     setDisclosure({
                         status: 'ready',
                         projectId: cloudProjectId,

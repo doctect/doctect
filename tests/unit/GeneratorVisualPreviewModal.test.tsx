@@ -1,5 +1,5 @@
 import React from 'react';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { GeneratorVisualPreviewModal } from '../../components/GeneratorVisualPreviewModal';
 import { fitTemplateScale } from '../../services/generatorVisualPreview';
@@ -77,7 +77,7 @@ const renderModal = (overrides: Record<string, unknown> = {}, payload = makePayl
     currentProjectName: 'Current',
     onBack: vi.fn(),
     onReplace: vi.fn(() => true),
-    onCreateProject: vi.fn(() => true),
+    onCreateProject: vi.fn(async () => true),
     ...overrides,
   };
   const view = render(<GeneratorVisualPreviewModal {...props} />);
@@ -267,15 +267,31 @@ describe('GeneratorVisualPreviewModal', () => {
     expect(props.onCreateProject).toHaveBeenCalledWith('Generated copy');
   });
 
-  it('keeps naming open and reports callback failure', () => {
-    const { props } = renderModal({ onCreateProject: vi.fn(() => false) });
+  it('keeps naming open and reports callback failure', async () => {
+    const { props } = renderModal({ onCreateProject: vi.fn(async () => false) });
     fireEvent.click(screen.getByRole('button', { name: 'Create As New Project' }));
     const namingDialog = screen.getByRole('dialog', { name: 'Create Generated Project' });
 
     fireEvent.click(within(namingDialog).getByRole('button', { name: 'Create Project' }));
 
     expect(props.onCreateProject).toHaveBeenCalledWith('Current – Generated');
-    expect(within(namingDialog).getByRole('alert')).toHaveTextContent('Could not create project. Try again.');
+    expect(await within(namingDialog).findByRole('alert')).toHaveTextContent('Could not create project. Try again.');
+  });
+
+  it('awaits project persistence before treating creation as successful', async () => {
+    let resolve!: (created: boolean) => void;
+    const pending = new Promise<boolean>(next => { resolve = next; });
+    const onCreateProject = vi.fn(() => pending);
+    renderModal({ onCreateProject });
+    fireEvent.click(screen.getByRole('button', { name: 'Create As New Project' }));
+    const namingDialog = screen.getByRole('dialog', { name: 'Create Generated Project' });
+
+    fireEvent.click(within(namingDialog).getByRole('button', { name: 'Create Project' }));
+
+    expect(onCreateProject).toHaveBeenCalledOnce();
+    expect(within(namingDialog).queryByRole('alert')).not.toBeInTheDocument();
+    await act(async () => resolve(false));
+    expect(await within(namingDialog).findByRole('alert')).toHaveTextContent('Could not create project. Try again.');
   });
 
   it('isolates preview render failures without disabling project actions', () => {

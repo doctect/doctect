@@ -14,7 +14,7 @@ export interface GeneratorVisualPreviewModalProps {
   currentProjectName: string;
   onBack: () => void;
   onReplace: () => boolean;
-  onCreateProject: (name: string) => boolean;
+  onCreateProject: (name: string) => Promise<boolean>;
 }
 
 interface PreviewErrorBoundaryProps {
@@ -215,11 +215,11 @@ export const GeneratorVisualPreviewModal: React.FC<GeneratorVisualPreviewModalPr
     trapFocus(event, namingRef.current);
   };
 
-  const submitName = () => {
+  const submitName = async () => {
     const trimmed = name.trim();
     if (!trimmed) return setNameError('Project name is required.');
     if (trimmed.length > 100) return setNameError('Project name must be 100 characters or fewer.');
-    if (onCreateProject(trimmed)) return;
+    if (await onCreateProject(trimmed)) return;
     setNameError('Could not create project. Try again.');
   };
 
@@ -426,7 +426,7 @@ export const GeneratorVisualPreviewModal: React.FC<GeneratorVisualPreviewModalPr
                 className="mt-4"
                 onSubmit={event => {
                   event.preventDefault();
-                  submitName();
+                  void submitName();
                 }}
               >
                 <label htmlFor="generated-project-name" className="block text-sm font-medium text-slate-700">Project name</label>

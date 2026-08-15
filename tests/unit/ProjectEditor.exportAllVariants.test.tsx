@@ -72,7 +72,7 @@ const renderEditor = (variants: Record<string, Variant>) => render(
         isActive
         onNameChange={vi.fn()}
         onStateChange={vi.fn()}
-        onCreateGeneratedProject={vi.fn(() => true)}
+        onCreateGeneratedProject={vi.fn(async () => true)}
     />,
 );
 

@@ -1,5 +1,5 @@
 import React from 'react';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AppState } from '../../types';
 
@@ -10,6 +10,8 @@ vi.mock('../../services/projectDocumentSnapshot', async importOriginal => {
     snapshotDocumentSpy.mockImplementation(actual.snapshotDocument);
     return { ...actual, snapshotDocument: snapshotDocumentSpy };
 });
+
+vi.mock('../../services/analytics', () => ({ trackEvent: vi.fn() }));
 
 vi.mock('../../components/Sidebar', () => ({
     Sidebar: ({ state, onUpdateNode }: { state: AppState; onUpdateNode: (id: string, updates: Partial<AppState['nodes'][string]>) => void }) => (
@@ -138,7 +140,7 @@ const renderEditor = () => render(
         isActive
         onNameChange={vi.fn()}
         onStateChange={vi.fn()}
-        onCreateGeneratedProject={vi.fn(() => true)}
+        onCreateGeneratedProject={vi.fn(async () => true)}
     />,
 );
 
@@ -168,7 +170,7 @@ describe('ProjectEditor generator history integration', () => {
                         isActive
                         onNameChange={setName}
                         onStateChange={vi.fn()}
-                        onCreateGeneratedProject={vi.fn(() => true)}
+                        onCreateGeneratedProject={vi.fn(async () => true)}
                     />
                 </>
             );
@@ -180,6 +182,34 @@ describe('ProjectEditor generator history integration', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Rename root' }));
 
         expect(screen.getByTestId('project-name')).toHaveTextContent('Renamed Root');
+    });
+
+    it('does not report initial state during StrictMode replay and reports edits immediately', () => {
+        const onStateChange = vi.fn();
+        render(
+            <React.StrictMode>
+                <ProjectEditor
+                    projectId="strict-mode-test"
+                    projectName="Strict Mode Test"
+                    initialState={initialState()}
+                    isActive
+                    onNameChange={vi.fn()}
+                    onStateChange={onStateChange}
+                    onCreateGeneratedProject={vi.fn(async () => true)}
+                />
+            </React.StrictMode>,
+        );
+
+        act(() => vi.advanceTimersByTime(1000));
+        expect(onStateChange).not.toHaveBeenCalled();
+
+        fireEvent.click(screen.getByRole('button', { name: 'Rename root' }));
+        expect(onStateChange).toHaveBeenCalledOnce();
+        expect(onStateChange).toHaveBeenCalledWith(expect.objectContaining({
+            nodes: expect.objectContaining({
+                root: expect.objectContaining({ title: 'Renamed Root' }),
+            }),
+        }));
     });
 
     it('checkpoints Apply once and Undo/Redo restore all generated fields and provenance timestamp', () => {

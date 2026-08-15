@@ -6,7 +6,7 @@ import clsx from 'clsx';
 interface TabBarProps {
   projects: { id: string; name: string }[];
   activeProjectId: string | null;
-  onSelect: (id: string) => void;
+  onSelect: (id: string) => void | Promise<void>;
   onClose: (id: string) => void;
   onNew: () => void;
 }

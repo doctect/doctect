@@ -1,5 +1,5 @@
 import React from 'react';
-import { BrowserRouter, Routes, Route, useLocation } from 'react-router-dom';
+import { createBrowserRouter, RouterProvider, Routes, Route, useLocation } from 'react-router-dom';
 import type { Location } from 'react-router-dom';
 import { LandingPage } from './pages/LandingPage';
 import { EditorPage } from './pages/EditorPage';
@@ -19,6 +19,8 @@ import { trackEvent } from './services/analytics';
 import { useSession } from './lib/auth-client';
 import { Navigate } from 'react-router-dom';
 import { useCurrentUser } from './hooks/useCurrentUser';
+import { WorkspaceBootstrapGate } from './components/workspace/WorkspaceBootstrapGate';
+import { localWorkspaceStore } from './services/localWorkspace/index';
 
 // Code-split the docs subsystem: its bundled markdown corpus (108 files) and
 // pages are large and only ever needed on /docs/*, so lazy-load them into a
@@ -30,13 +32,21 @@ const RouteFallback = () => (
   <div className="p-10 flex justify-center"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" /></div>
 );
 
-function App() {
+function RoutedApp() {
   return (
-    <BrowserRouter>
+    <>
       <PageTracker />
       <AppRoutes />
-    </BrowserRouter>
+    </>
   );
+}
+
+export const appRouter = createBrowserRouter([
+  { path: '*', element: <RoutedApp /> },
+]);
+
+function App() {
+  return <RouterProvider router={appRouter} />;
 }
 
 function AppRoutes() {
@@ -47,7 +57,21 @@ function AppRoutes() {
     <ErrorBoundary>
       <Routes location={backgroundLocation || location}>
         <Route path="/" element={<LandingPage />} />
-        <Route path="/app" element={<EditorPage />} />
+        <Route
+          path="/app"
+          element={(
+            <WorkspaceBootstrapGate
+              store={localWorkspaceStore}
+              renderEditor={({ store, initialWorkspace, initialWarnings }) => (
+                <EditorPage
+                  store={store}
+                  initialWorkspace={initialWorkspace}
+                  initialWarnings={initialWarnings}
+                />
+              )}
+            />
+          )}
+        />
         <Route path="/docs/*" element={<React.Suspense fallback={<RouteFallback />}><DocsSection /></React.Suspense>} />
         <Route path="/login" element={<LoginPage />} />
         <Route path="/gallery" element={<GalleryPage />} />
