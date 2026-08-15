@@ -95,6 +95,35 @@ describe('NewProjectModal', () => {
     });
   });
 
+  it('ignores same-tick Cancel after deletion starts but before pending state renders', async () => {
+    const pending = deferred<void>();
+    let cancel!: HTMLButtonElement;
+    const onDeleteCustomPreset = vi.fn((_presetId: string) => {
+      cancel.click();
+      return pending.promise;
+    });
+    render(
+      <NewProjectModal
+        {...defaultProps}
+        customPresets={[customPreset('custom-1', 'My Custom Preset')]}
+        onDeleteCustomPreset={onDeleteCustomPreset}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Delete My Custom Preset' }));
+    cancel = screen.getByRole('button', { name: 'Cancel' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Yes, Delete' }));
+
+    expect(onDeleteCustomPreset).toHaveBeenCalledOnce();
+    expect(screen.getByRole('alertdialog', { name: 'Delete Preset?' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Deleting…' })).toBeDisabled();
+
+    await act(async () => {
+      pending.resolve(undefined);
+      await pending.promise;
+    });
+  });
+
   it('retains the card and delete confirmation after durable failure', async () => {
     const onDelete = vi.fn(async (_presetId: string) => {
       throw new Error('write failed');
@@ -155,5 +184,31 @@ describe('NewProjectModal', () => {
     expect(onSelectPreset).not.toHaveBeenCalled();
     expect(onDeleteCustomPreset).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('contains editor shortcut keys while preserving local Escape and normal Tab behavior', () => {
+    const onParentKeyDown = vi.fn();
+    const onClose = vi.fn();
+    render(
+      <div onKeyDown={onParentKeyDown}>
+        <NewProjectModal
+          {...defaultProps}
+          customPresets={[]}
+          onClose={onClose}
+        />
+      </div>,
+    );
+    const dialog = screen.getByRole('dialog', { name: 'Create New Project' });
+
+    fireEvent.keyDown(dialog, { key: 'Delete' });
+    fireEvent.keyDown(dialog, { key: 'z', ctrlKey: true });
+    fireEvent.keyDown(dialog, { key: 'd', ctrlKey: true });
+    fireEvent.keyDown(dialog, { key: 'ArrowLeft' });
+    expect(fireEvent.keyDown(dialog, { key: 'Tab' })).toBe(true);
+
+    expect(onParentKeyDown).not.toHaveBeenCalled();
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(onParentKeyDown).not.toHaveBeenCalled();
   });
 });

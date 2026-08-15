@@ -112,6 +112,11 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
     setDeleteId(presetId);
   };
 
+  const cancelDelete = () => {
+    if (interactionBusy || actionRef.current) return;
+    setDeleteId(null);
+  };
+
   const confirmDelete = async () => {
     if (!deleteId || interactionBusy || actionRef.current) return;
     deleteDialogRef.current?.focus();
@@ -128,9 +133,9 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
   };
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    event.stopPropagation();
     if (event.key !== 'Escape') return;
     event.preventDefault();
-    event.stopPropagation();
     if (interactionBusy || actionRef.current) return;
     if (deleteId) setDeleteId(null);
     else onClose();
@@ -216,7 +221,7 @@ export const NewProjectModal: React.FC<NewProjectModalProps> = ({
               <button
                 type="button"
                 disabled={interactionBusy}
-                onClick={() => setDeleteId(null)}
+                onClick={cancelDelete}
                 className="min-h-11 rounded-lg border border-transparent px-6 py-2.5 font-medium text-slate-600 transition-colors hover:border-slate-200 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-500 disabled:cursor-wait disabled:opacity-50"
               >
                 Cancel
