@@ -80,7 +80,12 @@ export function MigrationReceipt({
             className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition-colors hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 disabled:cursor-wait disabled:opacity-60"
           >
             {isDownloading
-              ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" />
+              ? (
+                  <LoaderCircle
+                    className="size-4 animate-spin motion-reduce:animate-none"
+                    aria-hidden="true"
+                  />
+                )
               : <Download className="size-4" aria-hidden="true" />}
             {isDownloading ? 'Preparing backup' : 'Download original backup'}
           </button>

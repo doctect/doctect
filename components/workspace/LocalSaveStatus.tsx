@@ -20,7 +20,11 @@ export function LocalSaveStatus({
         aria-live="polite"
         className="inline-flex shrink-0 items-center gap-1.5 rounded-md bg-blue-50 px-2 py-1 text-xs font-medium text-blue-700"
       >
-        <Loader2 size={13} aria-hidden="true" className="animate-spin" />
+        <Loader2
+          size={13}
+          aria-hidden="true"
+          className="animate-spin motion-reduce:animate-none"
+        />
         Saving locally…
       </div>
     );
@@ -56,7 +60,7 @@ export function LocalSaveStatus({
             <button
               type="button"
               onClick={onRetry}
-              className="inline-flex items-center gap-1 rounded-md border border-slate-300 px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+              className="inline-flex min-h-11 items-center gap-1 rounded-md border border-slate-300 px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
             >
               <RotateCw size={12} aria-hidden="true" />
               Retry
@@ -65,7 +69,7 @@ export function LocalSaveStatus({
           <button
             type="button"
             onClick={onDownload}
-            className="inline-flex items-center gap-1 rounded-md bg-blue-600 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+            className="inline-flex min-h-11 items-center gap-1 rounded-md bg-blue-600 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
           >
             <Download size={12} aria-hidden="true" />
             Download JSON

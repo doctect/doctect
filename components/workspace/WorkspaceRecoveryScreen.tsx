@@ -119,6 +119,8 @@ export function WorkspaceRecoveryScreen({
       <section
         role="alert"
         aria-live="assertive"
+        aria-hidden={confirmationOpen ? true : undefined}
+        inert={confirmationOpen ? true : undefined}
         className="w-full max-w-2xl rounded-xl border border-red-200 bg-white p-6 shadow-[0_18px_45px_-28px_rgba(15,23,42,0.45)] sm:p-8"
       >
         <div className="mb-5 flex size-12 items-center justify-center rounded-lg bg-red-50 text-red-700">
@@ -161,7 +163,12 @@ export function WorkspaceRecoveryScreen({
                     className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition-colors hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 disabled:cursor-wait disabled:opacity-60"
                   >
                     {downloading
-                      ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" />
+                      ? (
+                          <LoaderCircle
+                            className="size-4 animate-spin motion-reduce:animate-none"
+                            aria-hidden="true"
+                          />
+                        )
                       : <Download className="size-4" aria-hidden="true" />}
                     {downloading ? 'Preparing download' : label}
                   </button>
@@ -196,7 +203,12 @@ export function WorkspaceRecoveryScreen({
               className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-[0_8px_18px_-12px_rgba(37,99,235,0.9)] transition-colors hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 disabled:cursor-wait disabled:opacity-60"
             >
               {isRecovering
-                ? <LoaderCircle className="size-4 animate-spin" aria-hidden="true" />
+                ? (
+                    <LoaderCircle
+                      className="size-4 animate-spin motion-reduce:animate-none"
+                      aria-hidden="true"
+                    />
+                  )
                 : <DatabaseBackup className="size-4" aria-hidden="true" />}
               {isRecovering ? 'Recovering copies' : 'Recover changed projects as copies'}
             </button>

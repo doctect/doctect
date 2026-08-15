@@ -98,3 +98,25 @@ Complete. `/app` now waits for verified workspace authority, EditorPage consumes
 - `npx tsc --noEmit` still reports only the same five unrelated baseline diagnostics in `changePassword.test.tsx`, `loginEmailVerification.test.tsx`, and `svgEditing.test.ts`.
 - Review found no remaining Critical or Important cross-authority issue. No Minor finding was addressed.
 - The Impeccable detector was not rerun. Screenshots remain deferred.
+
+## Accessibility Finish Fix
+
+### Implementation
+
+- Bootstrap, recovery, migration-receipt, and local-save loaders remain visible but stop spinning when reduced motion is requested.
+- Opening recovery confirmation makes only the non-dialog recovery section inert and hidden from accessibility APIs. Closing it restores the section while preserving the existing focus trap and trigger restoration.
+- Save-error retry/download and unsaved-navigation actions now provide a minimum 44px touch height. Recovery and migration retry/export actions retain their existing 44px minimum.
+
+### TDD Evidence
+
+- Initial focused RED: `npx vitest run tests/unit/WorkspaceBootstrapGate.test.tsx tests/unit/useWorkspaceProjectWrites.test.tsx tests/unit/EditorPageWorkspaceCommands.test.tsx tests/unit/browserDownload.test.ts` reported 7 failing and 50 passing tests across 4 files. Failures covered four loader surfaces, recovery-background isolation, and save-error touch targets.
+- Unsaved-navigation RED: the focused navigation case reported 1 failure with 20 skipped tests because `Stay` lacked `min-h-11`; its loader assertion remained in the same regression.
+- Final focused GREEN: the exact four-suite command passed 57/57 tests across 4 files.
+
+### Verification
+
+- `npm run build` passed after transforming 2,448 modules in 11.58 seconds; the existing large-chunk warning remains.
+- `npx tsc --noEmit` still reports only the same five unrelated baseline diagnostics in `changePassword.test.tsx`, `loginEmailVerification.test.tsx`, and `svgEditing.test.ts`.
+- Direct review found no Critical or Important issue, and `git diff --check` passes.
+- The Impeccable detector was not rerun, and no screenshots were taken.
+- Pre-existing mobile editor panel and toolbar composition remains a separate follow-up. This scoped finish did not redesign those surfaces.

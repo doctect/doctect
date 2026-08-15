@@ -583,6 +583,9 @@ describe('EditorPage workspace commands', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Edit Project A' }));
 
     expect(await screen.findByText('Not saved')).toBeVisible();
+    const alert = screen.getByRole('alert');
+    expect(within(alert).getByRole('button', { name: 'Retry' })).toHaveClass('min-h-11');
+    expect(within(alert).getByRole('button', { name: 'Download JSON' })).toHaveClass('min-h-11');
     expect(screen.getByText('Your work remains open in this tab, but local storage failed.')).toBeVisible();
     expect(activeState().scale).toBe(9);
     fireEvent.click(screen.getByRole('button', { name: 'Download JSON' }));
@@ -608,7 +611,9 @@ describe('EditorPage workspace commands', () => {
     expect(alert).toHaveTextContent('Storage conflict');
     expect(alert).toHaveTextContent('Another save changed this project. Your open work was not overwritten.');
     expect(within(alert).queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
-    expect(within(alert).getByRole('button', { name: 'Download JSON' })).toBeVisible();
+    const download = within(alert).getByRole('button', { name: 'Download JSON' });
+    expect(download).toBeVisible();
+    expect(download).toHaveClass('min-h-11');
     expect(activeState().scale).toBe(9);
   });
 
@@ -842,7 +847,8 @@ describe('EditorPage workspace commands', () => {
     expect(cleanEvent.defaultPrevented).toBe(false);
 
     fireEvent.click(screen.getByRole('button', { name: 'Edit Project A' }));
-    expect(await screen.findByText('Saving locally…')).toBeVisible();
+    const savingStatus = await screen.findByText('Saving locally…');
+    expect(savingStatus).toBeVisible();
     const dirtyEvent = new Event('beforeunload', { cancelable: true });
     window.dispatchEvent(dirtyEvent);
     expect(dirtyEvent.defaultPrevented).toBe(true);
@@ -856,6 +862,10 @@ describe('EditorPage workspace commands', () => {
     const leave = within(dialog).getByRole('button', { name: 'Leave editor' });
     expect(dialog).toHaveTextContent('Changes are still saving or are not saved. Leaving now may lose them.');
     expect(stay).toHaveFocus();
+    expect(stay).toHaveClass('min-h-11');
+    expect(leave).toHaveClass('min-h-11');
+    expect(savingStatus.closest('[role="status"]')?.querySelector('.animate-spin'))
+      .toHaveClass('motion-reduce:animate-none');
     expect(shell).toHaveAttribute('inert');
     expect(router.state.location.pathname).toBe('/app');
 

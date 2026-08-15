@@ -38,7 +38,10 @@ export function WorkspaceBootstrapScreen({ phase }: WorkspaceBootstrapScreenProp
           aria-atomic="true"
           className="mt-7 flex items-center gap-3 rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-medium text-blue-800"
         >
-          <LoaderCircle className="size-5 animate-spin" aria-hidden="true" />
+          <LoaderCircle
+            className="size-5 animate-spin motion-reduce:animate-none"
+            aria-hidden="true"
+          />
           <span>{PHASE_LABELS[phase]}</span>
         </div>
       </section>

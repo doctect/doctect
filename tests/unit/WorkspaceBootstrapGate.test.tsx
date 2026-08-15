@@ -108,9 +108,13 @@ describe('WorkspaceBootstrapGate', () => {
     const bootstrap = deferred<ReturnType<typeof readyResult>>();
     const store = fakeStore({ bootstrap: bootstrap.promise });
 
-    render(<WorkspaceBootstrapGate store={store} renderEditor={fakeEditorRenderer} />);
+    const view = render(
+      <WorkspaceBootstrapGate store={store} renderEditor={fakeEditorRenderer} />,
+    );
 
     expect(screen.getByRole('status')).toHaveTextContent('Opening local storage');
+    expect(view.container.querySelector('.animate-spin'))
+      .toHaveClass('motion-reduce:animate-none');
     expect(screen.getByRole('heading', { name: 'Preparing your local projects' })).toBeVisible();
     expect(screen.getByText(
       'Keep this tab open. Existing projects remain untouched until verification finishes.',
@@ -245,9 +249,13 @@ describe('WorkspaceBootstrapGate', () => {
     expect(within(alert).getByText(
       'Your existing projects remain untouched. The upgrade did not finish, and the editor did not create replacement data.',
     )).toBeVisible();
-    expect(within(alert).getByRole('button', { name: 'Retry' })).toBeEnabled();
+    const retry = within(alert).getByRole('button', { name: 'Retry' });
+    const download = within(alert).getByRole('button', { name: 'Download backup' });
+    expect(retry).toBeEnabled();
+    expect(retry).toHaveClass('min-h-11');
+    expect(download).toHaveClass('min-h-11');
 
-    fireEvent.click(within(alert).getByRole('button', { name: 'Download backup' }));
+    fireEvent.click(download);
     await waitFor(() => expect(store.exportRecoveryBundle).toHaveBeenCalledWith('legacy-current'));
     await waitFor(() => expect(downloadBlob).toHaveBeenCalledOnce());
     expect(screen.queryByTestId('editor-page')).not.toBeInTheDocument();
@@ -378,6 +386,7 @@ describe('WorkspaceBootstrapGate', () => {
     const trigger = screen.getByRole('button', {
       name: 'Recover changed projects as copies',
     });
+    const recoveryContent = screen.getByRole('alert');
 
     fireEvent.click(trigger);
     const dialog = screen.getByRole('dialog', {
@@ -388,6 +397,9 @@ describe('WorkspaceBootstrapGate', () => {
     });
     const confirm = within(dialog).getByRole('button', { name: 'Recover as copies' });
     expect(confirm).toHaveFocus();
+    expect(recoveryContent).toHaveAttribute('inert');
+    expect(recoveryContent).toHaveAttribute('aria-hidden', 'true');
+    expect(dialog.closest('[inert]')).toBeNull();
 
     confirm.focus();
     fireEvent.keyDown(dialog, { key: 'Tab' });
@@ -398,6 +410,8 @@ describe('WorkspaceBootstrapGate', () => {
 
     fireEvent.keyDown(dialog, { key: 'Escape' });
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(recoveryContent).not.toHaveAttribute('inert');
+    expect(recoveryContent).not.toHaveAttribute('aria-hidden');
     expect(trigger).toHaveFocus();
   });
 
@@ -455,6 +469,22 @@ describe('recovery export capabilities', () => {
   const combinations = Array.from({ length: 2 ** sources.length }, (_, mask) =>
     sources.filter((_, index) => (mask & (1 << index)) !== 0));
 
+  it('keeps recovery loaders visible but static under reduced motion', () => {
+    const view = render(<WorkspaceRecoveryScreen
+      result={recoveryResult(splitBrainRecovery())}
+      onExport={vi.fn()}
+      onRecoverAsCopies={vi.fn()}
+      activeExport="legacy-current"
+      isRecovering
+    />);
+
+    const loaders = Array.from(view.container.querySelectorAll('.animate-spin'));
+    expect(loaders).toHaveLength(2);
+    for (const loader of loaders) {
+      expect(loader).toHaveClass('motion-reduce:animate-none');
+    }
+  });
+
   it.each(['recovery', 'unavailable'] as const)(
     'renders exactly every advertised export combination for %s state',
     state => {
@@ -485,6 +515,18 @@ describe('recovery export capabilities', () => {
 });
 
 describe('MigrationReceipt', () => {
+  it('keeps its download loader visible but static under reduced motion', () => {
+    const view = render(<MigrationReceipt
+      receipt={migrationReceipt()}
+      onContinue={vi.fn()}
+      onDownloadOriginal={vi.fn()}
+      isDownloading
+    />);
+
+    expect(view.container.querySelector('.animate-spin'))
+      .toHaveClass('motion-reduce:animate-none');
+  });
+
   it('shows receipt before editor, downloads original backup, then records acknowledgement', async () => {
     const receipt = migrationReceipt({
       id: 'receipt-ordering',
@@ -505,12 +547,16 @@ describe('MigrationReceipt', () => {
     )).toBeVisible();
     expect(renderEditor).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Download original backup' }));
+    const download = screen.getByRole('button', { name: 'Download original backup' });
+    const continueToEditor = screen.getByRole('button', { name: 'Continue to editor' });
+    expect(download).toHaveClass('min-h-11');
+    expect(continueToEditor).toHaveClass('min-h-11');
+    fireEvent.click(download);
     await waitFor(() => expect(store.exportRecoveryBundle).toHaveBeenCalledWith('legacy-original'));
     await waitFor(() => expect(downloadBlob).toHaveBeenCalledOnce());
     expect(renderEditor).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Continue to editor' }));
+    fireEvent.click(continueToEditor);
     expect(await screen.findByTestId('editor-page')).toBeVisible();
     expect(window.localStorage.getItem(
       'doctect_workspace_migration_receipt_seen:receipt-ordering',
