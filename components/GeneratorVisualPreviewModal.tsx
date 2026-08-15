@@ -135,13 +135,13 @@ export const GeneratorVisualPreviewModal: React.FC<GeneratorVisualPreviewModalPr
   }, [lightboxIndex]);
 
   useLayoutEffect(() => {
-    if (naming) {
+    if (naming && !creating) {
       namingInputRef.current?.focus();
     } else if (restoreNamingFocusRef.current) {
       restoreNamingFocusRef.current = false;
       namingTriggerRef.current?.focus();
     }
-  }, [naming]);
+  }, [creating, naming]);
 
   const selectVariant = (variantId: string) => {
     setSelectedVariantId(variantId);
@@ -223,6 +223,7 @@ export const GeneratorVisualPreviewModal: React.FC<GeneratorVisualPreviewModalPr
     const trimmed = name.trim();
     if (!trimmed) return setNameError('Project name is required.');
     if (trimmed.length > 100) return setNameError('Project name must be 100 characters or fewer.');
+    namingRef.current?.focus();
     creatingRef.current = true;
     setCreating(true);
     setNameError(null);

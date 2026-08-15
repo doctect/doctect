@@ -310,6 +310,39 @@ describe('GeneratorVisualPreviewModal', () => {
     expect(screen.queryByRole('dialog', { name: 'Create Generated Project' })).not.toBeInTheDocument();
   });
 
+  it('moves focus to the naming dialog before disabling the focused submit control', async () => {
+    const pending = deferred<boolean>();
+    renderModal({ onCreateProject: vi.fn(() => pending.promise) });
+    fireEvent.click(screen.getByRole('button', { name: 'Create As New Project' }));
+    const namingDialog = screen.getByRole('dialog', { name: 'Create Generated Project' });
+    const submit = within(namingDialog).getByRole('button', { name: 'Create Project' });
+    submit.focus();
+
+    fireEvent.click(submit);
+
+    expect(submit).toBeDisabled();
+    expect(document.activeElement).toBe(namingDialog);
+
+    await act(async () => pending.resolve(true));
+  });
+
+  it('prevents Tab from escaping the focused naming dialog while pending controls are disabled', async () => {
+    const pending = deferred<boolean>();
+    renderModal({ onCreateProject: vi.fn(() => pending.promise) });
+    fireEvent.click(screen.getByRole('button', { name: 'Create As New Project' }));
+    const namingDialog = screen.getByRole('dialog', { name: 'Create Generated Project' });
+    const submit = within(namingDialog).getByRole('button', { name: 'Create Project' });
+    submit.focus();
+
+    fireEvent.click(submit);
+
+    expect(namingDialog).toHaveFocus();
+    expect(fireEvent.keyDown(namingDialog, { key: 'Tab' })).toBe(false);
+    expect(namingDialog).toHaveFocus();
+
+    await act(async () => pending.resolve(true));
+  });
+
   it.each([
     ['returns false', () => Promise.resolve(false)],
     ['rejects', () => Promise.reject(new WorkspaceStoreError('quota', 'quota'))],
@@ -320,14 +353,17 @@ describe('GeneratorVisualPreviewModal', () => {
     const namingDialog = screen.getByRole('dialog', { name: 'Create Generated Project' });
     const input = within(namingDialog).getByRole('textbox', { name: 'Project name' });
     fireEvent.change(input, { target: { value: 'Separate Generated' } });
+    const submit = within(namingDialog).getByRole('button', { name: 'Create Project' });
+    submit.focus();
 
-    fireEvent.click(within(namingDialog).getByRole('button', { name: 'Create Project' }));
+    fireEvent.click(submit);
 
     expect(await within(namingDialog).findByRole('alert')).toHaveTextContent(
       'Could not create project. Your current project is unchanged. Try again.',
     );
     expect(input).toHaveValue('Separate Generated');
     expect(input).toBeEnabled();
+    expect(input).toHaveFocus();
     expect(within(namingDialog).getByRole('button', { name: 'Cancel' })).toBeEnabled();
     expect(within(namingDialog).getByRole('button', { name: 'Create Project' })).toBeEnabled();
     expect(namingDialog).not.toHaveAttribute('aria-busy');
