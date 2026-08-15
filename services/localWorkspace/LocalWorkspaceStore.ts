@@ -1332,6 +1332,7 @@ export const createLocalWorkspaceStore = (
       storageRevision: 0,
       updatedAt,
       consumedImportId: importId,
+      consumedImportCreatedAt: pendingImport.createdAt,
     };
     return {
       pendingImportIdentity: JSON.stringify(pendingImport),

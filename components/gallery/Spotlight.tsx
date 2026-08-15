@@ -18,7 +18,10 @@ export function Spotlight({ item }: { item: GalleryItem }) {
         setError(null);
         try {
             const res = await cloudApi.galleryState(item.id);
-            await stageImport({ name: res.name, state: res.state });
+            await stageImport(
+                { name: res.name, state: res.state },
+                { sourceKey: `gallery-open:${item.id}` },
+            );
             navigate('/app');
         } catch {
             setError(IMPORT_STAGE_ERROR_MESSAGE);

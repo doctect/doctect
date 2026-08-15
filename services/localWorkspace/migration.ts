@@ -428,7 +428,7 @@ const validateProjectRecords = (records: unknown): Map<string, WorkspaceProject>
     requireExactKeys(
       rawRecord,
       ['id', 'project', 'storageRevision', 'updatedAt'],
-      ['consumedImportId'],
+      ['consumedImportId', 'consumedImportCreatedAt'],
       `Project record ${index}`,
     );
     if (typeof rawRecord.id !== 'string' || rawRecord.id.length === 0) {
@@ -448,6 +448,17 @@ const validateProjectRecords = (records: unknown): Map<string, WorkspaceProject>
         throw targetError(`Duplicate consumed import id ${rawRecord.consumedImportId}.`);
       }
       consumedImportIds.add(rawRecord.consumedImportId);
+    }
+    if (Object.hasOwn(rawRecord, 'consumedImportCreatedAt')) {
+      if (!Object.hasOwn(rawRecord, 'consumedImportId')) {
+        throw targetError(
+          `Project record ${rawRecord.id} consumedImportCreatedAt requires consumedImportId.`,
+        );
+      }
+      validateTimestamp(
+        rawRecord.consumedImportCreatedAt,
+        `Project record ${rawRecord.id} consumedImportCreatedAt`,
+      );
     }
     try {
       if (!isPlainObject(rawRecord.project)) throw new Error('Project payload must be an object.');

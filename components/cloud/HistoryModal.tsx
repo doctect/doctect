@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { X, RotateCcw, ExternalLink } from 'lucide-react';
 import { cloudApi, CommitMeta, ApiError } from '../../services/cloudApi';
 import { loadProjectState } from '../../services/loadProjectState';
@@ -9,7 +9,7 @@ type HistoryModalProps =
     { cloudProjectId: string; onClose: () => void } &
     (
         | { mode?: 'restore'; onRestore: (state: AppState) => void }
-        | { mode: 'clone'; onClone: (args: { state: unknown }) => Promise<void> }
+        | { mode: 'clone'; onClone: (args: { state: unknown; commitId: string }) => Promise<void> }
     );
 
 export function HistoryModal(props: HistoryModalProps) {
@@ -18,6 +18,7 @@ export function HistoryModal(props: HistoryModalProps) {
     const [commits, setCommits] = useState<CommitMeta[] | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [busyId, setBusyId] = useState<string | null>(null);
+    const busyRef = useRef(false);
 
     useEffect(() => {
         cloudApi.listCommits(cloudProjectId)
@@ -25,17 +26,33 @@ export function HistoryModal(props: HistoryModalProps) {
             .catch(e => setError(e instanceof ApiError ? e.message : 'Failed to load history'));
     }, [cloudProjectId]);
 
+    useEffect(() => {
+        const guardBusyEscape = (event: KeyboardEvent) => {
+            if (event.key !== 'Escape' || !busyRef.current) return;
+            event.preventDefault();
+            event.stopPropagation();
+            event.stopImmediatePropagation();
+        };
+        document.addEventListener('keydown', guardBusyEscape, true);
+        return () => document.removeEventListener('keydown', guardBusyEscape, true);
+    }, []);
+
+    const close = () => {
+        if (!busyRef.current) onClose();
+    };
+
     const select = async (commitId: string) => {
         // Restoring overwrites whatever's currently open in the editor, so it gets a confirm
         // dialog; cloning always creates a brand-new local project and touches nothing the
         // viewer already has open, so it doesn't need one.
         if (props.mode !== 'clone' && !window.confirm('Replace the current editor contents with this version? (Unsaved local changes will be lost — your cloud history is untouched.)')) return;
+        busyRef.current = true;
         setBusyId(commitId); setError(null);
         try {
             const commit = await cloudApi.getCommit(cloudProjectId, commitId);
             if (props.mode === 'clone') {
                 try {
-                    await props.onClone({ state: commit.state });
+                    await props.onClone({ state: commit.state, commitId });
                 } catch {
                     setError(IMPORT_STAGE_ERROR_MESSAGE);
                 }
@@ -47,16 +64,25 @@ export function HistoryModal(props: HistoryModalProps) {
         } catch (e) {
             setError(e instanceof ApiError ? e.message : (props.mode === 'clone' ? 'Could not open this version' : 'Restore failed'));
         } finally {
+            busyRef.current = false;
             setBusyId(null);
         }
     };
 
     return (
-        <div className="fixed inset-0 bg-black/40 z-[100] flex items-center justify-center" onClick={onClose}>
+        <div className="fixed inset-0 bg-black/40 z-[100] flex items-center justify-center" onClick={close}>
             <div className="bg-white rounded-xl shadow-2xl w-[480px] max-h-[70vh] flex flex-col" onClick={e => e.stopPropagation()}>
                 <div className="flex items-center justify-between px-4 py-3 border-b">
                     <h2 className="font-semibold text-slate-800 text-sm">Version history</h2>
-                    <button onClick={onClose} className="text-slate-400 hover:text-slate-700"><X size={16} /></button>
+                    <button
+                        type="button"
+                        aria-label="Close version history"
+                        disabled={busyId !== null}
+                        onClick={close}
+                        className="text-slate-400 hover:text-slate-700 disabled:cursor-wait disabled:opacity-50"
+                    >
+                        <X size={16} />
+                    </button>
                 </div>
                 <div className="overflow-y-auto p-2">
                     {error && <div role="alert" className="text-xs text-red-600 p-2">{error}</div>}

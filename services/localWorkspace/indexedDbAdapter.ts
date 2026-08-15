@@ -946,7 +946,7 @@ export const createIndexedDbAdapter = (
 
   const stageImport = async (pendingImport: WorkspacePendingImport): Promise<void> => {
     const activeDatabase = await getDatabase();
-    const storeNames = ['pendingImports', 'migrationLedger'] as const;
+    const storeNames = ['pendingImports', 'projects', 'migrationLedger'] as const;
     let transaction: WriteTransaction | undefined;
     const requests: Promise<unknown>[] = [];
     try {
@@ -956,13 +956,50 @@ export const createIndexedDbAdapter = (
         .get(WORKSPACE_MIGRATION_ID);
       requireVerifiedAuthority(ledger);
       const importStore = importTransaction.objectStore('pendingImports');
-      const pendingImports = await importStore.getAll();
-      if (pendingImports.some(record => record.id === pendingImport.id)) {
-        throw validation(`Pending import ${pendingImport.id} already exists.`);
+      const projectStore = importTransaction.objectStore('projects');
+      const [pendingImports, projects] = await Promise.all([
+        importStore.getAll(),
+        projectStore.getAll(),
+      ]);
+      const storedPending = pendingImports.find(record => record.id === pendingImport.id);
+      const consumedProjects = projects.filter(record =>
+        record.consumedImportId === pendingImport.id);
+      if (storedPending && consumedProjects.length > 0) {
+        throw conflict(`Import ${pendingImport.id} provenance is ambiguous.`);
+      }
+      if (storedPending) {
+        if (canonicalStringify(storedPending.pendingImport)
+          !== canonicalStringify(pendingImport)) {
+          throw conflict(`Pending import ${pendingImport.id} changed.`);
+        }
+        await importTransaction.done;
+        return;
+      }
+      if (consumedProjects.length > 0) {
+        if (consumedProjects.length > 1) {
+          throw conflict(`Consumed import ${pendingImport.id} provenance is ambiguous.`);
+        }
+        const consumed = consumedProjects[0];
+        const expectedProject: WorkspaceProject = {
+          id: pendingImport.targetProjectId,
+          name: pendingImport.name,
+          initialState: pendingImport.state,
+          ...(pendingImport.cloud ? { cloud: pendingImport.cloud } : {}),
+        };
+        if (consumed.id !== pendingImport.targetProjectId
+          || consumed.consumedImportCreatedAt !== pendingImport.createdAt
+          || canonicalStringify(consumed.project) !== canonicalStringify(expectedProject)) {
+          throw conflict(`Consumed import ${pendingImport.id} changed.`);
+        }
+        await importTransaction.done;
+        return;
       }
       if (pendingImports.some(record =>
         record.pendingImport.targetProjectId === pendingImport.targetProjectId)) {
-        throw validation(`Pending import target ${pendingImport.targetProjectId} already exists.`);
+        throw conflict(`Pending import target ${pendingImport.targetProjectId} already exists.`);
+      }
+      if (projects.some(record => record.id === pendingImport.targetProjectId)) {
+        throw conflict(`Project ${pendingImport.targetProjectId} already exists.`);
       }
       const position = Math.max(-1, ...pendingImports.map(record => record.position)) + 1;
       requests.push(importStore.add({

@@ -231,6 +231,27 @@ describe('WorkspaceBootstrapGate', () => {
     ]);
   });
 
+  it('continues with imports that appear in a consume result until the queue is empty', async () => {
+    const first = pendingImport('import-first', 'target-first');
+    const appeared = pendingImport('import-appeared', 'target-appeared');
+    const initial = workspaceSnapshot({ pendingImports: [first] });
+    const afterFirst = consumedSnapshot(initial, [first], [appeared]);
+    const afterAppeared = consumedSnapshot(initial, [first, appeared]);
+    const store = fakeReadyStore({ snapshot: initial });
+    store.commit
+      .mockResolvedValueOnce(afterFirst)
+      .mockResolvedValueOnce(afterAppeared);
+
+    render(<WorkspaceBootstrapGate store={store} renderEditor={fakeEditorRenderer} />);
+
+    expect(await screen.findByTestId('editor-page')).toHaveTextContent('target-appeared');
+    expect(store.commit.mock.calls.map(([command]) => command)).toEqual([
+      { type: 'consume-import', importId: 'import-first' },
+      { type: 'consume-import', importId: 'import-appeared' },
+    ]);
+    expect(afterAppeared.pendingImports).toEqual([]);
+  });
+
   it('blocks editor mount on consume failure and retries the retained import', async () => {
     const pending = pendingImport('import-retry', 'target-retry');
     const initial = workspaceSnapshot({ pendingImports: [pending] });
@@ -288,6 +309,58 @@ describe('WorkspaceBootstrapGate', () => {
       .toEqual(['Saved generator was detached.']);
     expect(trackEvent).toHaveBeenCalledOnce();
     expect(trackEvent).toHaveBeenCalledWith('project_imported_from_gallery');
+  });
+
+  it('delivers stale consume analytics once and warnings on one later same-store mount', async () => {
+    const pending = pendingImport(
+      'import-stale-delivery',
+      'target-stale-delivery',
+      ['Stale import warning.'],
+    );
+    const initial = workspaceSnapshot({ pendingImports: [pending] });
+    const consumed = consumedSnapshot(initial, [pending]);
+    const commit = deferred<ReturnType<typeof workspaceSnapshot>>();
+    const firstStore = fakeStore({
+      bootstrap: [
+        readyResult({ snapshot: initial }),
+        readyResult({ snapshot: consumed }),
+        readyResult({ snapshot: consumed }),
+      ],
+      commit: commit.promise,
+    });
+    const replacementStore = fakeReadyStore({
+      snapshot: workspaceSnapshot({ activeProjectId: 'replacement-project' }),
+    });
+    const renderEditor = vi.fn(({ initialWorkspace, initialWarnings }: WorkspaceEditorMount) => (
+      <div data-testid="editor-page">
+        <span>{initialWorkspace.activeProjectId}</span>
+        {initialWarnings.map(warning => <span key={warning}>{warning}</span>)}
+      </div>
+    ));
+    const view = render(
+      <WorkspaceBootstrapGate store={firstStore} renderEditor={renderEditor} />,
+    );
+    await waitFor(() => expect(firstStore.commit).toHaveBeenCalledOnce());
+
+    view.rerender(
+      <WorkspaceBootstrapGate store={replacementStore} renderEditor={renderEditor} />,
+    );
+    expect(await screen.findByTestId('editor-page')).toHaveTextContent('replacement-project');
+    await act(async () => commit.resolve(consumed));
+
+    await waitFor(() => expect(trackEvent).toHaveBeenCalledOnce());
+    expect(trackEvent).toHaveBeenCalledWith('project_imported_from_gallery');
+    view.rerender(
+      <WorkspaceBootstrapGate store={firstStore} renderEditor={renderEditor} />,
+    );
+    expect(await screen.findByText('Stale import warning.')).toBeVisible();
+    await waitFor(() => expect(firstStore.bootstrap).toHaveBeenCalledTimes(2));
+    view.unmount();
+
+    render(<WorkspaceBootstrapGate store={firstStore} renderEditor={renderEditor} />);
+    expect(await screen.findByTestId('editor-page')).toHaveTextContent('target-stale-delivery');
+    expect(screen.queryByText('Stale import warning.')).not.toBeInTheDocument();
+    expect(trackEvent).toHaveBeenCalledOnce();
   });
 
   it('waits for receipt acknowledgement before consuming its pending import', async () => {

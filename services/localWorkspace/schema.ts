@@ -17,6 +17,7 @@ export interface StoredProject {
   storageRevision: number;
   updatedAt: string;
   consumedImportId?: string;
+  consumedImportCreatedAt?: string;
 }
 
 export interface StoredWorkspace {

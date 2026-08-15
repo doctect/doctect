@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { HistoryModal } from '../../components/cloud/HistoryModal';
 import { cloudApi, CommitMeta } from '../../services/cloudApi';
 import { deferred } from '../helpers/fakeLocalWorkspaceStore';
@@ -175,7 +175,10 @@ describe('HistoryModal', () => {
             const onClone = vi.fn(() => staged.promise);
             render(<HistoryModal cloudProjectId="proj-1" mode="clone" onClone={onClone} onClose={vi.fn()} />);
             fireEvent.click((await screen.findAllByRole('button', { name: 'Open in editor' }))[0]);
-            await waitFor(() => expect(onClone).toHaveBeenCalledWith({ state: commitState }));
+            await waitFor(() => expect(onClone).toHaveBeenCalledWith({
+                state: commitState,
+                commitId: 'c2',
+            }));
 
             expect(screen.getByRole('button', { name: 'Loading…' })).toBeDisabled();
             expect(screen.getAllByRole('button', { name: 'Open in editor' })[0]).toBeDisabled();
@@ -198,6 +201,45 @@ describe('HistoryModal', () => {
             expect(screen.getAllByRole('button', { name: 'Open in editor' })[0]).toBeEnabled();
         });
 
+        it('blocks same-tick close paths until a deferred staging rejection is visible', async () => {
+            const staged = deferred<void>();
+            const onClone = vi.fn(() => staged.promise);
+            const onClose = vi.fn();
+            const outsideEscape = vi.fn();
+            document.addEventListener('keydown', outsideEscape);
+            try {
+                const view = render(
+                    <HistoryModal
+                        cloudProjectId="proj-1"
+                        mode="clone"
+                        onClone={onClone}
+                        onClose={onClose}
+                    />,
+                );
+                const open = (await screen.findAllByRole('button', { name: 'Open in editor' }))[0];
+
+                fireEvent.click(open);
+                fireEvent.click(view.container.querySelector('button')!);
+                fireEvent.click(view.container.firstElementChild!);
+                fireEvent.keyDown(document, { key: 'Escape' });
+
+                expect(onClose).not.toHaveBeenCalled();
+                expect(outsideEscape).not.toHaveBeenCalled();
+                await waitFor(() => expect(onClone).toHaveBeenCalledWith({
+                    state: commitState,
+                    commitId: 'c2',
+                }));
+
+                await act(async () => staged.reject(new Error('post-commit readback failed')));
+                expect(await screen.findByRole('alert')).toHaveTextContent(
+                    'Could not prepare this project for the editor. Nothing was removed; try again.',
+                );
+                expect(onClose).not.toHaveBeenCalled();
+            } finally {
+                document.removeEventListener('keydown', outsideEscape);
+            }
+        });
+
         it('keeps legacy malformed metadata raw for EditorPage to normalize once', async () => {
             vi.spyOn(cloudApi, 'getCommit').mockResolvedValue({
                 id: 'c2', message: 'Second save', createdAt: '2026-02-01T00:00:00.000Z', state: rawCloneState,
@@ -205,7 +247,10 @@ describe('HistoryModal', () => {
             const onClone = vi.fn();
             render(<HistoryModal cloudProjectId="proj-1" mode="clone" onClone={onClone} onClose={vi.fn()} />);
             fireEvent.click((await screen.findAllByRole('button', { name: 'Open in editor' }))[0]);
-            await waitFor(() => expect(onClone).toHaveBeenCalledWith({ state: rawCloneState }));
+            await waitFor(() => expect(onClone).toHaveBeenCalledWith({
+                state: rawCloneState,
+                commitId: 'c2',
+            }));
             expect(onClone.mock.calls[0][0].state.schemaVersion).toBe(8);
             expect(onClone.mock.calls[0][0].state.generator).toEqual(rawCloneState.generator);
         });
@@ -220,7 +265,10 @@ describe('HistoryModal', () => {
 
             fireEvent.click((await screen.findAllByRole('button', { name: 'Open in editor' }))[0]);
 
-            await waitFor(() => expect(onClone).toHaveBeenCalledWith({ state: malformedOverflowState }));
+            await waitFor(() => expect(onClone).toHaveBeenCalledWith({
+                state: malformedOverflowState,
+                commitId: 'c2',
+            }));
             expect(onClone.mock.calls[0][0].state.schemaVersion).toBe(10);
             expect(overflowElement(onClone.mock.calls[0][0].state, 'malformed-text')).toMatchObject({
                 textOverflow: 'truncate', textWrap: 'true',

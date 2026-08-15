@@ -7,7 +7,6 @@ import type {
   RecoverySource,
   WorkspaceBootstrapPhase,
   WorkspaceBootstrapResult,
-  WorkspacePendingImport,
   WorkspaceSnapshot,
 } from '../../services/localWorkspace/index';
 import { MigrationReceipt as MigrationReceiptScreen } from './MigrationReceipt';
@@ -40,7 +39,90 @@ type GateState =
       showReceipt: boolean;
       importsReady: boolean;
       initialWarnings: string[];
+      warningImportIds: string[];
     };
+
+interface PendingImportDescriptor {
+  id: string;
+  warnings: string[];
+}
+
+interface ImportDelivery {
+  warnings: string[];
+  analyticsEmitted: boolean;
+  warningsAcknowledged: boolean;
+}
+
+interface StoreImportState {
+  unresolved: PendingImportDescriptor[];
+  deliveries: Map<string, ImportDelivery>;
+}
+
+const storeImportStates = new WeakMap<LocalWorkspaceStore, StoreImportState>();
+
+const importStateFor = (store: LocalWorkspaceStore): StoreImportState => {
+  const existing = storeImportStates.get(store);
+  if (existing) return existing;
+  const created: StoreImportState = { unresolved: [], deliveries: new Map() };
+  storeImportStates.set(store, created);
+  return created;
+};
+
+const descriptorsFrom = (snapshot: WorkspaceSnapshot): PendingImportDescriptor[] =>
+  snapshot.pendingImports.map(pending => ({
+    id: pending.id,
+    warnings: [...pending.warnings],
+  }));
+
+const mergeBootstrapImports = (
+  importState: StoreImportState,
+  snapshot: WorkspaceSnapshot,
+): void => {
+  const known = new Set(importState.unresolved.map(pending => pending.id));
+  for (const pending of descriptorsFrom(snapshot)) {
+    if (known.has(pending.id)) continue;
+    importState.unresolved.push(pending);
+    known.add(pending.id);
+  }
+};
+
+const reconcileConsumeResult = (
+  importState: StoreImportState,
+  snapshot: WorkspaceSnapshot,
+): void => {
+  importState.unresolved = descriptorsFrom(snapshot);
+};
+
+const recordConsumeDelivery = (
+  store: LocalWorkspaceStore,
+  pending: PendingImportDescriptor,
+): void => {
+  const importState = importStateFor(store);
+  let delivery = importState.deliveries.get(pending.id);
+  if (!delivery) {
+    delivery = {
+      warnings: [...pending.warnings],
+      analyticsEmitted: false,
+      warningsAcknowledged: pending.warnings.length === 0,
+    };
+    importState.deliveries.set(pending.id, delivery);
+  }
+  if (!delivery.analyticsEmitted) {
+    delivery.analyticsEmitted = true;
+    void trackEvent('project_imported_from_gallery');
+  }
+};
+
+const unacknowledgedWarnings = (store: LocalWorkspaceStore) => {
+  const warningImportIds: string[] = [];
+  const initialWarnings: string[] = [];
+  for (const [importId, delivery] of importStateFor(store).deliveries) {
+    if (delivery.warningsAcknowledged || delivery.warnings.length === 0) continue;
+    warningImportIds.push(importId);
+    initialWarnings.push(...delivery.warnings);
+  }
+  return { warningImportIds, initialWarnings };
+};
 
 const RECEIPT_PREFERENCE_PREFIX = 'doctect_workspace_migration_receipt_seen:';
 
@@ -107,10 +189,6 @@ export function WorkspaceBootstrapGate({
   const actionRef = useRef(0);
   const consumeAttemptRef = useRef(0);
   const consumingRef = useRef<{ store: LocalWorkspaceStore; attempt: number } | null>(null);
-  const importStoreRef = useRef(store);
-  const importQueueRef = useRef<WorkspacePendingImport[]>([]);
-  const consumedImportIdsRef = useRef(new Set<string>());
-  const importWarningsRef = useRef<string[]>([]);
   const committedStoreRef = useRef(store);
   const committedStateRef = useRef(state);
 
@@ -129,21 +207,10 @@ export function WorkspaceBootstrapGate({
   const prepareImportQueue = (
     resultStore: LocalWorkspaceStore,
     snapshot: WorkspaceSnapshot,
-  ): boolean => {
-    if (importStoreRef.current !== resultStore) {
-      importStoreRef.current = resultStore;
-      importQueueRef.current = [];
-      consumedImportIdsRef.current = new Set();
-      importWarningsRef.current = [];
-    }
-    const queuedIds = new Set(importQueueRef.current.map(pending => pending.id));
-    for (const pending of snapshot.pendingImports) {
-      if (!queuedIds.has(pending.id)) {
-        importQueueRef.current.push(pending);
-        queuedIds.add(pending.id);
-      }
-    }
-    return importQueueRef.current.some(pending => !consumedImportIdsRef.current.has(pending.id));
+  ): StoreImportState => {
+    const importState = importStateFor(resultStore);
+    mergeBootstrapImports(importState, snapshot);
+    return importState;
   };
 
   const publishResult = (
@@ -152,14 +219,15 @@ export function WorkspaceBootstrapGate({
   ) => {
     resetActions();
     if (result.status === 'ready') {
-      const hasPendingImports = prepareImportQueue(resultStore, result.snapshot);
+      const importState = prepareImportQueue(resultStore, result.snapshot);
+      const warnings = unacknowledgedWarnings(resultStore);
       setState({
         kind: 'ready',
         store: resultStore,
         result,
         showReceipt: Boolean(result.receipt && !receiptWasSeen(result.receipt)),
-        importsReady: !hasPendingImports,
-        initialWarnings: [...importWarningsRef.current],
+        importsReady: importState.unresolved.length === 0,
+        ...warnings,
       });
       return;
     }
@@ -241,28 +309,29 @@ export function WorkspaceBootstrapGate({
       && committedStoreRef.current === actionStore
       && !controllerRef.current?.signal.aborted;
     let snapshot = initialSnapshot;
+    const importState = importStateFor(actionStore);
 
     try {
-      for (const pending of [...importQueueRef.current]) {
-        if (consumedImportIdsRef.current.has(pending.id)) continue;
+      while (importState.unresolved.length > 0) {
+        const pending = importState.unresolved[0];
         snapshot = await actionStore.commit({
           type: 'consume-import',
           importId: pending.id,
         });
+        recordConsumeDelivery(actionStore, pending);
+        reconcileConsumeResult(importState, snapshot);
         if (!isCurrent()) return;
-        consumedImportIdsRef.current.add(pending.id);
-        importWarningsRef.current.push(...pending.warnings);
-        void trackEvent('project_imported_from_gallery');
       }
 
       if (!isCurrent()) return;
       const currentState = committedStateRef.current;
       if (currentState.kind !== 'ready' || currentState.store !== actionStore) return;
+      const warnings = unacknowledgedWarnings(actionStore);
       setState({
         ...currentState,
         result: { ...currentState.result, snapshot },
         importsReady: true,
-        initialWarnings: [...importWarningsRef.current],
+        ...warnings,
       });
     } catch {
       if (isCurrent()) {
@@ -286,6 +355,19 @@ export function WorkspaceBootstrapGate({
       || state.importsReady
       || state.store !== store) return;
     void consumePendingImports(state.store, state.result.snapshot);
+  }, [state, store]);
+
+  useEffect(() => {
+    if (state.kind !== 'ready'
+      || state.showReceipt
+      || !state.importsReady
+      || state.store !== store
+      || state.warningImportIds.length === 0) return;
+    const deliveries = importStateFor(state.store).deliveries;
+    for (const importId of state.warningImportIds) {
+      const delivery = deliveries.get(importId);
+      if (delivery) delivery.warningsAcknowledged = true;
+    }
   }, [state, store]);
 
   const retry = () => {

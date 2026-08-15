@@ -46,7 +46,10 @@ describe('Spotlight', () => {
         vi.mocked(importProject.stageImport).mockReturnValue(staged.promise);
         renderIt();
         fireEvent.click(screen.getByRole('button', { name: /open in editor/i }));
-        await waitFor(() => expect(importProject.stageImport).toHaveBeenCalledWith({ name: 'Novel Story Studio', state: { nodes: [] } }));
+        await waitFor(() => expect(importProject.stageImport).toHaveBeenCalledWith(
+            { name: 'Novel Story Studio', state: { nodes: [] } },
+            { sourceKey: 'gallery-open:p1' },
+        ));
         expect(screen.queryByText('EDITOR_MARKER')).not.toBeInTheDocument();
         expect(screen.getByRole('button', { name: /open in editor/i })).toBeDisabled();
 

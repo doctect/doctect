@@ -132,10 +132,10 @@ describe('GalleryDetailPage version history', () => {
         const row = messageEl.parentElement!.parentElement!;
         fireEvent.click(within(row).getByRole('button', { name: 'Open in editor' }));
         expect(await screen.findByText('APP_MARKER')).toBeInTheDocument();
-        expect(importProject.stageImport).toHaveBeenCalledWith({
-            name: 'Test Project',
-            state: galleryState,
-        });
+        expect(importProject.stageImport).toHaveBeenCalledWith(
+            { name: 'Test Project', state: galleryState },
+            { sourceKey: 'gallery-history:proj-1:c1' },
+        );
     });
 
     it('keeps version history open and announces an exact staging failure', async () => {
@@ -182,9 +182,10 @@ describe('GalleryDetailPage generator source staging', () => {
         renderAt();
 
         fireEvent.click(await screen.findByRole('button', { name: /open in editor/i }));
-        await waitFor(() => expect(importProject.stageImport).toHaveBeenCalledWith({
-            name: 'Test Project', state: rawGalleryState,
-        }));
+        await waitFor(() => expect(importProject.stageImport).toHaveBeenCalledWith(
+            { name: 'Test Project', state: rawGalleryState },
+            { sourceKey: 'gallery-open:proj-1' },
+        ));
         expect(screen.queryByText('APP_MARKER')).not.toBeInTheDocument();
         expect(screen.getByRole('button', { name: 'Loading…' })).toBeDisabled();
 
@@ -204,11 +205,42 @@ describe('GalleryDetailPage generator source staging', () => {
 
         fireEvent.click(await screen.findByRole('button', { name: /fork this project/i }));
         expect(await screen.findByText('APP_MARKER')).toBeInTheDocument();
-        expect(importProject.stageImport).toHaveBeenCalledWith({
-            name: 'Forked Project',
+        expect(importProject.stageImport).toHaveBeenCalledWith(
+            {
+                name: 'Forked Project',
+                state: rawGalleryState,
+                cloud: { projectId: 'fork-1', lastSyncedCommitId: 'fork-commit-1' },
+            },
+            { sourceKey: 'gallery-fork:fork-1:fork-commit-1' },
+        );
+    });
+
+    it('retries a retained fork payload without repeating remote fork operations', async () => {
+        mockUseSession.mockReturnValue({ data: { user: { id: 'user-2', username: 'planner_pro' } } });
+        const fork = vi.spyOn(cloudApi, 'fork').mockResolvedValue({
+            project: { id: 'fork-retry', name: 'Retained Fork', headCommitId: 'fork-commit-retry' },
+        } as any);
+        const getCommit = vi.spyOn(cloudApi, 'getCommit').mockResolvedValue({
+            id: 'fork-commit-retry', message: 'Fork', createdAt: '2026-07-14T12:40:00.000Z',
             state: rawGalleryState,
-            cloud: { projectId: 'fork-1', lastSyncedCommitId: 'fork-commit-1' },
         });
+        vi.mocked(importProject.stageImport)
+            .mockRejectedValueOnce(new Error('post-commit readback failed'))
+            .mockResolvedValueOnce('retained-fork-import');
+        renderAt();
+
+        fireEvent.click(await screen.findByRole('button', { name: /fork this project/i }));
+        await screen.findByText(
+            'Could not prepare this project for the editor. Nothing was removed; try again.',
+        );
+        fireEvent.click(screen.getByRole('button', { name: /fork this project/i }));
+
+        expect(await screen.findByText('APP_MARKER')).toBeInTheDocument();
+        expect(fork).toHaveBeenCalledOnce();
+        expect(getCommit).toHaveBeenCalledOnce();
+        expect(importProject.stageImport).toHaveBeenCalledTimes(2);
+        expect(vi.mocked(importProject.stageImport).mock.calls[1])
+            .toEqual(vi.mocked(importProject.stageImport).mock.calls[0]);
     });
 
     it('keeps the gallery project visible and announces an exact staging failure', async () => {

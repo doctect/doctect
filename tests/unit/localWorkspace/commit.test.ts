@@ -378,7 +378,7 @@ describe('semantic transaction scopes', () => {
     },
     {
       label: 'stage-import',
-      scope: ['pendingImports', 'migrationLedger'],
+      scope: ['pendingImports', 'projects', 'migrationLedger'],
       command: () => ({ type: 'stage-import', pendingImport: pendingImport('import-new', 'target-new') }),
     },
     {
@@ -739,13 +739,78 @@ describe('preset and import commands', () => {
     await expect(store.commit({
       type: 'stage-import',
       pendingImport: pendingImport('import-1', 'another-target'),
-    })).rejects.toMatchObject({ code: 'validation' });
+    })).rejects.toMatchObject({ code: 'conflict' });
     await expect(store.commit({
       type: 'stage-import',
       pendingImport: pendingImport('another-import', 'target-2'),
-    })).rejects.toMatchObject({ code: 'validation' });
+    })).rejects.toMatchObject({ code: 'conflict' });
     expect((await inspect(harness)).pendingImports
       .sort((left, right) => left.position - right.position)).toEqual(stored);
+  });
+
+  it('treats an exact staged import repeat as idempotent but rejects conflicting reuse', async () => {
+    const { store, harness } = await readyStore();
+    const command = {
+      type: 'stage-import' as const,
+      pendingImport: pendingImport('stable-import', 'stable-target'),
+    };
+
+    const first = await store.commit(command);
+    const repeated = await store.commit(structuredClone(command));
+
+    expect(first.pendingImports.filter(item => item.id === 'stable-import')).toHaveLength(1);
+    expect(repeated.pendingImports.filter(item => item.id === 'stable-import')).toHaveLength(1);
+    expect((await inspect(harness)).pendingImports
+      .filter(record => record.id === 'stable-import')).toHaveLength(1);
+    await expect(store.commit({
+      ...command,
+      pendingImport: { ...command.pendingImport, createdAt: '2026-08-14T17:00:01.000Z' },
+    })).rejects.toMatchObject({ code: 'conflict' });
+  });
+
+  it('reconciles an exact stage retry after post-commit read failure and later consumption', async () => {
+    let failPostCommitRead = false;
+    const hook: TransactionHook = (stores, mode) => {
+      if (failPostCommitRead && mode === 'readonly' && sameStores(stores, READ_ALL_SCOPE)) {
+        failPostCommitRead = false;
+        throw new Error('Injected post-stage read failure.');
+      }
+    };
+    const { store, harness } = await readyStore({ hook });
+    const command = {
+      type: 'stage-import' as const,
+      pendingImport: pendingImport('restart-stage', 'restart-stage-target'),
+    };
+    failPostCommitRead = true;
+
+    await expect(store.commit(command)).rejects.toMatchObject({ code: 'io' });
+    expect((await inspect(harness)).pendingImports
+      .filter(record => record.id === 'restart-stage')).toHaveLength(1);
+
+    const reloaded = createLocalWorkspaceStore(harness.environment);
+    await expect(reloaded.bootstrap()).resolves.toMatchObject({ status: 'ready' });
+    const restaged = await reloaded.commit(structuredClone(command));
+    expect(restaged.pendingImports.filter(item => item.id === 'restart-stage')).toHaveLength(1);
+    expect(restaged.pendingImports.filter(item => item.targetProjectId === 'restart-stage-target'))
+      .toHaveLength(1);
+
+    await reloaded.commit({ type: 'consume-import', importId: 'restart-stage' });
+    const reconciled = await reloaded.commit(structuredClone(command));
+    expect(reconciled.pendingImports.some(item => item.id === 'restart-stage')).toBe(false);
+    expect(reconciled.projects.filter(project => project.id === 'restart-stage-target'))
+      .toHaveLength(1);
+    const durable = await inspect(harness);
+    expect(durable.projects.find(record => record.id === 'restart-stage-target'))
+      .toMatchObject({
+        consumedImportId: 'restart-stage',
+        consumedImportCreatedAt: TEST_NOW,
+      });
+    expect(durable.pendingImports.some(record => record.id === 'restart-stage')).toBe(false);
+
+    await expect(reloaded.commit({
+      ...command,
+      pendingImport: { ...command.pendingImport, name: 'Conflicting reuse' },
+    })).rejects.toMatchObject({ code: 'conflict' });
   });
 
   it('prepares imports before opening a write transaction', async () => {

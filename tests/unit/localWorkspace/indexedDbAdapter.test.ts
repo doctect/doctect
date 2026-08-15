@@ -7,7 +7,10 @@ import {
   forceCloseDatabase,
 } from 'fake-indexeddb';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { WorkspaceProject } from '../../../services/localWorkspace/contracts';
+import type {
+  WorkspacePendingImport,
+  WorkspaceProject,
+} from '../../../services/localWorkspace/contracts';
 import { WorkspaceStoreError } from '../../../services/localWorkspace/contracts';
 import type { WorkspaceFaultPoint } from '../../../services/localWorkspace/faults';
 import {
@@ -22,6 +25,7 @@ import {
   WORKSPACE_MIGRATION_ID,
   type LegacyBackupRecord,
   type MigrationLedger,
+  type StoredProject,
 } from '../../../services/localWorkspace/schema';
 import {
   legacySnapshot,
@@ -703,6 +707,47 @@ describe('normal mutation compare-and-swap', () => {
       storageRevision: 1,
       updatedAt: TEST_NOW,
     });
+  });
+
+  it('accepts only exact pending or consumed repeats for a reused stage identity', async () => {
+    const adapter = createTestAdapter();
+    const copy = preparedCopy();
+    await copyAndVerify(adapter, copy);
+    const pending = structuredClone(copy.pendingImports[0].pendingImport);
+
+    await expect(adapter.stageImport(structuredClone(pending))).resolves.toBeUndefined();
+    expect((await adapter.inspect()).pendingImports.filter(record => record.id === pending.id))
+      .toHaveLength(1);
+    await expect(adapter.stageImport({
+      ...structuredClone(pending),
+      createdAt: '2026-08-14T16:00:01.000Z',
+    })).rejects.toMatchObject({ code: 'conflict' });
+
+    const project = {
+      id: pending.targetProjectId,
+      name: pending.name,
+      initialState: pending.state,
+      ...(pending.cloud ? { cloud: pending.cloud } : {}),
+    };
+    await adapter.consumeImport(pending.id, copy.workspace.revision, {
+      pendingImportIdentity: JSON.stringify(pending),
+      project: {
+        id: project.id,
+        project,
+        storageRevision: 0,
+        updatedAt: TEST_NOW,
+        consumedImportId: pending.id,
+        consumedImportCreatedAt: pending.createdAt,
+      } as StoredProject,
+    });
+    await expect(adapter.stageImport(structuredClone(pending))).resolves.toBeUndefined();
+    const stored = await adapter.inspect();
+    expect(stored.pendingImports.some(record => record.id === pending.id)).toBe(false);
+    expect(stored.projects.filter(record => record.id === pending.targetProjectId)).toHaveLength(1);
+    await expect(adapter.stageImport({
+      ...structuredClone(pending),
+      name: 'Conflicting consumed import',
+    } as WorkspacePendingImport)).rejects.toMatchObject({ code: 'conflict' });
   });
 
   it('rejects one of two stale same-project saves without overwriting the winner', async () => {
