@@ -150,6 +150,8 @@ interface SourceInput {
   path: string;
   source: string;
   analysisStart?: number;
+  annexBFunctionAssignments?: ReadonlyMap<string, number>;
+  annexBFunctionPositions?: ReadonlySet<number>;
   authoredScripts?: readonly SourceInput[];
   classicLinked?: boolean;
   compilerPath?: string;
@@ -225,6 +227,7 @@ const classicScriptParseFailure = (source: string): SourceInput['parseFailure'] 
 };
 
 interface ClassicGlobalDeclarations {
+  annexBFunctions: Array<{ assignmentPosition?: number; name: string; position: number }>;
   functionNames: Set<string>;
   lexicalNames: Set<string>;
   varNames: Set<string>;
@@ -251,6 +254,16 @@ const classicGlobalDeclarations = (source: string): ClassicGlobalDeclarations =>
   const functionNames = new Set<string>();
   const lexicalNames = new Set<string>();
   const varNames = new Set<string>();
+  const annexBFunctions: ClassicGlobalDeclarations['annexBFunctions'] = [];
+  let strict = false;
+  for (const statement of sourceFile.statements) {
+    if (ts.isExpressionStatement(statement) && ts.isStringLiteral(statement.expression)) {
+      const literal = statement.expression.getText(sourceFile);
+      if (literal === '"use strict"' || literal === "'use strict'") strict = true;
+    } else {
+      break;
+    }
+  }
   for (const statement of sourceFile.statements) {
     if (ts.isVariableStatement(statement)
       && (statement.declarationList.flags & ts.NodeFlags.BlockScoped) !== 0) {
@@ -264,7 +277,46 @@ const classicGlobalDeclarations = (source: string): ClassicGlobalDeclarations =>
       varNames.add(statement.name.text);
     }
   }
+  const definitelyExecutes = (declaration: ts.FunctionDeclaration): boolean => {
+    let child: ts.Node = declaration;
+    for (let parent = declaration.parent; parent !== sourceFile; parent = parent.parent) {
+      if (ts.isBlock(parent)) {
+        child = parent;
+        continue;
+      }
+      if (ts.isLabeledStatement(parent) && parent.statement === child) {
+        child = parent;
+        continue;
+      }
+      if (ts.isIfStatement(parent)) {
+        const condition = unwrap(parent.expression);
+        const value = condition.kind === ts.SyntaxKind.TrueKeyword
+          ? true
+          : condition.kind === ts.SyntaxKind.FalseKeyword ? false : undefined;
+        if ((value === true && parent.thenStatement === child)
+          || (value === false && parent.elseStatement === child)) {
+          child = parent;
+          continue;
+        }
+      }
+      return false;
+    }
+    return true;
+  };
   const collectVarNames = (node: ts.Node): void => {
+    if (!strict
+      && ts.isFunctionDeclaration(node)
+      && node.parent !== sourceFile
+      && node.name) {
+      const name = node.name.text;
+      annexBFunctions.push({
+        assignmentPosition: definitelyExecutes(node) ? node.end : undefined,
+        name,
+        position: node.getStart(sourceFile),
+      });
+      varNames.add(name);
+      return;
+    }
     if (node !== sourceFile && (
       ts.isFunctionLike(node)
       || ts.isClassDeclaration(node)
@@ -277,7 +329,122 @@ const classicGlobalDeclarations = (source: string): ClassicGlobalDeclarations =>
     ts.forEachChild(node, collectVarNames);
   };
   collectVarNames(sourceFile);
-  return { functionNames, lexicalNames, varNames };
+  return { annexBFunctions, functionNames, lexicalNames, varNames };
+};
+
+const positionSegments = (offsets: readonly number[]): SourcePositionSegment[] => {
+  if (offsets.length === 0) return [];
+  const segments: SourcePositionSegment[] = [];
+  let start = 0;
+  for (let index = 1; index < offsets.length; index += 1) {
+    if (offsets[index] === offsets[start] + index - start) continue;
+    segments.push({
+      generatedStart: start,
+      generatedEnd: index - 1,
+      originalStart: offsets[start],
+    });
+    start = index;
+  }
+  segments.push({
+    generatedStart: start,
+    generatedEnd: offsets.length - 1,
+    originalStart: offsets[start],
+  });
+  return segments;
+};
+
+const svgTextOffsets = (
+  raw: string,
+  decoded: string,
+  rawStart: number,
+  decodeEntity: (value: string) => string,
+): number[] => {
+  const offsets = new Array<number>(decoded.length + 1);
+  let decodedIndex = 0;
+  let inCdata = false;
+  let rawIndex = 0;
+  offsets[0] = rawStart;
+  while (rawIndex < raw.length && decodedIndex < decoded.length) {
+    if (!inCdata && raw.startsWith('<![CDATA[', rawIndex)) {
+      rawIndex += '<![CDATA['.length;
+      offsets[decodedIndex] = rawStart + rawIndex;
+      inCdata = true;
+      continue;
+    }
+    if (inCdata && raw.startsWith(']]>', rawIndex)) {
+      rawIndex += ']]>'.length;
+      offsets[decodedIndex] = rawStart + rawIndex;
+      inCdata = false;
+      continue;
+    }
+    if (!inCdata && raw[rawIndex] === '&') {
+      const entity = raw.slice(rawIndex).match(
+        /^&(?:#[xX][\dA-Fa-f]+;?|#\d+;?|[A-Za-z][\dA-Za-z]+;?)/,
+      )?.[0];
+      if (entity) {
+        const value = decodeEntity(entity);
+        if (value !== entity && decoded.startsWith(value, decodedIndex)) {
+          for (let index = 0; index < value.length; index += 1) {
+            offsets[decodedIndex + index] = rawStart + rawIndex;
+          }
+          decodedIndex += value.length;
+          rawIndex += entity.length;
+          offsets[decodedIndex] = rawStart + rawIndex;
+          continue;
+        }
+      }
+    }
+    const crlf = raw[rawIndex] === '\r' && raw[rawIndex + 1] === '\n';
+    const value = raw[rawIndex] === '\r' ? '\n' : raw[rawIndex];
+    offsets[decodedIndex] = rawStart + rawIndex;
+    decodedIndex += 1;
+    rawIndex += crlf ? 2 : 1;
+    offsets[decodedIndex] = rawStart + rawIndex;
+    if (decoded[decodedIndex - 1] !== value) {
+      while (rawIndex < raw.length && raw[rawIndex] !== decoded[decodedIndex]) rawIndex += 1;
+      offsets[decodedIndex] = rawStart + rawIndex;
+    }
+  }
+  while (decodedIndex < decoded.length) {
+    offsets[decodedIndex] = rawStart + rawIndex;
+    decodedIndex += 1;
+  }
+  offsets[decoded.length] ??= rawStart + rawIndex;
+  return offsets;
+};
+
+const svgScriptSource = (
+  script: Element,
+  htmlSource: string,
+  parsedHtml: ParsedHtml,
+): { source: string; positionSegments: SourcePositionSegment[] } => {
+  const decoder = parsedHtml.window.document.createElementNS('http://www.w3.org/2000/svg', 'text');
+  const decodeEntity = (value: string): string => {
+    decoder.innerHTML = value;
+    return decoder.textContent ?? '';
+  };
+  let source = '';
+  const offsets: number[] = [];
+  const appendText = (node: Node): void => {
+    if (node.nodeType === 3) {
+      const location = parsedHtml.nodeLocation(node);
+      if (!location) throw new Error('Workspace boundary could not locate SVG script text');
+      const text = (node as Text).data;
+      const raw = htmlSource.slice(location.startOffset, location.endOffset);
+      const nodeOffsets = svgTextOffsets(raw, text, location.startOffset, decodeEntity);
+      const generatedStart = source.length;
+      source += text;
+      for (let index = 0; index < nodeOffsets.length; index += 1) {
+        offsets[generatedStart + index] = nodeOffsets[index];
+      }
+      return;
+    }
+    for (const child of node.childNodes) appendText(child);
+  };
+  for (const node of script.childNodes) {
+    appendText(node);
+  }
+  return { source, positionSegments: positionSegments(offsets) };
 };
 
 const executableScriptType = (script: Element): 'classic' | 'module' | undefined => {
@@ -309,7 +476,11 @@ const executableScriptType = (script: Element): 'classic' | 'module' | undefined
 const executableInputs = (inputs: readonly SourceInput[]): SourceInput[] => inputs.flatMap(input => {
   if (extname(input.path) !== '.html') return [input];
   const scripts: SourceInput[] = [];
-  const classicScripts: Array<{ index: number; source: string; bodyStart: number }> = [];
+  const classicScripts: Array<{
+    index: number;
+    positionSegments: readonly SourcePositionSegment[];
+    source: string;
+  }> = [];
   const document = new JSDOM(input.source, { includeNodeLocations: true });
   let index = 0;
   for (const script of document.window.document.querySelectorAll('script')) {
@@ -319,20 +490,31 @@ const executableInputs = (inputs: readonly SourceInput[]): SourceInput[] => inpu
     if (!location?.startTag) throw new Error(`Workspace boundary could not locate script in ${input.path}`);
     const bodyStart = location.startTag.endOffset;
     const bodyEnd = location.endTag?.startOffset ?? location.endOffset;
-    const source = input.source.slice(bodyStart, bodyEnd);
+    const rawSource = input.source.slice(bodyStart, bodyEnd);
+    const prepared = script.namespaceURI === 'http://www.w3.org/2000/svg'
+      ? svgScriptSource(script, input.source, document)
+      : {
+        source: rawSource,
+        positionSegments: [{
+          generatedStart: 0,
+          generatedEnd: rawSource.length,
+          originalStart: bodyStart,
+        }],
+      };
+    const { source } = prepared;
     const body = source.trim();
     const onboardingSlot = input.path === 'onboarding/src/shell.html'
-      && /^<!--SLOT:(?:DATA|DIFF|RUNTIME)-->$/.test(body);
+      && /^<!--SLOT:(?:DATA|DIFF|RUNTIME)-->$/.test(rawSource.trim());
     if (body.length === 0 || onboardingSlot) continue;
     if (type === 'classic') {
-      classicScripts.push({ index, source, bodyStart });
+      classicScripts.push({ index, positionSegments: prepared.positionSegments, source });
     } else {
       scripts.push({
         path: `${input.path}.__inline_${index}.js`,
         compilerPath: `\0doctect-inline/${input.path}/${index}.js`,
         reportPath: input.path,
         reportSource: input.source,
-        positionSegments: [{ generatedStart: 0, generatedEnd: source.length, originalStart: bodyStart }],
+        positionSegments: prepared.positionSegments,
         source,
       });
     }
@@ -342,7 +524,31 @@ const executableInputs = (inputs: readonly SourceInput[]): SourceInput[] => inpu
     let source = '';
     const activeLexicalNames = new Set<string>();
     const activeVarNames = new Set<string>();
-    const restrictedGlobalNames = new Set(['window']);
+    const annexBFunctionAssignments = new Map<string, number>();
+    const annexBFunctionPositions = new Set<number>();
+    const globalObject = document.window;
+    const globalDescriptors = Object.getOwnPropertyDescriptors(globalObject);
+    const globalExtensible = Object.isExtensible(globalObject);
+    const restrictedGlobalNames = new Set(Object.entries(globalDescriptors)
+      .filter(([, descriptor]) => descriptor.configurable === false)
+      .map(([name]) => name));
+    const ownGlobalDescriptor = (name: string): PropertyDescriptor | undefined => (
+      Object.prototype.hasOwnProperty.call(globalDescriptors, name)
+        ? globalDescriptors[name]
+        : undefined
+    );
+    const canDeclareGlobalFunction = (name: string): boolean => {
+      const descriptor = ownGlobalDescriptor(name);
+      if (!descriptor) return globalExtensible;
+      return descriptor.configurable === true || (
+        'value' in descriptor
+        && descriptor.writable === true
+        && descriptor.enumerable === true
+      );
+    };
+    const canDeclareGlobalVar = (name: string): boolean => (
+      ownGlobalDescriptor(name) !== undefined || globalExtensible
+    );
     const positionSegments: SourcePositionSegment[] = [];
     const classicInputs: SourceInput[] = [];
     for (const script of classicScripts) {
@@ -351,11 +557,7 @@ const executableInputs = (inputs: readonly SourceInput[]): SourceInput[] => inpu
         compilerPath: `\0doctect-inline/${input.path}/authored-${script.index}.js`,
         reportPath: input.path,
         reportSource: input.source,
-        positionSegments: [{
-          generatedStart: 0,
-          generatedEnd: script.source.length,
-          originalStart: script.bodyStart,
-        }],
+        positionSegments: script.positionSegments,
         source: script.source,
       };
       const parseFailure = classicScriptParseFailure(script.source);
@@ -368,22 +570,36 @@ const executableInputs = (inputs: readonly SourceInput[]): SourceInput[] => inpu
         activeLexicalNames.has(name)
         || activeVarNames.has(name)
         || restrictedGlobalNames.has(name)
-      )) || [...declarations.varNames].some(name => activeLexicalNames.has(name))
-        || [...declarations.functionNames].some(name => restrictedGlobalNames.has(name));
+      )) || [...declarations.varNames].some(name => (
+        activeLexicalNames.has(name) || !canDeclareGlobalVar(name)
+      )) || [...declarations.functionNames].some(name => !canDeclareGlobalFunction(name));
       if (activationFails) continue;
       for (const name of declarations.lexicalNames) activeLexicalNames.add(name);
       for (const name of declarations.varNames) activeVarNames.add(name);
       if (source.length > 0) source += '\n;\n';
       const generatedStart = source.length;
       source += script.source.startsWith('#!') ? `//${script.source.slice(2)}` : script.source;
-      positionSegments.push({
-        generatedStart,
-        generatedEnd: source.length,
-        originalStart: script.bodyStart,
-      });
+      for (const annexBFunction of declarations.annexBFunctions) {
+        annexBFunctionPositions.add(generatedStart + annexBFunction.position);
+        if (annexBFunction.assignmentPosition === undefined) continue;
+        const assignmentPosition = generatedStart + annexBFunction.assignmentPosition;
+        const priorAssignment = annexBFunctionAssignments.get(annexBFunction.name);
+        if (priorAssignment === undefined || assignmentPosition < priorAssignment) {
+          annexBFunctionAssignments.set(annexBFunction.name, assignmentPosition);
+        }
+      }
+      for (const segment of script.positionSegments) {
+        positionSegments.push({
+          generatedStart: generatedStart + segment.generatedStart,
+          generatedEnd: generatedStart + segment.generatedEnd,
+          originalStart: segment.originalStart,
+        });
+      }
       classicInputs.push({
         path: authoredScript.path,
         analysisStart: generatedStart,
+        annexBFunctionAssignments: new Map(annexBFunctionAssignments),
+        annexBFunctionPositions: new Set(annexBFunctionPositions),
         authoredScripts: [authoredScript],
         classicLinked: true,
         compilerPath: `\0doctect-inline/${input.path}/classic-${script.index}.js`,
@@ -599,6 +815,10 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
   const isClassicGlobalVar = (declaration: ts.Declaration): boolean => {
     const declarationInput = scriptsByFile.get(declaration.getSourceFile().fileName);
     if (!declarationInput?.classicLinked) return false;
+    if (ts.isFunctionDeclaration(declaration)
+      && declarationInput.annexBFunctionPositions?.has(
+        declaration.getStart(declaration.getSourceFile()),
+      )) return true;
     let current: ts.Node | undefined = declaration;
     while (current && !ts.isSourceFile(current) && !ts.isVariableDeclaration(current)) {
       if (ts.isFunctionLike(current) || ts.isClassStaticBlockDeclaration(current)) return false;
@@ -620,9 +840,15 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
     identifier: ts.Identifier,
     symbol: ts.Symbol | undefined,
     names: ReadonlySet<string>,
-  ): boolean => names.has(identifier.text) && !symbol?.declarations?.some(declaration => (
-    scriptsByFile.has(declaration.getSourceFile().fileName) && !isClassicGlobalVar(declaration)
-  ));
+  ): boolean => {
+    if (!names.has(identifier.text)) return false;
+    const declarationInput = scriptsByFile.get(identifier.getSourceFile().fileName);
+    const annexBAssignment = declarationInput?.annexBFunctionAssignments?.get(identifier.text);
+    if (annexBAssignment !== undefined && annexBAssignment <= identifier.getStart()) return false;
+    return !symbol?.declarations?.some(declaration => (
+      scriptsByFile.has(declaration.getSourceFile().fileName) && !isClassicGlobalVar(declaration)
+    ));
+  };
 
   const withSymbolOrigins = <T>(
     symbol: ts.Symbol,
@@ -1375,6 +1601,74 @@ describe('local workspace static boundary', () => {
   });
 
   it.each([
+    ['classic', '', 'hype_&#112;rojects'],
+    ['classic named', '', 'hype&lowbar;projects'],
+    ['module', ' type="module"', 'hype_&#112;rojects'],
+    ['module named', ' type="module"', 'hype&lowbar;projects'],
+  ])('SVG parser text decodes %s character references', (_case, type, key) => {
+    const source = [
+      '<svg>',
+      `<script${type}>`,
+      `localStorage.getItem("${key}");`,
+      '</script>',
+      '</svg>',
+    ].join('\n');
+    expect(analyzeSource('svg-decoded.html', source)).toEqual([
+      expect.stringContaining('svg-decoded.html:3: accesses legacy document key'),
+    ]);
+  });
+
+  it('SVG parser text removes valid CDATA delimiters', () => {
+    const source = [
+      '<svg>',
+      '<script><![CDATA[',
+      'window.ready = true;',
+      ']]></script>',
+      '</svg>',
+    ].join('\n');
+    expect(analyzeSource('svg-cdata-valid.html', source)).toEqual([]);
+  });
+
+  it('SVG parser text detects reconstructed access inside CDATA on its authored line', () => {
+    const source = [
+      '<svg>',
+      '<script><![CDATA[',
+      "const key = 'hype_' + 'projects';",
+      'localStorage.getItem(key);',
+      ']]></script>',
+      '</svg>',
+    ].join('\n');
+    expect(analyzeSource('svg-cdata-access.html', source)).toEqual([
+      expect.stringContaining('svg-cdata-access.html:4: accesses legacy document key'),
+    ]);
+  });
+
+  it('SVG parser text includes descendant text nodes in execution order', () => {
+    const source = [
+      '<svg>',
+      '<script>',
+      'localStorage.getItem("hype_<tspan>pro</tspan>jects");',
+      '</script>',
+      '</svg>',
+    ].join('\n');
+    expect(analyzeSource('svg-descendant-text.html', source)).toEqual([
+      expect.stringContaining('svg-descendant-text.html:3: accesses legacy document key'),
+    ]);
+  });
+
+  it('HTML raw-text script keeps character references encoded', () => {
+    const source = '<script>localStorage.getItem("hype_&#112;rojects");</script>';
+    expect(analyzeSource('html-raw-reference.html', source)).toEqual([]);
+  });
+
+  it('HTML raw-text script keeps CDATA delimiters as invalid JavaScript', () => {
+    const source = '<script><![CDATA[window.ready = true;]]></script>';
+    expect(analyzeSource('html-raw-cdata.html', source)).toEqual([
+      expect.stringContaining('html-raw-cdata.html:1: could not be parsed'),
+    ]);
+  });
+
+  it.each([
     [
       'whitespace-only type',
       '<svg><script type=" ">const key = \'hype_\' + \'projects\'; localStorage.getItem(key);</script></svg>',
@@ -1551,6 +1845,131 @@ describe('local workspace static boundary', () => {
       .filter(violation => violation.includes('accesses legacy document key'));
     expect(accesses).toEqual([
       expect.stringContaining('activation-window.html:8: accesses legacy document key'),
+    ]);
+  });
+
+  it.each(['window', 'document', 'location', 'top', 'Infinity', 'NaN', 'undefined'])(
+    'descriptor activation atomically rejects lexical %s',
+    name => {
+      const source = [
+        '<script>',
+        `let ${name};`,
+        'let self;',
+        "const failedKey = 'hype_' + 'projects';",
+        'globalThis.localStorage.getItem(failedKey);',
+        '</script>',
+        '<script>',
+        "const key = 'hype_' + 'projects';",
+        'self.localStorage.getItem(key);',
+        '</script>',
+      ].join('\n');
+      const accesses = analyzeSource('descriptor-lexical.html', source)
+        .filter(violation => violation.includes('accesses legacy document key'));
+      expect(accesses).toEqual([
+        expect.stringContaining('descriptor-lexical.html:9: accesses legacy document key'),
+      ]);
+    },
+  );
+
+  it.each(['window', 'document', 'location', 'top', 'Infinity', 'NaN', 'undefined'])(
+    'descriptor activation atomically rejects function %s',
+    name => {
+      const source = [
+        '<script>',
+        `function ${name}() {}`,
+        'let self;',
+        "const failedKey = 'hype_' + 'projects';",
+        'globalThis.localStorage.getItem(failedKey);',
+        '</script>',
+        '<script>',
+        "const key = 'hype_' + 'projects';",
+        'self.localStorage.getItem(key);',
+        '</script>',
+      ].join('\n');
+      const accesses = analyzeSource('descriptor-function.html', source)
+        .filter(violation => violation.includes('accesses legacy document key'));
+      expect(accesses).toEqual([
+        expect.stringContaining('descriptor-function.html:9: accesses legacy document key'),
+      ]);
+    },
+  );
+
+  it.each(['window', 'document', 'location', 'top', 'Infinity', 'NaN', 'undefined'])(
+    'descriptor activation permits global var for existing own %s',
+    name => {
+      const source = `<script>var ${name}; let self;</script>`
+        + '<script>const key = \'hype_\' + \'projects\'; self.localStorage.getItem(key);</script>';
+      expect(analyzeSource('descriptor-var.html', source)).toEqual([]);
+    },
+  );
+
+  it.each([
+    ['configurable lexical property', 'let Object; let self;'],
+    ['configurable function property', 'function Object() {} let self;'],
+    ['absent function property', 'function projectScoped() {} let self;'],
+    ['inherited object name', 'function toString() {} let self;'],
+  ])('descriptor activation permits %s', (_case, declaration) => {
+    const source = `<script>${declaration}</script>`
+      + '<script>const key = \'hype_\' + \'projects\'; self.localStorage.getItem(key);</script>';
+    expect(analyzeSource('descriptor-configurable.html', source)).toEqual([]);
+  });
+
+  it.each([
+    ['false block', 'if (false) { function occupied() {} }'],
+    ['false conditional', 'if (false) function occupied() {}'],
+    ['labelled function', 'label: function occupied() {}'],
+  ])('Annex B %s contributes a global var name before execution', (_case, annexBDeclaration) => {
+    const source = [
+      `<script>${annexBDeclaration}</script>`,
+      '<script>',
+      'let occupied;',
+      'let self;',
+      "const failedKey = 'hype_' + 'projects';",
+      'globalThis.localStorage.getItem(failedKey);',
+      '</script>',
+      '<script>',
+      "const key = 'hype_' + 'projects';",
+      'self.localStorage.getItem(key);',
+      '</script>',
+    ].join('\n');
+    const accesses = analyzeSource('annex-b-collision.html', source)
+      .filter(violation => violation.includes('accesses legacy document key'));
+    expect(accesses).toEqual([
+      expect.stringContaining('annex-b-collision.html:10: accesses legacy document key'),
+    ]);
+  });
+
+  it.each([
+    ['unconditional block', '{ function self() {} }'],
+    ['true conditional', 'if (true) function self() {}'],
+    ['false alternate', 'if (false) {} else function self() {}'],
+    ['labelled function', 'label: function self() {}'],
+  ])('Annex B %s replaces the protected global before a later script', (_case, declaration) => {
+    const source = `<script>${declaration}</script>`
+      + '<script>const key = \'hype_\' + \'projects\'; self.localStorage.getItem(key);</script>';
+    expect(analyzeSource('annex-b-executed.html', source)).toEqual([]);
+  });
+
+  it('Annex B false conditional leaves the protected global value native', () => {
+    const source = '<script>if (false) function self() {}</script>'
+      + '<script>const key = \'hype_\' + \'projects\'; self.localStorage.getItem(key);</script>';
+    expect(analyzeSource('annex-b-false.html', source)).toEqual([
+      expect.stringContaining('accesses legacy document key'),
+    ]);
+  });
+
+  it('strict block function remains block-local for later declaration activation', () => {
+    const source = '<script>"use strict"; { function occupied() {} }</script>'
+      + '<script>let occupied; let self;</script>'
+      + '<script>const key = \'hype_\' + \'projects\'; self.localStorage.getItem(key);</script>';
+    expect(analyzeSource('annex-b-strict-activation.html', source)).toEqual([]);
+  });
+
+  it('strict block function does not replace a protected global', () => {
+    const source = '<script>"use strict"; { function self() {} }</script>'
+      + '<script>const key = \'hype_\' + \'projects\'; self.localStorage.getItem(key);</script>';
+    expect(analyzeSource('annex-b-strict-global.html', source)).toEqual([
+      expect.stringContaining('accesses legacy document key'),
     ]);
   });
 
