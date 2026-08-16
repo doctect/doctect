@@ -155,7 +155,8 @@ interface SourceInput {
   authoredScripts?: readonly SourceInput[];
   classicLinked?: boolean;
   compilerPath?: string;
-  parseFailure?: { line: number; message: string };
+  moduleStart?: number;
+  parseFailure?: { message: string; offset: number };
   reportPath?: string;
   reportSource?: string;
   positionSegments?: readonly SourcePositionSegment[];
@@ -214,15 +215,35 @@ const unwrap = (input: ts.Expression): ts.Expression => {
 const trimAsciiWhitespace = (value: string): string =>
   value.replace(/^[\t\n\f\r ]+|[\t\n\f\r ]+$/g, '');
 
+const generatedOffset = (source: string, line: number, column: number): number => {
+  let currentLine = 1;
+  let offset = 0;
+  while (offset < source.length && currentLine < line) {
+    const character = source.charCodeAt(offset);
+    offset += 1;
+    if (character === 13) {
+      if (source.charCodeAt(offset) === 10) offset += 1;
+      currentLine += 1;
+    } else if (character === 10 || character === 0x2028 || character === 0x2029) {
+      currentLine += 1;
+    }
+  }
+  return Math.min(offset + column, source.length);
+};
+
 const classicScriptParseFailure = (source: string): SourceInput['parseFailure'] => {
   try {
     new Script(source, { filename: 'doctect-inline-classic.js' });
     return undefined;
   } catch (error) {
     if (!(error instanceof Error)) throw error;
-    const stackLine = error.stack?.split('\n', 1)[0];
-    const line = Number(stackLine?.match(/:(\d+)$/)?.[1] ?? 1);
-    return { line, message: error.message };
+    const stack = error.stack?.split('\n') ?? [];
+    const line = Number(stack[0]?.match(/:(\d+)$/)?.[1] ?? 1);
+    const caret = stack[2]?.indexOf('^') ?? -1;
+    return {
+      message: error.message,
+      offset: generatedOffset(source, line, Math.max(caret, 0)),
+    };
   }
 };
 
@@ -277,40 +298,149 @@ const classicGlobalDeclarations = (source: string): ClassicGlobalDeclarations =>
       varNames.add(statement.name.text);
     }
   }
-  const definitelyExecutes = (declaration: ts.FunctionDeclaration): boolean => {
+  const directLexicalNames = (
+    statements: readonly ts.Statement[],
+    ignored: ts.FunctionDeclaration,
+  ): Set<string> => {
+    const names = new Set<string>();
+    for (const statement of statements) {
+      if (statement === ignored) continue;
+      if (ts.isVariableStatement(statement)
+        && (statement.declarationList.flags & ts.NodeFlags.BlockScoped) !== 0) {
+        for (const declaration of statement.declarationList.declarations) {
+          addBindingNames(names, declaration.name);
+        }
+      } else if (ts.isClassDeclaration(statement) && statement.name) {
+        names.add(statement.name.text);
+      }
+    }
+    return names;
+  };
+  const annexBEligible = (declaration: ts.FunctionDeclaration): boolean => {
+    const name = declaration.name?.text;
+    if (!name) return false;
+    const parent = declaration.parent;
+    if (!(ts.isBlock(parent)
+      || ts.isCaseClause(parent)
+      || ts.isDefaultClause(parent)
+      || (ts.isIfStatement(parent)
+        && (parent.thenStatement === declaration || parent.elseStatement === declaration))
+      || (ts.isLabeledStatement(parent) && parent.statement === declaration))) return false;
+    for (let ancestor: ts.Node = parent; ; ancestor = ancestor.parent) {
+      if (ts.isBlock(ancestor)
+        && directLexicalNames(ancestor.statements, declaration).has(name)) return false;
+      if (ts.isCaseBlock(ancestor)) {
+        const statements = ancestor.clauses.flatMap(clause => [...clause.statements]);
+        if (directLexicalNames(statements, declaration).has(name)) return false;
+      }
+      if (ts.isForStatement(ancestor)
+        || ts.isForInStatement(ancestor)
+        || ts.isForOfStatement(ancestor)) {
+        const initializer = ancestor.initializer;
+        if (initializer && ts.isVariableDeclarationList(initializer)
+          && (initializer.flags & ts.NodeFlags.BlockScoped) !== 0) {
+          const names = new Set<string>();
+          for (const item of initializer.declarations) addBindingNames(names, item.name);
+          if (names.has(name)) return false;
+        }
+      }
+      if (ts.isSourceFile(ancestor)) {
+        return !directLexicalNames(ancestor.statements, declaration).has(name);
+      }
+    }
+  };
+  function statementCompletesNormally(statement: ts.Statement): boolean {
+    if (ts.isEmptyStatement(statement) || ts.isFunctionDeclaration(statement)) return true;
+    if (ts.isVariableStatement(statement)) {
+      return statement.declarationList.declarations.every(declaration => !declaration.initializer);
+    }
+    if (ts.isExpressionStatement(statement)) {
+      const expression = unwrap(statement.expression);
+      return ts.isStringLiteral(expression)
+        || ts.isNumericLiteral(expression)
+        || expression.kind === ts.SyntaxKind.TrueKeyword
+        || expression.kind === ts.SyntaxKind.FalseKeyword
+        || expression.kind === ts.SyntaxKind.NullKeyword;
+    }
+    if (ts.isBlock(statement)) return statement.statements.every(statementCompletesNormally);
+    return false;
+  }
+  const priorStatementsComplete = (
+    statements: readonly ts.Statement[],
+    child: ts.Node,
+  ): boolean => {
+    const index = statements.indexOf(child as ts.Statement);
+    return index !== -1 && statements.slice(0, index).every(statementCompletesNormally);
+  };
+  function statementDefinitelyThrows(statement: ts.Statement): boolean {
+    if (ts.isThrowStatement(statement)) return true;
+    if (ts.isBlock(statement)) return statementsDefinitelyThrow(statement.statements);
+    if (ts.isIfStatement(statement)) {
+      const condition = unwrap(statement.expression);
+      if (condition.kind === ts.SyntaxKind.TrueKeyword) {
+        return statementDefinitelyThrows(statement.thenStatement);
+      }
+      if (condition.kind === ts.SyntaxKind.FalseKeyword && statement.elseStatement) {
+        return statementDefinitelyThrows(statement.elseStatement);
+      }
+    }
+    return false;
+  }
+  function statementsDefinitelyThrow(statements: readonly ts.Statement[]): boolean {
+    for (const statement of statements) {
+      if (statementDefinitelyThrows(statement)) return true;
+      if (!statementCompletesNormally(statement)) return false;
+    }
+    return false;
+  }
+  const definitelyReached = (declaration: ts.FunctionDeclaration): boolean => {
     let child: ts.Node = declaration;
-    for (let parent = declaration.parent; parent !== sourceFile; parent = parent.parent) {
+    for (let parent = declaration.parent; ; child = parent, parent = parent.parent) {
+      if (ts.isSourceFile(parent)) return priorStatementsComplete(parent.statements, child);
       if (ts.isBlock(parent)) {
-        child = parent;
+        if (!priorStatementsComplete(parent.statements, child)) return false;
         continue;
       }
-      if (ts.isLabeledStatement(parent) && parent.statement === child) {
-        child = parent;
+      if (ts.isCaseClause(parent) || ts.isDefaultClause(parent)) {
+        if (!priorStatementsComplete(parent.statements, child)) return false;
+        continue;
+      }
+      if (ts.isLabeledStatement(parent)) {
+        if (parent.statement !== child) return false;
         continue;
       }
       if (ts.isIfStatement(parent)) {
         const condition = unwrap(parent.expression);
-        const value = condition.kind === ts.SyntaxKind.TrueKeyword
-          ? true
-          : condition.kind === ts.SyntaxKind.FalseKeyword ? false : undefined;
-        if ((value === true && parent.thenStatement === child)
-          || (value === false && parent.elseStatement === child)) {
-          child = parent;
-          continue;
-        }
+        const selected = condition.kind === ts.SyntaxKind.TrueKeyword
+          ? parent.thenStatement
+          : condition.kind === ts.SyntaxKind.FalseKeyword ? parent.elseStatement : undefined;
+        if (selected !== child) return false;
+        continue;
+      }
+      if (ts.isCatchClause(parent)) {
+        if (parent.block !== child) return false;
+        continue;
+      }
+      if (ts.isTryStatement(parent)) {
+        if (parent.tryBlock === child) continue;
+        const catchBinding = parent.catchClause?.variableDeclaration?.name;
+        if (parent.catchClause === child
+          && (!catchBinding || ts.isIdentifier(catchBinding))
+          && statementsDefinitelyThrow(parent.tryBlock.statements)) continue;
+        return false;
       }
       return false;
     }
-    return true;
   };
   const collectVarNames = (node: ts.Node): void => {
     if (!strict
       && ts.isFunctionDeclaration(node)
       && node.parent !== sourceFile
-      && node.name) {
+      && node.name
+      && annexBEligible(node)) {
       const name = node.name.text;
       annexBFunctions.push({
-        assignmentPosition: definitelyExecutes(node) ? node.end : undefined,
+        assignmentPosition: definitelyReached(node) ? node.end : undefined,
         name,
         position: node.getStart(sourceFile),
       });
@@ -448,7 +578,8 @@ const svgScriptSource = (
 };
 
 const executableScriptType = (script: Element): 'classic' | 'module' | undefined => {
-  if (script.namespaceURI === 'http://www.w3.org/1999/xhtml') {
+  const html = script.namespaceURI === 'http://www.w3.org/1999/xhtml';
+  if (html) {
     if (script.hasAttribute('src')) return undefined;
   } else if (script.namespaceURI === 'http://www.w3.org/2000/svg') {
     if (script.hasAttribute('href')
@@ -456,26 +587,34 @@ const executableScriptType = (script: Element): 'classic' | 'module' | undefined
   } else {
     return undefined;
   }
+  const classic = (): 'classic' | undefined => (
+    html && script.hasAttribute('nomodule') ? undefined : 'classic'
+  );
 
   const attribute = script.getAttribute('type');
   let type: string;
   if (attribute === null) {
-    if (script.namespaceURI === 'http://www.w3.org/2000/svg') return 'classic';
+    if (script.namespaceURI === 'http://www.w3.org/2000/svg') return classic();
     const language = script.getAttribute('language');
-    if (language === null || language === '') return 'classic';
+    if (language === null || language === '') return classic();
     type = `text/${language}`;
   } else {
-    if (attribute === '') return 'classic';
+    if (attribute === '') return classic();
     type = attribute;
   }
   const normalized = trimAsciiWhitespace(type).toLowerCase();
-  if (javascriptMimeEssences.has(normalized)) return 'classic';
+  if (javascriptMimeEssences.has(normalized)) return classic();
   return normalized === 'module' ? 'module' : undefined;
 };
 
 const executableInputs = (inputs: readonly SourceInput[]): SourceInput[] => inputs.flatMap(input => {
   if (extname(input.path) !== '.html') return [input];
   const scripts: SourceInput[] = [];
+  const moduleScripts: Array<{
+    index: number;
+    positionSegments: readonly SourcePositionSegment[];
+    source: string;
+  }> = [];
   const classicScripts: Array<{
     index: number;
     positionSegments: readonly SourcePositionSegment[];
@@ -509,17 +648,12 @@ const executableInputs = (inputs: readonly SourceInput[]): SourceInput[] => inpu
     if (type === 'classic') {
       classicScripts.push({ index, positionSegments: prepared.positionSegments, source });
     } else {
-      scripts.push({
-        path: `${input.path}.__inline_${index}.js`,
-        compilerPath: `\0doctect-inline/${input.path}/${index}.js`,
-        reportPath: input.path,
-        reportSource: input.source,
-        positionSegments: prepared.positionSegments,
-        source,
-      });
+      moduleScripts.push({ index, positionSegments: prepared.positionSegments, source });
     }
     index += 1;
   }
+  let pageGlobals: Pick<SourceInput,
+    'annexBFunctionAssignments' | 'annexBFunctionPositions' | 'positionSegments' | 'source'>;
   if (classicScripts.length > 0) {
     let source = '';
     const activeLexicalNames = new Set<string>();
@@ -549,6 +683,13 @@ const executableInputs = (inputs: readonly SourceInput[]): SourceInput[] => inpu
     const canDeclareGlobalVar = (name: string): boolean => (
       ownGlobalDescriptor(name) !== undefined || globalExtensible
     );
+    const canAssignGlobal = (name: string): boolean => {
+      const descriptor = ownGlobalDescriptor(name);
+      if (!descriptor) return globalExtensible;
+      return 'value' in descriptor
+        ? descriptor.writable === true
+        : descriptor.set !== undefined;
+    };
     const positionSegments: SourcePositionSegment[] = [];
     const classicInputs: SourceInput[] = [];
     for (const script of classicScripts) {
@@ -581,7 +722,8 @@ const executableInputs = (inputs: readonly SourceInput[]): SourceInput[] => inpu
       source += script.source.startsWith('#!') ? `//${script.source.slice(2)}` : script.source;
       for (const annexBFunction of declarations.annexBFunctions) {
         annexBFunctionPositions.add(generatedStart + annexBFunction.position);
-        if (annexBFunction.assignmentPosition === undefined) continue;
+        if (annexBFunction.assignmentPosition === undefined
+          || !canAssignGlobal(annexBFunction.name)) continue;
         const assignmentPosition = generatedStart + annexBFunction.assignmentPosition;
         const priorAssignment = annexBFunctionAssignments.get(annexBFunction.name);
         if (priorAssignment === undefined || assignmentPosition < priorAssignment) {
@@ -610,6 +752,49 @@ const executableInputs = (inputs: readonly SourceInput[]): SourceInput[] => inpu
       });
     }
     scripts.unshift(...classicInputs);
+    pageGlobals = {
+      annexBFunctionAssignments: new Map(annexBFunctionAssignments),
+      annexBFunctionPositions: new Set(annexBFunctionPositions),
+      positionSegments: [...positionSegments],
+      source,
+    };
+  } else {
+    pageGlobals = { positionSegments: [], source: '' };
+  }
+  for (const script of moduleScripts) {
+    const authoredScript: SourceInput = {
+      path: `${input.path}.__inline_${script.index}.js`,
+      compilerPath: `\0doctect-inline/${input.path}/authored-module-${script.index}.js`,
+      reportPath: input.path,
+      reportSource: input.source,
+      positionSegments: script.positionSegments,
+      source: script.source,
+    };
+    let source = pageGlobals.source;
+    if (source.length > 0) source += '\n;\n';
+    const moduleStart = source.length;
+    source += script.source.startsWith('#!') ? `//${script.source.slice(2)}` : script.source;
+    scripts.push({
+      path: authoredScript.path,
+      analysisStart: moduleStart,
+      annexBFunctionAssignments: pageGlobals.annexBFunctionAssignments,
+      annexBFunctionPositions: pageGlobals.annexBFunctionPositions,
+      authoredScripts: [authoredScript],
+      classicLinked: true,
+      compilerPath: `\0doctect-inline/${input.path}/${script.index}.js`,
+      moduleStart,
+      reportPath: input.path,
+      reportSource: input.source,
+      positionSegments: [
+        ...(pageGlobals.positionSegments ?? []),
+        ...script.positionSegments.map(segment => ({
+          generatedStart: moduleStart + segment.generatedStart,
+          generatedEnd: moduleStart + segment.generatedEnd,
+          originalStart: segment.originalStart,
+        })),
+      ],
+      source,
+    });
   }
   return scripts;
 });
@@ -663,7 +848,7 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
   for (const input of executable) {
     if (!input.parseFailure) continue;
     const policyPath = input.reportPath ?? input.path;
-    const line = reportLine(input, 0) + input.parseFailure.line - 1;
+    const line = reportLine(input, input.parseFailure.offset);
     results.get(policyPath)!.push(
       `${policyPath}:${line}: could not be parsed: ${input.parseFailure.message}`,
     );
@@ -715,6 +900,72 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
     host,
   });
   const checker = program.getTypeChecker();
+  const moduleLocalSymbols = new Map<string, Map<string, ts.Symbol>>();
+  for (const [fileName, input] of scriptsByFile) {
+    if (input.moduleStart === undefined) continue;
+    const sourceFile = program.getSourceFile(fileName);
+    if (!sourceFile) continue;
+    const symbols = new Map<string, ts.Symbol>();
+    const addIdentifier = (identifier: ts.Identifier): void => {
+      const symbol = checker.getSymbolAtLocation(identifier);
+      if (symbol) symbols.set(identifier.text, symbol);
+    };
+    const addBindings = (binding: ts.BindingName): void => {
+      if (ts.isIdentifier(binding)) {
+        addIdentifier(binding);
+        return;
+      }
+      for (const element of binding.elements) {
+        if (!ts.isOmittedExpression(element)) addBindings(element.name);
+      }
+    };
+    const collectModuleVars = (node: ts.Node): void => {
+      if (node !== sourceFile && (
+        ts.isFunctionLike(node)
+        || ts.isClassDeclaration(node)
+        || ts.isClassExpression(node)
+      )) return;
+      if (ts.isVariableDeclarationList(node)
+        && (node.flags & ts.NodeFlags.BlockScoped) === 0) {
+        for (const declaration of node.declarations) addBindings(declaration.name);
+      }
+      ts.forEachChild(node, collectModuleVars);
+    };
+    for (const statement of sourceFile.statements) {
+      if (statement.getStart(sourceFile) < input.moduleStart) continue;
+      if (ts.isVariableStatement(statement)) {
+        for (const declaration of statement.declarationList.declarations) {
+          addBindings(declaration.name);
+        }
+      } else if ((ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement))
+        && statement.name) {
+        addIdentifier(statement.name);
+      } else if (ts.isImportDeclaration(statement) && statement.importClause) {
+        if (statement.importClause.name) addIdentifier(statement.importClause.name);
+        const bindings = statement.importClause.namedBindings;
+        if (bindings && ts.isNamespaceImport(bindings)) addIdentifier(bindings.name);
+        else if (bindings && ts.isNamedImports(bindings)) {
+          for (const element of bindings.elements) addIdentifier(element.name);
+        }
+      } else if (ts.isImportEqualsDeclaration(statement)) {
+        addIdentifier(statement.name);
+      }
+      collectModuleVars(statement);
+    }
+    moduleLocalSymbols.set(fileName, symbols);
+  }
+  const identifierSymbol = (identifier: ts.Identifier): ts.Symbol | undefined => {
+    const symbol = checker.getSymbolAtLocation(identifier);
+    const fileName = identifier.getSourceFile().fileName;
+    const input = scriptsByFile.get(fileName);
+    if (input?.moduleStart === undefined
+      || identifier.getStart(identifier.getSourceFile()) < input.moduleStart) return symbol;
+    if (symbol?.declarations?.some(declaration => (
+      declaration.getSourceFile().fileName === fileName
+      && declaration.getStart(declaration.getSourceFile()) >= input.moduleStart!
+    ))) return symbol;
+    return moduleLocalSymbols.get(fileName)?.get(identifier.text) ?? symbol;
+  };
   const origins = new Map<ts.Symbol, Origin[]>();
 
   const addOrigin = (identifier: ts.Identifier, origin: Origin): void => {
@@ -815,6 +1066,8 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
   const isClassicGlobalVar = (declaration: ts.Declaration): boolean => {
     const declarationInput = scriptsByFile.get(declaration.getSourceFile().fileName);
     if (!declarationInput?.classicLinked) return false;
+    if (declarationInput.moduleStart !== undefined
+      && declaration.getStart(declaration.getSourceFile()) >= declarationInput.moduleStart) return false;
     if (ts.isFunctionDeclaration(declaration)
       && declarationInput.annexBFunctionPositions?.has(
         declaration.getStart(declaration.getSourceFile()),
@@ -861,8 +1114,17 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
     positions.add(atPosition);
     trail.set(symbol, positions);
     try {
+      const moduleStart = symbol.declarations?.map(declaration => {
+        const declarationInput = scriptsByFile.get(declaration.getSourceFile().fileName);
+        return declarationInput?.moduleStart !== undefined
+          && declaration.getStart(declaration.getSourceFile()) >= declarationInput.moduleStart
+          ? declarationInput.moduleStart
+          : undefined;
+      }).find((start): start is number => start !== undefined);
       return (origins.get(symbol) ?? [])
-        .filter(origin => origin.position <= atPosition)
+        .filter(origin => origin.position <= atPosition && (
+          moduleStart === undefined || atPosition < moduleStart || origin.position >= moduleStart
+        ))
         .flatMap(origin => resolve(origin, trail));
     } finally {
       positions.delete(atPosition);
@@ -878,7 +1140,7 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
     const expression = unwrap(input);
     if (ts.isStringLiteralLike(expression)) return new Set([expression.text]);
     if (ts.isIdentifier(expression)) {
-      const symbol = checker.getSymbolAtLocation(expression);
+      const symbol = identifierSymbol(expression);
       if (!symbol) return new Set();
       return new Set(withSymbolOrigins(symbol, atPosition, trail, (origin, nextTrail) => (
         origin.value.kind === 'expression'
@@ -954,7 +1216,7 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
   ): boolean => {
     const expression = unwrap(input);
     if (!ts.isIdentifier(expression)) return false;
-    const symbol = checker.getSymbolAtLocation(expression);
+    const symbol = identifierSymbol(expression);
     if (isUnshadowedGlobal(
       expression,
       symbol,
@@ -976,7 +1238,7 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
   ): boolean => {
     const expression = unwrap(input);
     if (ts.isIdentifier(expression)) {
-      const symbol = checker.getSymbolAtLocation(expression);
+      const symbol = identifierSymbol(expression);
       if (isUnshadowedGlobal(expression, symbol, new Set(['localStorage']))) return true;
       if (!symbol) return false;
       return withSymbolOrigins(symbol, atPosition, trail, (origin, nextTrail) => {
@@ -1003,7 +1265,7 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
   ): CallableMember[] => {
     const expression = unwrap(input);
     if (ts.isIdentifier(expression)) {
-      const symbol = checker.getSymbolAtLocation(expression);
+      const symbol = identifierSymbol(expression);
       if (!symbol) return [];
       return withSymbolOrigins(symbol, atPosition, trail, (origin, nextTrail) => {
         if (origin.value.kind === 'expression') {
@@ -1060,7 +1322,7 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
   ): boolean => {
     const expression = unwrap(input);
     if (!ts.isIdentifier(expression)) return false;
-    const symbol = checker.getSymbolAtLocation(expression);
+    const symbol = identifierSymbol(expression);
     if (isUnshadowedGlobal(expression, symbol, new Set(['require']))) return true;
     if (!symbol) return false;
     return withSymbolOrigins(symbol, atPosition, trail, (origin, nextTrail) => (
@@ -1084,7 +1346,7 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
         : [];
     }
     if (ts.isIdentifier(expression)) {
-      const symbol = checker.getSymbolAtLocation(expression);
+      const symbol = identifierSymbol(expression);
       if (!symbol) return [];
       return withSymbolOrigins(symbol, atPosition, trail, (origin, nextTrail) => (
         origin.value.kind === 'expression'
@@ -1534,6 +1796,31 @@ describe('local workspace static boundary', () => {
     expect(analyzeSource('inert-shell.html', source)).toEqual([]);
   });
 
+  it('browser script preparation skips HTML nomodule classic bodies', () => {
+    const source = '<script nomodule>const key = \'hype_\' + \'projects\'; '
+      + 'localStorage.getItem(key);</script>';
+    expect(analyzeSource('nomodule-classic.html', source)).toEqual([]);
+  });
+
+  it.each([
+    [
+      'HTML module',
+      '<script type="module" nomodule>const key = \'hype_\' + \'projects\'; localStorage.getItem(key);</script>',
+    ],
+    [
+      'SVG classic',
+      '<svg><script nomodule>const key = \'hype_\' + \'projects\'; localStorage.getItem(key);</script></svg>',
+    ],
+    [
+      'SVG module',
+      '<svg><script type="module" nomodule>const key = \'hype_\' + \'projects\'; localStorage.getItem(key);</script></svg>',
+    ],
+  ])('browser script preparation keeps nomodule active for %s', (_case, source) => {
+    expect(analyzeSource('nomodule-control.html', source)).toEqual(expect.arrayContaining([
+      expect.stringContaining('accesses legacy document key'),
+    ]));
+  });
+
   it.each([
     [
       'a missing type',
@@ -1731,6 +2018,90 @@ describe('local workspace static boundary', () => {
     const source = '<script type="module">const key = \'hype_\' + \'projects\';</script>'
       + '<script type="module">localStorage.getItem(key);</script>';
     expect(analyzeSource('module-shell.html', source)).toEqual([]);
+  });
+
+  it.each([
+    [
+      'classic before module',
+      '<script>const key = \'hype_\' + \'projects\';</script>'
+        + '<script type="module">localStorage.getItem(key);</script>',
+    ],
+    [
+      'module before classic',
+      '<script type="module">localStorage.getItem(key);</script>'
+        + '<script>const key = \'hype_\' + \'projects\';</script>',
+    ],
+  ])('deferred module resolves classic lexical key with %s', (_case, source) => {
+    expect(analyzeSource('deferred-module-order.html', source)).toEqual(expect.arrayContaining([
+      expect.stringContaining('accesses legacy document key'),
+    ]));
+  });
+
+  it('deferred module resolves a classic var key', () => {
+    const source = '<script>var key = \'hype_\' + \'projects\';</script>'
+      + '<script type="module">localStorage.getItem(key);</script>';
+    expect(analyzeSource('deferred-module-var.html', source)).toEqual(expect.arrayContaining([
+      expect.stringContaining('accesses legacy document key'),
+    ]));
+  });
+
+  it('deferred module resolves a classic storage alias', () => {
+    const source = '<script>const storage = localStorage;</script>'
+      + '<script type="module">storage.getItem(\'hype_\' + \'projects\');</script>';
+    expect(analyzeSource('deferred-module-storage.html', source)).toEqual(expect.arrayContaining([
+      expect.stringContaining('accesses legacy document key'),
+    ]));
+  });
+
+  it('deferred module resolves a classic callable alias', () => {
+    const source = '<script>const read = localStorage.getItem.bind(localStorage);</script>'
+      + '<script type="module">read(\'hype_\' + \'projects\');</script>';
+    expect(analyzeSource('deferred-module-callable.html', source)).toEqual(expect.arrayContaining([
+      expect.stringContaining('accesses legacy document key'),
+    ]));
+  });
+
+  it('deferred module keeps a failed classic body out of page globals', () => {
+    const source = '<script>let location; let self;</script>'
+      + '<script type="module">const key = \'hype_\' + \'projects\'; '
+      + 'self.localStorage.getItem(key);</script>';
+    expect(analyzeSource('deferred-module-failed-classic.html', source)).toEqual([
+      expect.stringContaining('accesses legacy document key'),
+    ]);
+  });
+
+  it('deferred module local declaration shadows a classic page global', () => {
+    const source = '<script>const key = \'hype_\' + \'projects\';</script>'
+      + '<script type="module">const key = \'preference\'; localStorage.getItem(key);</script>';
+    expect(analyzeSource('deferred-module-shadow.html', source)).toEqual([]);
+  });
+
+  it('deferred module protected-name declaration shadows a classic global var', () => {
+    const source = '<script>var localStorage;</script>'
+      + '<script type="module">const localStorage = { getItem() {} }; '
+      + 'const key = \'hype_\' + \'projects\'; localStorage.getItem(key);</script>';
+    expect(analyzeSource('deferred-module-protected-shadow.html', source)).toEqual([]);
+  });
+
+  it('deferred module declarations stay isolated from other modules', () => {
+    const source = '<script>const pageReady = true;</script>'
+      + '<script type="module">const key = \'hype_\' + \'projects\';</script>'
+      + '<script type="module">void pageReady; localStorage.getItem(key);</script>';
+    expect(analyzeSource('deferred-module-isolation.html', source)).toEqual([]);
+  });
+
+  it('deferred module declarations never flow back into classic scripts', () => {
+    const source = '<script type="module">const key = \'hype_\' + \'projects\';</script>'
+      + '<script>localStorage.getItem(key);</script>';
+    expect(analyzeSource('deferred-module-reverse-isolation.html', source)).toEqual([]);
+  });
+
+  it('deferred module keeps its parse goal and hashbang while resolving classic globals', () => {
+    const source = '<script>const key = \'hype_\' + \'projects\';</script>'
+      + '<script type="module">#! module\nlocalStorage.getItem(key);</script>';
+    expect(analyzeSource('deferred-module-hashbang.html', source)).toEqual([
+      expect.stringContaining('deferred-module-hashbang.html:2: accesses legacy document key'),
+    ]);
   });
 
   it.each([
@@ -1956,6 +2327,74 @@ describe('local workspace static boundary', () => {
     expect(analyzeSource('annex-b-false.html', source)).toEqual([
       expect.stringContaining('accesses legacy document key'),
     ]);
+  });
+
+  it.each([
+    ['window', 'window.localStorage'],
+    ['localStorage', 'localStorage'],
+  ])('Annex B reached %s assignment retains native taint when its descriptor rejects writes', (name, receiver) => {
+    const source = `<script>{ function ${name}() {} }</script>`
+      + `<script>const key = 'hype_' + 'projects'; ${receiver}.getItem(key);</script>`;
+    expect(analyzeSource('annex-b-getter-only.html', source)).toEqual([
+      expect.stringContaining('accesses legacy document key'),
+    ]);
+  });
+
+  it.each([
+    ['self', 'self.localStorage'],
+    ['globalThis', 'globalThis.localStorage'],
+  ])('Annex B reached %s assignment replaces a writable or settable global', (name, receiver) => {
+    const source = `<script>{ function ${name}() {} }</script>`
+      + `<script>const key = 'hype_' + 'projects'; ${receiver}.getItem(key);</script>`;
+    expect(analyzeSource('annex-b-writable.html', source)).toEqual([]);
+  });
+
+  it.each([
+    ['prior labelled break', 'outer: { break outer; function self() {} }'],
+    ['prior handled throw', 'try { throw 0; function self() {} } catch {}'],
+    ['prior continue', 'for (let index = 0; index < 1; index += 1) { continue; function self() {} }'],
+    ['uncertain branch', 'if (globalThis.condition) { function self() {} }'],
+  ])('Annex B %s reserves its name without proving global replacement', (_case, declaration) => {
+    const source = `<script>${declaration}</script>`
+      + '<script>const key = \'hype_\' + \'projects\'; self.localStorage.getItem(key);</script>';
+    expect(analyzeSource('annex-b-unreached.html', source)).toEqual([
+      expect.stringContaining('accesses legacy document key'),
+    ]);
+  });
+
+  it('Annex B intervening lexical declaration prevents global promotion', () => {
+    const source = '<script>{ let self; { function self() {} } }</script>'
+      + '<script>const key = \'hype_\' + \'projects\'; self.localStorage.getItem(key);</script>';
+    expect(analyzeSource('annex-b-intervening-lexical.html', source)).toEqual([
+      expect.stringContaining('accesses legacy document key'),
+    ]);
+  });
+
+  it('Annex B ineligible function leaves its name available to later lexical activation', () => {
+    const source = '<script>{ let occupied; { function occupied() {} } }</script>'
+      + '<script>let occupied; let self;</script>'
+      + '<script>const key = \'hype_\' + \'projects\'; self.localStorage.getItem(key);</script>';
+    expect(analyzeSource('annex-b-ineligible-activation.html', source)).toEqual([]);
+  });
+
+  it('Annex B function in a definitely reached catch replaces a settable global', () => {
+    const source = '<script>try { throw 0; } catch { function self() {} }</script>'
+      + '<script>const key = \'hype_\' + \'projects\'; self.localStorage.getItem(key);</script>';
+    expect(analyzeSource('annex-b-reached-catch.html', source)).toEqual([]);
+  });
+
+  it('Annex B destructuring catch failure does not reach its block function', () => {
+    const source = '<script>try { throw null; } catch ({ value }) { function self() {} }</script>'
+      + '<script>const key = \'hype_\' + \'projects\'; self.localStorage.getItem(key);</script>';
+    expect(analyzeSource('annex-b-catch-binding.html', source)).toEqual([
+      expect.stringContaining('accesses legacy document key'),
+    ]);
+  });
+
+  it('Annex B sibling block functions remain eligible for global replacement', () => {
+    const source = '<script>{ function self() {} function self() {} }</script>'
+      + '<script>const key = \'hype_\' + \'projects\'; self.localStorage.getItem(key);</script>';
+    expect(analyzeSource('annex-b-sibling-functions.html', source)).toEqual([]);
   });
 
   it('strict block function remains block-local for later declaration activation', () => {
@@ -2194,6 +2633,52 @@ describe('local workspace static boundary', () => {
     ].join('\n');
     expect(analyzeSource('quoted-marker.html', source)).toEqual([
       expect.stringContaining('quoted-marker.html:3: accesses legacy document key'),
+    ]);
+  });
+
+  it.each([
+    [
+      'classic entity newline',
+      '',
+      '<script>const value = 1;&#10;const broken = ;</script>',
+      2,
+    ],
+    [
+      'module entity newline',
+      ' type="module"',
+      '<script type="module">const value = 1;&#10;const broken = ;</script>',
+      2,
+    ],
+    [
+      'classic CDATA text',
+      '',
+      '<script><![CDATA[const value = 1;\nconst broken = ;]]></script>',
+      3,
+    ],
+    [
+      'module CDATA text',
+      ' type="module"',
+      '<script type="module"><![CDATA[const value = 1;\nconst broken = ;]]></script>',
+      3,
+    ],
+    [
+      'classic descendant text',
+      '',
+      '<script>const value = 1;<tspan\n data-marker="x">const broken = ;</tspan></script>',
+      3,
+    ],
+    [
+      'module descendant text',
+      ' type="module"',
+      '<script type="module">const value = 1;<tspan\n data-marker="x">const broken = ;</tspan></script>',
+      3,
+    ],
+  ])('SVG parse diagnostic maps %s to its authored raw line', (_case, _type, script, line) => {
+    const source = ['<svg>', script, '</svg>'].join('\n');
+    const parseFailures = analyzeSource('svg-parse-location.html', source)
+      .filter(violation => violation.includes('could not be parsed'));
+    expect(parseFailures).toEqual([
+      expect.stringContaining(`svg-parse-location.html:${line}: could not be parsed`),
     ]);
   });
 
