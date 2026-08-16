@@ -148,6 +148,7 @@ interface SourcePositionSegment {
 interface SourceInput {
   path: string;
   source: string;
+  analysisStart?: number;
   authoredScripts?: readonly SourceInput[];
   classicLinked?: boolean;
   compilerPath?: string;
@@ -209,10 +210,20 @@ const unwrap = (input: ts.Expression): ts.Expression => {
 const trimAsciiWhitespace = (value: string): string =>
   value.replace(/^[\t\n\f\r ]+|[\t\n\f\r ]+$/g, '');
 
-const executableScriptType = (script: HTMLScriptElement): 'classic' | 'module' | undefined => {
+const executableScriptType = (script: Element): 'classic' | 'module' | undefined => {
+  if (script.namespaceURI === 'http://www.w3.org/1999/xhtml') {
+    if (script.hasAttribute('src')) return undefined;
+  } else if (script.namespaceURI === 'http://www.w3.org/2000/svg') {
+    if (script.hasAttribute('href')
+      || script.hasAttributeNS('http://www.w3.org/1999/xlink', 'href')) return undefined;
+  } else {
+    return undefined;
+  }
+
   const attribute = script.getAttribute('type');
   let type: string;
   if (attribute === null) {
+    if (script.namespaceURI === 'http://www.w3.org/2000/svg') return 'classic';
     const language = script.getAttribute('language');
     if (language === null || language === '') return 'classic';
     type = `text/${language}`;
@@ -232,7 +243,6 @@ const executableInputs = (inputs: readonly SourceInput[]): SourceInput[] => inpu
   const document = new JSDOM(input.source, { includeNodeLocations: true });
   let index = 0;
   for (const script of document.window.document.querySelectorAll('script')) {
-    if (script.hasAttribute('src')) continue;
     const type = executableScriptType(script);
     if (!type) continue;
     const location = document.nodeLocation(script);
@@ -258,11 +268,10 @@ const executableInputs = (inputs: readonly SourceInput[]): SourceInput[] => inpu
     }
     index += 1;
   }
-  const firstClassic = classicScripts[0];
-  if (firstClassic) {
+  if (classicScripts.length > 0) {
     let source = '';
     const positionSegments: SourcePositionSegment[] = [];
-    const authoredScripts: SourceInput[] = [];
+    const linkedScripts: SourceInput[] = [];
     for (const script of classicScripts) {
       if (source.length > 0) source += '\n;\n';
       const generatedStart = source.length;
@@ -272,7 +281,7 @@ const executableInputs = (inputs: readonly SourceInput[]): SourceInput[] => inpu
         generatedEnd: source.length,
         originalStart: script.bodyStart,
       });
-      authoredScripts.push({
+      const authoredScript: SourceInput = {
         path: `${input.path}.__inline_${script.index}.js`,
         compilerPath: `\0doctect-inline/${input.path}/authored-${script.index}.js`,
         reportPath: input.path,
@@ -283,18 +292,20 @@ const executableInputs = (inputs: readonly SourceInput[]): SourceInput[] => inpu
           originalStart: script.bodyStart,
         }],
         source: script.source,
+      };
+      linkedScripts.push({
+        path: authoredScript.path,
+        analysisStart: generatedStart,
+        authoredScripts: [authoredScript],
+        classicLinked: true,
+        compilerPath: `\0doctect-inline/${input.path}/classic-${script.index}.js`,
+        reportPath: input.path,
+        reportSource: input.source,
+        positionSegments: [...positionSegments],
+        source,
       });
     }
-    scripts.unshift({
-      path: `${input.path}.__inline_${firstClassic.index}.js`,
-      authoredScripts,
-      classicLinked: true,
-      compilerPath: `\0doctect-inline/${input.path}/classic.js`,
-      reportPath: input.path,
-      reportSource: input.source,
-      positionSegments,
-      source,
-    });
+    scripts.unshift(...linkedScripts);
   }
   return scripts;
 });
@@ -831,7 +842,10 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
     };
 
     const inspectNode = (node: ts.Node): void => {
-      if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
+      const inAnalysisSegment = node.getStart(sourceFile) >= (input.analysisStart ?? 0);
+      if (!inAnalysisSegment) {
+        ts.forEachChild(node, inspectNode);
+      } else if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
         inspectModuleSpecifier(node, node.moduleSpecifier);
       } else if (ts.isImportEqualsDeclaration(node)
         && ts.isExternalModuleReference(node.moduleReference)) {
@@ -863,7 +877,7 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
           report(node, 'accesses legacy document key through localStorage');
         }
       }
-      ts.forEachChild(node, inspectNode);
+      if (inAnalysisSegment) ts.forEachChild(node, inspectNode);
     };
     inspectNode(sourceFile);
   }
@@ -1233,6 +1247,67 @@ describe('local workspace static boundary', () => {
   });
 
   it.each([
+    [
+      'src attribute',
+      '<svg><script src="/ignored.js">const key = \'hype_\' + \'projects\'; localStorage.getItem(key);</script></svg>',
+    ],
+    [
+      'language attribute',
+      '<svg><script language="json">const key = \'hype_\' + \'projects\'; localStorage.getItem(key);</script></svg>',
+    ],
+    [
+      'missing type',
+      '<svg><script>const key = \'hype_\' + \'projects\'; localStorage.getItem(key);</script></svg>',
+    ],
+    [
+      'empty type',
+      '<svg><script type="">const key = \'hype_\' + \'projects\'; localStorage.getItem(key);</script></svg>',
+    ],
+    [
+      'JavaScript MIME type',
+      '<svg><script type="text/javascript">const key = \'hype_\' + \'projects\'; localStorage.getItem(key);</script></svg>',
+    ],
+    [
+      'module type',
+      '<svg><script type="module">const key = \'hype_\' + \'projects\'; localStorage.getItem(key);</script></svg>',
+    ],
+  ])('SVG script namespace executes inline body with %s', (_case, source) => {
+    expect(analyzeSource('svg-shell.html', source)).toEqual(expect.arrayContaining([
+      expect.stringContaining('accesses legacy document key'),
+    ]));
+  });
+
+  it.each([
+    [
+      'whitespace-only type',
+      '<svg><script type=" ">const key = \'hype_\' + \'projects\'; localStorage.getItem(key);</script></svg>',
+    ],
+    [
+      'parameterized type',
+      '<svg><script type="text/javascript; charset=utf-8">const key = \'hype_\' + \'projects\'; localStorage.getItem(key);</script></svg>',
+    ],
+    [
+      'data-block type',
+      '<svg><script type="importmap">const key = \'hype_\' + \'projects\'; localStorage.getItem(key);</script></svg>',
+    ],
+    [
+      'href',
+      '<svg><script href="/external.js">const key = \'hype_\' + \'projects\'; localStorage.getItem(key);</script></svg>',
+    ],
+    [
+      'xlink:href',
+      '<svg xmlns:xlink="http://www.w3.org/1999/xlink"><script xlink:href="/external.js">const key = \'hype_\' + \'projects\'; localStorage.getItem(key);</script></svg>',
+    ],
+  ])('SVG script namespace skips inert body selected by %s', (_case, source) => {
+    expect(analyzeSource('svg-inert.html', source)).toEqual([]);
+  });
+
+  it('foreign script namespace skips inert MathML script bodies', () => {
+    const source = '<math><script>const key = \'hype_\' + \'projects\'; localStorage.getItem(key);</script></math>';
+    expect(analyzeSource('math-shell.html', source)).toEqual([]);
+  });
+
+  it.each([
     ['U+2028', '\u2028'],
     ['U+2029', '\u2029'],
   ])('Annex B Unicode separator %s does not hide executable access', (_case, separator) => {
@@ -1330,6 +1405,46 @@ describe('local workspace static boundary', () => {
   ])('classic protected globals preserve %s lexical shadowing', (_case, path, source) => {
     expect(analyzeSource(path, source)).toEqual([]);
   });
+
+  it.each((['localStorage', 'window', 'self', 'globalThis'] as const).flatMap(name => [
+    [name, 'let', `let ${name};`],
+    [name, 'const', `const ${name} = supplied;`],
+    [name, 'class', `class ${name} {}`],
+    [name, 'function', `function ${name}() {}`],
+  ]))('temporal classic scope keeps earlier %s access ahead of later %s declaration', (name, _kind, declaration) => {
+    const receiver = name === 'localStorage' ? name : `${name}.localStorage`;
+    const source = '<script>const key = \'hype_\' + \'projects\'; '
+      + `${receiver}.getItem(key);</script><script>${declaration}</script>`;
+    expect(analyzeSource('temporal-reverse.html', source)).toEqual(expect.arrayContaining([
+      expect.stringContaining('accesses legacy document key'),
+    ]));
+  });
+
+  it.each(['localStorage', 'window', 'self', 'globalThis'])(
+    'temporal classic scope preserves same-script %s lexical shadowing',
+    name => {
+      const receiver = name === 'localStorage' ? name : `${name}.localStorage`;
+      const value = name === 'localStorage'
+        ? '{ getItem() {} }'
+        : '{ localStorage: { getItem() {} } }';
+      const source = `<script>let ${name} = ${value}; const key = 'hype_' + 'projects'; `
+        + `${receiver}.getItem(key);</script>`;
+      expect(analyzeSource('temporal-same.html', source)).toEqual([]);
+    },
+  );
+
+  it.each(['localStorage', 'window', 'self', 'globalThis'])(
+    'temporal classic scope carries prior-script %s lexical shadowing forward',
+    name => {
+      const receiver = name === 'localStorage' ? name : `${name}.localStorage`;
+      const value = name === 'localStorage'
+        ? '{ getItem() {} }'
+        : '{ localStorage: { getItem() {} } }';
+      const source = `<script>let ${name} = ${value};</script>`
+        + `<script>const key = 'hype_' + 'projects'; ${receiver}.getItem(key);</script>`;
+      expect(analyzeSource('temporal-forward.html', source)).toEqual([]);
+    },
+  );
 
   it('independent inline parse boundaries report malformed bodies repaired by concatenation', () => {
     const source = [
