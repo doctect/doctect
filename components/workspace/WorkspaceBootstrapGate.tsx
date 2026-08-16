@@ -64,6 +64,11 @@ interface StoreImportState {
   deliveries: Map<string, ImportDelivery>;
 }
 
+interface OpenWorkspaceCapture {
+  store: LocalWorkspaceStore;
+  workspace: WorkspaceSnapshot;
+}
+
 const storeImportStates = new WeakMap<LocalWorkspaceStore, StoreImportState>();
 
 const importStateFor = (store: LocalWorkspaceStore): StoreImportState => {
@@ -195,7 +200,7 @@ export function WorkspaceBootstrapGate({
   const actionRef = useRef(0);
   const consumeAttemptRef = useRef(0);
   const consumingRef = useRef<{ store: LocalWorkspaceStore; attempt: number } | null>(null);
-  const openWorkspaceRef = useRef<WorkspaceSnapshot | null>(null);
+  const openWorkspaceRef = useRef<OpenWorkspaceCapture | null>(null);
   const committedStoreRef = useRef(store);
   const committedStateRef = useRef(state);
 
@@ -215,14 +220,17 @@ export function WorkspaceBootstrapGate({
   const blockedState = (
     resultStore: LocalWorkspaceStore,
     result: WorkspaceBlockingResult,
-  ): GateState => ({
-    kind: 'blocked',
-    store: resultStore,
-    result,
-    ...(openWorkspaceRef.current
-      ? { openWorkspace: structuredClone(openWorkspaceRef.current) }
-      : {}),
-  });
+  ): GateState => {
+    const capture = openWorkspaceRef.current;
+    return {
+      kind: 'blocked',
+      store: resultStore,
+      result,
+      ...(capture?.store === resultStore
+        ? { openWorkspace: structuredClone(capture.workspace) }
+        : {}),
+    };
+  };
 
   const prepareImportQueue = (
     resultStore: LocalWorkspaceStore,
@@ -239,7 +247,10 @@ export function WorkspaceBootstrapGate({
   ) => {
     resetActions();
     if (result.status === 'ready') {
-      openWorkspaceRef.current = structuredClone(result.snapshot);
+      openWorkspaceRef.current = {
+        store: resultStore,
+        workspace: structuredClone(result.snapshot),
+      };
       const importState = prepareImportQueue(resultStore, result.snapshot);
       const warnings = unacknowledgedWarnings(resultStore);
       setState({
@@ -348,7 +359,10 @@ export function WorkspaceBootstrapGate({
       const currentState = committedStateRef.current;
       if (currentState.kind !== 'ready' || currentState.store !== actionStore) return;
       const warnings = unacknowledgedWarnings(actionStore);
-      openWorkspaceRef.current = structuredClone(snapshot);
+      openWorkspaceRef.current = {
+        store: actionStore,
+        workspace: structuredClone(snapshot),
+      };
       setState({
         ...currentState,
         result: { ...currentState.result, snapshot },
@@ -558,8 +572,13 @@ export function WorkspaceBootstrapGate({
     initialWarnings: state.initialWarnings,
     onWorkspaceChange(snapshot) {
       const current = committedStateRef.current;
-      if (current.kind !== 'ready' || current.store !== state.store) return;
-      openWorkspaceRef.current = structuredClone(snapshot);
+      if (current.kind !== 'ready'
+        || current.store !== state.store
+        || state.store !== committedStoreRef.current) return;
+      openWorkspaceRef.current = {
+        store: state.store,
+        workspace: structuredClone(snapshot),
+      };
     },
   });
 }

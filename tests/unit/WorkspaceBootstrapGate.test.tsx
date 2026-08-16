@@ -9,11 +9,14 @@ import {
 } from '../../components/workspace/WorkspaceBootstrapGate';
 import { MigrationReceipt } from '../../components/workspace/MigrationReceipt';
 import { WorkspaceRecoveryScreen } from '../../components/workspace/WorkspaceRecoveryScreen';
+import { useWorkspaceProjectWrites } from '../../hooks/useWorkspaceProjectWrites';
+import { createBlankProject } from '../../services/presets';
 import type {
   LocalWorkspaceStore,
   RecoverySource,
   WorkspaceBootstrapPhase,
   WorkspacePendingImport,
+  WorkspaceProject,
 } from '../../services/localWorkspace/index';
 import {
   deferred,
@@ -68,6 +71,29 @@ const fakeEditorRenderer = ({ initialWorkspace }: WorkspaceEditorMount) => (
   <div data-testid="editor-page">{initialWorkspace.activeProjectId}</div>
 );
 
+function WorkspaceWritesProbe({
+  mount,
+  workingProject,
+}: {
+  mount: WorkspaceEditorMount;
+  workingProject: WorkspaceProject;
+}) {
+  const { updateProject } = useWorkspaceProjectWrites(
+    mount.store,
+    mount.initialWorkspace,
+    mount.onWorkspaceChange,
+  );
+
+  return (
+    <button
+      data-testid="editor-page"
+      onClick={() => { void updateProject(workingProject.id, () => workingProject); }}
+    >
+      Change nested project bytes
+    </button>
+  );
+}
+
 function ReplacementActionProbe({
   store,
   downloadDuringLayout,
@@ -82,6 +108,30 @@ function ReplacementActionProbe({
   }, [downloadDuringLayout, store]);
 
   return <WorkspaceBootstrapGate store={store} renderEditor={fakeEditorRenderer} />;
+}
+
+function ReplacementCaptureProbe({
+  store,
+  retained,
+  publishDuringLayout,
+  workspace,
+}: {
+  store: LocalWorkspaceStore;
+  retained: { publish?: WorkspaceEditorMount['onWorkspaceChange'] };
+  publishDuringLayout: boolean;
+  workspace: ReturnType<typeof workspaceSnapshot>;
+}) {
+  useLayoutEffect(() => {
+    if (publishDuringLayout) retained.publish?.(workspace);
+  }, [publishDuringLayout, retained, store, workspace]);
+
+  return <WorkspaceBootstrapGate
+    store={store}
+    renderEditor={mount => {
+      retained.publish = mount.onWorkspaceChange;
+      return <div data-testid="editor-page">{mount.initialWorkspace.activeProjectId}</div>;
+    }}
+  />;
 }
 
 function SuspendedSibling({
@@ -435,6 +485,49 @@ describe('WorkspaceBootstrapGate', () => {
     expect(replacementStore.bootstrap).toHaveBeenCalledOnce();
   });
 
+  it('rejects a retained open-work callback after committed store replacement', async () => {
+    const firstStore = fakeReadyStore();
+    const replacementBootstrap = deferred<ReturnType<typeof unavailableResult>>();
+    const replacementStore = fakeStore({ bootstrap: replacementBootstrap.promise });
+    const retained: { publish?: WorkspaceEditorMount['onWorkspaceChange'] } = {};
+    const oldWorkspace = workspaceSnapshot({
+      projects: [{ ...workspaceSnapshot().projects[0], name: 'Old store open work' }],
+    });
+    const view = render(<ReplacementCaptureProbe
+      store={firstStore}
+      retained={retained}
+      publishDuringLayout={false}
+      workspace={oldWorkspace}
+    />);
+    expect(await screen.findByTestId('editor-page')).toBeVisible();
+
+    view.rerender(<ReplacementCaptureProbe
+      store={replacementStore}
+      retained={retained}
+      publishDuringLayout
+      workspace={oldWorkspace}
+    />);
+    expect(screen.getByRole('status')).toHaveTextContent('Opening local storage');
+    expect(replacementStore.bootstrap).toHaveBeenCalledOnce();
+
+    await act(async () => replacementBootstrap.resolve(unavailableResult({
+      availableExports: [],
+    })));
+    expect(await screen.findByRole('heading', {
+      name: 'Local project storage is unavailable',
+    })).toBeVisible();
+    const staleDownload = screen.queryByRole('button', { name: 'Download open work' });
+    if (staleDownload) fireEvent.click(staleDownload);
+
+    expect(downloadJson).not.toHaveBeenCalledWith({
+      format: 'doctect.open-workspace-recovery',
+      version: 1,
+      capturedAt: expect.any(String),
+      workspace: oldWorkspace,
+    }, 'doctect-open-workspace.json');
+    expect(staleDownload).not.toBeInTheDocument();
+  });
+
   it('does not let replacement-layout recovery controls invoke the new store', async () => {
     const firstStore = fakeStore({ bootstrap: recoveryResult(splitBrainRecovery()) });
     const replacementBootstrap = deferred<ReturnType<typeof readyResult>>();
@@ -594,6 +687,54 @@ describe('WorkspaceBootstrapGate', () => {
     expect(screen.queryByTestId('editor-page')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Download open work' }));
 
+    expect(downloadJson).toHaveBeenCalledWith({
+      format: 'doctect.open-workspace-recovery',
+      version: 1,
+      capturedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/),
+      workspace: openWorkspace,
+    }, 'doctect-open-workspace.json');
+  });
+
+  it('downloads nested open work published by the real write hook before save settles', async () => {
+    const initialState = createBlankProject();
+    const initialProject = {
+      ...workspaceSnapshot().projects[0],
+      initialState,
+    };
+    const initialWorkspace = workspaceSnapshot({ projects: [initialProject] });
+    const workingProject = {
+      ...initialProject,
+      initialState: {
+        ...initialState,
+        nodes: {
+          ...initialState.nodes,
+          [initialState.rootId]: {
+            ...initialState.nodes[initialState.rootId],
+            title: 'Unsaved nested authority-loss work',
+          },
+        },
+      },
+    };
+    const openWorkspace = { ...initialWorkspace, projects: [workingProject] };
+    const pendingCommit = deferred<ReturnType<typeof workspaceSnapshot>>();
+    const store = fakeStore({
+      bootstrap: readyResult({ snapshot: initialWorkspace }),
+      commit: pendingCommit.promise,
+    });
+    const renderEditor = (mount: WorkspaceEditorMount) => (
+      <WorkspaceWritesProbe mount={mount} workingProject={workingProject} />
+    );
+    render(<WorkspaceBootstrapGate store={store} renderEditor={renderEditor} />);
+
+    fireEvent.click(await screen.findByTestId('editor-page'));
+    expect(store.commit).toHaveBeenCalledWith({
+      type: 'save-project',
+      project: workingProject,
+    });
+    act(() => store.emitAuthorityLost(recoveryResult(splitBrainRecovery())));
+    expect(screen.queryByTestId('editor-page')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Download open work' }));
     expect(downloadJson).toHaveBeenCalledWith({
       format: 'doctect.open-workspace-recovery',
       version: 1,
