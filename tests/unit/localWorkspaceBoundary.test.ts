@@ -4,8 +4,10 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { extname, join, relative, sep } from 'node:path';
 import ts from 'typescript';
@@ -62,13 +64,53 @@ const scriptKinds = new Map<string, ts.ScriptKind>([
 ]);
 const storageMutators = new Set(['setItem', 'removeItem', 'clear']);
 const keyedStorageMethods = new Set(['getItem', 'setItem', 'removeItem']);
+const javascriptMimeEssences = new Set([
+  'application/ecmascript',
+  'application/javascript',
+  'application/x-ecmascript',
+  'application/x-javascript',
+  'text/ecmascript',
+  'text/javascript',
+  'text/javascript1.0',
+  'text/javascript1.1',
+  'text/javascript1.2',
+  'text/javascript1.3',
+  'text/javascript1.4',
+  'text/javascript1.5',
+  'text/jscript',
+  'text/livescript',
+  'text/x-ecmascript',
+  'text/x-javascript',
+]);
 
-const sourceFiles = (directory: string): string[] => readdirSync(directory, {
+interface HtmlNodeLocation {
+  startOffset: number;
+  endOffset: number;
+  startTag?: HtmlNodeLocation;
+  endTag?: HtmlNodeLocation;
+}
+
+interface ParsedHtml {
+  window: { document: Document };
+  nodeLocation(node: Node): HtmlNodeLocation | null;
+}
+
+const { JSDOM } = createRequire(import.meta.url)('jsdom') as {
+  JSDOM: new (source: string, options: { includeNodeLocations: true }) => ParsedHtml;
+};
+
+const sourceFiles = (directory: string, repositoryRoot = directory): string[] => readdirSync(directory, {
   withFileTypes: true,
 }).flatMap(entry => {
   const path = join(directory, entry.name);
+  if (entry.isSymbolicLink()) {
+    const policyPath = relative(repositoryRoot, path).split(sep).join('/');
+    throw new Error(
+      `Workspace boundary refuses symbolic link ${policyPath}; replace it with a regular in-repository entry`,
+    );
+  }
   if (entry.isDirectory()) {
-    return excludedDirectories.has(entry.name) ? [] : sourceFiles(path);
+    return excludedDirectories.has(entry.name) ? [] : sourceFiles(path, repositoryRoot);
   }
   return entry.isFile() && executableExtensions.has(extname(entry.name)) ? [path] : [];
 });
@@ -78,11 +120,19 @@ const repositorySourcePaths = (repositoryRoot = root): string[] =>
     .map(path => relative(repositoryRoot, path).split(sep).join('/'))
     .sort();
 
+interface SourcePositionSegment {
+  generatedStart: number;
+  generatedEnd: number;
+  originalStart: number;
+}
+
 interface SourceInput {
   path: string;
   source: string;
+  compilerPath?: string;
   reportPath?: string;
-  lineOffset?: number;
+  reportSource?: string;
+  positionSegments?: readonly SourcePositionSegment[];
 }
 
 type OriginValue = {
@@ -135,37 +185,111 @@ const unwrap = (input: ts.Expression): ts.Expression => {
   return expression;
 };
 
+const trimAsciiWhitespace = (value: string): string =>
+  value.replace(/^[\t\n\f\r ]+|[\t\n\f\r ]+$/g, '');
+
+const executableScriptType = (script: HTMLScriptElement): 'classic' | 'module' | undefined => {
+  const attribute = script.getAttribute('type');
+  if (attribute === null) return 'classic';
+  const normalized = trimAsciiWhitespace(attribute).toLowerCase();
+  if (normalized === '' || javascriptMimeEssences.has(trimAsciiWhitespace(normalized.split(';', 1)[0]))) {
+    return 'classic';
+  }
+  return normalized === 'module' ? 'module' : undefined;
+};
+
 const executableInputs = (inputs: readonly SourceInput[]): SourceInput[] => inputs.flatMap(input => {
   if (extname(input.path) !== '.html') return [input];
   const scripts: SourceInput[] = [];
-  const pattern = /<script\b([^>]*)>([\s\S]*?)<\/script>/gi;
-  let match: RegExpExecArray | null;
+  const classicScripts: Array<{ index: number; source: string; bodyStart: number }> = [];
+  const document = new JSDOM(input.source, { includeNodeLocations: true });
   let index = 0;
-  while ((match = pattern.exec(input.source)) !== null) {
-    const type = /\btype=["']([^"']+)["']/i.exec(match[1])?.[1]?.toLowerCase();
-    if (type && type !== 'module' && type !== 'text/javascript' && type !== 'application/javascript') {
-      continue;
+  for (const script of document.window.document.querySelectorAll('script')) {
+    const type = executableScriptType(script);
+    if (!type) continue;
+    const location = document.nodeLocation(script);
+    if (!location?.startTag) throw new Error(`Workspace boundary could not locate script in ${input.path}`);
+    const bodyStart = location.startTag.endOffset;
+    const bodyEnd = location.endTag?.startOffset ?? location.endOffset;
+    const source = input.source.slice(bodyStart, bodyEnd);
+    const body = source.trim();
+    const onboardingSlot = input.path === 'onboarding/src/shell.html'
+      && /^<!--SLOT:(?:DATA|DIFF|RUNTIME)-->$/.test(body);
+    if (body.length === 0 || onboardingSlot) continue;
+    if (type === 'classic') {
+      classicScripts.push({ index, source, bodyStart });
+    } else {
+      scripts.push({
+        path: `${input.path}.__inline_${index}.js`,
+        compilerPath: `\0doctect-inline/${input.path}/${index}.js`,
+        reportPath: input.path,
+        reportSource: input.source,
+        positionSegments: [{ generatedStart: 0, generatedEnd: source.length, originalStart: bodyStart }],
+        source,
+      });
     }
-    const body = match[2].trim();
-    // TypeScript rejects Annex B HTML comments that contain no executable statements.
-    if (body.length === 0 || /^<!--[^\r\n]*-->$/.test(body)) continue;
-    const bodyStart = match.index + match[0].indexOf('>') + 1;
-    scripts.push({
-      path: `${input.path}.__inline_${index}.js`,
-      reportPath: input.path,
-      lineOffset: input.source.slice(0, bodyStart).split('\n').length - 1,
-      source: match[2],
-    });
     index += 1;
+  }
+  const firstClassic = classicScripts[0];
+  if (firstClassic) {
+    let source = '';
+    const positionSegments: SourcePositionSegment[] = [];
+    for (const script of classicScripts) {
+      if (source.length > 0) source += '\n;\n';
+      const generatedStart = source.length;
+      source += script.source;
+      positionSegments.push({
+        generatedStart,
+        generatedEnd: source.length,
+        originalStart: script.bodyStart,
+      });
+    }
+    scripts.unshift({
+      path: `${input.path}.__inline_${firstClassic.index}.js`,
+      compilerPath: `\0doctect-inline/${input.path}/classic.js`,
+      reportPath: input.path,
+      reportSource: input.source,
+      positionSegments,
+      source,
+    });
   }
   return scripts;
 });
+
+const originalOffset = (input: SourceInput, generatedOffset: number): number => {
+  if (!input.positionSegments) return generatedOffset;
+  for (const segment of input.positionSegments) {
+    if (generatedOffset < segment.generatedStart) return segment.originalStart;
+    if (generatedOffset <= segment.generatedEnd) {
+      return segment.originalStart + generatedOffset - segment.generatedStart;
+    }
+  }
+  const last = input.positionSegments.at(-1)!;
+  return last.originalStart + last.generatedEnd - last.generatedStart;
+};
+
+const sourceLine = (source: string, offset: number): number => {
+  let line = 1;
+  for (let index = 0; index < offset && index < source.length; index += 1) {
+    const character = source.charCodeAt(index);
+    if (character === 13) {
+      line += 1;
+      if (source.charCodeAt(index + 1) === 10 && index + 1 < offset) index += 1;
+    } else if (character === 10 || character === 0x2028 || character === 0x2029) {
+      line += 1;
+    }
+  }
+  return line;
+};
+
+const reportLine = (input: SourceInput, generatedOffset: number): number =>
+  sourceLine(input.reportSource ?? input.source, originalOffset(input, generatedOffset));
 
 const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> => {
   const results = new Map(inputs.map(input => [input.path, [] as string[]]));
   for (const input of inputs) {
     if (allowed.has(input.path)) continue;
-    for (const [index, line] of input.source.split('\n').entries()) {
+    for (const [index, line] of input.source.split(/\r\n|[\r\n\u2028\u2029]/).entries()) {
       for (const key of legacyKeys) {
         if (line.includes(key)) {
           results.get(input.path)!.push(
@@ -193,7 +317,10 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
     target: ts.ScriptTarget.Latest,
     types: [],
   };
-  const scriptsByFile = new Map(scripts.map(input => [join(root, input.path), input]));
+  const scriptsByFile = new Map(scripts.map(input => [
+    input.compilerPath ?? join(root, input.path),
+    input,
+  ]));
   const host: ts.CompilerHost = {
     fileExists: fileName => scriptsByFile.has(fileName),
     getCanonicalFileName: fileName => fileName,
@@ -603,24 +730,21 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
     const sourceFile = program.getSourceFile(fileName);
     if (!sourceFile) continue;
     const policyPath = input.reportPath ?? input.path;
-    const lineOffset = input.lineOffset ?? 0;
     const violations = results.get(policyPath)!;
     const importsAllowed = policyPath.startsWith('services/localWorkspace/')
       || policyPath === 'tests/helpers/localWorkspaceFixtures.ts';
     const localWorkspaceSource = policyPath.startsWith('services/localWorkspace/');
     const productionSource = !policyPath.startsWith('tests/');
     const report = (node: ts.Node, message: string): void => {
-      const position = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
-      violations.push(`${policyPath}:${position.line + lineOffset + 1}: ${message}`);
+      violations.push(`${policyPath}:${reportLine(input, node.getStart(sourceFile))}: ${message}`);
     };
     const parseDiagnostics = (sourceFile as ts.SourceFile & {
       parseDiagnostics: readonly ts.Diagnostic[];
     }).parseDiagnostics;
     for (const diagnostic of parseDiagnostics) {
-      const position = sourceFile.getLineAndCharacterOfPosition(diagnostic.start ?? 0);
       const message = ts.flattenDiagnosticMessageText(diagnostic.messageText, ' ');
       violations.push(
-        `${policyPath}:${position.line + lineOffset + 1}: could not be parsed: ${message}`,
+        `${policyPath}:${reportLine(input, diagnostic.start ?? 0)}: could not be parsed: ${message}`,
       );
     }
 
@@ -928,6 +1052,182 @@ describe('local workspace static boundary', () => {
       .toEqual([]);
     expect(analyzeSource('shell.html', '<script>const broken = ;</script>'))
       .toEqual(expect.arrayContaining([expect.stringContaining('could not be parsed')]));
+  });
+
+  it.each([
+    [
+      'end-tag whitespace',
+      '<script>const key = \'hype_\' + \'projects\'; localStorage.getItem(key);</script >',
+    ],
+    [
+      'an entity-decoded MIME type',
+      '<script type="text&#x2F;javascript">const key = \'hype_\' + \'projects\'; localStorage.getItem(key);</script>',
+    ],
+    [
+      'a JavaScript MIME alias',
+      '<script type="text/ecmascript">const key = \'hype_\' + \'projects\'; localStorage.getItem(key);</script>',
+    ],
+    [
+      'ASCII whitespace around the type',
+      '<script type=" \ttext/javascript\r\n">const key = \'hype_\' + \'projects\'; localStorage.getItem(key);</script>',
+    ],
+    [
+      'MIME parameters',
+      '<script type="application/javascript; charset=utf-8">const key = \'hype_\' + \'projects\'; localStorage.getItem(key);</script>',
+    ],
+  ])('browser HTML parsing analyzes %s', (_case, source) => {
+    expect(analyzeSource('browser-shell.html', source)).toEqual(expect.arrayContaining([
+      expect.stringContaining('accesses legacy document key'),
+    ]));
+  });
+
+  it.each([
+    ['quoted', '<script type="importmap">{"imports":{"x":"/x.js"}}</script>'],
+    ['unquoted', '<script type=importmap>{"imports":{"x":"/x.js"}}</script>'],
+    ['spaced unquoted', '<script type = importmap>{"imports":{"x":"/x.js"}}</script>'],
+  ])('browser HTML parsing skips %s import maps', (_case, source) => {
+    expect(analyzeSource('import-map.html', source)).toEqual([]);
+  });
+
+  it.each([
+    ['U+2028', '\u2028'],
+    ['U+2029', '\u2029'],
+  ])('Annex B Unicode separator %s does not hide executable access', (_case, separator) => {
+    const source = `<script><!--${separator}const key = 'hype_' + 'projects'; localStorage.getItem(key);//--></script>`;
+    expect(analyzeSource('unicode-shell.html', source)).toEqual(expect.arrayContaining([
+      expect.stringContaining('unicode-shell.html:2: accesses legacy document key'),
+    ]));
+  });
+
+  it.each([
+    [
+      'key',
+      '<script>const key = \'hype_\' + \'projects\';</script><script>localStorage.getItem(key);</script>',
+    ],
+    [
+      'storage',
+      '<script>const storage = localStorage;</script><script>storage.getItem(\'hype_\' + \'projects\');</script>',
+    ],
+    [
+      'callable',
+      '<script>const read = localStorage.getItem.bind(localStorage);</script><script>read(\'hype_\' + \'projects\');</script>',
+    ],
+  ])('classic script shared scope resolves a cross-script %s alias', (_case, source) => {
+    expect(analyzeSource('classic-shell.html', source)).toEqual(expect.arrayContaining([
+      expect.stringContaining('accesses legacy document key'),
+    ]));
+  });
+
+  it('classic script shared scope does not join module scripts', () => {
+    const source = '<script type="module">const key = \'hype_\' + \'projects\';</script>'
+      + '<script type="module">localStorage.getItem(key);</script>';
+    expect(analyzeSource('module-shell.html', source)).toEqual([]);
+  });
+
+  it('compiler identity collision cannot replace an inline script with a real file', () => {
+    const html = '<script>const key = \'hype_\' + \'projects\'; localStorage.getItem(key);</script>';
+    const violations = analyzeSources([
+      { path: 'collision.html', source: html },
+      { path: 'collision.html.__inline_0.js', source: 'export const ready = true;' },
+    ]);
+    expect(violations.get('collision.html')).toEqual(expect.arrayContaining([
+      expect.stringContaining('accesses legacy document key'),
+    ]));
+  });
+
+  it('symbolic link discovery rejects executable file links', () => {
+    const temporaryRoot = mkdtempSync(join(tmpdir(), 'workspace-policy-'));
+    try {
+      mkdirSync(join(temporaryRoot, 'future'));
+      writeFileSync(join(temporaryRoot, 'target.ts'), 'export const ready = true;');
+      symlinkSync(join(temporaryRoot, 'target.ts'), join(temporaryRoot, 'future', 'entry.ts'));
+      expect(() => repositorySourcePaths(temporaryRoot)).toThrow(/symbolic link.*future\/entry\.ts/i);
+    } finally {
+      rmSync(temporaryRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('symbolic link discovery rejects directory links', () => {
+    const temporaryRoot = mkdtempSync(join(tmpdir(), 'workspace-policy-'));
+    try {
+      mkdirSync(join(temporaryRoot, 'actual'));
+      writeFileSync(join(temporaryRoot, 'actual', 'entry.ts'), 'export const ready = true;');
+      symlinkSync(join(temporaryRoot, 'actual'), join(temporaryRoot, 'future'));
+      expect(() => repositorySourcePaths(temporaryRoot)).toThrow(/symbolic link.*future/i);
+    } finally {
+      rmSync(temporaryRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('symbolic link discovery rejects links into excluded directories', () => {
+    const temporaryRoot = mkdtempSync(join(tmpdir(), 'workspace-policy-'));
+    try {
+      mkdirSync(join(temporaryRoot, 'docs'));
+      writeFileSync(join(temporaryRoot, 'docs', 'entry.ts'), 'export const ready = true;');
+      mkdirSync(join(temporaryRoot, 'future'));
+      symlinkSync(join(temporaryRoot, 'docs', 'entry.ts'), join(temporaryRoot, 'future', 'entry.ts'));
+      expect(() => repositorySourcePaths(temporaryRoot)).toThrow(/symbolic link.*future\/entry\.ts/i);
+    } finally {
+      rmSync(temporaryRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('symbolic link discovery rejects links outside the repository root', () => {
+    const temporaryRoot = mkdtempSync(join(tmpdir(), 'workspace-policy-'));
+    const externalRoot = mkdtempSync(join(tmpdir(), 'workspace-policy-external-'));
+    try {
+      writeFileSync(join(externalRoot, 'entry.ts'), 'export const ready = true;');
+      mkdirSync(join(temporaryRoot, 'future'));
+      symlinkSync(join(externalRoot, 'entry.ts'), join(temporaryRoot, 'future', 'entry.ts'));
+      expect(() => repositorySourcePaths(temporaryRoot)).toThrow(/symbolic link.*future\/entry\.ts/i);
+    } finally {
+      rmSync(temporaryRoot, { recursive: true, force: true });
+      rmSync(externalRoot, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['CRLF', '\r\n'],
+    ['CR', '\r'],
+  ])('HTML source locations preserve %s lines across classic scripts', (_case, newline) => {
+    const source = [
+      '<script>const key = \'hype_\' + \'projects\';</script>',
+      '<div></div>',
+      '<script>',
+      'localStorage.getItem(key);',
+      '</script>',
+    ].join(newline);
+    expect(analyzeSource('line-shell.html', source)).toEqual(expect.arrayContaining([
+      expect.stringContaining('line-shell.html:4: accesses legacy document key'),
+    ]));
+  });
+
+  it('HTML source locations preserve CR-only parse diagnostic lines', () => {
+    const source = ['<div></div>', '<script>', 'const broken = ;', '</script>'].join('\r');
+    expect(analyzeSource('broken-shell.html', source)).toEqual(expect.arrayContaining([
+      expect.stringContaining('broken-shell.html:3: could not be parsed'),
+    ]));
+  });
+
+  it('HTML source locations use the parsed end of a tag containing quoted >', () => {
+    const source = [
+      '<script data-marker=">">',
+      "const key = 'hype_' + 'projects';",
+      'localStorage.getItem(key);',
+      '</script>',
+    ].join('\n');
+    expect(analyzeSource('quoted-marker.html', source)).toEqual([
+      expect.stringContaining('quoted-marker.html:3: accesses legacy document key'),
+    ]);
+  });
+
+  it('exact onboarding SLOT placeholders remain non-executable', () => {
+    const source = [
+      '<script><!--SLOT:DATA--></script>',
+      '<script><!--SLOT:DIFF--></script>',
+      '<script><!--SLOT:RUNTIME--></script>',
+    ].join('\n');
+    expect(analyzeSource('onboarding/src/shell.html', source)).toEqual([]);
   });
 
   it.each([
