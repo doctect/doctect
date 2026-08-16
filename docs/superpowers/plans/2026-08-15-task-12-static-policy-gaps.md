@@ -43,7 +43,7 @@ is rejected; nested shadow symbols do not overwrite outer symbols; `localStorage
 
 - [ ] **Step 2: Add reconstructed-key tests**
 
-Cover `getItem`, `setItem`, and `removeItem` using concatenation, templates, constants, computed members, destructured methods, `.bind`, `.call`, and `.apply`. Ensure at least one preference call for each invocation family remains allowed.
+Cover `getItem`, `setItem`, and `removeItem` using concatenation, templates, constants, computed members, destructured methods, `.bind`, `.call`, and `.apply`. Cover keys supplied directly to `.bind()` and bound functions later invoked directly, through aliases, through nested binds, with `.call`, and with `.apply`. Ensure pre-bound preference keys remain allowed even when later invocation arguments reconstruct legacy keys.
 
 - [ ] **Step 3: Add module-extension tests**
 
@@ -91,14 +91,24 @@ Implement symbol-and-position cycle guards. Resolving an identifier unions every
 Return all possible callable members, including invocation mode:
 
 ```ts
+interface PositionedExpression {
+  expression: ts.Expression;
+  position: number;
+}
+interface CallableMember {
+  method: string;
+  localStorage: boolean;
+  boundArguments: PositionedExpression[];
+}
 interface InvokedMember {
   method: string;
   localStorage: boolean;
+  boundArguments: PositionedExpression[];
   invocation: 'direct' | 'call' | 'apply';
 }
 ```
 
-For direct calls inspect argument zero; for `.call` inspect argument one; for `.apply` inspect element zero of every statically resolved argument-array origin. Outside the exact allowlist, report `accesses legacy document key through localStorage` when any static candidate matches a legacy key.
+Each `.bind(thisArg, ...args)` appends positioned `args` to the callable candidate after arguments from any earlier bind. Build effective arguments as all bound arguments followed by direct arguments, `.call` arguments after its explicit `thisArg`, or statically expanded `.apply` arguments. Inspect effective argument zero. If a bound argument occupies that position but is unresolved, do not fall through to later invocation arguments. Outside the exact allowlist, report `accesses legacy document key through localStorage` when any static candidate matches a legacy key.
 
 - [ ] **Step 5: Run GREEN**
 
@@ -111,6 +121,57 @@ Expected: repository scan and all adversarial cases pass.
 ```bash
 git add tests/unit/localWorkspaceBoundary.test.ts docs/superpowers/plans/2026-08-15-task-12-static-policy-gaps.md
 git commit -m "test(storage): close static policy gaps"
+```
+
+---
+
+### Task 2A: Bound Callable Arguments
+
+**Files:**
+- Modify: `tests/unit/localWorkspaceBoundary.test.ts`
+- Modify: `docs/superpowers/plans/2026-08-15-task-12-static-policy-gaps.md`
+
+**Interfaces:**
+- Extends: `CallableMember` and `InvokedMember` with `boundArguments: PositionedExpression[]`.
+- Produces: effective key selection matching JavaScript bind/direct/call/apply argument order.
+
+- [ ] **Step 1: Add bound-key adversarial tests**
+
+Add rejecting cases equivalent to:
+
+```ts
+const key = 'hype_' + 'projects';
+const read = localStorage.getItem.bind(localStorage, key);
+const alias = read;
+alias.call(null, 'doctect_last_fontSize');
+alias.apply(null, ['gallery-explainer-dismissed']);
+```
+
+Add `setItem` and `removeItem` coverage, nested binds, and allowed cases where a pre-bound preference key precedes a later reconstructed legacy argument.
+
+- [ ] **Step 2: Run RED**
+
+Run: `npm run check:workspace-boundary`
+
+Expected: pre-bound legacy cases are missed and pre-bound preference cases are falsely rejected because bound arguments are discarded.
+
+- [ ] **Step 3: Carry bound arguments**
+
+Initialize direct and destructured callable candidates with `boundArguments: []`. When resolving `.bind()`, preserve existing arguments and append `expression.arguments.slice(1)` with `position: expression.end`. Aliases and reassignment origins return complete candidates unchanged.
+
+- [ ] **Step 4: Select effective key**
+
+If `boundArguments` is non-empty, evaluate only its first expression at its saved position. Otherwise retain direct, `.call`, and `.apply` key extraction. This prevents an unresolved bound key from incorrectly falling through to invocation arguments.
+
+- [ ] **Step 5: Run GREEN and commit**
+
+Run: `npm run check:workspace-boundary`
+
+Expected: all repository and adversarial cases pass.
+
+```bash
+git add tests/unit/localWorkspaceBoundary.test.ts docs/superpowers/plans/2026-08-15-task-12-static-policy-gaps.md
+git commit -m "test(storage): track bound policy arguments"
 ```
 
 ---

@@ -91,9 +91,15 @@ interface MemberCandidate {
   name: string;
 }
 
+interface PositionedExpression {
+  expression: ts.Expression;
+  position: number;
+}
+
 interface CallableMember {
   method: string;
   localStorage: boolean;
+  boundArguments: PositionedExpression[];
 }
 
 interface InvokedMember extends CallableMember {
@@ -443,17 +449,27 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
         return [...propertyNames(memberOrigin.propertyName, origin.position, nextTrail)].map(method => ({
           method,
           localStorage: isLocalStorage(memberOrigin.receiver, origin.position, nextTrail),
+          boundArguments: [],
         }));
       });
     }
     if (ts.isCallExpression(expression)) {
       const bound = memberCandidates(expression.expression, atPosition, trail)
         .filter(member => member.name === 'bind');
-      return bound.flatMap(member => callableMembers(member.receiver, atPosition, trail));
+      const boundArguments = expression.arguments.slice(1).map(argument => ({
+        expression: argument,
+        position: expression.end,
+      }));
+      return bound.flatMap(member => callableMembers(member.receiver, atPosition, trail)
+        .map(callable => ({
+          ...callable,
+          boundArguments: [...callable.boundArguments, ...boundArguments],
+        })));
     }
     return memberCandidates(expression, atPosition, trail).map(member => ({
       method: member.name,
       localStorage: isLocalStorage(member.receiver, atPosition, trail),
+      boundArguments: [],
     }));
   };
 
@@ -522,6 +538,8 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
   };
 
   const keyCandidates = (call: ts.CallExpression, invoked: InvokedMember): Set<string> => {
+    const boundKey = invoked.boundArguments[0];
+    if (boundKey) return staticStrings(boundKey.expression, boundKey.position);
     if (invoked.invocation === 'apply') {
       const argumentArray = call.arguments[1];
       if (!argumentArray) return new Set();
@@ -779,6 +797,54 @@ describe('local workspace static boundary', () => {
     expect(analyzeSource(path, source)).toEqual(expect.arrayContaining([
       expect.stringContaining('accesses legacy document key through localStorage'),
     ]));
+  });
+
+  it.each([
+    [
+      'components/PreboundLegacyRead.ts',
+      "const key = 'hype_' + 'projects'; const read = localStorage.getItem.bind(localStorage, key); read();",
+    ],
+    [
+      'components/AliasedPreboundLegacyWrite.ts',
+      "const key = `hype_${'active'}_project`; const write = localStorage.setItem.bind(localStorage, key); const alias = write; alias('value');",
+    ],
+    [
+      'components/CalledPreboundLegacyRemove.ts',
+      "const remove = localStorage.removeItem.bind(localStorage, 'hype_' + 'custom_' + 'presets'); remove.call(null, 'doctect_last_fontSize');",
+    ],
+    [
+      'components/AppliedPreboundLegacyRead.ts',
+      "const read = localStorage.getItem.bind(localStorage, `hype_${'import'}_pending`); read.apply(null, ['gallery-explainer-dismissed']);",
+    ],
+    [
+      'components/NestedPreboundLegacyRead.ts',
+      "const read = localStorage.getItem.bind(localStorage).bind(null, 'hype_' + 'projects'); read();",
+    ],
+  ])('rejects reconstructed legacy keys carried by bound callables in %s', (path, source) => {
+    expect(analyzeSource(path, source)).toEqual(expect.arrayContaining([
+      expect.stringContaining('accesses legacy document key through localStorage'),
+    ]));
+  });
+
+  it.each([
+    [
+      'components/PreboundPreferenceRead.ts',
+      "const read = localStorage.getItem.bind(localStorage, 'doctect_last_fontSize'); read('hype_' + 'projects');",
+    ],
+    [
+      'components/CalledPreboundPreferenceWrite.ts',
+      "const write = localStorage.setItem.bind(localStorage, 'doctect_last_fontStyle'); write.call(null, 'hype_' + 'projects');",
+    ],
+    [
+      'components/AppliedPreboundPreferenceRemove.ts',
+      "const remove = localStorage.removeItem.bind(localStorage, 'gallery-explainer-dismissed'); remove.apply(null, ['hype_' + 'projects']);",
+    ],
+    [
+      'components/UnresolvedPreboundRead.ts',
+      "const read = localStorage.getItem.bind(localStorage, suppliedKey); read('hype_' + 'projects');",
+    ],
+  ])('keeps the first pre-bound key authoritative in %s', (path, source) => {
+    expect(analyzeSource(path, source)).toEqual([]);
   });
 
   it.each([
