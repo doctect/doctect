@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import {
   type Dirent,
   mkdirSync,
@@ -97,9 +98,13 @@ interface ParsedHtml {
   nodeLocation(node: Node): HtmlNodeLocation | null;
 }
 
-const { JSDOM } = createRequire(import.meta.url)('jsdom') as {
+const nodeRequire = createRequire(import.meta.url);
+const { JSDOM } = nodeRequire('jsdom') as {
   JSDOM: new (source: string, options: { includeNodeLocations: true }) => ParsedHtml;
 };
+const DirectSourceTextModule = (nodeRequire('node:vm') as {
+  SourceTextModule?: new (source: string, options: { identifier: string }) => object;
+}).SourceTextModule;
 
 const workflowRunsOnEveryPullRequest = (workflow: string): boolean => {
   const jobsStart = workflow.search(/^jobs:/m);
@@ -149,6 +154,7 @@ interface SourcePositionSegment {
 interface AnnexBFunctionEnvironment {
   assignments: ReadonlyMap<string, readonly number[]>;
   end: number;
+  functionStart: number;
   names: ReadonlySet<string>;
   start: number;
 }
@@ -183,6 +189,7 @@ type OriginValue = {
 };
 
 interface Origin {
+  bindingEnvironmentStart?: number;
   position: number;
   value: OriginValue;
 }
@@ -207,7 +214,7 @@ interface InvokedMember extends CallableMember {
   invocation: 'direct' | 'call' | 'apply';
 }
 
-type ResolutionTrail = Map<ts.Symbol, Set<number>>;
+type ResolutionTrail = Map<string | ts.Symbol, Set<number>>;
 
 const unwrap = (input: ts.Expression): ts.Expression => {
   let expression = input;
@@ -258,6 +265,102 @@ const classicScriptParseFailure = (source: string): SourceInput['parseFailure'] 
   }
 };
 
+const moduleParseFailureCache = new Map<string, SourceInput['parseFailure']>();
+const moduleParserProgram = `
+const { SourceTextModule } = require('node:vm');
+let input = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', chunk => { input += chunk; });
+process.stdin.on('end', () => {
+  const sources = JSON.parse(input);
+  const results = sources.map((source, index) => {
+    try {
+      new SourceTextModule(source, { identifier: 'doctect-inline-module-' + index + '.js' });
+      return null;
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
+  });
+  process.stdout.write(JSON.stringify(results));
+});
+`;
+
+const locateModuleParseFailure = (source: string, fallbackMessage: string): SourceInput['parseFailure'] => {
+  const result = spawnSync(process.execPath, ['--input-type=module', '--check'], {
+    encoding: 'utf8',
+    input: source,
+    maxBuffer: 2 * 1024 * 1024,
+    timeout: 5_000,
+  });
+  if (result.error) throw result.error;
+  const stderr = result.stderr;
+  const lines = stderr.split('\n');
+  const headerIndex = lines.findIndex(line => /^\[stdin\]:\d+$/.test(line));
+  const line = Number(lines[headerIndex]?.match(/:(\d+)$/)?.[1] ?? 1);
+  const column = headerIndex === -1 ? 0 : Math.max(lines[headerIndex + 2]?.indexOf('^') ?? 0, 0);
+  const message = stderr.match(/^SyntaxError: (.+)$/m)?.[1] ?? fallbackMessage;
+  return { message, offset: generatedOffset(source, line, column) };
+};
+
+const cacheModuleParseFailure = (source: string, failure: SourceInput['parseFailure']): void => {
+  if (moduleParseFailureCache.size >= 512) {
+    const oldest = moduleParseFailureCache.keys().next().value as string | undefined;
+    if (oldest !== undefined) moduleParseFailureCache.delete(oldest);
+  }
+  moduleParseFailureCache.set(source, failure);
+};
+
+const moduleParseFailures = (sources: readonly string[]): Map<string, SourceInput['parseFailure']> => {
+  const failures = new Map<string, SourceInput['parseFailure']>();
+  for (const source of sources) {
+    if (moduleParseFailureCache.has(source)) {
+      failures.set(source, moduleParseFailureCache.get(source));
+    }
+  }
+  const pending = [...new Set(sources)].filter(source => !moduleParseFailureCache.has(source));
+  for (let start = 0; start < pending.length; start += 64) {
+    const batch = pending.slice(start, start + 64);
+    const messages = DirectSourceTextModule
+      ? batch.map((source, index) => {
+        try {
+          new DirectSourceTextModule(source, { identifier: `doctect-inline-module-${index}.js` });
+          return null;
+        } catch (error) {
+          return error instanceof Error ? error.message : String(error);
+        }
+      })
+      : (() => {
+        const result = spawnSync(
+          process.execPath,
+          ['--no-warnings', '--experimental-vm-modules', '-e', moduleParserProgram],
+          {
+            encoding: 'utf8',
+            input: JSON.stringify(batch),
+            maxBuffer: 2 * 1024 * 1024,
+            timeout: 5_000,
+          },
+        );
+        if (result.error) throw result.error;
+        if (result.status !== 0) {
+          throw new Error(`Workspace boundary module parser failed: ${result.stderr.trim()}`);
+        }
+        return JSON.parse(result.stdout) as Array<string | null>;
+      })();
+    if (messages.length !== batch.length) {
+      throw new Error('Workspace boundary module parser returned an invalid result count');
+    }
+    for (const [index, source] of batch.entries()) {
+      const message = messages[index];
+      cacheModuleParseFailure(
+        source,
+        message === null ? undefined : locateModuleParseFailure(source, message),
+      );
+      failures.set(source, moduleParseFailureCache.get(source));
+    }
+  }
+  return failures;
+};
+
 interface ClassicGlobalDeclarations {
   annexBFunctionEnvironments: AnnexBFunctionEnvironment[];
   annexBFunctions: Array<{ assignmentPosition?: number; name: string; position: number }>;
@@ -276,109 +379,6 @@ const bindingIdentifiers = (binding: ts.BindingName): ts.Identifier[] => {
 
 const addBindingNames = (names: Set<string>, binding: ts.BindingName): void => {
   for (const identifier of bindingIdentifiers(binding)) names.add(identifier.text);
-};
-
-const moduleBindingParseFailure = (sourceFile: ts.SourceFile): SourceInput['parseFailure'] => {
-  const lexicalBindings: ts.Identifier[] = [];
-  const varBindings: ts.Identifier[] = [];
-  const exportedNames: Array<{ name: string; position: number }> = [];
-  const addDeclarationBindings = (statement: ts.Statement): void => {
-    if (ts.isVariableStatement(statement)) {
-      if ((statement.declarationList.flags & ts.NodeFlags.BlockScoped) !== 0) {
-        for (const declaration of statement.declarationList.declarations) {
-          lexicalBindings.push(...bindingIdentifiers(declaration.name));
-        }
-      }
-    } else if ((ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement))
-      && statement.name) {
-      lexicalBindings.push(statement.name);
-    } else if (ts.isImportDeclaration(statement) && statement.importClause) {
-      if (statement.importClause.name) lexicalBindings.push(statement.importClause.name);
-      const bindings = statement.importClause.namedBindings;
-      if (bindings && ts.isNamespaceImport(bindings)) lexicalBindings.push(bindings.name);
-      else if (bindings && ts.isNamedImports(bindings)) {
-        for (const element of bindings.elements) lexicalBindings.push(element.name);
-      }
-    }
-  };
-  const collectVarBindings = (node: ts.Node): void => {
-    if (node !== sourceFile && (
-      ts.isFunctionLike(node)
-      || ts.isClassDeclaration(node)
-      || ts.isClassExpression(node)
-    )) return;
-    if (ts.isVariableDeclarationList(node)
-      && (node.flags & ts.NodeFlags.BlockScoped) === 0) {
-      for (const declaration of node.declarations) {
-        varBindings.push(...bindingIdentifiers(declaration.name));
-      }
-    }
-    ts.forEachChild(node, collectVarBindings);
-  };
-  for (const statement of sourceFile.statements) {
-    addDeclarationBindings(statement);
-    collectVarBindings(statement);
-    const modifiers = ts.canHaveModifiers(statement) ? ts.getModifiers(statement) : undefined;
-    const exported = modifiers?.some(modifier => modifier.kind === ts.SyntaxKind.ExportKeyword) ?? false;
-    const defaultExport = modifiers?.some(modifier => modifier.kind === ts.SyntaxKind.DefaultKeyword) ?? false;
-    if (ts.isExportAssignment(statement) || (exported && defaultExport)) {
-      exportedNames.push({ name: 'default', position: statement.getStart(sourceFile) });
-    } else if (ts.isExportDeclaration(statement) && statement.exportClause) {
-      if (ts.isNamespaceExport(statement.exportClause)) {
-        exportedNames.push({
-          name: statement.exportClause.name.text,
-          position: statement.exportClause.name.getStart(sourceFile),
-        });
-      } else {
-        for (const element of statement.exportClause.elements) {
-          exportedNames.push({ name: element.name.text, position: element.name.getStart(sourceFile) });
-        }
-      }
-    } else if (exported) {
-      if (ts.isVariableStatement(statement)) {
-        for (const declaration of statement.declarationList.declarations) {
-          for (const identifier of bindingIdentifiers(declaration.name)) {
-            exportedNames.push({ name: identifier.text, position: identifier.getStart(sourceFile) });
-          }
-        }
-      } else if ((ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement))
-        && statement.name) {
-        exportedNames.push({ name: statement.name.text, position: statement.name.getStart(sourceFile) });
-      }
-    }
-  }
-  const bindingKinds = new Map<string, 'lexical' | 'var'>();
-  const bindingFailure = [
-    ...lexicalBindings.map(identifier => ({ identifier, kind: 'lexical' as const })),
-    ...varBindings.map(identifier => ({ identifier, kind: 'var' as const })),
-  ].sort((left, right) => left.identifier.getStart(sourceFile) - right.identifier.getStart(sourceFile))
-    .map(({ identifier, kind }) => {
-      const priorKind = bindingKinds.get(identifier.text);
-      if (!priorKind || (kind === 'var' && priorKind === 'var')) {
-        if (!priorKind) bindingKinds.set(identifier.text, kind);
-        return undefined;
-      }
-      return {
-        message: `Duplicate module binding '${identifier.text}'`,
-        offset: identifier.getStart(sourceFile),
-      };
-    }).find((failure): failure is NonNullable<typeof failure> => failure !== undefined);
-  const seenExports = new Set<string>();
-  const exportFailure = exportedNames
-    .sort((left, right) => left.position - right.position)
-    .map(exported => {
-      if (!seenExports.has(exported.name)) {
-        seenExports.add(exported.name);
-        return undefined;
-      }
-      return {
-        message: `Duplicate module export '${exported.name}'`,
-        offset: exported.position,
-      };
-    }).find((failure): failure is NonNullable<typeof failure> => failure !== undefined);
-  if (!bindingFailure) return exportFailure;
-  if (!exportFailure || bindingFailure.offset < exportFailure.offset) return bindingFailure;
-  return exportFailure;
 };
 
 const classicGlobalDeclarations = (source: string): ClassicGlobalDeclarations => {
@@ -745,6 +745,7 @@ const classicGlobalDeclarations = (source: string): ClassicGlobalDeclarations =>
       annexBFunctionEnvironments.push({
         assignments,
         end: body.end,
+        functionStart: declaration.getStart(sourceFile),
         names,
         start: body.getStart(sourceFile),
       });
@@ -1072,6 +1073,7 @@ const executableInputs = (inputs: readonly SourceInput[]): SourceInput[] => inpu
             positions.map(position => generatedStart + position),
           ])),
           end: generatedStart + environment.end,
+          functionStart: generatedStart + environment.functionStart,
           names: environment.names,
           start: generatedStart + environment.start,
         });
@@ -1217,6 +1219,9 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
   }
   const scripts = executable.filter(input => !input.parseFailure);
   if (scripts.length === 0) return results;
+  const authoredModuleFailures = moduleParseFailures(scripts.flatMap(input => (
+    input.authoredScripts ?? [input]
+  )).filter(input => input.moduleGoal).map(input => input.source));
 
   const compilerOptions: ts.CompilerOptions = {
     allowJs: true,
@@ -1329,14 +1334,80 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
     ))) return symbol;
     return moduleLocalSymbols.get(fileName)?.get(identifier.text) ?? symbol;
   };
+  const enclosingFunctionBodyStart = (node: ts.Node): number | undefined => {
+    for (let ancestor: ts.Node | undefined = node.parent; ancestor; ancestor = ancestor.parent) {
+      const body = (ts.isFunctionDeclaration(ancestor)
+        || ts.isMethodDeclaration(ancestor)
+        || ts.isGetAccessorDeclaration(ancestor)
+        || ts.isSetAccessorDeclaration(ancestor)
+        || ts.isConstructorDeclaration(ancestor)
+        || ts.isFunctionExpression(ancestor)
+        || ts.isArrowFunction(ancestor))
+        ? ancestor.body
+        : undefined;
+      if (body && ts.isBlock(body)) {
+        return body.getStart(ancestor.getSourceFile());
+      }
+    }
+    return undefined;
+  };
+  const annexBEnvironmentAt = (
+    input: SourceInput | undefined,
+    position: number,
+    name: string,
+  ): AnnexBFunctionEnvironment | undefined => input?.annexBFunctionEnvironments
+    ?.filter(environment => (
+      environment.start <= position
+      && position < environment.end
+      && environment.names.has(name)
+    ))
+    .sort((left, right) => right.start - left.start || left.end - right.end)[0];
+  const syntheticBindingEnvironment = (
+    identifier: ts.Identifier,
+    symbol: ts.Symbol | undefined,
+    includeOwnParameters: boolean,
+  ): AnnexBFunctionEnvironment | undefined => {
+    const sourceFile = identifier.getSourceFile();
+    const input = scriptsByFile.get(sourceFile.fileName);
+    const functionBodyStart = enclosingFunctionBodyStart(identifier);
+    if (includeOwnParameters && functionBodyStart !== undefined) {
+      const ownEnvironment = input?.annexBFunctionEnvironments?.find(environment => (
+        environment.start === functionBodyStart && environment.names.has(identifier.text)
+      ));
+      if (ownEnvironment) return ownEnvironment;
+    }
+    const environment = annexBEnvironmentAt(input, identifier.getStart(sourceFile), identifier.text);
+    if (!environment) return undefined;
+    const locallyDeclared = functionBodyStart !== undefined
+      && functionBodyStart !== environment.start
+      && symbol?.declarations?.some(declaration => (
+        enclosingFunctionBodyStart(declaration) === functionBodyStart
+      ));
+    return locallyDeclared ? undefined : environment;
+  };
   const origins = new Map<ts.Symbol, Origin[]>();
+  const namedOrigins = new Map<string, Origin[]>();
+  const namedOriginKey = (identifier: ts.Identifier): string => (
+    `${identifier.getSourceFile().fileName}\0${identifier.text}`
+  );
 
-  const addOrigin = (identifier: ts.Identifier, origin: Origin): void => {
+  const addOrigin = (
+    identifier: ts.Identifier,
+    origin: Omit<Origin, 'bindingEnvironmentStart'>,
+  ): void => {
     const symbol = checker.getSymbolAtLocation(identifier);
-    if (!symbol) return;
-    const existing = origins.get(symbol);
-    if (existing) existing.push(origin);
-    else origins.set(symbol, [origin]);
+    const storedOrigin: Origin = {
+      ...origin,
+      bindingEnvironmentStart: syntheticBindingEnvironment(identifier, symbol, true)?.start,
+    };
+    const named = namedOrigins.get(namedOriginKey(identifier));
+    if (named) named.push(storedOrigin);
+    else namedOrigins.set(namedOriginKey(identifier), [storedOrigin]);
+    if (symbol) {
+      const existing = origins.get(symbol);
+      if (existing) existing.push(storedOrigin);
+      else origins.set(symbol, [storedOrigin]);
+    }
   };
 
   const addBindingOrigins = (
@@ -1472,11 +1543,7 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
     if (!names.has(identifier.text)) return false;
     const declarationInput = scriptsByFile.get(identifier.getSourceFile().fileName);
     const position = identifier.getStart(identifier.getSourceFile());
-    if (declarationInput?.annexBFunctionEnvironments?.some(environment => (
-      environment.start <= position
-      && position < environment.end
-      && environment.names.has(identifier.text)
-    ))) return false;
+    if (syntheticBindingEnvironment(identifier, symbol, false)) return false;
     const annexBAssignment = declarationInput?.annexBFunctionAssignments?.get(identifier.text);
     if (annexBAssignment !== undefined && annexBAssignment <= position) return false;
     if (declarationInput?.classicVarAssignments?.get(identifier.text)
@@ -1498,16 +1565,6 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
     positions.add(atPosition);
     trail.set(symbol, positions);
     try {
-      const annexBAssignment = symbol.declarations?.flatMap(declaration => {
-        const declarationInput = scriptsByFile.get(declaration.getSourceFile().fileName);
-        return (declarationInput?.annexBFunctionEnvironments ?? []).flatMap(environment => (
-          environment.start <= atPosition && atPosition < environment.end
-            ? (environment.assignments.get(symbol.getName()) ?? []).filter(position => position <= atPosition)
-            : []
-        ));
-      }).reduce<number | undefined>((latest, position) => (
-        latest === undefined || position > latest ? position : latest
-      ), undefined);
       const moduleStart = symbol.declarations?.map(declaration => {
         const declarationInput = scriptsByFile.get(declaration.getSourceFile().fileName);
         return declarationInput?.moduleStart !== undefined
@@ -1518,11 +1575,46 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
       return (origins.get(symbol) ?? [])
         .filter(origin => origin.position <= atPosition && (
           moduleStart === undefined || atPosition < moduleStart || origin.position >= moduleStart
-        ) && (annexBAssignment === undefined || origin.position > annexBAssignment))
+        ))
         .flatMap(origin => resolve(origin, trail));
     } finally {
       positions.delete(atPosition);
       if (positions.size === 0) trail.delete(symbol);
+    }
+  };
+
+  const withIdentifierOrigins = <T>(
+    identifier: ts.Identifier,
+    symbol: ts.Symbol | undefined,
+    atPosition: number,
+    trail: ResolutionTrail,
+    resolve: (origin: Origin, trail: ResolutionTrail) => readonly T[],
+  ): T[] => {
+    const environment = syntheticBindingEnvironment(identifier, symbol, false);
+    if (!environment) {
+      return symbol ? withSymbolOrigins(symbol, atPosition, trail, resolve) : [];
+    }
+    const key = `annex-b\0${identifier.getSourceFile().fileName}\0${environment.start}\0${identifier.text}`;
+    const positions = trail.get(key) ?? new Set<number>();
+    if (positions.has(atPosition)) return [];
+    positions.add(atPosition);
+    trail.set(key, positions);
+    try {
+      const assignment = (environment.assignments.get(identifier.text) ?? [])
+        .filter(position => position <= atPosition)
+        .reduce<number | undefined>((latest, position) => (
+          latest === undefined || position > latest ? position : latest
+        ), undefined);
+      return (namedOrigins.get(namedOriginKey(identifier)) ?? [])
+        .filter(origin => (
+          origin.bindingEnvironmentStart === environment.start
+          && origin.position <= atPosition
+          && (assignment === undefined || origin.position > assignment)
+        ))
+        .flatMap(origin => resolve(origin, trail));
+    } finally {
+      positions.delete(atPosition);
+      if (positions.size === 0) trail.delete(key);
     }
   };
 
@@ -1616,8 +1708,7 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
       symbol,
       new Set(['window', 'globalThis', 'self']),
     )) return true;
-    if (!symbol) return false;
-    return withSymbolOrigins(symbol, atPosition, trail, (origin, nextTrail) => (
+    return withIdentifierOrigins(expression, symbol, atPosition, trail, (origin, nextTrail) => (
       origin.value.kind === 'expression'
         && isGlobalObject(origin.value.expression, origin.position, nextTrail)
         ? [true]
@@ -1634,8 +1725,7 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
     if (ts.isIdentifier(expression)) {
       const symbol = identifierSymbol(expression);
       if (isUnshadowedGlobal(expression, symbol, new Set(['localStorage']))) return true;
-      if (!symbol) return false;
-      return withSymbolOrigins(symbol, atPosition, trail, (origin, nextTrail) => {
+      return withIdentifierOrigins(expression, symbol, atPosition, trail, (origin, nextTrail) => {
         if (origin.value.kind === 'expression') {
           return isLocalStorage(origin.value.expression, origin.position, nextTrail) ? [true] : [];
         }
@@ -1819,23 +1909,22 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
         parseDiagnostics: readonly ts.Diagnostic[];
       }).parseDiagnostics;
       const moduleGoal = authoredInput.moduleGoal === true;
+      if (moduleGoal) {
+        const moduleFailure = authoredModuleFailures.get(authoredInput.source);
+        if (moduleFailure) {
+          authoredParseFailed = true;
+          appendFinding(
+            `${policyPath}:${reportLine(authoredInput, moduleFailure.offset)}: could not be parsed: ${moduleFailure.message}`,
+            `parse:${moduleFailure.offset}:${moduleFailure.message}`,
+          );
+        }
+        continue;
+      }
       for (const diagnostic of parseDiagnostics) {
-        if (moduleGoal) authoredParseFailed = true;
         const message = ts.flattenDiagnosticMessageText(diagnostic.messageText, ' ');
         appendFinding(
           `${policyPath}:${reportLine(authoredInput, diagnostic.start ?? 0)}: could not be parsed: ${message}`,
           `parse:${diagnostic.start ?? 0}:${message}`,
-        );
-      }
-      const moduleFailure = parseDiagnostics.length === 0
-        && moduleGoal
-        ? moduleBindingParseFailure(authoredSourceFile)
-        : undefined;
-      if (moduleFailure) {
-        authoredParseFailed = true;
-        appendFinding(
-          `${policyPath}:${reportLine(authoredInput, moduleFailure.offset)}: could not be parsed: ${moduleFailure.message}`,
-          `parse:${moduleFailure.offset}:${moduleFailure.message}`,
         );
       }
     }
@@ -3348,6 +3437,64 @@ describe('local workspace static boundary', () => {
     ]);
   });
 
+  it('function-local Annex B origin boundary ignores an outer native origin before assignment', () => {
+    const source = '<script>function outer() { var localStorage = window.localStorage; function inner() { '
+      + "const key = 'hype_' + 'projects'; localStorage?.getItem(key); "
+      + '{ function localStorage() {} } } inner(); } outer();</script>';
+    expect(analyzeSource('annex-b-origin-boundary.html', source)).toEqual([]);
+  });
+
+  it.each([
+    [
+      'parameter',
+      'function inner(localStorage = window.localStorage) { '
+        + "const key = 'hype_' + 'projects'; localStorage.getItem(key); "
+        + '{ function localStorage() {} } } inner();',
+    ],
+    [
+      'local var initializer',
+      'function inner() { var localStorage = window.localStorage; '
+        + "const key = 'hype_' + 'projects'; localStorage.getItem(key); "
+        + '{ function localStorage() {} } } inner();',
+    ],
+  ])('function-local Annex B origin boundary retains a same-function %s', (_case, body) => {
+    expect(analyzeSource('annex-b-origin-local.html', `<script>${body}</script>`)).toEqual([
+      expect.stringContaining('accesses legacy document key'),
+    ]);
+  });
+
+  it('function-local Annex B origin boundary stays local after reached assignment', () => {
+    const source = '<script>function outer() { var localStorage = window.localStorage; function inner() { '
+      + "{ function localStorage() {} localStorage.getItem = () => 'safe'; } "
+      + "const key = 'hype_' + 'projects'; localStorage.getItem(key); } inner(); } outer();</script>";
+    expect(analyzeSource('annex-b-origin-after.html', source)).toEqual([]);
+  });
+
+  it('function-local Annex B origin boundary flows into a nested closure', () => {
+    const source = '<script>function outer() { var localStorage = window.localStorage; function inner() { '
+      + "const key = 'hype_' + 'projects'; const read = () => localStorage?.getItem(key); read(); "
+      + '{ function localStorage() {} } } inner(); } outer();</script>';
+    expect(analyzeSource('annex-b-origin-closure.html', source)).toEqual([]);
+  });
+
+  it('function-local Annex B origin boundary preserves a nested closure local binding', () => {
+    const source = '<script>function outer() { { function localStorage() {} } function nested() { '
+      + "var localStorage = window.localStorage; const key = 'hype_' + 'projects'; "
+      + 'localStorage.getItem(key); } nested(); } outer();</script>';
+    expect(analyzeSource('annex-b-origin-closure-local.html', source)).toEqual([
+      expect.stringContaining('accesses legacy document key'),
+    ]);
+  });
+
+  it('function-local Annex B origin boundary permits later same-binding native re-taint', () => {
+    const source = '<script>function inner() { { function localStorage() {} } '
+      + "localStorage = window.localStorage; const key = 'hype_' + 'projects'; "
+      + 'localStorage.getItem(key); } inner();</script>';
+    expect(analyzeSource('annex-b-origin-retaint.html', source)).toEqual([
+      expect.stringContaining('accesses legacy document key'),
+    ]);
+  });
+
   it.each([
     ['boolean', 'true'],
     ['string', "'ready'"],
@@ -3470,6 +3617,53 @@ describe('local workspace static boundary', () => {
     expect(violations.filter(violation => violation.includes('could not be parsed'))).toEqual([]);
     expect(violations.filter(violation => violation.includes('accesses legacy document key'))).toEqual([
       expect.stringContaining('module-binding-valid.html:6: accesses legacy document key'),
+    ]);
+  });
+
+  it.each([
+    ['undefined local export', 'export { missing };'],
+    ['duplicate nested lexical binding', '{ let duplicate; let duplicate; }'],
+    ['strict duplicate parameters', 'function invalid(value, value) {}'],
+  ])('module goal parser rejects %s atomically', (_case, invalid) => {
+    const source = [
+      '<script type="module">',
+      invalid,
+      "const key = 'hype_' + 'projects';",
+      'localStorage.getItem(key);',
+      '</script>',
+    ].join('\n');
+    const violations = analyzeSource('module-goal-error.html', source);
+    expect(violations.filter(violation => violation.includes('could not be parsed'))).toEqual([
+      expect.stringContaining('module-goal-error.html:2: could not be parsed'),
+    ]);
+    expect(violations.filter(violation => violation.includes('accesses legacy document key'))).toEqual([]);
+  });
+
+  it('module goal parser preserves unresolved re-exports, dynamic import, and top-level await', () => {
+    const source = [
+      '<script type="module">',
+      "import { first as one } from './values.js';",
+      "export { remote } from './remote.js';",
+      "await import('./dynamic.js');",
+      "const key = 'hype_' + 'projects';",
+      'localStorage.getItem(key);',
+      '</script>',
+    ].join('\n');
+    const violations = analyzeSource('module-goal-valid.html', source);
+    expect(violations.filter(violation => violation.includes('could not be parsed'))).toEqual([]);
+    expect(violations.filter(violation => violation.includes('accesses legacy document key'))).toEqual([
+      expect.stringContaining('module-goal-valid.html:6: accesses legacy document key'),
+    ]);
+  });
+
+  it('module goal parser keeps separate authored module bindings isolated', () => {
+    const source = '<script type="module">const isolated = 1;</script>'
+      + '<script type="module">const isolated = 2; const key = \'hype_\' + \'projects\'; '
+      + 'localStorage.getItem(key);</script>';
+    const violations = analyzeSource('module-goal-isolation.html', source);
+    expect(violations.filter(violation => violation.includes('could not be parsed'))).toEqual([]);
+    expect(violations.filter(violation => violation.includes('accesses legacy document key'))).toEqual([
+      expect.stringContaining('accesses legacy document key'),
     ]);
   });
 
