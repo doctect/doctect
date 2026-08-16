@@ -1,47 +1,43 @@
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
 import { extname, join, relative, sep } from 'node:path';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
 const root = process.cwd();
-const sourceRoots = [
-  'pages',
-  'components',
-  'hooks',
-  'services',
-  'lib',
-  'shared',
-  'constants',
-  'server',
-  'docs-capture',
-  'tests',
-];
-const rootSourceEntries = ['App.tsx', 'index.tsx', 'index.html', 'types.ts'];
-const sourceExtensions = new Set([
+const executableExtensions = new Set([
   '.cjs',
   '.cts',
-  '.css',
   '.html',
   '.js',
   '.jsx',
-  '.json',
-  '.md',
   '.mjs',
   '.mts',
-  '.scss',
   '.ts',
   '.tsx',
-  '.yaml',
-  '.yml',
 ]);
 const excludedDirectories = new Set([
   '.claude',
+  '.git',
+  '.superpowers',
   '.worktrees',
+  'archives',
   'build',
   'coverage',
   'dist',
+  'docs',
+  'docs-content',
+  'gallery-samples',
   'node_modules',
   'playwright-report',
+  'scratch',
   'test-results',
 ]);
 const legacyKeys = [
@@ -74,22 +70,19 @@ const sourceFiles = (directory: string): string[] => readdirSync(directory, {
   if (entry.isDirectory()) {
     return excludedDirectories.has(entry.name) ? [] : sourceFiles(path);
   }
-  return entry.isFile() && sourceExtensions.has(extname(entry.name)) ? [path] : [];
+  return entry.isFile() && executableExtensions.has(extname(entry.name)) ? [path] : [];
 });
 
-const repoPath = (path: string): string => relative(root, path).split(sep).join('/');
-
-const repositorySourcePaths = (): string[] => [
-  ...rootSourceEntries.filter(path => existsSync(join(root, path))),
-  ...sourceRoots
-    .filter(directory => existsSync(join(root, directory)))
-    .flatMap(directory => sourceFiles(join(root, directory)))
-    .map(repoPath),
-];
+const repositorySourcePaths = (repositoryRoot = root): string[] =>
+  sourceFiles(repositoryRoot)
+    .map(path => relative(repositoryRoot, path).split(sep).join('/'))
+    .sort();
 
 interface SourceInput {
   path: string;
   source: string;
+  reportPath?: string;
+  lineOffset?: number;
 }
 
 type OriginValue = {
@@ -142,6 +135,32 @@ const unwrap = (input: ts.Expression): ts.Expression => {
   return expression;
 };
 
+const executableInputs = (inputs: readonly SourceInput[]): SourceInput[] => inputs.flatMap(input => {
+  if (extname(input.path) !== '.html') return [input];
+  const scripts: SourceInput[] = [];
+  const pattern = /<script\b([^>]*)>([\s\S]*?)<\/script>/gi;
+  let match: RegExpExecArray | null;
+  let index = 0;
+  while ((match = pattern.exec(input.source)) !== null) {
+    const type = /\btype=["']([^"']+)["']/i.exec(match[1])?.[1]?.toLowerCase();
+    if (type && type !== 'module' && type !== 'text/javascript' && type !== 'application/javascript') {
+      continue;
+    }
+    const body = match[2].trim();
+    // TypeScript rejects Annex B HTML comments that contain no executable statements.
+    if (body.length === 0 || /^<!--[^\r\n]*-->$/.test(body)) continue;
+    const bodyStart = match.index + match[0].indexOf('>') + 1;
+    scripts.push({
+      path: `${input.path}.__inline_${index}.js`,
+      reportPath: input.path,
+      lineOffset: input.source.slice(0, bodyStart).split('\n').length - 1,
+      source: match[2],
+    });
+    index += 1;
+  }
+  return scripts;
+});
+
 const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> => {
   const results = new Map(inputs.map(input => [input.path, [] as string[]]));
   for (const input of inputs) {
@@ -157,7 +176,8 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
     }
   }
 
-  const scripts = inputs.filter(input => scriptKinds.has(extname(input.path)));
+  const scripts = executableInputs(inputs)
+    .filter(input => scriptKinds.has(extname(input.path)));
   if (scripts.length === 0) return results;
 
   const compilerOptions: ts.CompilerOptions = {
@@ -582,25 +602,28 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
   for (const [fileName, input] of scriptsByFile) {
     const sourceFile = program.getSourceFile(fileName);
     if (!sourceFile) continue;
-    const violations = results.get(input.path)!;
+    const policyPath = input.reportPath ?? input.path;
+    const lineOffset = input.lineOffset ?? 0;
+    const violations = results.get(policyPath)!;
+    const importsAllowed = policyPath.startsWith('services/localWorkspace/')
+      || policyPath === 'tests/helpers/localWorkspaceFixtures.ts';
+    const localWorkspaceSource = policyPath.startsWith('services/localWorkspace/');
+    const productionSource = !policyPath.startsWith('tests/');
+    const report = (node: ts.Node, message: string): void => {
+      const position = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
+      violations.push(`${policyPath}:${position.line + lineOffset + 1}: ${message}`);
+    };
     const parseDiagnostics = (sourceFile as ts.SourceFile & {
       parseDiagnostics: readonly ts.Diagnostic[];
     }).parseDiagnostics;
     for (const diagnostic of parseDiagnostics) {
       const position = sourceFile.getLineAndCharacterOfPosition(diagnostic.start ?? 0);
       const message = ts.flattenDiagnosticMessageText(diagnostic.messageText, ' ');
-      violations.push(`${input.path}:${position.line + 1}: cannot parse source: ${message}`);
+      violations.push(
+        `${policyPath}:${position.line + lineOffset + 1}: could not be parsed: ${message}`,
+      );
     }
 
-    const importsAllowed = input.path.startsWith('services/localWorkspace/')
-      || input.path === 'tests/helpers/localWorkspaceFixtures.ts';
-    const localWorkspaceSource = input.path.startsWith('services/localWorkspace/');
-    const productionSource = rootSourceEntries.includes(input.path)
-      || /^(?:pages|components|hooks|services|lib|shared|constants|server)\//.test(input.path);
-    const report = (node: ts.Node, message: string): void => {
-      const position = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
-      violations.push(`${input.path}:${position.line + 1}: ${message}`);
-    };
     const inspectModuleSpecifier = (node: ts.Node, expression: ts.Expression | undefined): void => {
       if (!importsAllowed && expression && [...staticStrings(expression, node.getStart(sourceFile))]
         .some(isLegacyTypesModule)) {
@@ -633,7 +656,7 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
           && invoked.some(member => member.method === 'clear' && member.localStorage)) {
           report(node, 'clears all production local storage');
         }
-        if (!allowed.has(input.path) && invoked.some(member => (
+        if (!allowed.has(policyPath) && invoked.some(member => (
           member.localStorage
           && keyedStorageMethods.has(member.method)
           && [...keyCandidates(node, member)].some(key => legacyKeys.includes(key))
@@ -666,44 +689,38 @@ describe('local workspace static boundary', () => {
     'index.tsx',
     'index.html',
     'types.ts',
+    'vite.config.ts',
     'lib/auth-client.ts',
     'shared/validateAppState.js',
     'constants/editor.ts',
     'server/index.js',
-  ])('scans newly covered production path %s against forbidden access', path => {
+    'onboarding/build.mjs',
+    'scripts/run-lighthouse.js',
+    'tutorial/lib/servers.js',
+  ])('discovers production path %s without a root allowlist', path => {
     expect(repositorySourcePaths()).toContain(path);
-    const adversarial = `localStorage.getItem('${['hype', 'projects'].join('_')}');`;
-    expect(analyzeSource(path, adversarial)).toEqual(expect.arrayContaining([
-      expect.stringContaining('legacy document key'),
-    ]));
   });
 
-  it('pins pull-request workflow coverage to the complete workspace graph', () => {
+  it('discovers executable files in future source roots without allowlist edits', () => {
+    const temporaryRoot = mkdtempSync(join(tmpdir(), 'workspace-policy-'));
+    try {
+      mkdirSync(join(temporaryRoot, 'future-feature'));
+      writeFileSync(join(temporaryRoot, 'future-feature', 'entry.ts'), 'export const ready = true;');
+      mkdirSync(join(temporaryRoot, 'docs'));
+      writeFileSync(join(temporaryRoot, 'docs', 'example.ts'), 'localStorage.clear();');
+      expect(repositorySourcePaths(temporaryRoot)).toEqual(['future-feature/entry.ts']);
+    } finally {
+      rmSync(temporaryRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('runs the migration release gate for every pull request', () => {
     const workflow = readFileSync(
       join(root, '.github/workflows/local-workspace-migration.yml'),
       'utf8',
     );
-    const pathsBlock = workflow.slice(workflow.indexOf('    paths:'), workflow.indexOf('\njobs:'));
-    const workflowPaths = [...pathsBlock.matchAll(/^\s+- '([^']+)'$/gm)]
-      .map(match => match[1]);
-
-    expect(workflowPaths).toEqual([
-      ...rootSourceEntries,
-      'pages/**',
-      'components/**',
-      'hooks/**',
-      'services/**',
-      'lib/**',
-      'shared/**',
-      'constants/**',
-      'server/**',
-      'docs-capture/**',
-      'tests/**',
-      'playwright.config.cjs',
-      'package.json',
-      'package-lock.json',
-      '.github/workflows/local-workspace-migration.yml',
-    ]);
+    expect(workflow).toMatch(/pull_request:\s*\{\}/);
+    expect(workflow).not.toMatch(/^\s+paths:/m);
   });
 
   it.each([
@@ -892,6 +909,27 @@ describe('local workspace static boundary', () => {
     ]));
   });
 
+  it('rejects reconstructed legacy access inside executable inline HTML', () => {
+    const source = [
+      '<script type="module">',
+      "const key = 'hype_' + 'projects';",
+      'const read = localStorage.getItem.bind(localStorage, key);',
+      'read();',
+      '</script>',
+    ].join('\n');
+    expect(analyzeSource('future-shell.html', source)).toEqual(expect.arrayContaining([
+      expect.stringContaining('future-shell.html:4:'),
+      expect.stringContaining('accesses legacy document key'),
+    ]));
+  });
+
+  it('skips import maps but reports malformed executable inline scripts', () => {
+    expect(analyzeSource('shell.html', '<script type="importmap">{"imports":{}}</script>'))
+      .toEqual([]);
+    expect(analyzeSource('shell.html', '<script>const broken = ;</script>'))
+      .toEqual(expect.arrayContaining([expect.stringContaining('could not be parsed')]));
+  });
+
   it.each([
     [
       'components/PreboundPreferenceRead.ts',
@@ -965,7 +1003,7 @@ describe('local workspace static boundary', () => {
 
   it('fails closed when a script source cannot be parsed', () => {
     expect(analyzeSource('components/Broken.tsx', 'const value = ;')).toEqual(expect.arrayContaining([
-      expect.stringContaining('cannot parse source'),
+      expect.stringContaining('could not be parsed'),
     ]));
   });
 

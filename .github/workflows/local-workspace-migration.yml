@@ -1,26 +1,7 @@
 name: Local workspace migration gate
 
 on:
-  pull_request:
-    paths:
-      - 'App.tsx'
-      - 'index.tsx'
-      - 'index.html'
-      - 'types.ts'
-      - 'pages/**'
-      - 'components/**'
-      - 'hooks/**'
-      - 'services/**'
-      - 'lib/**'
-      - 'shared/**'
-      - 'constants/**'
-      - 'server/**'
-      - 'docs-capture/**'
-      - 'tests/**'
-      - 'playwright.config.cjs'
-      - 'package.json'
-      - 'package-lock.json'
-      - '.github/workflows/local-workspace-migration.yml'
+  pull_request: {}
 
 jobs:
   release-gate:
