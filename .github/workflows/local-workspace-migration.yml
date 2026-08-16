@@ -4,10 +4,17 @@ on:
   pull_request:
     paths:
       - 'App.tsx'
+      - 'index.tsx'
+      - 'index.html'
+      - 'types.ts'
       - 'pages/**'
       - 'components/**'
       - 'hooks/**'
       - 'services/**'
+      - 'lib/**'
+      - 'shared/**'
+      - 'constants/**'
+      - 'server/**'
       - 'docs-capture/**'
       - 'tests/**'
       - 'playwright.config.cjs'

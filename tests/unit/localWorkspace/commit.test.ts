@@ -449,6 +449,180 @@ describe('project save queues', () => {
       sameStores(record.stores, ['projects', 'migrationLedger']))).toHaveLength(2);
   });
 
+  it('keeps a queued stale intent pinned while an unrelated readback sees a newer revision', async () => {
+    const hold = transactionCompletionHold(['projects', 'migrationLedger']);
+    const { store: storeA, harness } = await readyStore({
+      values: twoProjectValues(),
+      hook: hold.hook,
+    });
+    const storeB = createLocalWorkspaceStore(harness.environment);
+    await expect(storeB.bootstrap()).resolves.toMatchObject({ status: 'ready' });
+    useQueueTimers();
+    hold.arm();
+
+    const unrelated = storeA.commit({
+      type: 'save-project',
+      project: projectNamed('Store A unrelated', 'project-b'),
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    await hold.started;
+    const stale = storeA.commit({
+      type: 'save-project',
+      project: projectNamed('Store A stale'),
+    });
+    const coalesced = storeA.commit({
+      type: 'save-project',
+      project: projectNamed('Store A newest stale'),
+    });
+    const staleAssertions = Promise.all([
+      expect(stale).rejects.toMatchObject({ code: 'conflict' }),
+      expect(coalesced).rejects.toMatchObject({ code: 'conflict' }),
+    ]);
+
+    const foreign = storeB.commit({
+      type: 'save-project',
+      project: projectNamed('Store B durable'),
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    hold.release();
+    await foreign;
+
+    const unrelatedResult = await unrelated;
+    expect(unrelatedResult.projects.find(project => project.id === 'project-a')?.name)
+      .toBe('Store B durable');
+    await staleAssertions;
+    expect((await inspect(harness)).projects.find(record => record.id === 'project-a'))
+      .toMatchObject({
+        project: { name: 'Store B durable' },
+        storageRevision: 1,
+      });
+  });
+
+  it('pins a follow-up behind an in-flight save to that local write lineage', async () => {
+    const hold = transactionCompletionHold(['projects', 'migrationLedger']);
+    const { store: storeA, harness } = await readyStore({ hook: hold.hook });
+    useQueueTimers();
+    hold.arm();
+
+    const first = storeA.commit({
+      type: 'save-project',
+      project: projectNamed('Store A first'),
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    await hold.started;
+    const followUp = storeA.commit({
+      type: 'save-project',
+      project: projectNamed('Store A follow-up'),
+    });
+    const followUpAssertion = expect(followUp).rejects.toMatchObject({ code: 'conflict' });
+
+    const other = createIndexedDbAdapter({
+      indexedDB: harness.indexedDB,
+      now: () => TEST_NOW,
+    });
+    const foreign = other.saveProject(projectNamed('Store B after first'), 1);
+    hold.release();
+    await foreign;
+
+    await expect(first).resolves.toMatchObject({
+      projects: expect.arrayContaining([
+        expect.objectContaining({ id: 'project-a', name: 'Store B after first' }),
+      ]),
+    });
+    await followUpAssertion;
+    expect((await inspect(harness)).projects.find(record => record.id === 'project-a'))
+      .toMatchObject({
+        project: { name: 'Store B after first' },
+        storageRevision: 2,
+      });
+    other.close();
+  });
+
+  it('adopts a foreign post-save revision after the local save lineage drains', async () => {
+    const hold = transactionCompletionHold(['projects', 'migrationLedger']);
+    const { store: storeA, harness } = await readyStore({ hook: hold.hook });
+    useQueueTimers();
+    hold.arm();
+
+    const first = storeA.commit({
+      type: 'save-project',
+      project: projectNamed('Store A first'),
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    await hold.started;
+
+    const other = createIndexedDbAdapter({
+      indexedDB: harness.indexedDB,
+      now: () => TEST_NOW,
+    });
+    const foreign = other.saveProject(projectNamed('Store B after first'), 1);
+    hold.release();
+    await foreign;
+
+    await expect(first).resolves.toMatchObject({
+      projects: expect.arrayContaining([
+        expect.objectContaining({ id: 'project-a', name: 'Store B after first' }),
+      ]),
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    const basedOnObserved = storeA.commit({
+      type: 'save-project',
+      project: projectNamed('Store A based on observed revision'),
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    await expect(basedOnObserved).resolves.toMatchObject({
+      projects: expect.arrayContaining([
+        expect.objectContaining({
+          id: 'project-a',
+          name: 'Store A based on observed revision',
+        }),
+      ]),
+    });
+    expect((await inspect(harness)).projects.find(record => record.id === 'project-a'))
+      .toMatchObject({ storageRevision: 3 });
+    other.close();
+  });
+
+  it('adopts a newer revision for a project with no admitted local intent', async () => {
+    const { store: storeA, harness } = await readyStore({ values: twoProjectValues() });
+    const storeB = createLocalWorkspaceStore(harness.environment);
+    await expect(storeB.bootstrap()).resolves.toMatchObject({ status: 'ready' });
+    useQueueTimers();
+
+    const foreign = storeB.commit({
+      type: 'save-project',
+      project: projectNamed('Store B durable'),
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    await foreign;
+
+    const unrelated = storeA.commit({
+      type: 'save-project',
+      project: projectNamed('Store A unrelated', 'project-b'),
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    const observed = await unrelated;
+    expect(observed.projects.find(project => project.id === 'project-a')?.name)
+      .toBe('Store B durable');
+
+    const saveAfterObservation = storeA.commit({
+      type: 'save-project',
+      project: projectNamed('Store A based on observed revision'),
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    await expect(saveAfterObservation).resolves.toMatchObject({
+      projects: expect.arrayContaining([
+        expect.objectContaining({
+          id: 'project-a',
+          name: 'Store A based on observed revision',
+        }),
+      ]),
+    });
+    expect((await inspect(harness)).projects.find(record => record.id === 'project-a'))
+      .toMatchObject({ storageRevision: 2 });
+  });
+
   it('drains earlier saves before crossing a structural command barrier', async () => {
     const { store, harness } = await readyStore({ values: twoProjectValues() });
 

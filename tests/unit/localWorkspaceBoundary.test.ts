@@ -1,10 +1,22 @@
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { extname, join, relative, sep } from 'node:path';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
 const root = process.cwd();
-const sourceRoots = ['pages', 'components', 'hooks', 'services', 'docs-capture', 'tests'];
+const sourceRoots = [
+  'pages',
+  'components',
+  'hooks',
+  'services',
+  'lib',
+  'shared',
+  'constants',
+  'server',
+  'docs-capture',
+  'tests',
+];
+const rootSourceEntries = ['App.tsx', 'index.tsx', 'index.html', 'types.ts'];
 const sourceExtensions = new Set([
   '.cjs',
   '.cts',
@@ -66,6 +78,14 @@ const sourceFiles = (directory: string): string[] => readdirSync(directory, {
 });
 
 const repoPath = (path: string): string => relative(root, path).split(sep).join('/');
+
+const repositorySourcePaths = (): string[] => [
+  ...rootSourceEntries.filter(path => existsSync(join(root, path))),
+  ...sourceRoots
+    .filter(directory => existsSync(join(root, directory)))
+    .flatMap(directory => sourceFiles(join(root, directory)))
+    .map(repoPath),
+];
 
 interface SourceInput {
   path: string;
@@ -575,7 +595,8 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
     const importsAllowed = input.path.startsWith('services/localWorkspace/')
       || input.path === 'tests/helpers/localWorkspaceFixtures.ts';
     const localWorkspaceSource = input.path.startsWith('services/localWorkspace/');
-    const productionSource = /^(?:pages|components|hooks|services)\//.test(input.path);
+    const productionSource = rootSourceEntries.includes(input.path)
+      || /^(?:pages|components|hooks|services|lib|shared|constants|server)\//.test(input.path);
     const report = (node: ts.Node, message: string): void => {
       const position = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
       violations.push(`${input.path}:${position.line + 1}: ${message}`);
@@ -633,11 +654,56 @@ const analyzeSource = (path: string, source: string): string[] =>
 
 describe('local workspace static boundary', () => {
   it('confines legacy document storage and keeps IndexedDB schema index-free', { timeout: 15_000 }, () => {
-    const inputs = sourceRoots.flatMap(directory => sourceFiles(join(root, directory)))
-      .map(file => ({ path: repoPath(file), source: readFileSync(file, 'utf8') }));
+    const inputs = repositorySourcePaths()
+      .map(path => ({ path, source: readFileSync(join(root, path), 'utf8') }));
     const violations = [...analyzeSources(inputs).values()].flat();
 
     expect(violations, `Workspace boundary violations:\n${violations.join('\n')}`).toEqual([]);
+  });
+
+  it.each([
+    'App.tsx',
+    'index.tsx',
+    'index.html',
+    'types.ts',
+    'lib/auth-client.ts',
+    'shared/validateAppState.js',
+    'constants/editor.ts',
+    'server/index.js',
+  ])('scans newly covered production path %s against forbidden access', path => {
+    expect(repositorySourcePaths()).toContain(path);
+    const adversarial = `localStorage.getItem('${['hype', 'projects'].join('_')}');`;
+    expect(analyzeSource(path, adversarial)).toEqual(expect.arrayContaining([
+      expect.stringContaining('legacy document key'),
+    ]));
+  });
+
+  it('pins pull-request workflow coverage to the complete workspace graph', () => {
+    const workflow = readFileSync(
+      join(root, '.github/workflows/local-workspace-migration.yml'),
+      'utf8',
+    );
+    const pathsBlock = workflow.slice(workflow.indexOf('    paths:'), workflow.indexOf('\njobs:'));
+    const workflowPaths = [...pathsBlock.matchAll(/^\s+- '([^']+)'$/gm)]
+      .map(match => match[1]);
+
+    expect(workflowPaths).toEqual([
+      ...rootSourceEntries,
+      'pages/**',
+      'components/**',
+      'hooks/**',
+      'services/**',
+      'lib/**',
+      'shared/**',
+      'constants/**',
+      'server/**',
+      'docs-capture/**',
+      'tests/**',
+      'playwright.config.cjs',
+      'package.json',
+      'package-lock.json',
+      '.github/workflows/local-workspace-migration.yml',
+    ]);
   });
 
   it.each([

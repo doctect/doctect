@@ -511,12 +511,22 @@ const createLocalWorkspaceStoreAtVersion = (
   const installDurableState = (
     records: WorkspaceRecords,
     snapshot: WorkspaceSnapshot,
-    updateCachedReady = false,
+    options: {
+      updateCachedReady?: boolean;
+      preservePinnedProjectRevisions?: boolean;
+    } = {},
   ): WorkspaceSnapshot => {
     const nextSnapshot = structuredClone(snapshot);
     const nextProjectRevisions = new Map(
       records.projects.map(record => [record.id, record.storageRevision]),
     );
+    if (options.preservePinnedProjectRevisions) {
+      for (const [projectId, revision] of expectedProjectRevisions) {
+        if (mutationQueue?.hasPinnedProjectRevision(projectId)) {
+          nextProjectRevisions.set(projectId, revision);
+        }
+      }
+    }
     const nextConsumedImportTargets = new Map<string, string>();
     for (const record of records.projects) {
       if (record.consumedImportId) {
@@ -528,7 +538,7 @@ const createLocalWorkspaceStoreAtVersion = (
     expectedProjectRevisions = nextProjectRevisions;
     expectedWorkspaceRevision = nextWorkspaceRevision;
     consumedImportTargets = nextConsumedImportTargets;
-    if (updateCachedReady && cachedReady) {
+    if (options.updateCachedReady && cachedReady) {
       cachedReady = { ...cachedReady, snapshot: structuredClone(nextSnapshot) };
     }
     return nextSnapshot;
@@ -1267,7 +1277,10 @@ const createLocalWorkspaceStoreAtVersion = (
       }
       throw failure;
     }
-    return installDurableState(records, snapshot, true);
+    return installDurableState(records, snapshot, {
+      updateCachedReady: true,
+      preservePinnedProjectRevisions: true,
+    });
   };
 
   const runCommandOperation = async (
@@ -1296,13 +1309,23 @@ const createLocalWorkspaceStoreAtVersion = (
     return expectedWorkspaceRevision;
   };
 
-  const executeProjectSave = (project: WorkspaceProject): Promise<WorkspaceSnapshot> =>
+  const executeProjectSave = (
+    project: WorkspaceProject,
+    expectedRevision: number,
+  ): Promise<WorkspaceSnapshot> =>
     runCommandOperation(async () => {
-      const expectedRevision = expectedProjectRevisions.get(project.id);
-      if (expectedRevision === undefined) {
+      const currentRevision = expectedProjectRevisions.get(project.id);
+      if (currentRevision === undefined) {
         throw new WorkspaceStoreError(`Project ${project.id} does not exist.`, 'validation');
       }
-      await getAdapter().saveProject(project, expectedRevision);
+      if (currentRevision !== expectedRevision) {
+        throw new WorkspaceStoreError(
+          `Project ${project.id} local revision lineage changed.`,
+          'conflict',
+        );
+      }
+      const saved = await getAdapter().saveProject(project, expectedRevision);
+      expectedProjectRevisions.set(project.id, saved.storageRevision);
       return readPostCommandSnapshot();
     });
 
@@ -1368,6 +1391,7 @@ const createLocalWorkspaceStoreAtVersion = (
           currentWorkspaceRevision(),
           expectedProjectRevisions.get(command.projectId) as number,
         );
+        expectedProjectRevisions.delete(command.projectId);
         break;
       case 'save-custom-preset':
         await getAdapter().saveCustomPreset(command.preset);
@@ -1719,9 +1743,15 @@ const createLocalWorkspaceStoreAtVersion = (
       } catch (error) {
         return Promise.reject(validationError(error));
       }
-      return prepared.type === 'save-project'
-        ? queue.enqueueProjectSave(prepared.project)
-        : queue.runExclusive(prepared);
+      if (prepared.type !== 'save-project') return queue.runExclusive(prepared);
+      const expectedRevision = expectedProjectRevisions.get(prepared.project.id);
+      if (expectedRevision === undefined) {
+        return Promise.reject(new WorkspaceStoreError(
+          `Project ${prepared.project.id} does not exist.`,
+          'validation',
+        ));
+      }
+      return queue.enqueueProjectSave(prepared.project, expectedRevision);
     },
 
     async exportRecoveryBundle(source: RecoverySource): Promise<Blob> {

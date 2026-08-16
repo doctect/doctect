@@ -8,15 +8,22 @@ import {
 type ExclusiveCommand = Exclude<WorkspaceCommand, { type: 'save-project' }>;
 
 export interface MutationQueue {
-  enqueueProjectSave(project: WorkspaceProject): Promise<WorkspaceSnapshot>;
+  enqueueProjectSave(
+    project: WorkspaceProject,
+    expectedRevision: number,
+  ): Promise<WorkspaceSnapshot>;
   runExclusive(command: ExclusiveCommand): Promise<WorkspaceSnapshot>;
   freeze(): void;
   drain(): Promise<void>;
   hasPending(): boolean;
+  hasPinnedProjectRevision(projectId: string): boolean;
 }
 
 interface MutationOperations {
-  saveProject(project: WorkspaceProject): Promise<WorkspaceSnapshot>;
+  saveProject(
+    project: WorkspaceProject,
+    expectedRevision: number,
+  ): Promise<WorkspaceSnapshot>;
   runExclusive(command: ExclusiveCommand): Promise<WorkspaceSnapshot>;
 }
 
@@ -28,6 +35,7 @@ interface Waiter {
 interface SaveEntry {
   kind: 'save';
   project: WorkspaceProject;
+  expectedRevision: number;
   ready: boolean;
   timer?: ReturnType<typeof setTimeout>;
   waiters: Waiter[];
@@ -47,6 +55,11 @@ const frozenError = (): WorkspaceStoreError => new WorkspaceStoreError(
   'authority-lost',
 );
 
+const lineageError = (projectId: string): WorkspaceStoreError => new WorkspaceStoreError(
+  `Project ${projectId} save lineage did not advance.`,
+  'conflict',
+);
+
 const cloneSnapshot = (snapshot: WorkspaceSnapshot): WorkspaceSnapshot =>
   structuredClone(snapshot);
 
@@ -57,8 +70,9 @@ export const createMutationQueue = (
 ): MutationQueue => {
   const entries: QueueEntry[] = [];
   let queuedSaves = new Map<string, SaveEntry>();
+  const projectLineages = new Map<string, number>();
   const drainWaiters: Array<() => void> = [];
-  let activeSaveId: string | undefined;
+  let activeSave: SaveEntry | undefined;
   let running = false;
   let frozen = false;
 
@@ -102,16 +116,26 @@ export const createMutationQueue = (
     if (entry.kind === 'save') {
       if (entry.timer !== undefined) clearTimeout(entry.timer);
       if (queuedSaves.get(entry.project.id) === entry) queuedSaves.delete(entry.project.id);
-      activeSaveId = entry.project.id;
+      activeSave = entry;
     }
 
     const operation = entry.kind === 'save'
-      ? operations.saveProject(entry.project)
+      ? projectLineages.get(entry.project.id) === entry.expectedRevision
+        ? operations.saveProject(entry.project, entry.expectedRevision)
+        : Promise.reject(lineageError(entry.project.id))
       : operations.runExclusive(entry.command);
+    let succeeded = false;
     void operation.then(snapshot => {
+      succeeded = true;
+      if (entry.kind === 'save') {
+        projectLineages.set(entry.project.id, entry.expectedRevision + 1);
+      }
       settleSuccess(entry.waiters, snapshot);
       if (entry.kind === 'exclusive') {
         settleSuccess(entry.canceledSaveWaiters, snapshot);
+        if (entry.command.type === 'close-project') {
+          projectLineages.delete(entry.command.projectId);
+        }
       }
     }, error => {
       settleFailure(entry.waiters, error);
@@ -119,7 +143,13 @@ export const createMutationQueue = (
         settleFailure(entry.canceledSaveWaiters, error);
       }
     }).finally(() => {
-      if (entry.kind === 'save') activeSaveId = undefined;
+      if (entry.kind === 'save') {
+        activeSave = undefined;
+        if (succeeded && !entries.some(candidate =>
+          candidate.kind === 'save' && candidate.project.id === entry.project.id)) {
+          projectLineages.delete(entry.project.id);
+        }
+      }
       running = false;
       pump();
     });
@@ -136,7 +166,7 @@ export const createMutationQueue = (
   };
 
   return {
-    enqueueProjectSave(project) {
+    enqueueProjectSave(project, expectedRevision) {
       if (frozen) return Promise.reject(frozenError());
       const { promise, waiter } = waiterPromise();
       const queued = queuedSaves.get(project.id);
@@ -146,10 +176,21 @@ export const createMutationQueue = (
         return promise;
       }
 
+      const projectId = project.id;
+      const priorEntry = [...entries].reverse().find(candidate =>
+        candidate.kind === 'save' && candidate.project.id === projectId) as SaveEntry | undefined;
+      const predecessor = priorEntry
+        ?? (activeSave?.project.id === projectId ? activeSave : undefined);
+      const lineageRevision = projectLineages.get(projectId) ?? expectedRevision;
+      projectLineages.set(projectId, lineageRevision);
+
       const entry: SaveEntry = {
         kind: 'save',
         project: structuredClone(project),
-        ready: activeSaveId === project.id,
+        expectedRevision: predecessor
+          ? predecessor.expectedRevision + 1
+          : lineageRevision,
+        ready: activeSave?.project.id === projectId,
         waiters: [waiter],
       };
       if (!entry.ready) {
@@ -202,6 +243,16 @@ export const createMutationQueue = (
 
     hasPending() {
       return running || entries.length > 0;
+    },
+
+    hasPinnedProjectRevision(projectId) {
+      if (!projectLineages.has(projectId)) return false;
+      if (activeSave?.project.id !== projectId) return true;
+      return entries.some(entry =>
+        (entry.kind === 'save' && entry.project.id === projectId)
+        || (entry.kind === 'exclusive'
+          && entry.command.type === 'close-project'
+          && entry.command.projectId === projectId));
     },
   };
 };
