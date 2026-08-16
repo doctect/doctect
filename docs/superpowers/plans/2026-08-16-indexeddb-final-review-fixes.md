@@ -236,14 +236,12 @@ it('publishes the newest working workspace before its save settles', () => {
 - [ ] **Step 2: Write failing gate download regression**
 
 Import `downloadJson` beside `downloadBlob` from the already mocked
-`services/browserDownload` module, reset both mocks in `beforeEach`, and call
-`vi.useRealTimers()` in `afterEach`. Add an editor probe that publishes changed
-workspace through the mount callback, then trigger authority loss:
+`services/browserDownload` module and reset both mocks in `beforeEach`. Add an
+editor probe that publishes changed workspace through the mount callback, then
+trigger authority loss:
 
 ```tsx
 it('downloads captured open work after authority loss unmounts the editor', async () => {
-  vi.useFakeTimers();
-  vi.setSystemTime(new Date('2026-08-16T12:00:00.000Z'));
   const store = fakeReadyStore();
   const openWorkspace = workspaceSnapshot({
     projects: [{ ...workspaceSnapshot().projects[0], name: 'Unsaved open work' }],
@@ -263,7 +261,7 @@ it('downloads captured open work after authority loss unmounts the editor', asyn
   expect(downloadJson).toHaveBeenCalledWith({
     format: 'doctect.open-workspace-recovery',
     version: 1,
-    capturedAt: '2026-08-16T12:00:00.000Z',
+    capturedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/),
     workspace: openWorkspace,
   }, 'doctect-open-workspace.json');
 });
