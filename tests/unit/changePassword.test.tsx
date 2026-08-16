@@ -3,7 +3,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { AccountSettingsPage } from '../../pages/AccountSettingsPage';
 
-const changePassword = vi.fn(async () => ({ data: {}, error: null }));
+const changePassword = vi.fn(async (..._args: any[]) => ({ data: {}, error: null }));
 // better-auth's real /list-accounts endpoint returns objects keyed by `providerId`
 // (verified against a live server: node_modules/better-auth/dist/api/routes/account.mjs
 // maps `providerId: a.providerId` into the response) -- NOT `provider`. The mock must

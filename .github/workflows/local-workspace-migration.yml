@@ -4,23 +4,15 @@ on:
   pull_request:
     paths:
       - 'App.tsx'
+      - 'pages/**'
       - 'components/**'
       - 'hooks/**'
-      - 'pages/EditorPage.tsx'
-      - 'services/importProject.ts'
-      - 'services/localWorkspace/**'
-      - 'services/presets.ts'
-      - 'server/migrations/**'
-      - 'tests/e2e/fork.spec.js'
-      - 'tests/e2e/localWorkspaceHelpers.js'
-      - 'tests/e2e/local_workspace_migration.spec.js'
-      - 'tests/e2e/fixtures/localWorkspaceMigration.js'
-      - 'tests/helpers/localWorkspaceFixtures.ts'
-      - 'tests/unit/localWorkspace/**'
-      - 'tests/unit/localWorkspaceBoundary.test.ts'
-      - 'tests/unit/server/migrations*.test.js'
+      - 'services/**'
+      - 'docs-capture/**'
+      - 'tests/**'
       - 'playwright.config.cjs'
       - 'package.json'
+      - 'package-lock.json'
       - '.github/workflows/local-workspace-migration.yml'
 
 jobs:

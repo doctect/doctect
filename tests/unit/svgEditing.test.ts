@@ -30,7 +30,7 @@ describe('validateSvgMarkup', () => {
     it('rejects markup whose root is not <svg>', () => {
         const result = validateSvgMarkup('<div>not svg</div>');
         expect(result.ok).toBe(false);
-        if (!result.ok) expect(result.error).toMatch(/root/i);
+        if (result.ok === false) expect(result.error).toMatch(/root/i);
     });
 
     it('rejects empty or whitespace-only text', () => {

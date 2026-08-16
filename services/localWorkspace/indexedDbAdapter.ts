@@ -248,6 +248,7 @@ const requireWorkspaceRevision = (
 
 export const createIndexedDbAdapter = (
   environment: IndexedDbAdapterEnvironment,
+  requestedVersion = WORKSPACE_DB_VERSION,
 ): IndexedDbAdapter => {
   let database: IDBPDatabase<LocalWorkspaceDatabase> | undefined;
   let opening: Promise<void> | undefined;
@@ -280,7 +281,7 @@ export const createIndexedDbAdapter = (
     let underlyingOpen: Promise<IDBPDatabase<LocalWorkspaceDatabase>>;
     try {
       underlyingOpen = openWithFactory(environment.indexedDB, () =>
-        openDB<LocalWorkspaceDatabase>(WORKSPACE_DB_NAME, WORKSPACE_DB_VERSION, {
+        openDB<LocalWorkspaceDatabase>(WORKSPACE_DB_NAME, requestedVersion, {
           upgrade(upgradeDatabase) {
             for (const storeName of STORE_NAMES) {
               if (!upgradeDatabase.objectStoreNames.contains(storeName)) {
@@ -293,6 +294,7 @@ export const createIndexedDbAdapter = (
               'IndexedDB upgrade is blocked.',
               'unavailable',
             );
+            authorityError ??= blockedError;
             rejectBlocked(blockedError);
           },
           blocking() {

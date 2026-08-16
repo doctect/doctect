@@ -43,7 +43,6 @@ export const resetLocalWorkspace = async page => {
         prefixes: NON_DOCUMENT_PREFIXES,
         sessionKeys: SESSION_PREFERENCES,
     });
-    await page.reload();
 };
 
 export const openFreshEditor = async page => {

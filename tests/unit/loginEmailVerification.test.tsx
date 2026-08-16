@@ -3,9 +3,9 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { LoginPage } from '../../pages/LoginPage';
 
-const signUpEmail = vi.fn(async () => ({ data: { user: {} }, error: null }));
-const signInEmail = vi.fn(async () => ({ data: null, error: { status: 403, message: 'Email not verified' } }));
-const sendVerificationEmail = vi.fn(async () => ({ data: {}, error: null }));
+const signUpEmail = vi.fn(async (..._args: any[]) => ({ data: { user: {} }, error: null }));
+const signInEmail = vi.fn(async (..._args: any[]) => ({ data: null, error: { status: 403, message: 'Email not verified' } }));
+const sendVerificationEmail = vi.fn(async (..._args: any[]) => ({ data: {}, error: null }));
 let sessionData: any = null;
 vi.mock('../../lib/auth-client', () => ({
     signIn: { email: (...a: any[]) => signInEmail(...a), social: vi.fn() },

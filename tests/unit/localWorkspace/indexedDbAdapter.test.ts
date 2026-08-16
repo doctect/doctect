@@ -22,6 +22,7 @@ import type {
   WorkspaceRecords,
 } from '../../../services/localWorkspace/migration';
 import {
+  WORKSPACE_DB_NAME,
   WORKSPACE_MIGRATION_ID,
   type LegacyBackupRecord,
   type MigrationLedger,
@@ -139,6 +140,7 @@ const emptyInspection = () => ({
 
 interface TestAdapterOptions {
   indexedDB?: IDBFactory;
+  requestedVersion?: number;
   faultPoint?: WorkspaceFaultPoint;
   faultError?: unknown;
   fault?: (point: WorkspaceFaultPoint) => void;
@@ -158,7 +160,7 @@ const createTestAdapter = (options: TestAdapterOptions = {}): IndexedDbAdapter =
         throw options.faultError ?? new Error(`Injected fault at ${point}.`);
       }
     }),
-  });
+  }, options.requestedVersion);
   adapters.push(adapter);
   return adapter;
 };
@@ -264,6 +266,16 @@ const WRITE_OPERATIONS = [
 ] as const;
 
 describe('IndexedDB schema', () => {
+  it('opens exact database version 1 by default', async () => {
+    const indexedDB = new IDBFactory();
+    const adapter = createTestAdapter({ indexedDB });
+    await adapter.open();
+
+    const rawDatabase = await openRaw(indexedDB, WORKSPACE_DB_NAME);
+    expect(rawDatabase.version).toBe(1);
+    rawDatabase.close();
+  });
+
   it('creates exactly six stores and no indexes', async () => {
     const adapter = createTestAdapter();
     await adapter.open();
@@ -302,6 +314,27 @@ describe('IndexedDB schema', () => {
 });
 
 describe('open lifecycle', () => {
+  it('keeps a blocked upgrade unavailable for later reads', async () => {
+    const indexedDB = new IDBFactory();
+    const versionOne = await openRaw(indexedDB, WORKSPACE_DB_NAME, 1);
+    const adapter = createTestAdapter({ indexedDB, requestedVersion: 2 });
+
+    try {
+      await expect(adapter.open()).rejects.toMatchObject({ code: 'unavailable' });
+      const laterRead = adapter.inspect().then(
+        () => 'resolved',
+        error => error instanceof WorkspaceStoreError ? error.code : 'unknown-error',
+      );
+      const outcome = await Promise.race([
+        laterRead,
+        new Promise<string>(resolve => setTimeout(() => resolve('pending'), 20)),
+      ]);
+      expect(outcome).toBe('unavailable');
+    } finally {
+      versionOne.close();
+    }
+  });
+
   it('rejects a blocked open without a timeout and closes the connection if it later opens', async () => {
     const indexedDB = new IDBFactory();
     const tracked = trackFactory(indexedDB);

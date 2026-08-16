@@ -467,7 +467,7 @@ export const installIndexedDbTermination = page => page.evaluate(() => {
     };
 });
 
-export const runBlockedVersionUpgrade = page => page.evaluate(async databaseName => {
+export const holdVersionOneWorkspaceDatabase = page => page.evaluate(async ({ databaseName, stores }) => {
     await new Promise((resolve, reject) => {
         const deletion = indexedDB.deleteDatabase(databaseName);
         deletion.addEventListener('success', resolve, { once: true });
@@ -476,29 +476,54 @@ export const runBlockedVersionUpgrade = page => page.evaluate(async databaseName
     const versionOne = await new Promise((resolve, reject) => {
         const request = indexedDB.open(databaseName, 1);
         request.addEventListener('upgradeneeded', () => {
-            request.result.createObjectStore('v1', { keyPath: 'id' });
+            for (const store of stores) request.result.createObjectStore(store, { keyPath: 'id' });
         }, { once: true });
         request.addEventListener('success', () => resolve(request.result), { once: true });
         request.addEventListener('error', () => reject(request.error), { once: true });
     });
-    versionOne.addEventListener('versionchange', event => event.preventDefault());
-    let resolveBlocked;
-    const blocked = new Promise(resolve => { resolveBlocked = resolve; });
-    const upgrade = indexedDB.open(databaseName, 2);
-    upgrade.addEventListener('blocked', () => resolveBlocked({
-        blocked: true,
-        heldVersion: versionOne.version,
-    }), { once: true });
-    const evidence = await blocked;
-    versionOne.close();
-    const versionTwo = await new Promise((resolve, reject) => {
-        upgrade.addEventListener('success', () => resolve(upgrade.result), { once: true });
-        upgrade.addEventListener('error', () => reject(upgrade.error), { once: true });
+    window.__heldWorkspaceDatabase = versionOne;
+    window.__heldWorkspaceVersionChangeCount = 0;
+    versionOne.addEventListener('versionchange', event => {
+        event.preventDefault();
+        window.__heldWorkspaceVersionChangeCount += 1;
     });
-    const upgradedVersion = versionTwo.version;
-    versionTwo.close();
-    return { ...evidence, upgradedVersion };
-}, WORKSPACE_DB_NAME);
+    return { version: versionOne.version, stores: Array.from(versionOne.objectStoreNames) };
+}, { databaseName: WORKSPACE_DB_NAME, stores: WORKSPACE_STORE_NAMES });
+
+export const mountVersionTwoWorkspaceGate = page => page.evaluate(async () => {
+    const { mountBlockedUpgradeGate } = await import('/tests/e2e/fixtures/workspaceBlockedUpgradeHarness.tsx');
+    return mountBlockedUpgradeGate(2);
+});
+
+export const readHeldWorkspaceSignals = page => page.evaluate(() => ({
+    versionChangeCount: window.__heldWorkspaceVersionChangeCount,
+}));
+
+export const inspectHeldWorkspaceDatabase = page => page.evaluate(async stores => {
+    const database = window.__heldWorkspaceDatabase;
+    if (!database) throw new Error('Version-1 workspace database is not held.');
+    const transaction = database.transaction(stores, 'readonly');
+    const records = Object.fromEntries(await Promise.all(stores.map(store => new Promise((resolve, reject) => {
+        const request = transaction.objectStore(store).getAll();
+        request.addEventListener('success', () => resolve([store, request.result]), { once: true });
+        request.addEventListener('error', () => reject(request.error), { once: true });
+    }))));
+    await new Promise((resolve, reject) => {
+        transaction.addEventListener('complete', resolve, { once: true });
+        transaction.addEventListener('abort', () => reject(transaction.error), { once: true });
+        transaction.addEventListener('error', () => reject(transaction.error), { once: true });
+    });
+    return {
+        version: database.version,
+        versionChangeCount: window.__heldWorkspaceVersionChangeCount,
+        records,
+    };
+}, WORKSPACE_STORE_NAMES);
+
+export const releaseHeldWorkspaceDatabase = page => page.evaluate(() => {
+    window.__heldWorkspaceDatabase?.close();
+    delete window.__heldWorkspaceDatabase;
+});
 
 const streamText = async stream => {
     const chunks = [];

@@ -19,13 +19,26 @@ export function useCanvasTextLayoutSession(
         if (injectedSession) return;
 
         const fonts = typeof document === 'undefined' ? undefined : document.fonts;
-        const handleFontsLoaded = () => {
+        let active = true;
+        let initialReadinessHandled = false;
+        const refreshLayout = () => {
+            if (!active) return;
             session.clear();
             rerender();
         };
+        const handleFontsLoaded = () => {
+            initialReadinessHandled = true;
+            refreshLayout();
+        };
         fonts?.addEventListener('loadingdone', handleFontsLoaded);
+        void fonts?.ready?.then(() => {
+            if (initialReadinessHandled) return;
+            initialReadinessHandled = true;
+            refreshLayout();
+        });
 
         return () => {
+            active = false;
             fonts?.removeEventListener('loadingdone', handleFontsLoaded);
             session.clear();
         };

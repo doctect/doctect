@@ -374,6 +374,41 @@ describe('Canvas fixed text rendering', () => {
 });
 
 describe('Canvas text layout session hook', () => {
+    it('clears fallback measurements when fonts became ready before the listener attached', async () => {
+        const originalFonts = Object.getOwnPropertyDescriptor(document, 'fonts');
+        const fonts = Object.assign(new EventTarget(), { ready: Promise.resolve() });
+        Object.defineProperty(document, 'fonts', { configurable: true, value: fonts });
+        const fakeCanvas = createFakeCanvas(() => 42);
+        vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(
+            () => fakeCanvas.context,
+        );
+        let renderCount = 0;
+
+        try {
+            const { result, unmount } = renderHook(() => {
+                renderCount += 1;
+                return useCanvasTextLayoutSession();
+            });
+            const session = result.current;
+
+            session.layout(baseRequest, 'fallback measurement');
+            expect(fakeCanvas.context.measureText).toHaveBeenCalledTimes(1);
+
+            await act(async () => {
+                await fonts.ready;
+            });
+
+            expect(renderCount).toBe(2);
+            expect(result.current).toBe(session);
+            session.layout(baseRequest, 'loaded font measurement');
+            expect(fakeCanvas.context.measureText).toHaveBeenCalledTimes(2);
+            unmount();
+        } finally {
+            if (originalFonts) Object.defineProperty(document, 'fonts', originalFonts);
+            else Reflect.deleteProperty(document, 'fonts');
+        }
+    });
+
     it('clears and rerenders after fonts load, then removes its listener on unmount', () => {
         const originalFonts = Object.getOwnPropertyDescriptor(document, 'fonts');
         const fonts = new EventTarget();

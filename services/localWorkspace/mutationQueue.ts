@@ -56,7 +56,7 @@ export const createMutationQueue = (
   operations: MutationOperations,
 ): MutationQueue => {
   const entries: QueueEntry[] = [];
-  const queuedSaves = new Map<string, SaveEntry>();
+  let queuedSaves = new Map<string, SaveEntry>();
   const drainWaiters: Array<() => void> = [];
   let activeSaveId: string | undefined;
   let running = false;
@@ -180,7 +180,7 @@ export const createMutationQueue = (
       }
 
       flushSaves();
-      queuedSaves.clear();
+      queuedSaves = new Map();
       entries.push({
         kind: 'exclusive',
         command: structuredClone(command),

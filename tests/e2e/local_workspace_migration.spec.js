@@ -11,7 +11,9 @@ import {
     armLegacyStorageEvent,
     createChangedLegacyWorkspace,
     downloadJson,
+    holdVersionOneWorkspaceDatabase,
     inspectWorkspaceDatabase,
+    inspectHeldWorkspaceDatabase,
     installBootstrapPhaseHold,
     installBootstrapResultCapture,
     installCrashAfterCopied,
@@ -22,15 +24,17 @@ import {
     installInitialCopyCorruption,
     installPerformanceCapture,
     legacyRawFromBundle,
+    mountVersionTwoWorkspaceGate,
     navigateSpaToEditor,
     prepareLargeLegacyWorkspace,
     prepareLegacyFailure,
     prepareValidLegacyWorkspace,
     readCapturedBootstrapResult,
+    readHeldWorkspaceSignals,
     readLegacyRaw,
     readPerformanceCapture,
+    releaseHeldWorkspaceDatabase,
     releaseBootstrapPhaseHold,
-    runBlockedVersionUpgrade,
     seedLegacyRaw,
     totalStoredRecords,
     waitForBootstrapPhaseHold,
@@ -200,12 +204,39 @@ test.describe('local workspace migration release gate', () => {
         }
     });
 
-    test('browser version-1 connection blocks version-2 upgrade without fallback', async ({ page }) => {
-        await page.goto('/');
+    test('production version-2 bootstrap is blocked by a held version-1 connection without fallback', async ({ page }) => {
+        const legacy = await prepareValidLegacyWorkspace(page, { pendingImport: false });
+        const held = await holdVersionOneWorkspaceDatabase(page);
+        expect(held).toEqual({ version: 1, stores: [...WORKSPACE_STORE_NAMES].sort() });
+        let heldReleased = false;
 
-        const evidence = await runBlockedVersionUpgrade(page);
+        try {
+            const gateEvidence = await mountVersionTwoWorkspaceGate(page);
+            expect(gateEvidence).toMatchObject({
+                result: { status: 'unavailable' },
+                gateBootstrapCalls: 1,
+            });
+            await expect.poll(async () => (
+                await readHeldWorkspaceSignals(page)
+            ).versionChangeCount).toBe(1);
+            await expect(page.getByRole('heading', {
+                name: 'Local project storage is unavailable',
+            })).toBeVisible();
+            await expect(page.getByTestId('blocked-upgrade-editor')).toHaveCount(0);
+            await expect(editorPane(page)).toHaveCount(0);
+            const heldInspection = await inspectHeldWorkspaceDatabase(page);
+            expect(heldInspection.version).toBe(1);
+            expect(heldInspection.versionChangeCount).toBe(1);
+            expect(totalStoredRecords(heldInspection)).toBe(0);
+            expect(await readLegacyRaw(page)).toEqual(legacy.raw);
 
-        expect(evidence).toEqual({ blocked: true, heldVersion: 1, upgradedVersion: 2 });
+            await releaseHeldWorkspaceDatabase(page);
+            heldReleased = true;
+            expect(totalStoredRecords(await inspectWorkspaceDatabase(page))).toBe(0);
+            expect(await readLegacyRaw(page)).toEqual(legacy.raw);
+        } finally {
+            if (!heldReleased) await releaseHeldWorkspaceDatabase(page);
+        }
     });
 
     test('aborted initial copy is all-or-nothing and retains every source byte', async ({ page }) => {

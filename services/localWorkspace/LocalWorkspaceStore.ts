@@ -408,8 +408,9 @@ const ready = (
 const verificationError = (message: string): WorkspaceMigrationError =>
   new WorkspaceMigrationError(message, 'verification-failed');
 
-export const createLocalWorkspaceStore = (
+const createLocalWorkspaceStoreAtVersion = (
   environment: LocalWorkspaceEnvironment,
+  requestedIndexedDbVersion: number,
 ): LocalWorkspaceStore => {
   let authority: AuthorityState = 'cold';
   let inFlight: Promise<WorkspaceBootstrapResult> | undefined;
@@ -423,7 +424,7 @@ export const createLocalWorkspaceStore = (
   let durableSnapshot: WorkspaceSnapshot | undefined;
   let expectedWorkspaceRevision: number | undefined;
   let expectedProjectRevisions = new Map<string, number>();
-  const consumedImportTargets = new Map<string, string>();
+  let consumedImportTargets = new Map<string, string>();
   let mutationQueue: MutationQueue | undefined;
   let startReadyLegacyRevalidation: (() => void) | undefined;
   let resetCommandQueue: (() => void) | undefined;
@@ -448,7 +449,7 @@ export const createLocalWorkspaceStore = (
     durableSnapshot = undefined;
     expectedWorkspaceRevision = undefined;
     expectedProjectRevisions = new Map();
-    consumedImportTargets.clear();
+    consumedImportTargets = new Map();
   };
 
   const handleAuthorityLost = (error: WorkspaceStoreError): void => {
@@ -467,7 +468,7 @@ export const createLocalWorkspaceStore = (
       now: environment.now,
       fault: environment.fault,
       onAuthorityLost: handleAuthorityLost,
-    });
+    }, requestedIndexedDbVersion);
     return adapter;
   };
 
@@ -526,10 +527,7 @@ export const createLocalWorkspaceStore = (
     durableSnapshot = nextSnapshot;
     expectedProjectRevisions = nextProjectRevisions;
     expectedWorkspaceRevision = nextWorkspaceRevision;
-    consumedImportTargets.clear();
-    for (const [importId, projectId] of nextConsumedImportTargets) {
-      consumedImportTargets.set(importId, projectId);
-    }
+    consumedImportTargets = nextConsumedImportTargets;
     if (updateCachedReady && cachedReady) {
       cachedReady = { ...cachedReady, snapshot: structuredClone(nextSnapshot) };
     }
@@ -1794,3 +1792,19 @@ export const createLocalWorkspaceStore = (
     },
   };
 };
+
+export const createLocalWorkspaceStore = (
+  environment: LocalWorkspaceEnvironment,
+): LocalWorkspaceStore => createLocalWorkspaceStoreAtVersion(
+  environment,
+  WORKSPACE_DB_VERSION,
+);
+
+// Real-browser upgrade tests import this module directly; public barrel stays production-only.
+export const createLocalWorkspaceStoreForTesting = (
+  environment: LocalWorkspaceEnvironment,
+  requestedIndexedDbVersion: number,
+): LocalWorkspaceStore => createLocalWorkspaceStoreAtVersion(
+  environment,
+  requestedIndexedDbVersion,
+);
