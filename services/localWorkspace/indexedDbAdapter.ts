@@ -102,6 +102,10 @@ export interface IndexedDbAdapter {
   describeSchema(): Promise<IndexedDbSchemaDescription>;
   inspect(): Promise<IndexedDbInspection>;
   writeInitialCopy(prepared: PreparedInitialCopy): Promise<InitialCopyResult>;
+  replaceCopiedInitialCopy(
+    prepared: PreparedInitialCopy,
+    expectedLedger: MigrationLedger,
+  ): Promise<void>;
   readWorkspaceRecords(): Promise<WorkspaceRecords>;
   readLegacyBackup(id: string): Promise<LegacyBackupRecord | undefined>;
   readMigrationLedger(): Promise<MigrationLedger | undefined>;
@@ -409,6 +413,36 @@ export const createIndexedDbAdapter = (
     }
   };
 
+  const enqueuePreparedCopy = (
+    transaction: WriteTransaction,
+    prepared: PreparedInitialCopy,
+    requests: Promise<unknown>[],
+  ): void => {
+    const projects = transaction.objectStore('projects');
+    for (const project of prepared.projects) requests.push(projects.add(project));
+    environment.fault?.('copy.after-projects');
+
+    requests.push(transaction.objectStore('workspace').add(prepared.workspace));
+    environment.fault?.('copy.after-workspace');
+
+    const presets = transaction.objectStore('presets');
+    for (const preset of prepared.presets) requests.push(presets.add(preset));
+    environment.fault?.('copy.after-presets');
+
+    const pendingImports = transaction.objectStore('pendingImports');
+    for (const pending of prepared.pendingImports) {
+      requests.push(pendingImports.add(pending));
+    }
+    environment.fault?.('copy.after-pending-imports');
+
+    requests.push(transaction.objectStore('legacyBackup').add(prepared.backup));
+    environment.fault?.('copy.after-backup');
+
+    requests.push(transaction.objectStore('migrationLedger').add(prepared.ledger));
+    environment.fault?.('copy.after-ledger');
+    environment.fault?.('copy.before-complete');
+  };
+
   const writeInitialCopy = async (
     prepared: PreparedInitialCopy,
   ): Promise<InitialCopyResult> => {
@@ -437,33 +471,49 @@ export const createIndexedDbAdapter = (
         return { status: 'orphaned-target' };
       }
 
-      const projectStore = transaction.objectStore('projects');
-      for (const project of prepared.projects) requests.push(projectStore.add(project));
-      environment.fault?.('copy.after-projects');
-
-      requests.push(transaction.objectStore('workspace').add(prepared.workspace));
-      environment.fault?.('copy.after-workspace');
-
-      const presetStore = transaction.objectStore('presets');
-      for (const preset of prepared.presets) requests.push(presetStore.add(preset));
-      environment.fault?.('copy.after-presets');
-
-      const pendingImportStore = transaction.objectStore('pendingImports');
-      for (const pendingImport of prepared.pendingImports) {
-        requests.push(pendingImportStore.add(pendingImport));
-      }
-      environment.fault?.('copy.after-pending-imports');
-
-      requests.push(transaction.objectStore('legacyBackup').add(prepared.backup));
-      environment.fault?.('copy.after-backup');
-
-      requests.push(transaction.objectStore('migrationLedger').add(prepared.ledger));
-      environment.fault?.('copy.after-ledger');
-      environment.fault?.('copy.before-complete');
+      enqueuePreparedCopy(transaction, prepared, requests);
 
       await Promise.all(requests);
       await transaction.done;
       return { status: 'copied' };
+    } catch (error) {
+      return abortTransaction(transaction, requests, error);
+    }
+  };
+
+  const replaceCopiedInitialCopy = async (
+    prepared: PreparedInitialCopy,
+    expectedLedger: MigrationLedger,
+  ): Promise<void> => {
+    const activeDatabase = await getDatabase();
+    try {
+      environment.fault?.('copy.before-transaction');
+    } catch (error) {
+      throw mappedError(error);
+    }
+
+    let transaction: WriteTransaction | undefined;
+    const requests: Promise<unknown>[] = [];
+    try {
+      transaction = activeDatabase.transaction(STORE_NAMES, 'readwrite');
+      const ledgerStore = transaction.objectStore('migrationLedger');
+      const currentLedger = await ledgerStore.get(WORKSPACE_MIGRATION_ID);
+      if (!recognizedLedger(currentLedger)
+        || currentLedger.state !== 'copied'
+        || currentLedger.unresolvedRecovery !== null
+        || canonicalStringify(currentLedger) !== canonicalStringify(expectedLedger)) {
+        throw conflict('Copied migration ledger changed before replacement.');
+      }
+
+      const keys = await Promise.all(STORE_NAMES.map(name =>
+        transaction!.objectStore(name).getAllKeys()));
+      for (const [index, name] of STORE_NAMES.entries()) {
+        const objectStore = transaction.objectStore(name);
+        for (const key of keys[index]) requests.push(objectStore.delete(key));
+      }
+      enqueuePreparedCopy(transaction, prepared, requests);
+      await Promise.all(requests);
+      await transaction.done;
     } catch (error) {
       return abortTransaction(transaction, requests, error);
     }
@@ -1117,6 +1167,7 @@ export const createIndexedDbAdapter = (
     describeSchema,
     inspect,
     writeInitialCopy,
+    replaceCopiedInitialCopy,
     readWorkspaceRecords,
     readLegacyBackup,
     readMigrationLedger,

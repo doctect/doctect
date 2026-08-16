@@ -55,11 +55,17 @@ const COPY_TRANSACTION_FAULTS = [
   'copy.before-complete',
 ] as const satisfies readonly WorkspaceFaultPoint[];
 
-const preparedCopy = (): PreparedInitialCopy => {
+const preparedCopy = (digest = 'source-digest'): PreparedInitialCopy => {
   const snapshot = workspaceSnapshot();
+  if (digest !== 'source-digest') {
+    snapshot.projects[0] = {
+      ...snapshot.projects[0],
+      name: `Project ${digest}`,
+    };
+  }
   const migratedAt = '2026-08-14T15:00:00.000Z';
   const source = legacySnapshot();
-  const backupId = `${WORKSPACE_MIGRATION_ID}:original:source-digest`;
+  const backupId = `${WORKSPACE_MIGRATION_ID}:original:${digest}`;
   const projects = snapshot.projects.map(project => ({
     id: project.id,
     project,
@@ -87,7 +93,7 @@ const preparedCopy = (): PreparedInitialCopy => {
     kind: 'original',
     capturedAt: migratedAt,
     snapshot: source,
-    digest: 'source-digest',
+    digest,
   };
   const ledger: MigrationLedger = {
     id: WORKSPACE_MIGRATION_ID,
@@ -95,9 +101,9 @@ const preparedCopy = (): PreparedInitialCopy => {
     state: 'copied',
     origin: 'legacy',
     ledgerRevision: 0,
-    sourceDigest: 'source-digest',
-    expectedTargetDigest: 'target-digest',
-    acceptedLegacyDigest: 'source-digest',
+    sourceDigest: digest,
+    expectedTargetDigest: `target-${digest}`,
+    acceptedLegacyDigest: digest,
     originalLegacyBackupId: backupId,
     acceptedLegacyBackupId: backupId,
     keyFingerprints: [],
@@ -589,6 +595,67 @@ describe('atomic initial copy', () => {
     });
 
     expect(events).toEqual(['complete', 'resolved']);
+  });
+});
+
+describe('atomic copied target replacement', () => {
+  it('atomically replaces an exact copied ledger with a newly prepared copy', async () => {
+    const adapter = createTestAdapter();
+    const oldCopy = preparedCopy();
+    const newCopy = preparedCopy('new-source-digest');
+    await adapter.writeInitialCopy(oldCopy);
+
+    await adapter.replaceCopiedInitialCopy(newCopy, oldCopy.ledger);
+
+    expect(await adapter.inspect()).toEqual({
+      projects: newCopy.projects,
+      workspace: [newCopy.workspace],
+      presets: newCopy.presets,
+      pendingImports: newCopy.pendingImports,
+      migrationLedger: [newCopy.ledger],
+      legacyBackup: [newCopy.backup],
+    });
+  });
+
+  it.each(COPY_TRANSACTION_FAULTS)(
+    'preserves the previous copied target when replacement fails at %s',
+    async faultPoint => {
+      let replacementArmed = false;
+      const adapter = createTestAdapter({
+        fault(point) {
+          if (replacementArmed && point === faultPoint) {
+            throw new Error(`Injected replacement fault at ${point}.`);
+          }
+        },
+      });
+      const oldCopy = preparedCopy();
+      const newCopy = preparedCopy('new-source-digest');
+      await adapter.writeInitialCopy(oldCopy);
+      const before = await adapter.inspect();
+      replacementArmed = true;
+
+      await expect(adapter.replaceCopiedInitialCopy(
+        newCopy,
+        oldCopy.ledger,
+      )).rejects.toBeInstanceOf(WorkspaceStoreError);
+
+      expect(await adapter.inspect()).toEqual(before);
+    },
+  );
+
+  it('rejects replacement when the copied ledger no longer matches exactly', async () => {
+    const adapter = createTestAdapter();
+    const oldCopy = preparedCopy();
+    const newCopy = preparedCopy('new-source-digest');
+    await adapter.writeInitialCopy(oldCopy);
+    const before = await adapter.inspect();
+
+    await expect(adapter.replaceCopiedInitialCopy(newCopy, {
+      ...oldCopy.ledger,
+      ledgerRevision: oldCopy.ledger.ledgerRevision + 1,
+    })).rejects.toMatchObject({ code: 'conflict' });
+
+    expect(await adapter.inspect()).toEqual(before);
   });
 });
 

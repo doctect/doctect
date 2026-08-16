@@ -30,7 +30,10 @@ import {
   createIndexedDbAdapter,
   type IndexedDbInspection,
 } from '../../../services/localWorkspace/indexedDbAdapter';
-import { digestLegacySnapshot } from '../../../services/localWorkspace/canonical';
+import {
+  canonicalStringify,
+  digestLegacySnapshot,
+} from '../../../services/localWorkspace/canonical';
 import { captureLegacySnapshot } from '../../../services/localWorkspace/legacy';
 import {
   prepareInitialCopy,
@@ -1071,12 +1074,83 @@ describe('existing target decision table', () => {
     const oldValues = validLegacyValues();
     const storage = memoryStorage(oldValues);
     const harness = createHarness({ storage });
+    const copy = await seedCopy(harness, { source: sourceFrom(oldValues) });
+    storage.seed(LEGACY_KEYS.projects, JSON.stringify([legacyProject(), secondProject()]));
+    const store = createLocalWorkspaceStore(harness.environment);
+
+    const first = await store.bootstrap();
+    expect(recoveryResult(first).recovery.kind).toBe('verification-failed');
+
+    const retried = readyResult(await store.bootstrap());
+    expect(retried.snapshot.projects.map(project => project.id))
+      .toEqual(['project-a', 'project-b']);
+    expect((await inspect(harness)).migrationLedger[0]).toMatchObject({
+      state: 'verified',
+    });
+    expect((await inspect(harness)).migrationLedger[0].sourceDigest)
+      .not.toBe(copy.sourceDigest);
+    expect(storage.mutations).toEqual([]);
+  });
+
+  it('preserves the previous copy when retry preparation rejects changed legacy', async () => {
+    const oldValues = validLegacyValues();
+    const storage = memoryStorage(oldValues);
+    const harness = createHarness({ storage });
+    await seedCopy(harness, { source: sourceFrom(oldValues) });
+    storage.seed(LEGACY_KEYS.projects, '{');
+    const store = createLocalWorkspaceStore(harness.environment);
+
+    expect(recoveryResult(await store.bootstrap()).recovery.kind)
+      .toBe('verification-failed');
+    const before = canonicalStringify(await inspect(harness));
+    const retry = recoveryResult(await store.bootstrap());
+
+    expect(retry.recovery.kind).toBe('migration-failed');
+    expect(canonicalStringify(await inspect(harness))).toBe(before);
+    expect(storage.mutations).toEqual([]);
+  });
+
+  it('aborts copied replacement without changing either source', async () => {
+    const oldValues = validLegacyValues();
+    const storage = memoryStorage(oldValues);
+    const harness = createHarness({ storage });
     await seedCopy(harness, { source: sourceFrom(oldValues) });
     storage.seed(LEGACY_KEYS.projects, JSON.stringify([legacyProject(), secondProject()]));
+    const store = createLocalWorkspaceStore(harness.environment);
+    expect(recoveryResult(await store.bootstrap()).recovery.kind)
+      .toBe('verification-failed');
+    const before = canonicalStringify(await inspect(harness));
+    harness.setFault('copy.after-projects');
 
-    const result = await createLocalWorkspaceStore(harness.environment).bootstrap();
+    expect(recoveryResult(await store.bootstrap()).recovery.kind)
+      .toBe('migration-failed');
+    expect(canonicalStringify(await inspect(harness))).toBe(before);
+    expect(storage.mutations).toEqual([]);
+  });
 
-    expect(recoveryResult(result).recovery.kind).toBe('verification-failed');
+  it('lets concurrent copied retries follow one replacement winner', async () => {
+    const oldValues = validLegacyValues();
+    const storage = memoryStorage(oldValues);
+    const harness = createHarness({ storage });
+    await seedCopy(harness, { source: sourceFrom(oldValues) });
+    storage.seed(LEGACY_KEYS.projects, JSON.stringify([legacyProject(), secondProject()]));
+    const left = createLocalWorkspaceStore(harness.environment);
+    const right = createLocalWorkspaceStore(harness.environment);
+    const first = await Promise.all([left.bootstrap(), right.bootstrap()]);
+    expect(first.map(result => recoveryResult(result).recovery.kind))
+      .toEqual(['verification-failed', 'verification-failed']);
+
+    const retried = await Promise.all([left.bootstrap(), right.bootstrap()]);
+
+    expect(retried).toEqual([
+      expect.objectContaining({ status: 'ready' }),
+      expect.objectContaining({ status: 'ready' }),
+    ]);
+    const finalInspection = await inspect(harness);
+    expect(finalInspection.migrationLedger).toHaveLength(1);
+    expect(finalInspection.migrationLedger[0].state).toBe('verified');
+    expect(finalInspection.legacyBackup).toHaveLength(1);
+    expect(storage.mutations).toEqual([]);
   });
 
   it('loads verified records without comparing edits to the migration target digest', async () => {

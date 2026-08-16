@@ -262,6 +262,15 @@ const allStoresEmpty = (inspection: IndexedDbInspection): boolean =>
   && inspection.migrationLedger.length === 0
   && inspection.legacyBackup.length === 0;
 
+const inspectionForPrepared = (prepared: PreparedInitialCopy): IndexedDbInspection => ({
+  projects: prepared.projects,
+  workspace: [prepared.workspace],
+  presets: prepared.presets,
+  pendingImports: prepared.pendingImports,
+  migrationLedger: [prepared.ledger],
+  legacyBackup: [prepared.backup],
+});
+
 const recoveryDetails: Record<WorkspaceRecovery['kind'], {
   category: string;
   message: string;
@@ -428,6 +437,7 @@ const createLocalWorkspaceStoreAtVersion = (
   let mutationQueue: MutationQueue | undefined;
   let startReadyLegacyRevalidation: (() => void) | undefined;
   let resetCommandQueue: (() => void) | undefined;
+  let retryableCopiedLedger: MigrationLedger | undefined;
 
   const registerObserver = (observer?: WorkspaceBootstrapObserver): void => {
     if (observer && !observer.signal?.aborted) observers.add(observer);
@@ -1020,17 +1030,73 @@ const createLocalWorkspaceStoreAtVersion = (
 
     const followInspection = async (
       inspection: IndexedDbInspection,
+      allowCopiedReplacement: boolean,
     ): Promise<WorkspaceBootstrapResult> => {
       const classification = classifyInspection(inspection);
       if (classification.kind === 'none' || classification.kind === 'unrecognized') {
+        retryableCopiedLedger = undefined;
         return recovery('unrecognized-target');
       }
       const ledger = classification.ledger;
       if (ledger.state === 'cleanup-started' || ledger.state === 'cleanup-complete') {
+        retryableCopiedLedger = undefined;
         return recovery('unsupported-cleanup-state');
       }
-      if (ledger.state === 'verified') return processVerified(ledger);
+      if (ledger.state === 'verified') {
+        retryableCopiedLedger = undefined;
+        return processVerified(ledger);
+      }
       if (ledger.unresolvedRecovery) return storedRecovery(ledger.unresolvedRecovery);
+
+      if (ledger.state === 'copied'
+        && allowCopiedReplacement
+        && retryableCopiedLedger
+        && canonicalStringify(retryableCopiedLedger) === canonicalStringify(ledger)) {
+        let replacement: PreparedInitialCopy;
+        try {
+          replacement = await captureStableLegacySnapshot(
+            environment.legacyStorage,
+            source => prepareInitialCopy(source, {
+              crypto: environment.crypto,
+              now: environment.now,
+              randomUUID: environment.randomUUID,
+              createBlankProject: environment.createBlankProject,
+            }),
+            environment.crypto.subtle,
+            { generation: () => observedLegacyChange },
+          );
+        } catch (error) {
+          if (error instanceof LegacyCaptureError || error instanceof WorkspaceMigrationError) {
+            return migrationFailure(error);
+          }
+          throw error;
+        }
+        emit('copying-projects');
+        try {
+          await adapter.replaceCopiedInitialCopy(replacement, ledger);
+        } catch (error) {
+          if (error instanceof WorkspaceStoreError && error.code === 'conflict') {
+            try {
+              return followInspection(await adapter.inspect(), false);
+            } catch (inspectionError) {
+              if (inspectionError instanceof WorkspaceStoreError) return unavailable();
+              throw inspectionError;
+            }
+          }
+          if (error instanceof WorkspaceStoreError && error.code === 'unavailable') {
+            return unavailable();
+          }
+          if (error instanceof WorkspaceStoreError) return migrationFailure(error);
+          throw error;
+        }
+        retryableCopiedLedger = undefined;
+        return followInspection(inspectionForPrepared(replacement), false);
+      }
+
+      const copiedFailure = (error?: unknown) => {
+        retryableCopiedLedger = structuredClone(ledger);
+        return verificationFailure(error);
+      };
 
       emit('verifying-projects');
       let inputs: Awaited<ReturnType<typeof readVerificationInputs>>;
@@ -1038,7 +1104,7 @@ const createLocalWorkspaceStoreAtVersion = (
         inputs = await readVerificationInputs(ledger);
       } catch (error) {
         if (error instanceof WorkspaceStoreError) return unavailable();
-        if (error instanceof WorkspaceMigrationError) return verificationFailure(error);
+        if (error instanceof WorkspaceMigrationError) return copiedFailure(error);
         throw error;
       }
 
@@ -1064,13 +1130,13 @@ const createLocalWorkspaceStoreAtVersion = (
           environment.crypto.subtle,
         );
       } catch (error) {
-        return verificationFailure(error);
+        return copiedFailure(error);
       }
       if (!await retainedLegacyMatches(
         inputs.acceptedBackup.snapshot,
         ledger.acceptedLegacyDigest,
       )) {
-        return verificationFailure();
+        return copiedFailure();
       }
 
       let verifiedLedger: MigrationLedger;
@@ -1091,23 +1157,23 @@ const createLocalWorkspaceStoreAtVersion = (
             }
             throw inspectionError;
           }
-          return followInspection(latest);
+          return followInspection(latest, false);
         }
         if (error instanceof WorkspaceStoreError && error.code === 'unavailable') {
           return unavailable();
         }
-        return verificationFailure(error);
+        return copiedFailure(error);
       }
       if (!isRecognizedLedger(verifiedLedger)
         || verifiedLedger.state !== 'verified'
         || verifiedLedger.unresolvedRecovery !== null) {
-        return verificationFailure();
+        return copiedFailure();
       }
       if (!await retainedLegacyMatches(
         inputs.acceptedBackup.snapshot,
         verifiedLedger.acceptedLegacyDigest,
       )) {
-        return verificationFailure();
+        return copiedFailure();
       }
 
       emit('finishing-upgrade');
@@ -1115,15 +1181,20 @@ const createLocalWorkspaceStoreAtVersion = (
         captureLegacySnapshot(environment.legacyStorage),
         inputs.acceptedBackup.snapshot,
       )) {
-        return verificationFailure();
+        return copiedFailure();
       }
       installDurableState(inputs.records, snapshot);
+      retryableCopiedLedger = undefined;
       return ready(snapshot, verifiedLedger);
     };
 
     const classification = classifyInspection(initialInspection);
-    if (classification.kind === 'unrecognized') return recovery('unrecognized-target');
-    if (classification.kind === 'recognized') return followInspection(initialInspection);
+    if (classification.kind === 'unrecognized') {
+      retryableCopiedLedger = undefined;
+      return recovery('unrecognized-target');
+    }
+    if (classification.kind === 'recognized') return followInspection(initialInspection, true);
+    retryableCopiedLedger = undefined;
 
     let prepared: PreparedInitialCopy;
     try {
@@ -1157,7 +1228,10 @@ const createLocalWorkspaceStoreAtVersion = (
       throw error;
     }
 
-    if (copyResult.status === 'orphaned-target') return recovery('unrecognized-target');
+    if (copyResult.status === 'orphaned-target') {
+      retryableCopiedLedger = undefined;
+      return recovery('unrecognized-target');
+    }
     if (copyResult.status === 'existing-ledger') {
       let winner: IndexedDbInspection;
       try {
@@ -1166,17 +1240,10 @@ const createLocalWorkspaceStoreAtVersion = (
         if (error instanceof WorkspaceStoreError) return unavailable();
         throw error;
       }
-      return followInspection(winner);
+      return followInspection(winner, false);
     }
 
-    const result = await followInspection({
-      projects: prepared.projects,
-      workspace: [prepared.workspace],
-      presets: prepared.presets,
-      pendingImports: prepared.pendingImports,
-      migrationLedger: [prepared.ledger],
-      legacyBackup: [prepared.backup],
-    });
+    const result = await followInspection(inspectionForPrepared(prepared), false);
     return result;
   };
 
