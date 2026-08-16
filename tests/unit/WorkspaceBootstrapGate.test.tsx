@@ -1,7 +1,7 @@
 import { StrictMode, Suspense, startTransition, useLayoutEffect, useState } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { downloadBlob } from '../../services/browserDownload';
+import { downloadBlob, downloadJson } from '../../services/browserDownload';
 import { trackEvent } from '../../services/analytics';
 import {
   WorkspaceBootstrapGate,
@@ -129,6 +129,7 @@ function InterruptedReplacementHarness({
 beforeEach(() => {
   window.localStorage.clear();
   vi.mocked(downloadBlob).mockReset();
+  vi.mocked(downloadJson).mockReset();
   vi.mocked(trackEvent).mockReset();
 });
 
@@ -187,6 +188,7 @@ describe('WorkspaceBootstrapGate', () => {
       store,
       initialWorkspace: snapshot,
       initialWarnings: [],
+      onWorkspaceChange: expect.any(Function),
     });
   });
 
@@ -573,6 +575,31 @@ describe('WorkspaceBootstrapGate', () => {
       'Nothing was overwritten. Download either copy before choosing how to continue.',
     )).toBeVisible();
     expect(screen.queryByTestId('editor-page')).not.toBeInTheDocument();
+  });
+
+  it('downloads captured open work after authority loss unmounts the editor', async () => {
+    const store = fakeReadyStore();
+    const openWorkspace = workspaceSnapshot({
+      projects: [{ ...workspaceSnapshot().projects[0], name: 'Unsaved open work' }],
+    });
+    const renderEditor = ({ onWorkspaceChange }: WorkspaceEditorMount) => (
+      <button data-testid="editor-page" onClick={() => onWorkspaceChange(openWorkspace)}>
+        Publish open work
+      </button>
+    );
+    render(<WorkspaceBootstrapGate store={store} renderEditor={renderEditor} />);
+    fireEvent.click(await screen.findByTestId('editor-page'));
+
+    act(() => store.emitAuthorityLost(recoveryResult(splitBrainRecovery())));
+    expect(screen.queryByTestId('editor-page')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Download open work' }));
+
+    expect(downloadJson).toHaveBeenCalledWith({
+      format: 'doctect.open-workspace-recovery',
+      version: 1,
+      capturedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/),
+      workspace: openWorkspace,
+    }, 'doctect-open-workspace.json');
   });
 
   it('requires confirmation before recovering changed legacy data as copies', async () => {

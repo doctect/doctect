@@ -39,6 +39,7 @@ export interface EditorPageProps {
   store: LocalWorkspaceStore;
   initialWorkspace: WorkspaceSnapshot;
   initialWarnings: string[];
+  onWorkspaceChange?: (snapshot: WorkspaceSnapshot) => void;
 }
 
 const newProjectId = (): string => `proj_${crypto.randomUUID()}`;
@@ -57,6 +58,7 @@ export function EditorPage({
   store,
   initialWorkspace,
   initialWarnings,
+  onWorkspaceChange,
 }: EditorPageProps): React.ReactElement {
   const {
     workspace,
@@ -65,7 +67,7 @@ export function EditorPage({
     updateProject,
     commitStructural,
     retryProject,
-  } = useWorkspaceProjectWrites(store, initialWorkspace);
+  } = useWorkspaceProjectWrites(store, initialWorkspace, onWorkspaceChange);
   const [loadWarnings, setLoadWarnings] = useState(initialWarnings);
   const [commandError, setCommandError] = useState<string | null>(null);
   const [showNewProjectModal, setShowNewProjectModal] = useState(false);

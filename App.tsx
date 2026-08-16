@@ -62,11 +62,12 @@ function AppRoutes() {
           element={(
             <WorkspaceBootstrapGate
               store={localWorkspaceStore}
-              renderEditor={({ store, initialWorkspace, initialWarnings }) => (
+              renderEditor={({ store, initialWorkspace, initialWarnings, onWorkspaceChange }) => (
                 <EditorPage
                   store={store}
                   initialWorkspace={initialWorkspace}
                   initialWarnings={initialWarnings}
+                  onWorkspaceChange={onWorkspaceChange}
                 />
               )}
             />

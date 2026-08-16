@@ -1,5 +1,5 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { downloadBlob } from '../../services/browserDownload';
+import { downloadBlob, downloadJson } from '../../services/browserDownload';
 import { trackEvent } from '../../services/analytics';
 import type {
   LocalWorkspaceStore,
@@ -20,6 +20,7 @@ export interface WorkspaceEditorMount {
   store: LocalWorkspaceStore;
   initialWorkspace: WorkspaceSnapshot;
   initialWarnings: string[];
+  onWorkspaceChange(snapshot: WorkspaceSnapshot): void;
 }
 
 export interface WorkspaceBootstrapGateProps {
@@ -31,7 +32,12 @@ type ReadyResult = Extract<WorkspaceBootstrapResult, { status: 'ready' }>;
 
 type GateState =
   | { kind: 'bootstrapping'; store: LocalWorkspaceStore; phase: WorkspaceBootstrapPhase }
-  | { kind: 'blocked'; store: LocalWorkspaceStore; result: WorkspaceBlockingResult }
+  | {
+      kind: 'blocked';
+      store: LocalWorkspaceStore;
+      result: WorkspaceBlockingResult;
+      openWorkspace?: WorkspaceSnapshot;
+    }
   | {
       kind: 'ready';
       store: LocalWorkspaceStore;
@@ -189,10 +195,12 @@ export function WorkspaceBootstrapGate({
   const actionRef = useRef(0);
   const consumeAttemptRef = useRef(0);
   const consumingRef = useRef<{ store: LocalWorkspaceStore; attempt: number } | null>(null);
+  const openWorkspaceRef = useRef<WorkspaceSnapshot | null>(null);
   const committedStoreRef = useRef(store);
   const committedStateRef = useRef(state);
 
   useLayoutEffect(() => {
+    if (committedStoreRef.current !== store) openWorkspaceRef.current = null;
     committedStoreRef.current = store;
     committedStateRef.current = state;
   }, [state, store]);
@@ -203,6 +211,18 @@ export function WorkspaceBootstrapGate({
     setIsRecovering(false);
     setActionError(null);
   };
+
+  const blockedState = (
+    resultStore: LocalWorkspaceStore,
+    result: WorkspaceBlockingResult,
+  ): GateState => ({
+    kind: 'blocked',
+    store: resultStore,
+    result,
+    ...(openWorkspaceRef.current
+      ? { openWorkspace: structuredClone(openWorkspaceRef.current) }
+      : {}),
+  });
 
   const prepareImportQueue = (
     resultStore: LocalWorkspaceStore,
@@ -219,6 +239,7 @@ export function WorkspaceBootstrapGate({
   ) => {
     resetActions();
     if (result.status === 'ready') {
+      openWorkspaceRef.current = structuredClone(result.snapshot);
       const importState = prepareImportQueue(resultStore, result.snapshot);
       const warnings = unacknowledgedWarnings(resultStore);
       setState({
@@ -231,7 +252,7 @@ export function WorkspaceBootstrapGate({
       });
       return;
     }
-    setState({ kind: 'blocked', store: resultStore, result });
+    setState(blockedState(resultStore, result));
   };
 
   const beginBootstrap = async (
@@ -268,7 +289,7 @@ export function WorkspaceBootstrapGate({
           consumeAttemptRef.current += 1;
           consumingRef.current = null;
           resetActions();
-          setState({ kind: 'blocked', store: bootstrapStore, result });
+          setState(blockedState(bootstrapStore, result));
         },
       });
       if (isCurrent() && !authorityLost) publishResult(bootstrapStore, result);
@@ -327,6 +348,7 @@ export function WorkspaceBootstrapGate({
       const currentState = committedStateRef.current;
       if (currentState.kind !== 'ready' || currentState.store !== actionStore) return;
       const warnings = unacknowledgedWarnings(actionStore);
+      openWorkspaceRef.current = structuredClone(snapshot);
       setState({
         ...currentState,
         result: { ...currentState.result, snapshot },
@@ -336,11 +358,7 @@ export function WorkspaceBootstrapGate({
     } catch {
       if (isCurrent()) {
         resetActions();
-        setState({
-          kind: 'blocked',
-          store: actionStore,
-          result: rejectedImportConsumptionResult(),
-        });
+        setState(blockedState(actionStore, rejectedImportConsumptionResult()));
       }
     } finally {
       if (consumingRef.current?.attempt === consumeAttempt) {
@@ -409,6 +427,20 @@ export function WorkspaceBootstrapGate({
       if (actionRef.current === action && committedStoreRef.current === actionStore) {
         setActiveExport(null);
       }
+    }
+  };
+
+  const exportOpenWorkspace = (snapshot: WorkspaceSnapshot): void => {
+    setActionError(null);
+    try {
+      downloadJson({
+        format: 'doctect.open-workspace-recovery',
+        version: 1,
+        capturedAt: new Date().toISOString(),
+        workspace: structuredClone(snapshot),
+      }, 'doctect-open-workspace.json');
+    } catch {
+      setActionError('Open-work download failed. Nothing was changed. Try again.');
     }
   };
 
@@ -490,6 +522,9 @@ export function WorkspaceBootstrapGate({
         onRetry={recovery?.canRetry
           ? retry
           : undefined}
+        onExportOpenWorkspace={state.openWorkspace
+          ? () => exportOpenWorkspace(state.openWorkspace!)
+          : undefined}
         onExport={source => { void exportRecovery(state.store, source); }}
         onRecoverAsCopies={recovery?.canRecoverLegacyAsCopies
           ? () => { void recoverAsCopies(state.store, recovery.recoveryId); }
@@ -521,5 +556,10 @@ export function WorkspaceBootstrapGate({
     store: state.store,
     initialWorkspace: state.result.snapshot,
     initialWarnings: state.initialWarnings,
+    onWorkspaceChange(snapshot) {
+      const current = committedStateRef.current;
+      if (current.kind !== 'ready' || current.store !== state.store) return;
+      openWorkspaceRef.current = structuredClone(snapshot);
+    },
   });
 }

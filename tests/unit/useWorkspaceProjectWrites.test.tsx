@@ -54,6 +54,25 @@ const storeWithCommit = (
 });
 
 describe('useWorkspaceProjectWrites', () => {
+  it('publishes the newest working workspace before its save settles', () => {
+    const pending = new Promise<WorkspaceSnapshot>(() => {});
+    const store = storeWithCommit(() => pending);
+    const onWorkspaceChange = vi.fn();
+    const { result } = renderHook(() => useWorkspaceProjectWrites(
+      store,
+      snapshot(),
+      onWorkspaceChange,
+    ));
+    const working = project('Unsaved authority-loss copy', 13);
+
+    act(() => { void result.current.updateProject('project-1', () => working); });
+
+    expect(onWorkspaceChange).toHaveBeenLastCalledWith({
+      ...snapshot(),
+      projects: [working],
+    });
+  });
+
   it('renders initial state as saved without issuing a write, including StrictMode replay', () => {
     const store = storeWithCommit(async () => snapshot());
     const wrapper = ({ children }: { children: React.ReactNode }) => (

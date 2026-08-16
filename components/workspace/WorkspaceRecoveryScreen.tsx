@@ -21,6 +21,7 @@ export type WorkspaceBlockingResult = Extract<
 export interface WorkspaceRecoveryScreenProps {
   result: WorkspaceBlockingResult;
   onRetry?: () => void;
+  onExportOpenWorkspace?: () => void;
   onExport: (source: RecoverySource) => void;
   onRecoverAsCopies?: () => void;
   activeExport?: RecoverySource | null;
@@ -34,9 +35,12 @@ const EXPORT_LABELS: Record<RecoverySource, string> = {
   'indexeddb-workspace': 'Download editor copy',
 };
 
+const downloadButtonClassName = 'inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition-colors hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 disabled:cursor-wait disabled:opacity-60';
+
 export function WorkspaceRecoveryScreen({
   result,
   onRetry,
+  onExportOpenWorkspace,
   onExport,
   onRecoverAsCopies,
   activeExport = null,
@@ -147,8 +151,19 @@ export function WorkspaceRecoveryScreen({
 
         <div className="mt-7 border-t border-slate-200 pt-6">
           <h2 className="text-base font-semibold text-slate-900">Recovery downloads</h2>
-          {availableExports.length > 0 ? (
+          {onExportOpenWorkspace || availableExports.length > 0 ? (
             <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
+              {onExportOpenWorkspace && (
+                <button
+                  type="button"
+                  onClick={onExportOpenWorkspace}
+                  disabled={busy}
+                  className={downloadButtonClassName}
+                >
+                  <Download className="size-4" aria-hidden="true" />
+                  Download open work
+                </button>
+              )}
               {availableExports.map(source => {
                 const label = initialFailure && source === 'legacy-current'
                   ? 'Download backup'
@@ -160,7 +175,7 @@ export function WorkspaceRecoveryScreen({
                     type="button"
                     onClick={() => onExport(source)}
                     disabled={busy}
-                    className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition-colors hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 disabled:cursor-wait disabled:opacity-60"
+                    className={downloadButtonClassName}
                   >
                     {downloading
                       ? (

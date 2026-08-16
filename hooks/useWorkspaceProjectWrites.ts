@@ -55,15 +55,23 @@ const saveFailure = (error: unknown): ProjectSaveState => {
 export function useWorkspaceProjectWrites(
   store: LocalWorkspaceStore,
   initialWorkspace: WorkspaceSnapshot,
+  onWorkspaceChange?: (snapshot: WorkspaceSnapshot) => void,
 ): WorkspaceProjectWrites {
   const durableSnapshotRef = useRef(initialWorkspace);
   const workingCopiesRef = useRef(new Map<string, WorkingCopy>());
   const generationsRef = useRef(new Map<string, number>());
   const structuralQueueRef = useRef<Promise<void> | null>(null);
+  const onWorkspaceChangeRef = useRef(onWorkspaceChange);
+  onWorkspaceChangeRef.current = onWorkspaceChange;
   const [workspace, setWorkspace] = useState(initialWorkspace);
   const [saveStates, setSaveStates] = useState<ReadonlyMap<string, ProjectSaveState>>(
     () => new Map(initialWorkspace.projects.map(project => [project.id, { status: 'saved' }])),
   );
+
+  const publishWorkspace = useCallback((snapshot: WorkspaceSnapshot) => {
+    onWorkspaceChangeRef.current?.(structuredClone(snapshot));
+    setWorkspace(snapshot);
+  }, []);
 
   const reconcileSnapshot = useCallback((snapshot: WorkspaceSnapshot): WorkspaceSnapshot => {
     const survivingProjectIds = new Set(snapshot.projects.map(project => project.id));
@@ -75,7 +83,7 @@ export function useWorkspaceProjectWrites(
 
     durableSnapshotRef.current = snapshot;
     const visible = overlayWorkingCopies(snapshot, workingCopiesRef.current);
-    setWorkspace(visible);
+    publishWorkspace(visible);
     setSaveStates(current => {
       const next = new Map(current);
       for (const project of snapshot.projects) {
@@ -87,7 +95,7 @@ export function useWorkspaceProjectWrites(
       return next;
     });
     return snapshot;
-  }, []);
+  }, [publishWorkspace]);
 
   const commitStructural = useCallback((
     command: StructuralWorkspaceCommand,
@@ -147,19 +155,19 @@ export function useWorkspaceProjectWrites(
 
     const project = update(currentProject);
     const generation = (generationsRef.current.get(projectId) ?? 0) + 1;
+    const workingCopies = new Map(workingCopiesRef.current);
+    workingCopies.set(projectId, { generation, project });
+    const visible = overlayWorkingCopies(durableSnapshotRef.current, workingCopies);
     generationsRef.current.set(projectId, generation);
-    workingCopiesRef.current.set(projectId, { generation, project });
-    setWorkspace(current => ({
-      ...current,
-      projects: current.projects.map(item => item.id === projectId ? project : item),
-    }));
+    workingCopiesRef.current = workingCopies;
+    publishWorkspace(visible);
     setSaveStates(current => {
       const next = new Map(current);
       next.set(projectId, { status: 'saving' });
       return next;
     });
     return saveProject(project, generation);
-  }, [saveProject]);
+  }, [publishWorkspace, saveProject]);
 
   const retryProject = useCallback((projectId: string) => {
     const workingCopy = workingCopiesRef.current.get(projectId);
