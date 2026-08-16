@@ -147,6 +147,7 @@ interface SourcePositionSegment {
 }
 
 interface AnnexBFunctionEnvironment {
+  assignments: ReadonlyMap<string, readonly number[]>;
   end: number;
   names: ReadonlySet<string>;
   start: number;
@@ -161,8 +162,10 @@ interface SourceInput {
   annexBFunctionPositions?: ReadonlySet<number>;
   authoredScripts?: readonly SourceInput[];
   classicLinked?: boolean;
+  classicVarAssignments?: ReadonlyMap<string, readonly number[]>;
   compilerPath?: string;
   findingGroup?: string;
+  moduleGoal?: boolean;
   moduleStart?: number;
   parseFailure?: { message: string; offset: number };
   reportPath?: string;
@@ -260,17 +263,122 @@ interface ClassicGlobalDeclarations {
   annexBFunctions: Array<{ assignmentPosition?: number; name: string; position: number }>;
   functionNames: Set<string>;
   lexicalNames: Set<string>;
+  varAssignments: Array<{ name: string; position: number }>;
   varNames: Set<string>;
 }
 
+const bindingIdentifiers = (binding: ts.BindingName): ts.Identifier[] => {
+  if (ts.isIdentifier(binding)) return [binding];
+  return binding.elements.flatMap(element => (
+    ts.isOmittedExpression(element) ? [] : bindingIdentifiers(element.name)
+  ));
+};
+
 const addBindingNames = (names: Set<string>, binding: ts.BindingName): void => {
-  if (ts.isIdentifier(binding)) {
-    names.add(binding.text);
-    return;
+  for (const identifier of bindingIdentifiers(binding)) names.add(identifier.text);
+};
+
+const moduleBindingParseFailure = (sourceFile: ts.SourceFile): SourceInput['parseFailure'] => {
+  const lexicalBindings: ts.Identifier[] = [];
+  const varBindings: ts.Identifier[] = [];
+  const exportedNames: Array<{ name: string; position: number }> = [];
+  const addDeclarationBindings = (statement: ts.Statement): void => {
+    if (ts.isVariableStatement(statement)) {
+      if ((statement.declarationList.flags & ts.NodeFlags.BlockScoped) !== 0) {
+        for (const declaration of statement.declarationList.declarations) {
+          lexicalBindings.push(...bindingIdentifiers(declaration.name));
+        }
+      }
+    } else if ((ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement))
+      && statement.name) {
+      lexicalBindings.push(statement.name);
+    } else if (ts.isImportDeclaration(statement) && statement.importClause) {
+      if (statement.importClause.name) lexicalBindings.push(statement.importClause.name);
+      const bindings = statement.importClause.namedBindings;
+      if (bindings && ts.isNamespaceImport(bindings)) lexicalBindings.push(bindings.name);
+      else if (bindings && ts.isNamedImports(bindings)) {
+        for (const element of bindings.elements) lexicalBindings.push(element.name);
+      }
+    }
+  };
+  const collectVarBindings = (node: ts.Node): void => {
+    if (node !== sourceFile && (
+      ts.isFunctionLike(node)
+      || ts.isClassDeclaration(node)
+      || ts.isClassExpression(node)
+    )) return;
+    if (ts.isVariableDeclarationList(node)
+      && (node.flags & ts.NodeFlags.BlockScoped) === 0) {
+      for (const declaration of node.declarations) {
+        varBindings.push(...bindingIdentifiers(declaration.name));
+      }
+    }
+    ts.forEachChild(node, collectVarBindings);
+  };
+  for (const statement of sourceFile.statements) {
+    addDeclarationBindings(statement);
+    collectVarBindings(statement);
+    const modifiers = ts.canHaveModifiers(statement) ? ts.getModifiers(statement) : undefined;
+    const exported = modifiers?.some(modifier => modifier.kind === ts.SyntaxKind.ExportKeyword) ?? false;
+    const defaultExport = modifiers?.some(modifier => modifier.kind === ts.SyntaxKind.DefaultKeyword) ?? false;
+    if (ts.isExportAssignment(statement) || (exported && defaultExport)) {
+      exportedNames.push({ name: 'default', position: statement.getStart(sourceFile) });
+    } else if (ts.isExportDeclaration(statement) && statement.exportClause) {
+      if (ts.isNamespaceExport(statement.exportClause)) {
+        exportedNames.push({
+          name: statement.exportClause.name.text,
+          position: statement.exportClause.name.getStart(sourceFile),
+        });
+      } else {
+        for (const element of statement.exportClause.elements) {
+          exportedNames.push({ name: element.name.text, position: element.name.getStart(sourceFile) });
+        }
+      }
+    } else if (exported) {
+      if (ts.isVariableStatement(statement)) {
+        for (const declaration of statement.declarationList.declarations) {
+          for (const identifier of bindingIdentifiers(declaration.name)) {
+            exportedNames.push({ name: identifier.text, position: identifier.getStart(sourceFile) });
+          }
+        }
+      } else if ((ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement))
+        && statement.name) {
+        exportedNames.push({ name: statement.name.text, position: statement.name.getStart(sourceFile) });
+      }
+    }
   }
-  for (const element of binding.elements) {
-    if (!ts.isOmittedExpression(element)) addBindingNames(names, element.name);
-  }
+  const bindingKinds = new Map<string, 'lexical' | 'var'>();
+  const bindingFailure = [
+    ...lexicalBindings.map(identifier => ({ identifier, kind: 'lexical' as const })),
+    ...varBindings.map(identifier => ({ identifier, kind: 'var' as const })),
+  ].sort((left, right) => left.identifier.getStart(sourceFile) - right.identifier.getStart(sourceFile))
+    .map(({ identifier, kind }) => {
+      const priorKind = bindingKinds.get(identifier.text);
+      if (!priorKind || (kind === 'var' && priorKind === 'var')) {
+        if (!priorKind) bindingKinds.set(identifier.text, kind);
+        return undefined;
+      }
+      return {
+        message: `Duplicate module binding '${identifier.text}'`,
+        offset: identifier.getStart(sourceFile),
+      };
+    }).find((failure): failure is NonNullable<typeof failure> => failure !== undefined);
+  const seenExports = new Set<string>();
+  const exportFailure = exportedNames
+    .sort((left, right) => left.position - right.position)
+    .map(exported => {
+      if (!seenExports.has(exported.name)) {
+        seenExports.add(exported.name);
+        return undefined;
+      }
+      return {
+        message: `Duplicate module export '${exported.name}'`,
+        offset: exported.position,
+      };
+    }).find((failure): failure is NonNullable<typeof failure> => failure !== undefined);
+  if (!bindingFailure) return exportFailure;
+  if (!exportFailure || bindingFailure.offset < exportFailure.offset) return bindingFailure;
+  return exportFailure;
 };
 
 const classicGlobalDeclarations = (source: string): ClassicGlobalDeclarations => {
@@ -284,6 +392,7 @@ const classicGlobalDeclarations = (source: string): ClassicGlobalDeclarations =>
   const functionNames = new Set<string>();
   const lexicalNames = new Set<string>();
   const varNames = new Set<string>();
+  const varAssignments: ClassicGlobalDeclarations['varAssignments'] = [];
   const annexBFunctions: ClassicGlobalDeclarations['annexBFunctions'] = [];
   const annexBFunctionEnvironments: AnnexBFunctionEnvironment[] = [];
   const hasUseStrictDirective = (statements: readonly ts.Statement[]): boolean => {
@@ -382,10 +491,41 @@ const classicGlobalDeclarations = (source: string): ClassicGlobalDeclarations =>
       if (ts.isSourceFile(ancestor)) return false;
     }
   };
+  function expressionCompletesNormally(input: ts.Expression): boolean {
+    const expression = unwrap(input);
+    if (ts.isStringLiteralLike(expression)
+      || ts.isNumericLiteral(expression)
+      || ts.isBigIntLiteral(expression)
+      || expression.kind === ts.SyntaxKind.TrueKeyword
+      || expression.kind === ts.SyntaxKind.FalseKeyword
+      || expression.kind === ts.SyntaxKind.NullKeyword
+      || ts.isFunctionExpression(expression)
+      || ts.isArrowFunction(expression)) return true;
+    if (ts.isArrayLiteralExpression(expression)) {
+      return expression.elements.every(element => (
+        ts.isOmittedExpression(element)
+        || (!ts.isSpreadElement(element) && expressionCompletesNormally(element))
+      ));
+    }
+    if (ts.isObjectLiteralExpression(expression)) {
+      return expression.properties.every(property => {
+        if (ts.isSpreadAssignment(property)
+          || ts.isShorthandPropertyAssignment(property)
+          || ts.isComputedPropertyName(property.name)) return false;
+        return !ts.isPropertyAssignment(property)
+          || expressionCompletesNormally(property.initializer);
+      });
+    }
+    return false;
+  }
+  function declarationCompletesNormally(declaration: ts.VariableDeclaration): boolean {
+    return ts.isIdentifier(declaration.name)
+      && (!declaration.initializer || expressionCompletesNormally(declaration.initializer));
+  }
   function statementCompletesNormally(statement: ts.Statement): boolean {
     if (ts.isEmptyStatement(statement) || ts.isFunctionDeclaration(statement)) return true;
     if (ts.isVariableStatement(statement)) {
-      return statement.declarationList.declarations.every(declaration => !declaration.initializer);
+      return statement.declarationList.declarations.every(declarationCompletesNormally);
     }
     if (ts.isExpressionStatement(statement)) {
       const expression = unwrap(statement.expression);
@@ -426,12 +566,60 @@ const classicGlobalDeclarations = (source: string): ClassicGlobalDeclarations =>
     }
     return false;
   }
-  const definitelyReached = (declaration: ts.FunctionDeclaration): boolean => {
-    let child: ts.Node = declaration;
-    for (let parent = declaration.parent; ; child = parent, parent = parent.parent) {
+  const definitelyReached = (node: ts.Node): boolean => {
+    let child = node;
+    for (let parent = node.parent; ; child = parent, parent = parent.parent) {
       if (ts.isSourceFile(parent)) return priorStatementsComplete(parent.statements, child);
       if (ts.isBlock(parent)) {
         if (!priorStatementsComplete(parent.statements, child)) return false;
+        continue;
+      }
+      if (ts.isCaseClause(parent) || ts.isDefaultClause(parent)) {
+        if (!priorStatementsComplete(parent.statements, child)) return false;
+        continue;
+      }
+      if (ts.isLabeledStatement(parent)) {
+        if (parent.statement !== child) return false;
+        continue;
+      }
+      if (ts.isIfStatement(parent)) {
+        const condition = unwrap(parent.expression);
+        const selected = condition.kind === ts.SyntaxKind.TrueKeyword
+          ? parent.thenStatement
+          : condition.kind === ts.SyntaxKind.FalseKeyword ? parent.elseStatement : undefined;
+        if (selected !== child) return false;
+        continue;
+      }
+      if (ts.isCatchClause(parent)) {
+        if (parent.block !== child) return false;
+        continue;
+      }
+      if (ts.isTryStatement(parent)) {
+        if (parent.tryBlock === child) continue;
+        const catchBinding = parent.catchClause?.variableDeclaration?.name;
+        if (parent.catchClause === child
+          && (!catchBinding || ts.isIdentifier(catchBinding))
+          && statementsDefinitelyThrow(parent.tryBlock.statements)) continue;
+        return false;
+      }
+      return false;
+    }
+  };
+  const locallyDefinitelyReached = (
+    declaration: ts.FunctionDeclaration,
+    boundary: ts.Block,
+  ): boolean => {
+    let child: ts.Node = declaration;
+    for (let parent = declaration.parent; ; child = parent, parent = parent.parent) {
+      if (ts.isBlock(parent)) {
+        const index = parent.statements.indexOf(child as ts.Statement);
+        if (index === -1 || !parent.statements.slice(0, index).every(statement => (
+          statementCompletesNormally(statement)
+          || (parent === boundary && (
+            ts.isVariableStatement(statement) || ts.isExpressionStatement(statement)
+          ))
+        ))) return false;
+        if (parent === boundary) return true;
         continue;
       }
       if (ts.isCaseClause(parent) || ts.isDefaultClause(parent)) {
@@ -488,6 +676,15 @@ const classicGlobalDeclarations = (source: string): ClassicGlobalDeclarations =>
     if (ts.isVariableDeclarationList(node)
       && (node.flags & ts.NodeFlags.BlockScoped) === 0) {
       for (const declaration of node.declarations) addBindingNames(varNames, declaration.name);
+      if (ts.isVariableStatement(node.parent) && definitelyReached(node.parent)) {
+        for (const [index, declaration] of node.declarations.entries()) {
+          if (!declaration.initializer
+            || !ts.isIdentifier(declaration.name)
+            || !expressionCompletesNormally(declaration.initializer)
+            || !node.declarations.slice(0, index).every(declarationCompletesNormally)) continue;
+          varAssignments.push({ name: declaration.name.text, position: declaration.end });
+        }
+      }
     }
     ts.forEachChild(node, collectVarNames);
   };
@@ -501,21 +698,39 @@ const classicGlobalDeclarations = (source: string): ClassicGlobalDeclarations =>
     || ts.isFunctionExpression(node)
     || ts.isArrowFunction(node)
   );
-  const collectFunctionEnvironment = (
+  function collectFunctionEnvironment(
     declaration: ts.FunctionLikeDeclaration,
     inheritedStrict: boolean,
-  ): void => {
+  ): void {
     const body = declaration.body;
-    if (!body || !ts.isBlock(body)) return;
-    const functionStrict = inheritedStrict || hasUseStrictDirective(body.statements);
+    const functionStrict = inheritedStrict || (body !== undefined
+      && ts.isBlock(body)
+      && hasUseStrictDirective(body.statements));
+    for (const parameter of declaration.parameters) {
+      if (parameter.initializer) collectNestedFunctions(parameter.initializer, functionStrict);
+    }
+    if (!body) return;
+    if (!ts.isBlock(body)) {
+      collectNestedFunctions(body, functionStrict);
+      return;
+    }
     const names = new Set<string>();
+    const assignments = new Map<string, number[]>();
     const visit = (node: ts.Node): void => {
       if (node !== body && isFunctionEnvironment(node)) {
         if (!functionStrict
           && ts.isFunctionDeclaration(node)
           && node.parent !== body
           && node.name
-          && annexBEligible(node, body)) names.add(node.name.text);
+          && annexBEligible(node, body)) {
+          const name = node.name.text;
+          names.add(name);
+          if (locallyDefinitelyReached(node, body)) {
+            const positions = assignments.get(name) ?? [];
+            positions.push(node.end);
+            assignments.set(name, positions);
+          }
+        }
         collectFunctionEnvironment(node, functionStrict);
         return;
       }
@@ -528,26 +743,28 @@ const classicGlobalDeclarations = (source: string): ClassicGlobalDeclarations =>
     ts.forEachChild(body, visit);
     if (names.size > 0) {
       annexBFunctionEnvironments.push({
+        assignments,
         end: body.end,
         names,
         start: body.getStart(sourceFile),
       });
     }
-  };
-  const collectNestedFunctions = (node: ts.Node): void => {
+  }
+  function collectNestedFunctions(node: ts.Node, inheritedStrict: boolean): void {
     if (ts.isClassDeclaration(node) || ts.isClassExpression(node)) return;
     if (isFunctionEnvironment(node)) {
-      collectFunctionEnvironment(node, strict);
+      collectFunctionEnvironment(node, inheritedStrict);
       return;
     }
-    ts.forEachChild(node, collectNestedFunctions);
-  };
-  ts.forEachChild(sourceFile, collectNestedFunctions);
+    ts.forEachChild(node, child => collectNestedFunctions(child, inheritedStrict));
+  }
+  ts.forEachChild(sourceFile, node => collectNestedFunctions(node, strict));
   return {
     annexBFunctionEnvironments,
     annexBFunctions,
     functionNames,
     lexicalNames,
+    varAssignments,
     varNames,
   };
 };
@@ -753,6 +970,7 @@ const executableInputs = (inputs: readonly SourceInput[]): SourceInput[] => inpu
     'annexBFunctionAssignments'
     | 'annexBFunctionEnvironments'
     | 'annexBFunctionPositions'
+    | 'classicVarAssignments'
     | 'positionSegments'
     | 'source'> & {
     afterIndex: number;
@@ -769,6 +987,7 @@ const executableInputs = (inputs: readonly SourceInput[]): SourceInput[] => inpu
     const annexBFunctionAssignments = new Map<string, number>();
     const annexBFunctionEnvironments: AnnexBFunctionEnvironment[] = [];
     const annexBFunctionPositions = new Set<number>();
+    const classicVarAssignments = new Map<string, number[]>();
     const globalObject = document.window;
     const globalDescriptors = Object.getOwnPropertyDescriptors(globalObject);
     const globalExtensible = Object.isExtensible(globalObject);
@@ -839,8 +1058,19 @@ const executableInputs = (inputs: readonly SourceInput[]): SourceInput[] => inpu
           annexBFunctionAssignments.set(annexBFunction.name, assignmentPosition);
         }
       }
+      for (const assignment of declarations.varAssignments) {
+        if (!canAssignGlobal(assignment.name)) continue;
+        classicVarAssignments.set(assignment.name, [
+          ...(classicVarAssignments.get(assignment.name) ?? []),
+          generatedStart + assignment.position,
+        ]);
+      }
       for (const environment of declarations.annexBFunctionEnvironments) {
         annexBFunctionEnvironments.push({
+          assignments: new Map([...environment.assignments].map(([name, positions]) => [
+            name,
+            positions.map(position => generatedStart + position),
+          ])),
           end: generatedStart + environment.end,
           names: environment.names,
           start: generatedStart + environment.start,
@@ -861,6 +1091,7 @@ const executableInputs = (inputs: readonly SourceInput[]): SourceInput[] => inpu
         annexBFunctionPositions: new Set(annexBFunctionPositions),
         authoredScripts: [authoredScript],
         classicLinked: true,
+        classicVarAssignments: new Map(classicVarAssignments),
         compilerPath: `\0doctect-inline/${input.path}/classic-${script.index}.js`,
         reportPath: input.path,
         reportSource: input.source,
@@ -872,6 +1103,7 @@ const executableInputs = (inputs: readonly SourceInput[]): SourceInput[] => inpu
         annexBFunctionAssignments: new Map(annexBFunctionAssignments),
         annexBFunctionEnvironments: [...annexBFunctionEnvironments],
         annexBFunctionPositions: new Set(annexBFunctionPositions),
+        classicVarAssignments: new Map(classicVarAssignments),
         positionSegments: [...positionSegments],
         source,
       });
@@ -882,6 +1114,7 @@ const executableInputs = (inputs: readonly SourceInput[]): SourceInput[] => inpu
     const authoredScript: SourceInput = {
       path: `${input.path}.__inline_${script.index}.js`,
       compilerPath: `\0doctect-inline/${input.path}/authored-module-${script.index}.js`,
+      moduleGoal: true,
       reportPath: input.path,
       reportSource: input.source,
       positionSegments: script.positionSegments,
@@ -907,6 +1140,7 @@ const executableInputs = (inputs: readonly SourceInput[]): SourceInput[] => inpu
         annexBFunctionPositions: pageGlobals.annexBFunctionPositions,
         authoredScripts: [authoredScript],
         classicLinked: true,
+        classicVarAssignments: pageGlobals.classicVarAssignments,
         compilerPath: `\0doctect-inline/${input.path}/${script.index}-${pageGlobals.afterIndex}.js`,
         findingGroup: script.async ? authoredScript.path : undefined,
         moduleStart,
@@ -1245,6 +1479,8 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
     ))) return false;
     const annexBAssignment = declarationInput?.annexBFunctionAssignments?.get(identifier.text);
     if (annexBAssignment !== undefined && annexBAssignment <= position) return false;
+    if (declarationInput?.classicVarAssignments?.get(identifier.text)
+      ?.some(assignment => assignment <= position)) return false;
     return !symbol?.declarations?.some(declaration => (
       scriptsByFile.has(declaration.getSourceFile().fileName)
       && !isClassicGlobalVar(declaration, identifier)
@@ -1262,6 +1498,16 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
     positions.add(atPosition);
     trail.set(symbol, positions);
     try {
+      const annexBAssignment = symbol.declarations?.flatMap(declaration => {
+        const declarationInput = scriptsByFile.get(declaration.getSourceFile().fileName);
+        return (declarationInput?.annexBFunctionEnvironments ?? []).flatMap(environment => (
+          environment.start <= atPosition && atPosition < environment.end
+            ? (environment.assignments.get(symbol.getName()) ?? []).filter(position => position <= atPosition)
+            : []
+        ));
+      }).reduce<number | undefined>((latest, position) => (
+        latest === undefined || position > latest ? position : latest
+      ), undefined);
       const moduleStart = symbol.declarations?.map(declaration => {
         const declarationInput = scriptsByFile.get(declaration.getSourceFile().fileName);
         return declarationInput?.moduleStart !== undefined
@@ -1272,7 +1518,7 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
       return (origins.get(symbol) ?? [])
         .filter(origin => origin.position <= atPosition && (
           moduleStart === undefined || atPosition < moduleStart || origin.position >= moduleStart
-        ))
+        ) && (annexBAssignment === undefined || origin.position > annexBAssignment))
         .flatMap(origin => resolve(origin, trail));
     } finally {
       positions.delete(atPosition);
@@ -1558,6 +1804,7 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
       );
     };
     const authoredScripts = input.authoredScripts ?? [input];
+    let authoredParseFailed = false;
     for (const authoredInput of authoredScripts) {
       const authoredSourceFile = authoredInput === input
         ? sourceFile
@@ -1571,14 +1818,28 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
       const parseDiagnostics = (authoredSourceFile as ts.SourceFile & {
         parseDiagnostics: readonly ts.Diagnostic[];
       }).parseDiagnostics;
+      const moduleGoal = authoredInput.moduleGoal === true;
       for (const diagnostic of parseDiagnostics) {
+        if (moduleGoal) authoredParseFailed = true;
         const message = ts.flattenDiagnosticMessageText(diagnostic.messageText, ' ');
         appendFinding(
           `${policyPath}:${reportLine(authoredInput, diagnostic.start ?? 0)}: could not be parsed: ${message}`,
           `parse:${diagnostic.start ?? 0}:${message}`,
         );
       }
+      const moduleFailure = parseDiagnostics.length === 0
+        && moduleGoal
+        ? moduleBindingParseFailure(authoredSourceFile)
+        : undefined;
+      if (moduleFailure) {
+        authoredParseFailed = true;
+        appendFinding(
+          `${policyPath}:${reportLine(authoredInput, moduleFailure.offset)}: could not be parsed: ${moduleFailure.message}`,
+          `parse:${moduleFailure.offset}:${moduleFailure.message}`,
+        );
+      }
     }
+    if (authoredParseFailed) continue;
 
     const inspectModuleSpecifier = (node: ts.Node, expression: ts.Expression | undefined): void => {
       if (!importsAllowed && expression && [...staticStrings(expression, node.getStart(sourceFile))]
@@ -2979,6 +3240,236 @@ describe('local workspace static boundary', () => {
   ])('function-local Annex B leaves %s unchanged', (_case, path, source) => {
     expect(analyzeSource(path, source)).toEqual([
       expect.stringContaining('accesses legacy document key'),
+    ]);
+  });
+
+  it.each([
+    [
+      'function expression in a parameter initializer',
+      'function outer(run = function () { { function localStorage() {} '
+        + "localStorage.getItem = () => 'safe'; } const key = 'hype_' + 'projects'; "
+        + 'return localStorage.getItem(key); }) { return run(); } outer();',
+    ],
+    [
+      'arrow in a parameter initializer',
+      'function outer(run = () => { { function localStorage() {} '
+        + "localStorage.getItem = () => 'safe'; } const key = 'hype_' + 'projects'; "
+        + 'return localStorage.getItem(key); }) { return run(); } outer();',
+    ],
+    [
+      'function expression in a concise arrow',
+      'const make = () => function () { { function localStorage() {} '
+        + "localStorage.getItem = () => 'safe'; } const key = 'hype_' + 'projects'; "
+        + 'return localStorage.getItem(key); }; make()();',
+    ],
+    [
+      'object method in a concise arrow',
+      'const make = () => ({ read() { { function localStorage() {} '
+        + "localStorage.getItem = () => 'safe'; } const key = 'hype_' + 'projects'; "
+        + 'return localStorage.getItem(key); } }); make().read();',
+    ],
+  ])('nested Annex B environment discovery supports %s', (_case, body) => {
+    expect(analyzeSource('annex-b-nested-expression.html', `<script>${body}</script>`)).toEqual([]);
+  });
+
+  it('nested Annex B environment discovery preserves strictness inheritance', () => {
+    const source = '<script>\'use strict\'; function outer(run = function () { '
+      + "{ function localStorage() {} } const key = 'hype_' + 'projects'; "
+      + 'return localStorage.getItem(key); }) { return run(); } outer();</script>';
+    expect(analyzeSource('annex-b-nested-expression-strict.html', source)).toEqual([
+      expect.stringContaining('accesses legacy document key'),
+    ]);
+  });
+
+  it.each([
+    [
+      'localStorage',
+      'var localStorage = window.localStorage;',
+      "localStorage.getItem = () => 'safe';",
+      'localStorage',
+    ],
+    [
+      'window',
+      'var window = globalThis;',
+      "window.localStorage = { getItem: () => 'safe' };",
+      'window.localStorage',
+    ],
+    [
+      'self',
+      'var self = window;',
+      "self.localStorage = { getItem: () => 'safe' };",
+      'self.localStorage',
+    ],
+    [
+      'globalThis',
+      'var globalThis = window;',
+      "globalThis.localStorage = { getItem: () => 'safe' };",
+      'globalThis.localStorage',
+    ],
+  ])('local Annex B assignment kill masks an earlier native %s origin', (name, initial, safe, receiver) => {
+    const source = `<script>function read() { ${initial} { function ${name}() {} ${safe} } `
+      + `const key = 'hype_' + 'projects'; return ${receiver}.getItem(key); } read();</script>`;
+    expect(analyzeSource('annex-b-local-assignment.html', source)).toEqual([]);
+  });
+
+  it('local Annex B assignment kill retains a native origin before assignment', () => {
+    const source = '<script>function read() { var localStorage = window.localStorage; '
+      + "const key = 'hype_' + 'projects'; localStorage.getItem(key); "
+      + '{ function localStorage() {} } } read();</script>';
+    expect(analyzeSource('annex-b-local-before-assignment.html', source)).toEqual([
+      expect.stringContaining('accesses legacy document key'),
+    ]);
+  });
+
+  it('local Annex B assignment kill allows a later native origin to taint again', () => {
+    const source = '<script>function read() { var localStorage = window.localStorage; '
+      + "{ function localStorage() {} } localStorage = window.localStorage; const key = 'hype_' + 'projects'; "
+      + 'localStorage.getItem(key); } read();</script>';
+    expect(analyzeSource('annex-b-local-retaint.html', source)).toEqual([
+      expect.stringContaining('accesses legacy document key'),
+    ]);
+  });
+
+  it('local Annex B assignment kill keeps an uncertain assignment conservative', () => {
+    const source = '<script>function read() { var localStorage = window.localStorage; '
+      + 'if (globalThis.condition) { function localStorage() {} } '
+      + "const key = 'hype_' + 'projects'; localStorage.getItem(key); } read();</script>";
+    expect(analyzeSource('annex-b-local-uncertain.html', source)).toEqual([
+      expect.stringContaining('accesses legacy document key'),
+    ]);
+  });
+
+  it('local Annex B assignment kill keeps a prior labelled break conservative', () => {
+    const source = '<script>function read() { var localStorage = window.localStorage; exit: { break exit; '
+      + '{ function localStorage() {} } } const key = \'hype_\' + \'projects\'; '
+      + 'localStorage.getItem(key); } read();</script>';
+    expect(analyzeSource('annex-b-local-break.html', source)).toEqual([
+      expect.stringContaining('accesses legacy document key'),
+    ]);
+  });
+
+  it.each([
+    ['boolean', 'true'],
+    ['string', "'ready'"],
+    ['number', '1'],
+    ['null', 'null'],
+  ])('Annex B safe completion proves a %s initializer before global assignment', (_case, initializer) => {
+    const source = `<script>const ready = ${initializer}; { function self() {} `
+      + "self.localStorage = { getItem: () => 'safe' }; }</script>"
+      + '<script>const key = \'hype_\' + \'projects\'; self.localStorage.getItem(key);</script>';
+    expect(analyzeSource('annex-b-safe-initializer.html', source)).toEqual([]);
+  });
+
+  it.each([
+    ['getter access', 'supplied.ready'],
+    ['call', 'getReady()'],
+    ['computed property', '{ [getKey()]: true }'],
+    ['spread', '{ ...supplied }'],
+  ])('Annex B safe completion keeps %s initializer uncertain', (_case, initializer) => {
+    const source = `<script>const ready = ${initializer}; { function self() {} }</script>`
+      + '<script>const key = \'hype_\' + \'projects\'; self.localStorage.getItem(key);</script>';
+    expect(analyzeSource('annex-b-unsafe-initializer.html', source)).toEqual([
+      expect.stringContaining('accesses legacy document key'),
+    ]);
+  });
+
+  it.each([
+    ['self', 'self.localStorage'],
+    ['globalThis', 'globalThis.localStorage'],
+  ])('classic global var initializer replaces descriptor-accepted %s', (name, receiver) => {
+    const source = `<script>var ${name} = { localStorage: { getItem: () => 'safe' } }; `
+      + `const key = 'hype_' + 'projects'; ${receiver}.getItem(key);</script>`;
+    expect(analyzeSource('classic-global-var-initializer.html', source)).toEqual([]);
+  });
+
+  it.each([
+    ['window', 'window.localStorage'],
+    ['localStorage', 'localStorage'],
+  ])('classic global var initializer cannot replace getter-only %s', (name, receiver) => {
+    const value = name === 'window'
+      ? "{ localStorage: { getItem: () => 'safe' } }"
+      : "{ getItem: () => 'safe' }";
+    const source = `<script>var ${name} = ${value}; const key = 'hype_' + 'projects'; `
+      + `${receiver}.getItem(key);</script>`;
+    expect(analyzeSource('classic-global-var-getter.html', source)).toEqual([
+      expect.stringContaining('accesses legacy document key'),
+    ]);
+  });
+
+  it('classic global var initializer keeps native baseline before its write', () => {
+    const source = '<script>const key = \'hype_\' + \'projects\'; self.localStorage.getItem(key); '
+      + "var self = { localStorage: { getItem: () => 'safe' } };</script>";
+    expect(analyzeSource('classic-global-var-before.html', source)).toEqual([
+      expect.stringContaining('accesses legacy document key'),
+    ]);
+  });
+
+  it('classic global var initializer allows a later native assignment to re-taint', () => {
+    const source = '<script>var self = { localStorage: { getItem() {} } }; self = window; '
+      + "const key = 'hype_' + 'projects'; self.localStorage.getItem(key);</script>";
+    expect(analyzeSource('classic-global-var-retaint.html', source)).toEqual([
+      expect.stringContaining('accesses legacy document key'),
+    ]);
+  });
+
+  it('classic global var initializer keeps throwable writes conservative', () => {
+    const source = '<script>var self = getSafeGlobal(); const key = \'hype_\' + \'projects\'; '
+      + 'self.localStorage.getItem(key);</script>';
+    expect(analyzeSource('classic-global-var-uncertain.html', source)).toEqual([
+      expect.stringContaining('accesses legacy document key'),
+    ]);
+  });
+
+  it.each([
+    [
+      'duplicate lexical declarations',
+      ['let duplicate;', 'let duplicate;'],
+      3,
+    ],
+    [
+      'duplicate imported bindings',
+      ["import { first as duplicate } from './first.js';", "import { second as duplicate } from './second.js';"],
+      3,
+    ],
+    [
+      'import and lexical collision',
+      ["import { value as duplicate } from './value.js';", 'const duplicate = 1;'],
+      3,
+    ],
+    [
+      'duplicate exported names',
+      ['const first = 1; const second = 2;', 'export { first as duplicate };', 'export { second as duplicate };'],
+      4,
+    ],
+  ])('module binding early error rejects %s atomically', (_case, declarations, failureLine) => {
+    const source = [
+      '<script type="module">',
+      ...declarations,
+      "const key = 'hype_' + 'projects';",
+      'localStorage.getItem(key);',
+      '</script>',
+    ].join('\n');
+    const violations = analyzeSource('module-binding-error.html', source);
+    expect(violations.filter(violation => violation.includes('could not be parsed'))).toEqual([
+      expect.stringContaining(`module-binding-error.html:${failureLine}: could not be parsed`),
+    ]);
+    expect(violations.filter(violation => violation.includes('accesses legacy document key'))).toEqual([]);
+  });
+
+  it('module binding early error preserves valid imports, exports, and top-level await', () => {
+    const source = [
+      '<script type="module">',
+      "import { first as one, second as two } from './values.js';",
+      'export { one, two };',
+      'await Promise.resolve();',
+      "const key = 'hype_' + 'projects';",
+      'localStorage.getItem(key);',
+      '</script>',
+    ].join('\n');
+    const violations = analyzeSource('module-binding-valid.html', source);
+    expect(violations.filter(violation => violation.includes('could not be parsed'))).toEqual([]);
+    expect(violations.filter(violation => violation.includes('accesses legacy document key'))).toEqual([
+      expect.stringContaining('module-binding-valid.html:6: accesses legacy document key'),
     ]);
   });
 
