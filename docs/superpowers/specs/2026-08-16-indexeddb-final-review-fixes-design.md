@@ -26,7 +26,8 @@ The fixes cover four failures:
 ## Fixed invariants
 
 - Project bytes and their private storage revisions move together.
-- A complete command snapshot is published in monotonic durable order.
+- A complete command snapshot keeps every project's bytes coupled to the
+  private revisions installed from the same readback.
 - Active working copies overlay authoritative snapshots; stale durable bytes do
   not overlay authoritative revisions.
 - Authority loss blocks and unmounts the editor, but the latest open workspace
@@ -45,13 +46,14 @@ The fixes cover four failures:
 
 Project transactions may remain concurrent across different project queues.
 After each durable transaction commits, its independent full-workspace readback
-enters one private publication queue. The queue performs read, validation,
-private revision installation, cached-ready update, and promise resolution in
-durable commit order.
+continues to validate and install one complete snapshot plus the private
+revisions read with it. IndexedDB orders overlapping read/write transactions by
+creation, so a read created before a later write completes before that write; a
+read created after it observes the write. A real-IndexedDB regression pins this
+ordering without adding a redundant application queue.
 
-Queue failure freezes authority exactly as current post-command validation
-failure does. A rejected publication does not block later queue settlement, but
-the frozen store rejects all new commands.
+Readback failure freezes authority exactly as today. The store never installs
+revisions from one readback while returning project bytes from another.
 
 `LocalWorkspaceStore` still exposes only:
 
@@ -202,19 +204,17 @@ Each behavior begins RED and turns GREEN separately:
 
 1. Cross-project foreign bytes are adopted with the revision observed after a
    different project saves.
-2. Concurrent post-command readbacks cannot publish older bytes after newer
-   bytes.
-3. Newer working copies remain over complete returned snapshots.
-4. Authority loss captures failed/pending open work and downloads exact JSON
+2. Newer working copies remain over complete returned snapshots.
+3. Authority loss captures failed/pending open work and downloads exact JSON
    after editor unmount.
-5. First copied-ledger mismatch blocks; explicit Retry atomically rebuilds and
+4. First copied-ledger mismatch blocks; explicit Retry atomically rebuilds and
    verifies changed stable legacy data.
-6. Retry preparation failure and every replacement fault preserve the previous
+5. Retry preparation failure and every replacement fault preserve the previous
    copy and exact legacy strings.
-7. Concurrent retries produce one replacement and one winner-following path.
-8. Inline HTML reconstructed-key access fails policy.
-9. New executable root directories are discovered without allowlist edits.
-10. Workflow test proves the gate has no pull-request path filter.
+6. Concurrent retries produce one replacement and one winner-following path.
+7. Inline HTML reconstructed-key access fails policy.
+8. New executable root directories are discovered without allowlist edits.
+9. Workflow test proves the gate has no pull-request path filter.
 
 After focused GREEN runs: full Vitest, TypeScript, build, static boundary,
 supported migration browser matrix, and independent two-axis review.
