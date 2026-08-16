@@ -22,11 +22,11 @@ Unbound `window`, `globalThis`, `self`, `localStorage`, and `require` identifier
 
 Static strings resolve to candidate sets rather than one value. Supported forms are string literals, no-substitution templates, constants, concatenation, and templates whose substitutions resolve statically. Candidate sets preserve every prior possible assignment value.
 
-Member and callable resolution supports property access, computed access, object destructuring, aliases, bound methods, and `.call`/`.apply`. The same symbol-origin engine resolves localStorage receivers, callable methods, require aliases, property names, and key arguments.
+Member and callable resolution supports property access, computed access, object destructuring, aliases, bound methods, and `.call`/`.apply`. Callable candidates retain every `.bind()` argument after the bound `thisArg`, together with its bind-time source position. Nested binds append arguments in JavaScript effective-call order, and aliases preserve the resulting candidate unchanged. The same symbol-origin engine resolves localStorage receivers, callable methods, require aliases, property names, and key arguments.
 
 ## Legacy-Key Policy
 
-Outside the exact two-file allowlist, inspect localStorage `getItem`, `setItem`, and `removeItem` calls. For direct or bound calls, the key is argument zero. For `.call`, the key follows the explicit receiver. For `.apply`, the key is the first element of a statically resolvable argument array. Reject the call if any resolved key candidate equals an epoch-1 legacy document key. Preference keys remain legal.
+Outside the exact two-file allowlist, inspect localStorage `getItem`, `setItem`, and `removeItem` calls. Effective arguments are all pre-bound arguments followed by invocation arguments. Direct calls contribute their argument list; `.call` excludes its explicit `thisArg`; `.apply` contributes a statically resolvable argument array. The effective key is argument zero. If a bound argument occupies that position but cannot be resolved, later invocation arguments cannot replace it. Reject the call if any resolved key candidate equals an epoch-1 legacy document key. Preference keys remain legal.
 
 Contiguous legacy-key text scanning remains as defense in depth. New argument analysis catches keys reconstructed from fragments where the literal never appears contiguously.
 
@@ -43,6 +43,8 @@ Add adversarial RED cases for:
 - Taint-preserving reassignment before a call and ignored reassignment after a call.
 - Receiver, callable, destructuring, require, and static-string alias chains.
 - Concatenated, templated, and constant legacy keys through direct, computed, destructured, bound, `.call`, and `.apply` invocations.
+- Reconstructed legacy keys pre-bound directly, through aliases and nested binds, and before later `.call`/`.apply` invocations.
+- Pre-bound preference keys that remain legal even when later invocation arguments resemble legacy keys.
 - Allowed preference literals through the same invocation forms.
 - Import and mutator violations in both `.mts` and `.cts`.
 
