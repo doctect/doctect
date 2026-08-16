@@ -1,4 +1,5 @@
 import {
+  type Dirent,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -99,24 +100,42 @@ const { JSDOM } = createRequire(import.meta.url)('jsdom') as {
   JSDOM: new (source: string, options: { includeNodeLocations: true }) => ParsedHtml;
 };
 
-const sourceFiles = (directory: string, repositoryRoot = directory): string[] => readdirSync(directory, {
-  withFileTypes: true,
-}).flatMap(entry => {
-  const path = join(directory, entry.name);
-  if (entry.isSymbolicLink()) {
-    const policyPath = relative(repositoryRoot, path).split(sep).join('/');
-    throw new Error(
-      `Workspace boundary refuses symbolic link ${policyPath}; replace it with a regular in-repository entry`,
-    );
-  }
-  if (entry.isDirectory()) {
-    return excludedDirectories.has(entry.name) ? [] : sourceFiles(path, repositoryRoot);
-  }
-  return entry.isFile() && executableExtensions.has(extname(entry.name)) ? [path] : [];
-});
+const workflowRunsOnEveryPullRequest = (workflow: string): boolean => {
+  const jobsStart = workflow.search(/^jobs:/m);
+  const header = jobsStart === -1 ? workflow : workflow.slice(0, jobsStart);
+  const activeLines = header.split(/\r?\n/).map(line => (
+    line.replace(/^\s*#.*$/, '').replace(/\s+#.*$/, '').trimEnd()
+  ));
+  return activeLines.some(line => /^  pull_request:\s*\{\}$/.test(line))
+    && !activeLines.some(line => /^    paths(?:-ignore)?:/.test(line));
+};
 
-const repositorySourcePaths = (repositoryRoot = root): string[] =>
-  sourceFiles(repositoryRoot)
+type ReadDirectory = (directory: string) => Dirent[];
+
+const readDirectory: ReadDirectory = directory => readdirSync(directory, { withFileTypes: true });
+
+const sourceFiles = (
+  directory: string,
+  repositoryRoot = directory,
+  readEntries = readDirectory,
+): string[] => readEntries(directory)
+  .sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0)
+  .flatMap(entry => {
+    const path = join(directory, entry.name);
+    if (entry.isSymbolicLink()) {
+      const policyPath = relative(repositoryRoot, path).split(sep).join('/');
+      throw new Error(
+        `Workspace boundary refuses symbolic link ${policyPath}; replace it with a regular in-repository entry`,
+      );
+    }
+    if (entry.isDirectory()) {
+      return excludedDirectories.has(entry.name) ? [] : sourceFiles(path, repositoryRoot, readEntries);
+    }
+    return entry.isFile() && executableExtensions.has(extname(entry.name)) ? [path] : [];
+  });
+
+const repositorySourcePaths = (repositoryRoot = root, readEntries = readDirectory): string[] =>
+  sourceFiles(repositoryRoot, repositoryRoot, readEntries)
     .map(path => relative(repositoryRoot, path).split(sep).join('/'))
     .sort();
 
@@ -129,6 +148,8 @@ interface SourcePositionSegment {
 interface SourceInput {
   path: string;
   source: string;
+  authoredScripts?: readonly SourceInput[];
+  classicLinked?: boolean;
   compilerPath?: string;
   reportPath?: string;
   reportSource?: string;
@@ -190,11 +211,17 @@ const trimAsciiWhitespace = (value: string): string =>
 
 const executableScriptType = (script: HTMLScriptElement): 'classic' | 'module' | undefined => {
   const attribute = script.getAttribute('type');
-  if (attribute === null) return 'classic';
-  const normalized = trimAsciiWhitespace(attribute).toLowerCase();
-  if (normalized === '' || javascriptMimeEssences.has(trimAsciiWhitespace(normalized.split(';', 1)[0]))) {
-    return 'classic';
+  let type: string;
+  if (attribute === null) {
+    const language = script.getAttribute('language');
+    if (language === null || language === '') return 'classic';
+    type = `text/${language}`;
+  } else {
+    if (attribute === '') return 'classic';
+    type = attribute;
   }
+  const normalized = trimAsciiWhitespace(type).toLowerCase();
+  if (javascriptMimeEssences.has(normalized)) return 'classic';
   return normalized === 'module' ? 'module' : undefined;
 };
 
@@ -205,6 +232,7 @@ const executableInputs = (inputs: readonly SourceInput[]): SourceInput[] => inpu
   const document = new JSDOM(input.source, { includeNodeLocations: true });
   let index = 0;
   for (const script of document.window.document.querySelectorAll('script')) {
+    if (script.hasAttribute('src')) continue;
     const type = executableScriptType(script);
     if (!type) continue;
     const location = document.nodeLocation(script);
@@ -234,18 +262,33 @@ const executableInputs = (inputs: readonly SourceInput[]): SourceInput[] => inpu
   if (firstClassic) {
     let source = '';
     const positionSegments: SourcePositionSegment[] = [];
+    const authoredScripts: SourceInput[] = [];
     for (const script of classicScripts) {
       if (source.length > 0) source += '\n;\n';
       const generatedStart = source.length;
-      source += script.source;
+      source += script.source.startsWith('#!') ? `//${script.source.slice(2)}` : script.source;
       positionSegments.push({
         generatedStart,
         generatedEnd: source.length,
         originalStart: script.bodyStart,
       });
+      authoredScripts.push({
+        path: `${input.path}.__inline_${script.index}.js`,
+        compilerPath: `\0doctect-inline/${input.path}/authored-${script.index}.js`,
+        reportPath: input.path,
+        reportSource: input.source,
+        positionSegments: [{
+          generatedStart: 0,
+          generatedEnd: script.source.length,
+          originalStart: script.bodyStart,
+        }],
+        source: script.source,
+      });
     }
     scripts.unshift({
       path: `${input.path}.__inline_${firstClassic.index}.js`,
+      authoredScripts,
+      classicLinked: true,
       compilerPath: `\0doctect-inline/${input.path}/classic.js`,
       reportPath: input.path,
       reportSource: input.source,
@@ -445,12 +488,32 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
     if (sourceFile) collectOrigins(sourceFile);
   }
 
+  const isClassicGlobalVar = (declaration: ts.Declaration): boolean => {
+    const declarationInput = scriptsByFile.get(declaration.getSourceFile().fileName);
+    if (!declarationInput?.classicLinked) return false;
+    let current: ts.Node | undefined = declaration;
+    while (current && !ts.isSourceFile(current) && !ts.isVariableDeclaration(current)) {
+      if (ts.isFunctionLike(current) || ts.isClassStaticBlockDeclaration(current)) return false;
+      current = current.parent;
+    }
+    if (!current || !ts.isVariableDeclaration(current)) return false;
+    const declarationList = current.parent;
+    if (!ts.isVariableDeclarationList(declarationList)
+      || (declarationList.flags & ts.NodeFlags.BlockScoped) !== 0) return false;
+    for (let ancestor: ts.Node = declarationList.parent;
+      !ts.isSourceFile(ancestor);
+      ancestor = ancestor.parent) {
+      if (ts.isFunctionLike(ancestor) || ts.isClassStaticBlockDeclaration(ancestor)) return false;
+    }
+    return true;
+  };
+
   const isUnshadowedGlobal = (
     identifier: ts.Identifier,
     symbol: ts.Symbol | undefined,
     names: ReadonlySet<string>,
   ): boolean => names.has(identifier.text) && !symbol?.declarations?.some(declaration => (
-    scriptsByFile.has(declaration.getSourceFile().fileName)
+    scriptsByFile.has(declaration.getSourceFile().fileName) && !isClassicGlobalVar(declaration)
   ));
 
   const withSymbolOrigins = <T>(
@@ -738,14 +801,26 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
     const report = (node: ts.Node, message: string): void => {
       violations.push(`${policyPath}:${reportLine(input, node.getStart(sourceFile))}: ${message}`);
     };
-    const parseDiagnostics = (sourceFile as ts.SourceFile & {
-      parseDiagnostics: readonly ts.Diagnostic[];
-    }).parseDiagnostics;
-    for (const diagnostic of parseDiagnostics) {
-      const message = ts.flattenDiagnosticMessageText(diagnostic.messageText, ' ');
-      violations.push(
-        `${policyPath}:${reportLine(input, diagnostic.start ?? 0)}: could not be parsed: ${message}`,
-      );
+    const authoredScripts = input.authoredScripts ?? [input];
+    for (const authoredInput of authoredScripts) {
+      const authoredSourceFile = authoredInput === input
+        ? sourceFile
+        : ts.createSourceFile(
+          authoredInput.compilerPath ?? authoredInput.path,
+          authoredInput.source,
+          ts.ScriptTarget.Latest,
+          true,
+          scriptKinds.get(extname(authoredInput.path)),
+        );
+      const parseDiagnostics = (authoredSourceFile as ts.SourceFile & {
+        parseDiagnostics: readonly ts.Diagnostic[];
+      }).parseDiagnostics;
+      for (const diagnostic of parseDiagnostics) {
+        const message = ts.flattenDiagnosticMessageText(diagnostic.messageText, ' ');
+        violations.push(
+          `${policyPath}:${reportLine(authoredInput, diagnostic.start ?? 0)}: could not be parsed: ${message}`,
+        );
+      }
     }
 
     const inspectModuleSpecifier = (node: ts.Node, expression: ts.Expression | undefined): void => {
@@ -843,8 +918,24 @@ describe('local workspace static boundary', () => {
       join(root, '.github/workflows/local-workspace-migration.yml'),
       'utf8',
     );
-    expect(workflow).toMatch(/pull_request:\s*\{\}/);
-    expect(workflow).not.toMatch(/^\s+paths:/m);
+    expect(workflowRunsOnEveryPullRequest(workflow)).toBe(true);
+  });
+
+  it.each([
+    [
+      'commented trigger',
+      '# pull_request: {}\non:\n  push: {}\njobs: {}\n',
+    ],
+    [
+      'active paths',
+      '# pull_request: {}\non:\n  pull_request:\n    paths:\n      - src/**\njobs: {}\n',
+    ],
+    [
+      'active paths-ignore',
+      '# pull_request: {}\non:\n  pull_request:\n    paths-ignore:\n      - docs/**\njobs: {}\n',
+    ],
+  ])('workflow trigger policy rejects %s', (_case, workflow) => {
+    expect(workflowRunsOnEveryPullRequest(workflow)).toBe(false);
   });
 
   it.each([
@@ -1071,10 +1162,6 @@ describe('local workspace static boundary', () => {
       'ASCII whitespace around the type',
       '<script type=" \ttext/javascript\r\n">const key = \'hype_\' + \'projects\'; localStorage.getItem(key);</script>',
     ],
-    [
-      'MIME parameters',
-      '<script type="application/javascript; charset=utf-8">const key = \'hype_\' + \'projects\'; localStorage.getItem(key);</script>',
-    ],
   ])('browser HTML parsing analyzes %s', (_case, source) => {
     expect(analyzeSource('browser-shell.html', source)).toEqual(expect.arrayContaining([
       expect.stringContaining('accesses legacy document key'),
@@ -1087,6 +1174,62 @@ describe('local workspace static boundary', () => {
     ['spaced unquoted', '<script type = importmap>{"imports":{"x":"/x.js"}}</script>'],
   ])('browser HTML parsing skips %s import maps', (_case, source) => {
     expect(analyzeSource('import-map.html', source)).toEqual([]);
+  });
+
+  it.each([
+    [
+      'an external src body',
+      '<script src="/app.js">const key = \'hype_\' + \'projects\'; localStorage.getItem(key);</script>',
+    ],
+    [
+      'a whitespace-only type',
+      '<script type=" \t\r\n">const key = \'hype_\' + \'projects\'; localStorage.getItem(key);</script>',
+    ],
+    [
+      'a parameterized MIME type',
+      '<script type="application/javascript; charset=utf-8">const key = \'hype_\' + \'projects\'; localStorage.getItem(key);</script>',
+    ],
+    [
+      'a non-JavaScript language',
+      '<script language="json">const key = \'hype_\' + \'projects\'; localStorage.getItem(key);</script>',
+    ],
+  ])('browser script preparation skips %s', (_case, source) => {
+    expect(analyzeSource('inert-shell.html', source)).toEqual([]);
+  });
+
+  it.each([
+    [
+      'a missing type',
+      '<script>const key = \'hype_\' + \'projects\'; localStorage.getItem(key);</script>',
+    ],
+    [
+      'an exactly empty type',
+      '<script type="">const key = \'hype_\' + \'projects\'; localStorage.getItem(key);</script>',
+    ],
+    [
+      'an empty language',
+      '<script language="">const key = \'hype_\' + \'projects\'; localStorage.getItem(key);</script>',
+    ],
+    [
+      'a JavaScript language',
+      '<script language="javascript">const key = \'hype_\' + \'projects\'; localStorage.getItem(key);</script>',
+    ],
+    [
+      'a module type',
+      '<script type="module">const key = \'hype_\' + \'projects\'; localStorage.getItem(key);</script>',
+    ],
+  ])('browser script preparation analyzes %s', (_case, source) => {
+    expect(analyzeSource('prepared-shell.html', source)).toEqual(expect.arrayContaining([
+      expect.stringContaining('accesses legacy document key'),
+    ]));
+  });
+
+  it('browser script preparation retains exact-literal scanning for inert bodies', () => {
+    const key = ['hype', 'projects'].join('_');
+    const source = `<script src="/app.js">localStorage.getItem('${key}');</script>`;
+    expect(analyzeSource('inert-literal.html', source)).toEqual(expect.arrayContaining([
+      expect.stringContaining(`exact legacy document key ${key}`),
+    ]));
   });
 
   it.each([
@@ -1122,6 +1265,100 @@ describe('local workspace static boundary', () => {
     const source = '<script type="module">const key = \'hype_\' + \'projects\';</script>'
       + '<script type="module">localStorage.getItem(key);</script>';
     expect(analyzeSource('module-shell.html', source)).toEqual([]);
+  });
+
+  it.each([
+    [
+      'single uninitialized localStorage',
+      '<script>var localStorage; const key = \'hype_\' + \'projects\'; localStorage.getItem(key);</script>',
+    ],
+    [
+      'cross-script initialized localStorage',
+      '<script>var localStorage = localStorage;</script><script>const key = \'hype_\' + \'projects\'; localStorage.getItem(key);</script>',
+    ],
+    [
+      'single uninitialized window',
+      '<script>var window; const key = \'hype_\' + \'projects\'; window.localStorage.getItem(key);</script>',
+    ],
+    [
+      'cross-script initialized window',
+      '<script>var window = window;</script><script>const key = \'hype_\' + \'projects\'; window.localStorage.getItem(key);</script>',
+    ],
+    [
+      'single uninitialized self',
+      '<script>var self; const key = \'hype_\' + \'projects\'; self.localStorage.getItem(key);</script>',
+    ],
+    [
+      'cross-script initialized self',
+      '<script>var self = self;</script><script>const key = \'hype_\' + \'projects\'; self.localStorage.getItem(key);</script>',
+    ],
+    [
+      'single uninitialized globalThis',
+      '<script>var globalThis; const key = \'hype_\' + \'projects\'; globalThis.localStorage.getItem(key);</script>',
+    ],
+    [
+      'cross-script initialized globalThis',
+      '<script>var globalThis = globalThis;</script><script>const key = \'hype_\' + \'projects\'; globalThis.localStorage.getItem(key);</script>',
+    ],
+  ])('classic protected globals retain taint for %s', (_case, source) => {
+    expect(analyzeSource('protected-classic.html', source)).toEqual(expect.arrayContaining([
+      expect.stringContaining('accesses legacy document key'),
+    ]));
+  });
+
+  it.each([
+    [
+      'ordinary localStorage',
+      'components/ProtectedShadow.ts',
+      "var localStorage; const key = 'hype_' + 'projects'; localStorage.getItem(key);",
+    ],
+    [
+      'ordinary window',
+      'components/GlobalShadow.ts',
+      "var window; const key = 'hype_' + 'projects'; window.localStorage.getItem(key);",
+    ],
+    [
+      'module localStorage',
+      'module-shadow.html',
+      '<script type="module">var localStorage; const key = \'hype_\' + \'projects\'; localStorage.getItem(key);</script>',
+    ],
+    [
+      'module window',
+      'module-global-shadow.html',
+      '<script type="module">var window; const key = \'hype_\' + \'projects\'; window.localStorage.getItem(key);</script>',
+    ],
+  ])('classic protected globals preserve %s lexical shadowing', (_case, path, source) => {
+    expect(analyzeSource(path, source)).toEqual([]);
+  });
+
+  it('independent inline parse boundaries report malformed bodies repaired by concatenation', () => {
+    const source = [
+      '<script>',
+      'if (true) {',
+      '</script>',
+      '<script>',
+      '}',
+      '</script>',
+    ].join('\n');
+    const parseFailures = analyzeSource('parse-boundaries.html', source)
+      .filter(violation => violation.includes('could not be parsed'));
+    expect(parseFailures).toEqual(expect.arrayContaining([
+      expect.stringContaining('parse-boundaries.html:3:'),
+      expect.stringContaining('parse-boundaries.html:5:'),
+    ]));
+    expect(parseFailures).toHaveLength(2);
+  });
+
+  it('independent inline parse boundaries preserve repeated hashbangs and shared symbols', () => {
+    const source = [
+      '<script>#! first',
+      "const key = 'hype_' + 'projects';</script>",
+      '<script>#! second',
+      'localStorage.getItem(key);</script>',
+    ].join('\n');
+    expect(analyzeSource('hashbang-shell.html', source)).toEqual([
+      expect.stringContaining('hashbang-shell.html:4: accesses legacy document key'),
+    ]);
   });
 
   it('compiler identity collision cannot replace an inline script with a real file', () => {
@@ -1183,6 +1420,21 @@ describe('local workspace static boundary', () => {
     } finally {
       rmSync(temporaryRoot, { recursive: true, force: true });
       rmSync(externalRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('deterministic symlink diagnostics select the lexically first path', () => {
+    const temporaryRoot = mkdtempSync(join(tmpdir(), 'workspace-policy-'));
+    try {
+      writeFileSync(join(temporaryRoot, 'target.ts'), 'export const ready = true;');
+      symlinkSync(join(temporaryRoot, 'target.ts'), join(temporaryRoot, 'z-last.ts'));
+      symlinkSync(join(temporaryRoot, 'target.ts'), join(temporaryRoot, 'a-first.ts'));
+      const reverseDirectory: ReadDirectory = directory =>
+        readDirectory(directory).sort((left, right) => right.name.localeCompare(left.name));
+      expect(() => repositorySourcePaths(temporaryRoot, reverseDirectory))
+        .toThrow(/symbolic link a-first\.ts/i);
+    } finally {
+      rmSync(temporaryRoot, { recursive: true, force: true });
     }
   });
 
