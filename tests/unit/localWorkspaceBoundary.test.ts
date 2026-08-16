@@ -11,6 +11,7 @@ import {
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { extname, join, relative, sep } from 'node:path';
+import { Script } from 'node:vm';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
@@ -152,6 +153,7 @@ interface SourceInput {
   authoredScripts?: readonly SourceInput[];
   classicLinked?: boolean;
   compilerPath?: string;
+  parseFailure?: { line: number; message: string };
   reportPath?: string;
   reportSource?: string;
   positionSegments?: readonly SourcePositionSegment[];
@@ -209,6 +211,74 @@ const unwrap = (input: ts.Expression): ts.Expression => {
 
 const trimAsciiWhitespace = (value: string): string =>
   value.replace(/^[\t\n\f\r ]+|[\t\n\f\r ]+$/g, '');
+
+const classicScriptParseFailure = (source: string): SourceInput['parseFailure'] => {
+  try {
+    new Script(source, { filename: 'doctect-inline-classic.js' });
+    return undefined;
+  } catch (error) {
+    if (!(error instanceof Error)) throw error;
+    const stackLine = error.stack?.split('\n', 1)[0];
+    const line = Number(stackLine?.match(/:(\d+)$/)?.[1] ?? 1);
+    return { line, message: error.message };
+  }
+};
+
+interface ClassicGlobalDeclarations {
+  functionNames: Set<string>;
+  lexicalNames: Set<string>;
+  varNames: Set<string>;
+}
+
+const addBindingNames = (names: Set<string>, binding: ts.BindingName): void => {
+  if (ts.isIdentifier(binding)) {
+    names.add(binding.text);
+    return;
+  }
+  for (const element of binding.elements) {
+    if (!ts.isOmittedExpression(element)) addBindingNames(names, element.name);
+  }
+};
+
+const classicGlobalDeclarations = (source: string): ClassicGlobalDeclarations => {
+  const sourceFile = ts.createSourceFile(
+    'doctect-inline-classic.js',
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.JS,
+  );
+  const functionNames = new Set<string>();
+  const lexicalNames = new Set<string>();
+  const varNames = new Set<string>();
+  for (const statement of sourceFile.statements) {
+    if (ts.isVariableStatement(statement)
+      && (statement.declarationList.flags & ts.NodeFlags.BlockScoped) !== 0) {
+      for (const declaration of statement.declarationList.declarations) {
+        addBindingNames(lexicalNames, declaration.name);
+      }
+    } else if (ts.isClassDeclaration(statement) && statement.name) {
+      lexicalNames.add(statement.name.text);
+    } else if (ts.isFunctionDeclaration(statement) && statement.name) {
+      functionNames.add(statement.name.text);
+      varNames.add(statement.name.text);
+    }
+  }
+  const collectVarNames = (node: ts.Node): void => {
+    if (node !== sourceFile && (
+      ts.isFunctionLike(node)
+      || ts.isClassDeclaration(node)
+      || ts.isClassExpression(node)
+    )) return;
+    if (ts.isVariableDeclarationList(node)
+      && (node.flags & ts.NodeFlags.BlockScoped) === 0) {
+      for (const declaration of node.declarations) addBindingNames(varNames, declaration.name);
+    }
+    ts.forEachChild(node, collectVarNames);
+  };
+  collectVarNames(sourceFile);
+  return { functionNames, lexicalNames, varNames };
+};
 
 const executableScriptType = (script: Element): 'classic' | 'module' | undefined => {
   if (script.namespaceURI === 'http://www.w3.org/1999/xhtml') {
@@ -270,17 +340,12 @@ const executableInputs = (inputs: readonly SourceInput[]): SourceInput[] => inpu
   }
   if (classicScripts.length > 0) {
     let source = '';
+    const activeLexicalNames = new Set<string>();
+    const activeVarNames = new Set<string>();
+    const restrictedGlobalNames = new Set(['window']);
     const positionSegments: SourcePositionSegment[] = [];
-    const linkedScripts: SourceInput[] = [];
+    const classicInputs: SourceInput[] = [];
     for (const script of classicScripts) {
-      if (source.length > 0) source += '\n;\n';
-      const generatedStart = source.length;
-      source += script.source.startsWith('#!') ? `//${script.source.slice(2)}` : script.source;
-      positionSegments.push({
-        generatedStart,
-        generatedEnd: source.length,
-        originalStart: script.bodyStart,
-      });
       const authoredScript: SourceInput = {
         path: `${input.path}.__inline_${script.index}.js`,
         compilerPath: `\0doctect-inline/${input.path}/authored-${script.index}.js`,
@@ -293,7 +358,30 @@ const executableInputs = (inputs: readonly SourceInput[]): SourceInput[] => inpu
         }],
         source: script.source,
       };
-      linkedScripts.push({
+      const parseFailure = classicScriptParseFailure(script.source);
+      if (parseFailure) {
+        classicInputs.push({ ...authoredScript, parseFailure });
+        continue;
+      }
+      const declarations = classicGlobalDeclarations(script.source);
+      const activationFails = [...declarations.lexicalNames].some(name => (
+        activeLexicalNames.has(name)
+        || activeVarNames.has(name)
+        || restrictedGlobalNames.has(name)
+      )) || [...declarations.varNames].some(name => activeLexicalNames.has(name))
+        || [...declarations.functionNames].some(name => restrictedGlobalNames.has(name));
+      if (activationFails) continue;
+      for (const name of declarations.lexicalNames) activeLexicalNames.add(name);
+      for (const name of declarations.varNames) activeVarNames.add(name);
+      if (source.length > 0) source += '\n;\n';
+      const generatedStart = source.length;
+      source += script.source.startsWith('#!') ? `//${script.source.slice(2)}` : script.source;
+      positionSegments.push({
+        generatedStart,
+        generatedEnd: source.length,
+        originalStart: script.bodyStart,
+      });
+      classicInputs.push({
         path: authoredScript.path,
         analysisStart: generatedStart,
         authoredScripts: [authoredScript],
@@ -305,7 +393,7 @@ const executableInputs = (inputs: readonly SourceInput[]): SourceInput[] => inpu
         source,
       });
     }
-    scripts.unshift(...linkedScripts);
+    scripts.unshift(...classicInputs);
   }
   return scripts;
 });
@@ -354,8 +442,17 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
     }
   }
 
-  const scripts = executableInputs(inputs)
+  const executable = executableInputs(inputs)
     .filter(input => scriptKinds.has(extname(input.path)));
+  for (const input of executable) {
+    if (!input.parseFailure) continue;
+    const policyPath = input.reportPath ?? input.path;
+    const line = reportLine(input, 0) + input.parseFailure.line - 1;
+    results.get(policyPath)!.push(
+      `${policyPath}:${line}: could not be parsed: ${input.parseFailure.message}`,
+    );
+  }
+  const scripts = executable.filter(input => !input.parseFailure);
   if (scripts.length === 0) return results;
 
   const compilerOptions: ts.CompilerOptions = {
@@ -1433,18 +1530,111 @@ describe('local workspace static boundary', () => {
     },
   );
 
-  it.each(['localStorage', 'window', 'self', 'globalThis'])(
-    'temporal classic scope carries prior-script %s lexical shadowing forward',
-    name => {
-      const receiver = name === 'localStorage' ? name : `${name}.localStorage`;
-      const value = name === 'localStorage'
-        ? '{ getItem() {} }'
-        : '{ localStorage: { getItem() {} } }';
-      const source = `<script>let ${name} = ${value};</script>`
-        + `<script>const key = 'hype_' + 'projects'; ${receiver}.getItem(key);</script>`;
-      expect(analyzeSource('temporal-forward.html', source)).toEqual([]);
-    },
-  );
+  it.each([
+    ['let', 'let window;'],
+    ['const', 'const window = {};'],
+    ['class', 'class window {}'],
+    ['function', 'function window() {}'],
+  ])('classic activation rejects the whole body for a top-level %s window declaration', (_kind, declaration) => {
+    const source = [
+      '<script>',
+      declaration,
+      "const failedKey = 'hype_' + 'projects';",
+      'localStorage.getItem(failedKey);',
+      '</script>',
+      '<script>',
+      "const key = 'hype_' + 'projects';",
+      'window.localStorage.getItem(key);',
+      '</script>',
+    ].join('\n');
+    const accesses = analyzeSource('activation-window.html', source)
+      .filter(violation => violation.includes('accesses legacy document key'));
+    expect(accesses).toEqual([
+      expect.stringContaining('activation-window.html:8: accesses legacy document key'),
+    ]);
+  });
+
+  it.each([
+    ['lexical/lexical', 'let occupied;', 'let occupied;'],
+    ['lexical/var', 'let occupied;', 'var occupied;'],
+    ['lexical/function', 'let occupied;', 'function occupied() {}'],
+    ['var/lexical', 'var occupied;', 'let occupied;'],
+  ])('classic activation installs nothing after a prior %s collision', (_case, prior, conflicting) => {
+    const source = [
+      `<script>${prior}</script>`,
+      '<script>',
+      conflicting,
+      'let self;',
+      "const failedKey = 'hype_' + 'projects';",
+      'globalThis.localStorage.getItem(failedKey);',
+      '</script>',
+      '<script>',
+      "const key = 'hype_' + 'projects';",
+      'self.localStorage.getItem(key);',
+      '</script>',
+    ].join('\n');
+    const accesses = analyzeSource('activation-atomic.html', source)
+      .filter(violation => violation.includes('accesses legacy document key'));
+    expect(accesses).toEqual([
+      expect.stringContaining('activation-atomic.html:10: accesses legacy document key'),
+    ]);
+  });
+
+  it.each((['localStorage', 'self', 'globalThis'] as const).flatMap(name => [
+    [name, 'let', `let ${name};`],
+    [name, 'const', `const ${name} = {};`],
+    [name, 'class', `class ${name} {}`],
+    [name, 'function', `function ${name}() {}`],
+  ]))('classic activation carries successful prior %s %s declaration forward', (name, _kind, declaration) => {
+    const receiver = name === 'localStorage' ? name : `${name}.localStorage`;
+    const source = `<script>${declaration}</script>`
+      + `<script>const key = 'hype_' + 'projects'; ${receiver}.getItem(key);</script>`;
+    expect(analyzeSource('temporal-forward.html', source)).toEqual([]);
+  });
+
+  it.each([
+    ['default import', "import value from './value.js';"],
+    ['named import', "import { value } from './value.js';"],
+    ['named export declaration', 'export const value = 1;'],
+    ['default export', 'export default 1;'],
+    ['export list', 'const value = 1; export { value };'],
+    ['export assignment', 'const value = 1; export = value;'],
+    ['import.meta', 'void import.meta;'],
+  ])('classic Script parse goal rejects %s', (_case, statement) => {
+    const source = ['<script>', '', statement, '</script>'].join('\n');
+    const parseFailures = analyzeSource('classic-script-goal.html', source)
+      .filter(violation => violation.includes('could not be parsed'));
+    expect(parseFailures).toEqual([
+      expect.stringContaining('classic-script-goal.html:3: could not be parsed'),
+    ]);
+  });
+
+  it('classic Script parse failure neither executes nor seeds later linked scope', () => {
+    const source = [
+      '<script>',
+      "import value from './value.js';",
+      'let self;',
+      "const failedKey = 'hype_' + 'projects';",
+      'localStorage.getItem(failedKey);',
+      '</script>',
+      '<script>',
+      "const key = 'hype_' + 'projects';",
+      'self.localStorage.getItem(key);',
+      '</script>',
+    ].join('\n');
+    const violations = analyzeSource('classic-invalid-prefix.html', source);
+    expect(violations.filter(violation => violation.includes('could not be parsed'))).toEqual([
+      expect.stringContaining('classic-invalid-prefix.html:2: could not be parsed'),
+    ]);
+    expect(violations.filter(violation => violation.includes('accesses legacy document key'))).toEqual([
+      expect.stringContaining('classic-invalid-prefix.html:9: accesses legacy document key'),
+    ]);
+  });
+
+  it('classic Script parse goal allows dynamic import expressions', () => {
+    const source = '<script>void import(\'./value.js\');</script>';
+    expect(analyzeSource('classic-dynamic-import.html', source)).toEqual([]);
+  });
 
   it('independent inline parse boundaries report malformed bodies repaired by concatenation', () => {
     const source = [
