@@ -146,10 +146,17 @@ interface SourcePositionSegment {
   originalStart: number;
 }
 
+interface AnnexBFunctionEnvironment {
+  end: number;
+  names: ReadonlySet<string>;
+  start: number;
+}
+
 interface SourceInput {
   path: string;
   source: string;
   analysisStart?: number;
+  annexBFunctionEnvironments?: readonly AnnexBFunctionEnvironment[];
   annexBFunctionAssignments?: ReadonlyMap<string, number>;
   annexBFunctionPositions?: ReadonlySet<number>;
   authoredScripts?: readonly SourceInput[];
@@ -249,6 +256,7 @@ const classicScriptParseFailure = (source: string): SourceInput['parseFailure'] 
 };
 
 interface ClassicGlobalDeclarations {
+  annexBFunctionEnvironments: AnnexBFunctionEnvironment[];
   annexBFunctions: Array<{ assignmentPosition?: number; name: string; position: number }>;
   functionNames: Set<string>;
   lexicalNames: Set<string>;
@@ -277,15 +285,19 @@ const classicGlobalDeclarations = (source: string): ClassicGlobalDeclarations =>
   const lexicalNames = new Set<string>();
   const varNames = new Set<string>();
   const annexBFunctions: ClassicGlobalDeclarations['annexBFunctions'] = [];
-  let strict = false;
-  for (const statement of sourceFile.statements) {
-    if (ts.isExpressionStatement(statement) && ts.isStringLiteral(statement.expression)) {
-      const literal = statement.expression.getText(sourceFile);
-      if (literal === '"use strict"' || literal === "'use strict'") strict = true;
-    } else {
-      break;
+  const annexBFunctionEnvironments: AnnexBFunctionEnvironment[] = [];
+  const hasUseStrictDirective = (statements: readonly ts.Statement[]): boolean => {
+    for (const statement of statements) {
+      if (ts.isExpressionStatement(statement) && ts.isStringLiteral(statement.expression)) {
+        const literal = statement.expression.getText(sourceFile);
+        if (literal === '"use strict"' || literal === "'use strict'") return true;
+      } else {
+        break;
+      }
     }
-  }
+    return false;
+  };
+  const strict = hasUseStrictDirective(sourceFile.statements);
   for (const statement of sourceFile.statements) {
     if (ts.isVariableStatement(statement)
       && (statement.declarationList.flags & ts.NodeFlags.BlockScoped) !== 0) {
@@ -325,7 +337,10 @@ const classicGlobalDeclarations = (source: string): ClassicGlobalDeclarations =>
     }
     return names;
   };
-  const annexBEligible = (declaration: ts.FunctionDeclaration): boolean => {
+  const annexBEligible = (
+    declaration: ts.FunctionDeclaration,
+    boundary: ts.Node = sourceFile,
+  ): boolean => {
     const name = declaration.name?.text;
     if (!name || !isPlainFunctionDeclaration(declaration)) return false;
     const parent = declaration.parent;
@@ -361,9 +376,10 @@ const classicGlobalDeclarations = (source: string): ClassicGlobalDeclarations =>
           if (names.has(name)) return false;
         }
       }
-      if (ts.isSourceFile(ancestor)) {
-        return !directLexicalNames(ancestor.statements, declaration).has(name);
-      }
+      if (ancestor === boundary) return ts.isSourceFile(ancestor)
+        ? !directLexicalNames(ancestor.statements, declaration).has(name)
+        : true;
+      if (ts.isSourceFile(ancestor)) return false;
     }
   };
   function statementCompletesNormally(statement: ts.Statement): boolean {
@@ -476,7 +492,64 @@ const classicGlobalDeclarations = (source: string): ClassicGlobalDeclarations =>
     ts.forEachChild(node, collectVarNames);
   };
   collectVarNames(sourceFile);
-  return { annexBFunctions, functionNames, lexicalNames, varNames };
+  const isFunctionEnvironment = (node: ts.Node): node is ts.FunctionLikeDeclaration => (
+    ts.isFunctionDeclaration(node)
+    || ts.isMethodDeclaration(node)
+    || ts.isGetAccessorDeclaration(node)
+    || ts.isSetAccessorDeclaration(node)
+    || ts.isConstructorDeclaration(node)
+    || ts.isFunctionExpression(node)
+    || ts.isArrowFunction(node)
+  );
+  const collectFunctionEnvironment = (
+    declaration: ts.FunctionLikeDeclaration,
+    inheritedStrict: boolean,
+  ): void => {
+    const body = declaration.body;
+    if (!body || !ts.isBlock(body)) return;
+    const functionStrict = inheritedStrict || hasUseStrictDirective(body.statements);
+    const names = new Set<string>();
+    const visit = (node: ts.Node): void => {
+      if (node !== body && isFunctionEnvironment(node)) {
+        if (!functionStrict
+          && ts.isFunctionDeclaration(node)
+          && node.parent !== body
+          && node.name
+          && annexBEligible(node, body)) names.add(node.name.text);
+        collectFunctionEnvironment(node, functionStrict);
+        return;
+      }
+      if (node !== body && (
+        ts.isClassDeclaration(node)
+        || ts.isClassExpression(node)
+      )) return;
+      ts.forEachChild(node, visit);
+    };
+    ts.forEachChild(body, visit);
+    if (names.size > 0) {
+      annexBFunctionEnvironments.push({
+        end: body.end,
+        names,
+        start: body.getStart(sourceFile),
+      });
+    }
+  };
+  const collectNestedFunctions = (node: ts.Node): void => {
+    if (ts.isClassDeclaration(node) || ts.isClassExpression(node)) return;
+    if (isFunctionEnvironment(node)) {
+      collectFunctionEnvironment(node, strict);
+      return;
+    }
+    ts.forEachChild(node, collectNestedFunctions);
+  };
+  ts.forEachChild(sourceFile, collectNestedFunctions);
+  return {
+    annexBFunctionEnvironments,
+    annexBFunctions,
+    functionNames,
+    lexicalNames,
+    varNames,
+  };
 };
 
 const positionSegments = (offsets: readonly number[]): SourcePositionSegment[] => {
@@ -677,7 +750,11 @@ const executableInputs = (inputs: readonly SourceInput[]): SourceInput[] => inpu
     index += 1;
   }
   type PageGlobalState = Pick<SourceInput,
-    'annexBFunctionAssignments' | 'annexBFunctionPositions' | 'positionSegments' | 'source'> & {
+    'annexBFunctionAssignments'
+    | 'annexBFunctionEnvironments'
+    | 'annexBFunctionPositions'
+    | 'positionSegments'
+    | 'source'> & {
     afterIndex: number;
   };
   const pageGlobalStates: PageGlobalState[] = [{
@@ -690,6 +767,7 @@ const executableInputs = (inputs: readonly SourceInput[]): SourceInput[] => inpu
     const activeLexicalNames = new Set<string>();
     const activeVarNames = new Set<string>();
     const annexBFunctionAssignments = new Map<string, number>();
+    const annexBFunctionEnvironments: AnnexBFunctionEnvironment[] = [];
     const annexBFunctionPositions = new Set<number>();
     const globalObject = document.window;
     const globalDescriptors = Object.getOwnPropertyDescriptors(globalObject);
@@ -761,6 +839,13 @@ const executableInputs = (inputs: readonly SourceInput[]): SourceInput[] => inpu
           annexBFunctionAssignments.set(annexBFunction.name, assignmentPosition);
         }
       }
+      for (const environment of declarations.annexBFunctionEnvironments) {
+        annexBFunctionEnvironments.push({
+          end: generatedStart + environment.end,
+          names: environment.names,
+          start: generatedStart + environment.start,
+        });
+      }
       for (const segment of script.positionSegments) {
         positionSegments.push({
           generatedStart: generatedStart + segment.generatedStart,
@@ -772,6 +857,7 @@ const executableInputs = (inputs: readonly SourceInput[]): SourceInput[] => inpu
         path: authoredScript.path,
         analysisStart: generatedStart,
         annexBFunctionAssignments: new Map(annexBFunctionAssignments),
+        annexBFunctionEnvironments: [...annexBFunctionEnvironments],
         annexBFunctionPositions: new Set(annexBFunctionPositions),
         authoredScripts: [authoredScript],
         classicLinked: true,
@@ -784,6 +870,7 @@ const executableInputs = (inputs: readonly SourceInput[]): SourceInput[] => inpu
       pageGlobalStates.push({
         afterIndex: script.index,
         annexBFunctionAssignments: new Map(annexBFunctionAssignments),
+        annexBFunctionEnvironments: [...annexBFunctionEnvironments],
         annexBFunctionPositions: new Set(annexBFunctionPositions),
         positionSegments: [...positionSegments],
         source,
@@ -816,6 +903,7 @@ const executableInputs = (inputs: readonly SourceInput[]): SourceInput[] => inpu
         path: authoredScript.path,
         analysisStart: moduleStart,
         annexBFunctionAssignments: pageGlobals.annexBFunctionAssignments,
+        annexBFunctionEnvironments: pageGlobals.annexBFunctionEnvironments,
         annexBFunctionPositions: pageGlobals.annexBFunctionPositions,
         authoredScripts: [authoredScript],
         classicLinked: true,
@@ -1149,8 +1237,14 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
   ): boolean => {
     if (!names.has(identifier.text)) return false;
     const declarationInput = scriptsByFile.get(identifier.getSourceFile().fileName);
+    const position = identifier.getStart(identifier.getSourceFile());
+    if (declarationInput?.annexBFunctionEnvironments?.some(environment => (
+      environment.start <= position
+      && position < environment.end
+      && environment.names.has(identifier.text)
+    ))) return false;
     const annexBAssignment = declarationInput?.annexBFunctionAssignments?.get(identifier.text);
-    if (annexBAssignment !== undefined && annexBAssignment <= identifier.getStart()) return false;
+    if (annexBAssignment !== undefined && annexBAssignment <= position) return false;
     return !symbol?.declarations?.some(declaration => (
       scriptsByFile.has(declaration.getSourceFile().fileName)
       && !isClassicGlobalVar(declaration, identifier)
@@ -2690,6 +2784,200 @@ describe('local workspace static boundary', () => {
     const source = `<script>const key = 'hype_' + 'projects'; ${receiver}.getItem(key); `
       + `{ function ${name}() {} }</script>`;
     expect(analyzeSource('annex-b-before-global-assignment.html', source)).toEqual([
+      expect.stringContaining('accesses legacy document key'),
+    ]);
+  });
+
+  it.each(([
+    ['localStorage', 'localStorage'],
+    ['window', 'window.localStorage'],
+    ['self', 'self.localStorage'],
+    ['globalThis', 'globalThis.localStorage'],
+  ] as const).flatMap(([name, receiver]) => [
+    [
+      name,
+      'before block',
+      `const key = 'hype_' + 'projects'; ${receiver}.getItem(key); { function ${name}() {} }`,
+    ],
+    [
+      name,
+      'inside block',
+      `{ function ${name}() {} const key = 'hype_' + 'projects'; ${receiver}.getItem(key); }`,
+    ],
+    [
+      name,
+      'after block',
+      `{ function ${name}() {} } const key = 'hype_' + 'projects'; ${receiver}.getItem(key);`,
+    ],
+    [
+      name,
+      'inside nested closure',
+      `{ function ${name}() {} } function nested() { const key = 'hype_' + 'projects'; `
+        + `${receiver}.getItem(key); } nested();`,
+    ],
+  ]))('function-local Annex B %s binding shadows native access %s', (_name, _position, body) => {
+    const source = `<script>function readSafely() { ${body} } readSafely();</script>`;
+    expect(analyzeSource('annex-b-function-environment.html', source)).toEqual([]);
+  });
+
+  it.each([
+    ['false conditional', 'if (false) function localStorage() {}'],
+    ['labelled declaration', 'label: function localStorage() {}'],
+  ])('function-local Annex B supports an eligible %s synthetic binding', (_case, declaration) => {
+    const source = `<script>function readSafely() { ${declaration} `
+      + "const key = 'hype_' + 'projects'; localStorage.getItem(key); } readSafely();</script>";
+    expect(analyzeSource('annex-b-function-form.html', source)).toEqual([]);
+  });
+
+  it.each([
+    [
+      'strict containing function',
+      'function read() { \'use strict\'; { function localStorage() {} } '
+        + "const key = 'hype_' + 'projects'; localStorage.getItem(key); }",
+    ],
+    [
+      'strict containing script',
+      "'use strict'; function read() { { function localStorage() {} } "
+        + "const key = 'hype_' + 'projects'; localStorage.getItem(key); }",
+    ],
+  ])('function-local Annex B excludes %s', (_case, declaration) => {
+    const source = `<script>${declaration} read();</script>`;
+    expect(analyzeSource('annex-b-function-strict.html', source)).toEqual([
+      expect.stringContaining('accesses legacy document key'),
+    ]);
+  });
+
+  it.each([
+    ['generator', 'function* localStorage() {}'],
+    ['async', 'async function localStorage() {}'],
+    ['async generator', 'async function* localStorage() {}'],
+  ])('function-local Annex B excludes nonordinary %s declarations', (_case, declaration) => {
+    const source = `<script>function read() { { ${declaration} } `
+      + "const key = 'hype_' + 'projects'; localStorage.getItem(key); } read();</script>";
+    expect(analyzeSource('annex-b-function-nonordinary.html', source)).toEqual([
+      expect.stringContaining('accesses legacy document key'),
+    ]);
+  });
+
+  it.each([
+    [
+      'intervening lexical declaration',
+      '{ let localStorage; { function localStorage() {} } }',
+    ],
+    [
+      'same-name destructuring catch',
+      'try { throw { localStorage: 1 }; } '
+        + 'catch ({ localStorage }) { { function localStorage() {} } }',
+    ],
+  ])('function-local Annex B excludes %s', (_case, declaration) => {
+    const source = `<script>function read() { ${declaration} `
+      + "const key = 'hype_' + 'projects'; localStorage.getItem(key); } read();</script>";
+    expect(analyzeSource('annex-b-function-ineligible.html', source)).toEqual([
+      expect.stringContaining('accesses legacy document key'),
+    ]);
+  });
+
+  it('function-local Annex B does not leak into an unrelated sibling function', () => {
+    const source = '<script>function define() { { function localStorage() {} } } '
+      + "function read() { const key = 'hype_' + 'projects'; localStorage.getItem(key); } "
+      + 'define(); read();</script>';
+    expect(analyzeSource('annex-b-function-sibling.html', source)).toEqual([
+      expect.stringContaining('accesses legacy document key'),
+    ]);
+  });
+
+  it('function-local Annex B does not leak from a nested function to its parent', () => {
+    const source = '<script>function read() { function nested() { { function localStorage() {} } } '
+      + "nested(); const key = 'hype_' + 'projects'; localStorage.getItem(key); } read();</script>";
+    expect(analyzeSource('annex-b-function-nested-boundary.html', source)).toEqual([
+      expect.stringContaining('accesses legacy document key'),
+    ]);
+  });
+
+  it.each([
+    ['parameter', 'function read(localStorage) {'],
+    ['local var', 'function read() { var localStorage;'],
+    ['local lexical', 'function read() { let localStorage;'],
+  ])('function-local Annex B preserves ordinary %s shadowing', (_case, prefix) => {
+    const source = `<script>${prefix} { function localStorage() {} } `
+      + "const key = 'hype_' + 'projects'; localStorage.getItem(key); } read();</script>";
+    expect(analyzeSource('annex-b-function-ordinary-shadow.html', source)).toEqual([]);
+  });
+
+  it.each([
+    [
+      'function expression',
+      'const read = function () { { function localStorage() {} } '
+        + "const key = 'hype_' + 'projects'; localStorage.getItem(key); }; read();",
+    ],
+    [
+      'arrow function',
+      'const read = () => { { function localStorage() {} } '
+        + "const key = 'hype_' + 'projects'; localStorage.getItem(key); }; read();",
+    ],
+    [
+      'object method',
+      'const reader = { read() { { function localStorage() {} } '
+        + "const key = 'hype_' + 'projects'; localStorage.getItem(key); } }; reader.read();",
+    ],
+  ])('function-local Annex B supports a non-strict %s environment', (_case, body) => {
+    expect(analyzeSource('annex-b-function-kind.html', `<script>${body}</script>`)).toEqual([]);
+  });
+
+  it('function-local Annex B reaches a nested closure before block assignment', () => {
+    const source = '<script>function read() { function nested() { '
+      + "const key = 'hype_' + 'projects'; localStorage.getItem(key); } nested(); "
+      + '{ function localStorage() {} } } read();</script>';
+    expect(analyzeSource('annex-b-function-early-closure.html', source)).toEqual([]);
+  });
+
+  it.each([
+    [
+      'same-name simple catch',
+      'try { throw 0; } catch (localStorage) { { function localStorage() {} } }',
+    ],
+    [
+      'different-name destructuring catch',
+      'try { throw null; } catch ({ value }) { { function localStorage() {} } }',
+    ],
+  ])('function-local Annex B preserves %s synthetic binding', (_case, declaration) => {
+    const source = `<script>function read() { ${declaration} `
+      + "const key = 'hype_' + 'projects'; localStorage.getItem(key); } read();</script>";
+    expect(analyzeSource('annex-b-function-catch-control.html', source)).toEqual([]);
+  });
+
+  it('function-local Annex B excludes its own parameter initializer environment', () => {
+    const source = '<script>const key = \'hype_\' + \'projects\'; '
+      + 'function read(value = localStorage.getItem(key)) { { function localStorage() {} } } '
+      + 'read();</script>';
+    expect(analyzeSource('annex-b-function-parameter-environment.html', source)).toEqual([
+      expect.stringContaining('accesses legacy document key'),
+    ]);
+  });
+
+  it('function-local Annex B excludes strict class methods', () => {
+    const source = '<script>class Reader { read() { { function localStorage() {} } '
+      + "const key = 'hype_' + 'projects'; localStorage.getItem(key); } } new Reader().read();</script>";
+    expect(analyzeSource('annex-b-function-class-method.html', source)).toEqual([
+      expect.stringContaining('accesses legacy document key'),
+    ]);
+  });
+
+  it.each([
+    [
+      'ordinary module file',
+      'components/AnnexBFunction.js',
+      'function read() { { function localStorage() {} } '
+        + "const key = 'hype_' + 'projects'; localStorage.getItem(key); } read();",
+    ],
+    [
+      'HTML module body',
+      'annex-b-function-module.html',
+      '<script type="module">function read() { { function localStorage() {} } '
+        + "const key = 'hype_' + 'projects'; localStorage.getItem(key); } read();</script>",
+    ],
+  ])('function-local Annex B leaves %s unchanged', (_case, path, source) => {
+    expect(analyzeSource(path, source)).toEqual([
       expect.stringContaining('accesses legacy document key'),
     ]);
   });
