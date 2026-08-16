@@ -531,14 +531,25 @@ describe('EditorPage workspace commands', () => {
     expect(screen.queryByText('First command failed.')).not.toBeInTheDocument();
   });
 
-  it('applies stale structural shape without replacing a newer saved project', async () => {
+  it('overlays a newer working copy on an older structural result', async () => {
     const initial = workspace([
       project('project-a', 'Project A'),
       project('project-b', 'Project B'),
     ]);
     const activation = deferred<WorkspaceSnapshot>();
+    const save = deferred<WorkspaceSnapshot>();
+    const activated = {
+      ...initial,
+      projects: [initial.projects[1], initial.projects[0]],
+      activeProjectId: 'project-b',
+    };
+    let savedProject: WorkspaceProject | undefined;
     const { store, commit } = commandStore(initial, (command, next) => {
       if (command.type === 'activate-project') return activation.promise;
+      if (command.type === 'save-project') {
+        savedProject = command.project;
+        return save.promise;
+      }
       return next;
     });
     renderEditor(store, initial);
@@ -546,7 +557,7 @@ describe('EditorPage workspace commands', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Open Project B' }));
     fireEvent.click(screen.getByRole('button', { name: 'Edit Project A' }));
 
-    await screen.findByText('Saved locally');
+    await waitFor(() => expect(commit).toHaveBeenCalledTimes(2));
     expect(projectState('project-a').scale).toBe(9);
     expect(commit).toHaveBeenNthCalledWith(1, {
       type: 'activate-project',
@@ -558,11 +569,7 @@ describe('EditorPage workspace commands', () => {
     });
 
     await act(async () => {
-      activation.resolve({
-        ...initial,
-        projects: [initial.projects[1], initial.projects[0]],
-        activeProjectId: 'project-b',
-      });
+      activation.resolve(activated);
       await activation.promise;
     });
 
@@ -572,6 +579,17 @@ describe('EditorPage workspace commands', () => {
       'Open Project A',
     ]);
     expect(projectState('project-a').scale).toBe(9);
+
+    await act(async () => {
+      save.resolve({
+        ...activated,
+        projects: activated.projects.map(item => (
+          item.id === savedProject!.id ? savedProject! : item
+        )),
+      });
+      await save.promise;
+    });
+
     expect(screen.getByText('Saved locally')).toBeVisible();
   });
 
@@ -935,15 +953,14 @@ describe('EditorPage workspace commands', () => {
     await waitFor(() => expect(activeState().scale).toBe(13));
   });
 
-  it('keeps a cloud link and newer editor state when save completions arrive backward', async () => {
+  it('keeps a cloud link and newer editor state for coalesced save callers', async () => {
     const initial = workspace();
-    const editSave = deferred<WorkspaceSnapshot>();
-    const linkSave = deferred<WorkspaceSnapshot>();
+    const save = deferred<WorkspaceSnapshot>();
     const savedProjects: WorkspaceProject[] = [];
     const { store } = commandStore(initial, command => {
       if (command.type !== 'save-project') return undefined;
       savedProjects.push(command.project);
-      return savedProjects.length === 1 ? editSave.promise : linkSave.promise;
+      return save.promise;
     });
     renderEditor(store, initial);
 
@@ -956,14 +973,10 @@ describe('EditorPage workspace commands', () => {
     });
 
     await act(async () => {
-      linkSave.resolve({ ...initial, projects: [savedProjects[1]] });
-      await linkSave.promise;
+      save.resolve({ ...initial, projects: [savedProjects[1]] });
+      await save.promise;
     });
     await waitFor(() => expect(cloudResults.link).toBe(true));
-    await act(async () => {
-      editSave.resolve({ ...initial, projects: [savedProjects[0]] });
-      await editSave.promise;
-    });
 
     expect(activeState().scale).toBe(9);
     expect(screen.getByTestId('cloud-project-a')).toHaveTextContent('commit-1');
@@ -999,13 +1012,12 @@ describe('EditorPage workspace commands', () => {
 
   it('keeps a cloud restore when a newer edit supersedes its completion', async () => {
     const initial = workspace();
-    const restoreSave = deferred<WorkspaceSnapshot>();
-    const editSave = deferred<WorkspaceSnapshot>();
+    const save = deferred<WorkspaceSnapshot>();
     const savedProjects: WorkspaceProject[] = [];
     const { store } = commandStore(initial, command => {
       if (command.type !== 'save-project') return undefined;
       savedProjects.push(command.project);
-      return savedProjects.length === 1 ? restoreSave.promise : editSave.promise;
+      return save.promise;
     });
     renderEditor(store, initial);
 
@@ -1019,12 +1031,8 @@ describe('EditorPage workspace commands', () => {
     });
 
     await act(async () => {
-      editSave.resolve({ ...initial, projects: [savedProjects[1]] });
-      await editSave.promise;
-    });
-    await act(async () => {
-      restoreSave.resolve({ ...initial, projects: [savedProjects[0]] });
-      await restoreSave.promise;
+      save.resolve({ ...initial, projects: [savedProjects[1]] });
+      await save.promise;
     });
 
     expect(activeState().scale).toBe(9);

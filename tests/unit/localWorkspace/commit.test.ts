@@ -603,12 +603,14 @@ describe('project save queues', () => {
     });
     await vi.advanceTimersByTimeAsync(1_000);
     const observed = await unrelated;
-    expect(observed.projects.find(project => project.id === 'project-a')?.name)
-      .toBe('Store B durable');
+    const observedProject = observed.projects.find(project => project.id === 'project-a');
+    expect(observedProject?.name).toBe('Store B durable');
+    expect(observed.projects.find(project => project.id === 'project-b')?.name)
+      .toBe('Store A unrelated');
 
     const saveAfterObservation = storeA.commit({
       type: 'save-project',
-      project: projectNamed('Store A based on observed revision'),
+      project: { ...observedProject!, name: 'Store A based on observed revision' },
     });
     await vi.advanceTimersByTimeAsync(1_000);
     await expect(saveAfterObservation).resolves.toMatchObject({

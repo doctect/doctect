@@ -65,10 +65,7 @@ export function useWorkspaceProjectWrites(
     () => new Map(initialWorkspace.projects.map(project => [project.id, { status: 'saved' }])),
   );
 
-  const reconcileStructuralSnapshot = useCallback((snapshot: WorkspaceSnapshot) => {
-    const currentProjects = new Map(
-      durableSnapshotRef.current.projects.map(project => [project.id, project]),
-    );
+  const reconcileSnapshot = useCallback((snapshot: WorkspaceSnapshot): WorkspaceSnapshot => {
     const survivingProjectIds = new Set(snapshot.projects.map(project => project.id));
     for (const projectId of workingCopiesRef.current.keys()) {
       if (survivingProjectIds.has(projectId)) continue;
@@ -76,27 +73,20 @@ export function useWorkspaceProjectWrites(
       workingCopiesRef.current.delete(projectId);
     }
 
-    const reconciledSnapshot = {
-      ...snapshot,
-      projects: snapshot.projects.map(project => currentProjects.get(project.id) ?? project),
-    };
-    durableSnapshotRef.current = reconciledSnapshot;
-    setWorkspace(overlayWorkingCopies(reconciledSnapshot, workingCopiesRef.current));
+    durableSnapshotRef.current = snapshot;
+    const visible = overlayWorkingCopies(snapshot, workingCopiesRef.current);
+    setWorkspace(visible);
     setSaveStates(current => {
       const next = new Map(current);
-      for (const project of reconciledSnapshot.projects) {
-        if (!workingCopiesRef.current.has(project.id) && !next.has(project.id)) {
-          next.set(project.id, { status: 'saved' });
-        }
+      for (const project of snapshot.projects) {
+        if (!next.has(project.id)) next.set(project.id, { status: 'saved' });
       }
       for (const projectId of next.keys()) {
-        if (!survivingProjectIds.has(projectId)) {
-          next.delete(projectId);
-        }
+        if (!survivingProjectIds.has(projectId)) next.delete(projectId);
       }
       return next;
     });
-    return reconciledSnapshot;
+    return snapshot;
   }, []);
 
   const commitStructural = useCallback((
@@ -104,7 +94,7 @@ export function useWorkspaceProjectWrites(
   ): Promise<WorkspaceSnapshot> => {
     const execute = async (): Promise<WorkspaceSnapshot> => {
       const snapshot = await store.commit(command);
-      return reconcileStructuralSnapshot(snapshot);
+      return reconcileSnapshot(snapshot);
     };
     const operation = structuralQueueRef.current
       ? structuralQueueRef.current.then(execute)
@@ -115,7 +105,7 @@ export function useWorkspaceProjectWrites(
       if (structuralQueueRef.current === tail) structuralQueueRef.current = null;
     });
     return operation;
-  }, [reconcileStructuralSnapshot, store]);
+  }, [reconcileSnapshot, store]);
 
   const saveProject = useCallback(async (
     project: WorkspaceProject,
@@ -124,28 +114,16 @@ export function useWorkspaceProjectWrites(
     try {
       const snapshot = await store.commit({ type: 'save-project', project });
       const currentCopy = workingCopiesRef.current.get(project.id);
-      if (generationsRef.current.get(project.id) !== generation
-        || currentCopy?.generation !== generation) return true;
-
-      const savedProject = snapshot.projects.find(item => item.id === project.id);
-      const durableSnapshot = durableSnapshotRef.current;
-      if (!savedProject
-        || !durableSnapshot.projects.some(item => item.id === project.id)) return true;
-
-      const nextDurableSnapshot = {
-        ...durableSnapshot,
-        projects: durableSnapshot.projects.map(item => (
-          item.id === project.id ? savedProject : item
-        )),
-      };
-      durableSnapshotRef.current = nextDurableSnapshot;
-      workingCopiesRef.current.delete(project.id);
+      const currentGeneration = generationsRef.current.get(project.id) === generation
+        && currentCopy?.generation === generation;
+      if (currentGeneration) workingCopiesRef.current.delete(project.id);
+      reconcileSnapshot(snapshot);
+      if (!currentGeneration) return true;
       setSaveStates(current => {
         const next = new Map(current);
         next.set(project.id, { status: 'saved' });
         return next;
       });
-      setWorkspace(overlayWorkingCopies(nextDurableSnapshot, workingCopiesRef.current));
       return true;
     } catch (error) {
       if (generationsRef.current.get(project.id) !== generation
@@ -157,7 +135,7 @@ export function useWorkspaceProjectWrites(
       });
       return false;
     }
-  }, [store]);
+  }, [reconcileSnapshot, store]);
 
   const updateProject = useCallback((
     projectId: string,

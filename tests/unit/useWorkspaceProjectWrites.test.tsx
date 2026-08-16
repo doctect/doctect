@@ -32,6 +32,12 @@ const project = (name: string, scale = 1): WorkspaceProject => ({
   initialState: { ...createBlankProject(), scale },
 });
 
+const projectWithId = (id: string, name: string, scale = 1): WorkspaceProject => ({
+  id,
+  name,
+  initialState: { ...createBlankProject(), scale },
+});
+
 const snapshot = (currentProject = project('Original')): WorkspaceSnapshot => ({
   projects: [currentProject],
   activeProjectId: currentProject.id,
@@ -63,6 +69,39 @@ describe('useWorkspaceProjectWrites', () => {
     expect(result.current.saveStates.get('project-1')).toEqual({ status: 'saved' });
     expect(result.current.hasUnsavedWork).toBe(false);
     expect(store.commit).not.toHaveBeenCalled();
+  });
+
+  it('adopts unrelated authoritative project bytes from a save snapshot', async () => {
+    const initial: WorkspaceSnapshot = {
+      projects: [
+        projectWithId('project-a', 'A stale'),
+        projectWithId('project-b', 'B initial'),
+      ],
+      activeProjectId: 'project-b',
+      customPresets: [],
+      pendingImports: [],
+    };
+    const authoritativeA = projectWithId('project-a', 'A from another tab', 7);
+    const savedB = projectWithId('project-b', 'B saved', 2);
+    const store = storeWithCommit(async () => ({
+      ...initial,
+      projects: [authoritativeA, savedB],
+    }));
+    const { result } = renderHook(() => useWorkspaceProjectWrites(store, initial));
+
+    await act(async () => {
+      await result.current.updateProject('project-b', () => savedB);
+    });
+
+    expect(result.current.workspace.projects).toEqual([authoritativeA, savedB]);
+    let updateBase: WorkspaceProject | undefined;
+    act(() => {
+      void result.current.updateProject('project-a', current => {
+        updateBase = current;
+        return { ...current, name: 'A edited locally' };
+      });
+    });
+    expect(updateBase).toEqual(authoritativeA);
   });
 
   it('keeps a newer working copy over an older save completion', async () => {
@@ -97,7 +136,7 @@ describe('useWorkspaceProjectWrites', () => {
     expect(result.current.hasUnsavedWork).toBe(false);
   });
 
-  it('ignores an older whole-snapshot success after a newer generation saves', async () => {
+  it('keeps a coalesced physical snapshot when callers settle out of order', async () => {
     const first = deferred<WorkspaceSnapshot>();
     const second = deferred<WorkspaceSnapshot>();
     const secondProject = { ...project('Project 2'), id: 'project-2' };
@@ -105,6 +144,10 @@ describe('useWorkspaceProjectWrites', () => {
       ...snapshot(),
       projects: [project('Original'), secondProject],
       activeProjectId: 'project-2',
+    };
+    const newestSnapshot = {
+      ...initial,
+      projects: [project('Second', 3), secondProject],
     };
     const store = storeWithCommit(vi.fn()
       .mockReturnValueOnce(first.promise)
@@ -115,14 +158,11 @@ describe('useWorkspaceProjectWrites', () => {
     act(() => { void result.current.updateProject('project-1', () => project('Second', 3)); });
 
     await act(async () => {
-      second.resolve({
-        ...initial,
-        projects: [project('Second', 3), secondProject],
-      });
+      second.resolve(newestSnapshot);
       await second.promise;
     });
     await act(async () => {
-      first.resolve(snapshot(project('First', 2)));
+      first.resolve(newestSnapshot);
       await first.promise;
     });
 
@@ -136,7 +176,7 @@ describe('useWorkspaceProjectWrites', () => {
     expect(result.current.saveStates.get('project-1')).toEqual({ status: 'saved' });
   });
 
-  it('preserves newer workspace structure when the current project save completes', async () => {
+  it('adopts structure from a complete current-project save snapshot', async () => {
     const save = deferred<WorkspaceSnapshot>();
     const secondProject = { ...project('Project 2'), id: 'project-2' };
     const initial = {
@@ -158,11 +198,7 @@ describe('useWorkspaceProjectWrites', () => {
       });
     });
     await act(async () => {
-      save.resolve({
-        ...initial,
-        activeProjectId: 'project-2',
-        projects: [project('Working', 4), secondProject],
-      });
+      save.resolve(snapshot(project('Working', 4)));
       await save.promise;
     });
 
@@ -174,12 +210,13 @@ describe('useWorkspaceProjectWrites', () => {
     expect(result.current.workspace.activeProjectId).toBe('project-1');
   });
 
-  it('applies structural shape without replacing authoritative surviving projects', async () => {
+  it('applies complete authoritative structural snapshots', async () => {
     const structural = deferred<WorkspaceSnapshot>();
     const save = deferred<WorkspaceSnapshot>();
     const secondProject = { ...project('Project 2'), id: 'project-2' };
     const removedProject = { ...project('Removed'), id: 'project-3' };
     const addedProject = { ...project('Added', 7), id: 'project-4' };
+    const authoritativeProject = project('Structural authoritative', 8);
     const initial = {
       ...snapshot(),
       projects: [project('Original'), secondProject, removedProject],
@@ -213,7 +250,7 @@ describe('useWorkspaceProjectWrites', () => {
     await act(async () => {
       structural.resolve({
         ...initial,
-        projects: [secondProject, project('Captured old'), addedProject],
+        projects: [secondProject, authoritativeProject, addedProject],
         activeProjectId: 'project-2',
       });
       await structuralWrite;
@@ -224,10 +261,7 @@ describe('useWorkspaceProjectWrites', () => {
       'project-1',
       'project-4',
     ]);
-    expect(result.current.workspace.projects[1]).toMatchObject({
-      name: 'Latest saved',
-      initialState: { scale: 9 },
-    });
+    expect(result.current.workspace.projects[1]).toEqual(authoritativeProject);
     expect(result.current.workspace.projects[2]).toEqual(addedProject);
     expect(result.current.workspace.activeProjectId).toBe('project-2');
     expect(result.current.saveStates.get('project-1')).toEqual({ status: 'saved' });
