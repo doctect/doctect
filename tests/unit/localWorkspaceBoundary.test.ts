@@ -155,6 +155,7 @@ interface SourceInput {
   authoredScripts?: readonly SourceInput[];
   classicLinked?: boolean;
   compilerPath?: string;
+  findingGroup?: string;
   moduleStart?: number;
   parseFailure?: { message: string; offset: number };
   reportPath?: string;
@@ -298,6 +299,10 @@ const classicGlobalDeclarations = (source: string): ClassicGlobalDeclarations =>
       varNames.add(statement.name.text);
     }
   }
+  const isPlainFunctionDeclaration = (declaration: ts.FunctionDeclaration): boolean => (
+    declaration.asteriskToken === undefined
+    && !declaration.modifiers?.some(modifier => modifier.kind === ts.SyntaxKind.AsyncKeyword)
+  );
   const directLexicalNames = (
     statements: readonly ts.Statement[],
     ignored: ts.FunctionDeclaration,
@@ -312,13 +317,17 @@ const classicGlobalDeclarations = (source: string): ClassicGlobalDeclarations =>
         }
       } else if (ts.isClassDeclaration(statement) && statement.name) {
         names.add(statement.name.text);
+      } else if (ts.isFunctionDeclaration(statement)
+        && statement.name
+        && !isPlainFunctionDeclaration(statement)) {
+        names.add(statement.name.text);
       }
     }
     return names;
   };
   const annexBEligible = (declaration: ts.FunctionDeclaration): boolean => {
     const name = declaration.name?.text;
-    if (!name) return false;
+    if (!name || !isPlainFunctionDeclaration(declaration)) return false;
     const parent = declaration.parent;
     if (!(ts.isBlock(parent)
       || ts.isCaseClause(parent)
@@ -341,6 +350,14 @@ const classicGlobalDeclarations = (source: string): ClassicGlobalDeclarations =>
           && (initializer.flags & ts.NodeFlags.BlockScoped) !== 0) {
           const names = new Set<string>();
           for (const item of initializer.declarations) addBindingNames(names, item.name);
+          if (names.has(name)) return false;
+        }
+      }
+      if (ts.isCatchClause(ancestor)) {
+        const catchBinding = ancestor.variableDeclaration?.name;
+        if (catchBinding && !ts.isIdentifier(catchBinding)) {
+          const names = new Set<string>();
+          addBindingNames(names, catchBinding);
           if (names.has(name)) return false;
         }
       }
@@ -611,6 +628,7 @@ const executableInputs = (inputs: readonly SourceInput[]): SourceInput[] => inpu
   if (extname(input.path) !== '.html') return [input];
   const scripts: SourceInput[] = [];
   const moduleScripts: Array<{
+    async: boolean;
     index: number;
     positionSegments: readonly SourcePositionSegment[];
     source: string;
@@ -648,12 +666,25 @@ const executableInputs = (inputs: readonly SourceInput[]): SourceInput[] => inpu
     if (type === 'classic') {
       classicScripts.push({ index, positionSegments: prepared.positionSegments, source });
     } else {
-      moduleScripts.push({ index, positionSegments: prepared.positionSegments, source });
+      moduleScripts.push({
+        async: script.namespaceURI === 'http://www.w3.org/1999/xhtml'
+          && script.hasAttribute('async'),
+        index,
+        positionSegments: prepared.positionSegments,
+        source,
+      });
     }
     index += 1;
   }
-  let pageGlobals: Pick<SourceInput,
-    'annexBFunctionAssignments' | 'annexBFunctionPositions' | 'positionSegments' | 'source'>;
+  type PageGlobalState = Pick<SourceInput,
+    'annexBFunctionAssignments' | 'annexBFunctionPositions' | 'positionSegments' | 'source'> & {
+    afterIndex: number;
+  };
+  const pageGlobalStates: PageGlobalState[] = [{
+    afterIndex: -1,
+    positionSegments: [],
+    source: '',
+  }];
   if (classicScripts.length > 0) {
     let source = '';
     const activeLexicalNames = new Set<string>();
@@ -750,16 +781,15 @@ const executableInputs = (inputs: readonly SourceInput[]): SourceInput[] => inpu
         positionSegments: [...positionSegments],
         source,
       });
+      pageGlobalStates.push({
+        afterIndex: script.index,
+        annexBFunctionAssignments: new Map(annexBFunctionAssignments),
+        annexBFunctionPositions: new Set(annexBFunctionPositions),
+        positionSegments: [...positionSegments],
+        source,
+      });
     }
     scripts.unshift(...classicInputs);
-    pageGlobals = {
-      annexBFunctionAssignments: new Map(annexBFunctionAssignments),
-      annexBFunctionPositions: new Set(annexBFunctionPositions),
-      positionSegments: [...positionSegments],
-      source,
-    };
-  } else {
-    pageGlobals = { positionSegments: [], source: '' };
   }
   for (const script of moduleScripts) {
     const authoredScript: SourceInput = {
@@ -770,31 +800,41 @@ const executableInputs = (inputs: readonly SourceInput[]): SourceInput[] => inpu
       positionSegments: script.positionSegments,
       source: script.source,
     };
-    let source = pageGlobals.source;
-    if (source.length > 0) source += '\n;\n';
-    const moduleStart = source.length;
-    source += script.source.startsWith('#!') ? `//${script.source.slice(2)}` : script.source;
-    scripts.push({
-      path: authoredScript.path,
-      analysisStart: moduleStart,
-      annexBFunctionAssignments: pageGlobals.annexBFunctionAssignments,
-      annexBFunctionPositions: pageGlobals.annexBFunctionPositions,
-      authoredScripts: [authoredScript],
-      classicLinked: true,
-      compilerPath: `\0doctect-inline/${input.path}/${script.index}.js`,
-      moduleStart,
-      reportPath: input.path,
-      reportSource: input.source,
-      positionSegments: [
-        ...(pageGlobals.positionSegments ?? []),
-        ...script.positionSegments.map(segment => ({
-          generatedStart: moduleStart + segment.generatedStart,
-          generatedEnd: moduleStart + segment.generatedEnd,
-          originalStart: segment.originalStart,
-        })),
-      ],
-      source,
-    });
+    const priorStates = pageGlobalStates.filter(state => state.afterIndex < script.index);
+    const states = script.async
+      ? [
+        priorStates.at(-1)!,
+        ...pageGlobalStates.filter(state => state.afterIndex > script.index),
+      ]
+      : [pageGlobalStates.at(-1)!];
+    for (const pageGlobals of states) {
+      let source = pageGlobals.source;
+      if (source.length > 0) source += '\n;\n';
+      const moduleStart = source.length;
+      source += script.source.startsWith('#!') ? `//${script.source.slice(2)}` : script.source;
+      scripts.push({
+        path: authoredScript.path,
+        analysisStart: moduleStart,
+        annexBFunctionAssignments: pageGlobals.annexBFunctionAssignments,
+        annexBFunctionPositions: pageGlobals.annexBFunctionPositions,
+        authoredScripts: [authoredScript],
+        classicLinked: true,
+        compilerPath: `\0doctect-inline/${input.path}/${script.index}-${pageGlobals.afterIndex}.js`,
+        findingGroup: script.async ? authoredScript.path : undefined,
+        moduleStart,
+        reportPath: input.path,
+        reportSource: input.source,
+        positionSegments: [
+          ...(pageGlobals.positionSegments ?? []),
+          ...script.positionSegments.map(segment => ({
+            generatedStart: moduleStart + segment.generatedStart,
+            generatedEnd: moduleStart + segment.generatedEnd,
+            originalStart: segment.originalStart,
+          })),
+        ],
+        source,
+      });
+    }
   }
   return scripts;
 });
@@ -900,6 +940,7 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
     host,
   });
   const checker = program.getTypeChecker();
+  const findingIdentities = new Set<string>();
   const moduleLocalSymbols = new Map<string, Map<string, ts.Symbol>>();
   for (const [fileName, input] of scriptsByFile) {
     if (input.moduleStart === undefined) continue;
@@ -1063,7 +1104,10 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
     if (sourceFile) collectOrigins(sourceFile);
   }
 
-  const isClassicGlobalVar = (declaration: ts.Declaration): boolean => {
+  const isClassicGlobalVar = (
+    declaration: ts.Declaration,
+    reference: ts.Identifier,
+  ): boolean => {
     const declarationInput = scriptsByFile.get(declaration.getSourceFile().fileName);
     if (!declarationInput?.classicLinked) return false;
     if (declarationInput.moduleStart !== undefined
@@ -1071,7 +1115,16 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
     if (ts.isFunctionDeclaration(declaration)
       && declarationInput.annexBFunctionPositions?.has(
         declaration.getStart(declaration.getSourceFile()),
-      )) return true;
+      )) {
+      const parent = declaration.parent;
+      const lexicalScope = ts.isCaseClause(parent) || ts.isDefaultClause(parent)
+        ? parent.parent
+        : ts.isBlock(parent) ? parent : declaration;
+      if (reference.getSourceFile() === declaration.getSourceFile()
+        && reference.getStart(reference.getSourceFile()) >= lexicalScope.getStart()
+        && reference.end <= lexicalScope.end) return false;
+      return true;
+    }
     let current: ts.Node | undefined = declaration;
     while (current && !ts.isSourceFile(current) && !ts.isVariableDeclaration(current)) {
       if (ts.isFunctionLike(current) || ts.isClassStaticBlockDeclaration(current)) return false;
@@ -1099,7 +1152,8 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
     const annexBAssignment = declarationInput?.annexBFunctionAssignments?.get(identifier.text);
     if (annexBAssignment !== undefined && annexBAssignment <= identifier.getStart()) return false;
     return !symbol?.declarations?.some(declaration => (
-      scriptsByFile.has(declaration.getSourceFile().fileName) && !isClassicGlobalVar(declaration)
+      scriptsByFile.has(declaration.getSourceFile().fileName)
+      && !isClassicGlobalVar(declaration, identifier)
     ));
   };
 
@@ -1394,8 +1448,20 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
       || policyPath === 'tests/helpers/localWorkspaceFixtures.ts';
     const localWorkspaceSource = policyPath.startsWith('services/localWorkspace/');
     const productionSource = !policyPath.startsWith('tests/');
+    const appendFinding = (finding: string, identity: string): void => {
+      if (input.findingGroup) {
+        const groupedIdentity = `${input.findingGroup}\0${identity}`;
+        if (findingIdentities.has(groupedIdentity)) return;
+        findingIdentities.add(groupedIdentity);
+      }
+      violations.push(finding);
+    };
     const report = (node: ts.Node, message: string): void => {
-      violations.push(`${policyPath}:${reportLine(input, node.getStart(sourceFile))}: ${message}`);
+      const start = node.getStart(sourceFile);
+      appendFinding(
+        `${policyPath}:${reportLine(input, start)}: ${message}`,
+        `${start - (input.moduleStart ?? 0)}:${message}`,
+      );
     };
     const authoredScripts = input.authoredScripts ?? [input];
     for (const authoredInput of authoredScripts) {
@@ -1413,8 +1479,9 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
       }).parseDiagnostics;
       for (const diagnostic of parseDiagnostics) {
         const message = ts.flattenDiagnosticMessageText(diagnostic.messageText, ' ');
-        violations.push(
+        appendFinding(
           `${policyPath}:${reportLine(authoredInput, diagnostic.start ?? 0)}: could not be parsed: ${message}`,
+          `parse:${diagnostic.start ?? 0}:${message}`,
         );
       }
     }
@@ -2104,6 +2171,111 @@ describe('local workspace static boundary', () => {
     ]);
   });
 
+  it('async module timing reports the streamed schedule before a future receiver replacement', () => {
+    const source = [
+      '<script>var key = \'hype_\' + \'projects\';</script>',
+      '<script type="module" async>',
+      'self.localStorage.getItem(key);',
+      '</script>',
+      '<script>{ function self() {} }</script>',
+    ].join('\n');
+    const accesses = analyzeSource('async-module-streamed.html', source)
+      .filter(violation => violation.includes('accesses legacy document key'));
+    expect(accesses).toEqual([
+      expect.stringContaining('async-module-streamed.html:3: accesses legacy document key'),
+    ]);
+  });
+
+  it('async module timing reports module-before-future-classic native access', () => {
+    const source = '<script type="module" async>const key = \'hype_\' + \'projects\'; '
+      + 'self.localStorage.getItem(key);</script>'
+      + '<script>{ function self() {} }</script>';
+    expect(analyzeSource('async-module-before-classic.html', source)).toEqual([
+      expect.stringContaining('accesses legacy document key'),
+    ]);
+  });
+
+  it.each([
+    [
+      'key',
+      'localStorage.getItem(key);',
+      'const key = \'hype_\' + \'projects\';',
+    ],
+    [
+      'storage alias',
+      'storage.getItem(\'hype_\' + \'projects\');',
+      'const storage = localStorage;',
+    ],
+    [
+      'callable alias',
+      'read(\'hype_\' + \'projects\');',
+      'const read = localStorage.getItem.bind(localStorage);',
+    ],
+  ])('async module timing includes a late schedule with a future classic %s', (_case, moduleBody, classicBody) => {
+    const source = `<script type="module" async>${moduleBody}</script>`
+      + `<script>${classicBody}</script>`;
+    expect(analyzeSource('async-module-future-origin.html', source)).toEqual([
+      expect.stringContaining('accesses legacy document key'),
+    ]);
+  });
+
+  it('async module timing deduplicates a finding exposed by multiple classic states', () => {
+    const source = '<script>const key = \'hype_\' + \'projects\';</script>'
+      + '<script type="module" async>localStorage.getItem(key);</script>'
+      + '<script>const ready = true;</script>';
+    const accesses = analyzeSource('async-module-deduplicated.html', source)
+      .filter(violation => violation.includes('accesses legacy document key'));
+    expect(accesses).toEqual([
+      expect.stringContaining('accesses legacy document key'),
+    ]);
+  });
+
+  it('async module timing excludes a failed future classic body', () => {
+    const source = '<script type="module" async>const key = \'hype_\' + \'projects\'; '
+      + 'self.localStorage.getItem(key);</script>'
+      + '<script>let location; let self;</script>';
+    expect(analyzeSource('async-module-failed-classic.html', source)).toEqual([
+      expect.stringContaining('accesses legacy document key'),
+    ]);
+  });
+
+  it('async module timing retains a prior classic receiver replacement', () => {
+    const source = '<script>{ function self() {} }</script>'
+      + '<script type="module" async>const key = \'hype_\' + \'projects\'; '
+      + 'self.localStorage.getItem(key);</script>';
+    expect(analyzeSource('async-module-prior-replacement.html', source)).toEqual([]);
+  });
+
+  it('async module timing leaves ordinary deferred modules on final classic state', () => {
+    const source = '<script>var key = \'hype_\' + \'projects\';</script>'
+      + '<script type="module">self.localStorage.getItem(key);</script>'
+      + '<script>{ function self() {} }</script>';
+    expect(analyzeSource('ordinary-module-final-state.html', source)).toEqual([]);
+  });
+
+  it('async module timing examines an intermediate future classic state', () => {
+    const source = '<script type="module" async>self.localStorage.getItem(key);</script>'
+      + '<script>const key = \'hype_\' + \'projects\';</script>'
+      + '<script>{ function self() {} }</script>';
+    expect(analyzeSource('async-module-intermediate-state.html', source)).toEqual([
+      expect.stringContaining('accesses legacy document key'),
+    ]);
+  });
+
+  it('async module timing keeps sibling async module declarations isolated', () => {
+    const source = '<script type="module" async>const key = \'hype_\' + \'projects\';</script>'
+      + '<script type="module" async>localStorage.getItem(key);</script>'
+      + '<script>const ready = true;</script>';
+    expect(analyzeSource('async-module-sibling-isolation.html', source)).toEqual([]);
+  });
+
+  it('async module timing does not apply HTML async scheduling to SVG modules', () => {
+    const source = '<svg><script type="module" async>const key = \'hype_\' + \'projects\'; '
+      + 'self.localStorage.getItem(key);</script></svg>'
+      + '<script>{ function self() {} }</script>';
+    expect(analyzeSource('svg-module-async-attribute.html', source)).toEqual([]);
+  });
+
   it.each([
     [
       'single uninitialized localStorage',
@@ -2395,6 +2567,131 @@ describe('local workspace static boundary', () => {
     const source = '<script>{ function self() {} function self() {} }</script>'
       + '<script>const key = \'hype_\' + \'projects\'; self.localStorage.getItem(key);</script>';
     expect(analyzeSource('annex-b-sibling-functions.html', source)).toEqual([]);
+  });
+
+  it.each([
+    ['generator', 'function* self() {}'],
+    ['async', 'async function self() {}'],
+    ['async generator', 'async function* self() {}'],
+  ])('Annex B non-ordinary %s declaration does not replace a protected receiver', (_case, declaration) => {
+    const source = `<script>{ ${declaration} }</script>`
+      + '<script>const key = \'hype_\' + \'projects\'; self.localStorage.getItem(key);</script>';
+    expect(analyzeSource('annex-b-non-ordinary-receiver.html', source)).toEqual([
+      expect.stringContaining('accesses legacy document key'),
+    ]);
+  });
+
+  it.each([
+    ['generator', 'function* occupied() {}'],
+    ['async', 'async function occupied() {}'],
+    ['async generator', 'async function* occupied() {}'],
+  ])('Annex B non-ordinary %s declaration permits later lexical activation', (_case, declaration) => {
+    const source = `<script>{ ${declaration} }</script>`
+      + '<script>let occupied; const key = \'hype_\' + \'projects\'; localStorage.getItem(key);</script>';
+    expect(analyzeSource('annex-b-non-ordinary-activation.html', source)).toEqual([
+      expect.stringContaining('accesses legacy document key'),
+    ]);
+  });
+
+  it.each([
+    ['generator', 'function* self() {}'],
+    ['async', 'async function self() {}'],
+    ['async generator', 'async function* self() {}'],
+  ])('Annex B non-ordinary %s declaration blocks nested same-name promotion', (_case, declaration) => {
+    const source = `<script>{ ${declaration} { function self() {} } }</script>`
+      + '<script>const key = \'hype_\' + \'projects\'; self.localStorage.getItem(key);</script>';
+    expect(analyzeSource('annex-b-non-ordinary-intervening.html', source)).toEqual([
+      expect.stringContaining('accesses legacy document key'),
+    ]);
+  });
+
+  it('Annex B non-ordinary filtering retains ordinary block-function promotion', () => {
+    const source = '<script>{ function self() {} }</script>'
+      + '<script>const key = \'hype_\' + \'projects\'; self.localStorage.getItem(key);</script>';
+    expect(analyzeSource('annex-b-ordinary-control.html', source)).toEqual([]);
+  });
+
+  it('Annex B catch eligibility rejects a same-name destructuring catch binding', () => {
+    const source = '<script>try { throw { self: 1 }; } '
+      + 'catch ({ self }) { { function self() {} } }</script>'
+      + '<script>let self; const key = \'hype_\' + \'projects\'; localStorage.getItem(key);</script>';
+    expect(analyzeSource('annex-b-catch-destructuring-name.html', source)).toEqual([
+      expect.stringContaining('accesses legacy document key'),
+    ]);
+  });
+
+  it('Annex B catch eligibility preserves same-name simple catch promotion', () => {
+    const source = '<script>try { throw 0; } catch (self) { { function self() {} } }</script>'
+      + '<script>const key = \'hype_\' + \'projects\'; self.localStorage.getItem(key);</script>';
+    expect(analyzeSource('annex-b-catch-simple-name.html', source)).toEqual([]);
+  });
+
+  it('Annex B catch eligibility keeps different-name destructuring reachability conservative', () => {
+    const source = '<script>try { throw { value: 1 }; } '
+      + 'catch ({ value }) { { function self() {} } }</script>'
+      + '<script>const key = \'hype_\' + \'projects\'; self.localStorage.getItem(key);</script>';
+    expect(analyzeSource('annex-b-catch-destructuring-control.html', source)).toEqual([
+      expect.stringContaining('accesses legacy document key'),
+    ]);
+  });
+
+  it.each([
+    ['localStorage', 'localStorage'],
+    ['window', 'window.localStorage'],
+    ['self', 'self.localStorage'],
+    ['globalThis', 'globalThis.localStorage'],
+  ])('Annex B block lexical %s binding shadows native access before and after its declaration', (name, receiver) => {
+    const source = `<script>{ const beforeKey = 'hype_' + 'projects'; ${receiver}.getItem(beforeKey); `
+      + `function ${name}() {} const afterKey = 'hype_' + 'projects'; `
+      + `${receiver}.getItem(afterKey); }</script>`;
+    expect(analyzeSource('annex-b-block-lexical-order.html', source)).toEqual([]);
+  });
+
+  it.each([
+    ['localStorage', 'localStorage'],
+    ['window', 'window.localStorage'],
+    ['self', 'self.localStorage'],
+    ['globalThis', 'globalThis.localStorage'],
+  ])('Annex B block lexical %s binding shadows native access inside its function body', (name, receiver) => {
+    const source = `<script>{ function ${name}() { const key = 'hype_' + 'projects'; `
+      + `${receiver}.getItem(key); } }</script>`;
+    expect(analyzeSource('annex-b-block-lexical-body.html', source)).toEqual([]);
+  });
+
+  it.each([
+    ['getter-only localStorage', 'localStorage', 'localStorage', true],
+    ['getter-only window', 'window', 'window.localStorage', true],
+    ['settable self', 'self', 'self.localStorage', false],
+    ['writable globalThis', 'globalThis', 'globalThis.localStorage', false],
+  ])('Annex B block lexical keeps %s outside-block synthetic-global behavior', (_case, name, receiver, reports) => {
+    const source = `<script>{ function ${name}() {} }</script>`
+      + `<script>const key = 'hype_' + 'projects'; ${receiver}.getItem(key);</script>`;
+    const accesses = analyzeSource('annex-b-block-lexical-outside.html', source)
+      .filter(violation => violation.includes('accesses legacy document key'));
+    expect(accesses).toHaveLength(reports ? 1 : 0);
+  });
+
+  it('Annex B block lexical handling preserves ordinary top-level function shadowing', () => {
+    const source = '<script>function localStorage() {} const key = \'hype_\' + \'projects\'; '
+      + 'localStorage.getItem(key);</script>';
+    expect(analyzeSource('top-level-function-shadow.html', source)).toEqual([]);
+  });
+
+  it('Annex B block lexical binding covers its complete switch case block', () => {
+    const source = '<script>switch (0) { case 0: const key = \'hype_\' + \'projects\'; '
+      + 'localStorage.getItem(key); function localStorage() {} }</script>';
+    expect(analyzeSource('annex-b-case-block-lexical.html', source)).toEqual([]);
+  });
+
+  it.each([
+    ['getter-only localStorage', 'localStorage', 'localStorage'],
+    ['settable self', 'self', 'self.localStorage'],
+  ])('Annex B block lexical keeps native %s before outside-block assignment', (_case, name, receiver) => {
+    const source = `<script>const key = 'hype_' + 'projects'; ${receiver}.getItem(key); `
+      + `{ function ${name}() {} }</script>`;
+    expect(analyzeSource('annex-b-before-global-assignment.html', source)).toEqual([
+      expect.stringContaining('accesses legacy document key'),
+    ]);
   });
 
   it('strict block function remains block-local for later declaration activation', () => {
