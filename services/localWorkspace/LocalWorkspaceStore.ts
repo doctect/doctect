@@ -45,6 +45,11 @@ import {
   type MutationQueue,
 } from './mutationQueue';
 import {
+  cloneWorkspaceSnapshotWithProjectAuthority,
+  getInstalledProjectAuthorityToken,
+  registerInstalledProjectAuthority,
+} from './projectAuthority';
+import {
   createIndexedDbRecoveryBundle,
   createLegacyRecoveryBundle,
   prepareLegacyRecovery,
@@ -433,6 +438,9 @@ const createLocalWorkspaceStoreAtVersion = (
   let durableSnapshot: WorkspaceSnapshot | undefined;
   let expectedWorkspaceRevision: number | undefined;
   let expectedProjectRevisions = new Map<string, number>();
+  // Installed revisions identify readback authority even while save lineages
+  // keep expected revisions pinned.
+  let installedProjectRevisions = new Map<string, number>();
   let consumedImportTargets = new Map<string, string>();
   let mutationQueue: MutationQueue | undefined;
   let startReadyLegacyRevalidation: (() => void) | undefined;
@@ -459,6 +467,7 @@ const createLocalWorkspaceStoreAtVersion = (
     durableSnapshot = undefined;
     expectedWorkspaceRevision = undefined;
     expectedProjectRevisions = new Map();
+    installedProjectRevisions = new Map();
     consumedImportTargets = new Map();
   };
 
@@ -524,12 +533,39 @@ const createLocalWorkspaceStoreAtVersion = (
     options: {
       updateCachedReady?: boolean;
       preservePinnedProjectRevisions?: boolean;
+      preserveProjectAuthority?: { projectId: string; storageRevision: number };
     } = {},
   ): WorkspaceSnapshot => {
-    const nextSnapshot = structuredClone(snapshot);
-    const nextProjectRevisions = new Map(
+    let nextSnapshot = structuredClone(snapshot);
+    const nextInstalledProjectRevisions = new Map(
       records.projects.map(record => [record.id, record.storageRevision]),
     );
+    const nextProjectRevisions = new Map(nextInstalledProjectRevisions);
+    const previousProjects = new Map(
+      durableSnapshot?.projects.map(project => [project.id, project]) ?? [],
+    );
+    const recordsById = new Map(records.projects.map(record => [record.id, record]));
+    nextSnapshot = {
+      ...nextSnapshot,
+      projects: nextSnapshot.projects.map(project => {
+        const record = recordsById.get(project.id);
+        const previous = previousProjects.get(project.id);
+        if (record && previous
+          && installedProjectRevisions.get(project.id) === record.storageRevision) {
+          return previous;
+        }
+        const preserveAuthority = Boolean(record && previous
+          && options.preserveProjectAuthority?.projectId === project.id
+          && options.preserveProjectAuthority.storageRevision === record.storageRevision);
+        registerInstalledProjectAuthority(
+          project,
+          preserveAuthority
+            ? getInstalledProjectAuthorityToken(previous)
+            : undefined,
+        );
+        return project;
+      }),
+    };
     if (options.preservePinnedProjectRevisions) {
       for (const [projectId, revision] of expectedProjectRevisions) {
         if (mutationQueue?.hasPinnedProjectRevision(projectId)) {
@@ -545,11 +581,15 @@ const createLocalWorkspaceStoreAtVersion = (
     }
     const nextWorkspaceRevision = records.workspace.revision;
     durableSnapshot = nextSnapshot;
+    installedProjectRevisions = nextInstalledProjectRevisions;
     expectedProjectRevisions = nextProjectRevisions;
     expectedWorkspaceRevision = nextWorkspaceRevision;
     consumedImportTargets = nextConsumedImportTargets;
     if (options.updateCachedReady && cachedReady) {
-      cachedReady = { ...cachedReady, snapshot: structuredClone(nextSnapshot) };
+      cachedReady = {
+        ...cachedReady,
+        snapshot: cloneWorkspaceSnapshotWithProjectAuthority(nextSnapshot),
+      };
     }
     return nextSnapshot;
   };
@@ -1024,8 +1064,8 @@ const createLocalWorkspaceStoreAtVersion = (
           ? recovery('legacy-changing')
           : recovery('split-brain');
       }
-      installDurableState(inputs.records, snapshot);
-      return ready(snapshot, ledger);
+      const installed = installDurableState(inputs.records, snapshot);
+      return ready(cloneWorkspaceSnapshotWithProjectAuthority(installed), ledger);
     };
 
     const followInspection = async (
@@ -1183,9 +1223,9 @@ const createLocalWorkspaceStoreAtVersion = (
       )) {
         return copiedFailure();
       }
-      installDurableState(inputs.records, snapshot);
+      const installed = installDurableState(inputs.records, snapshot);
       retryableCopiedLedger = undefined;
-      return ready(snapshot, verifiedLedger);
+      return ready(cloneWorkspaceSnapshotWithProjectAuthority(installed), verifiedLedger);
     };
 
     const classification = classifyInspection(initialInspection);
@@ -1318,7 +1358,9 @@ const createLocalWorkspaceStoreAtVersion = (
     }
   };
 
-  const readPostCommandSnapshot = async (): Promise<WorkspaceSnapshot> => {
+  const readPostCommandSnapshot = async (
+    preserveProjectAuthority?: { projectId: string; storageRevision: number },
+  ): Promise<WorkspaceSnapshot> => {
     let records: WorkspaceRecords;
     let snapshot: WorkspaceSnapshot;
     try {
@@ -1347,6 +1389,7 @@ const createLocalWorkspaceStoreAtVersion = (
     return installDurableState(records, snapshot, {
       updateCachedReady: true,
       preservePinnedProjectRevisions: true,
+      preserveProjectAuthority,
     });
   };
 
@@ -1393,7 +1436,10 @@ const createLocalWorkspaceStoreAtVersion = (
       }
       const saved = await getAdapter().saveProject(project, expectedRevision);
       expectedProjectRevisions.set(project.id, saved.storageRevision);
-      return readPostCommandSnapshot();
+      return readPostCommandSnapshot({
+        projectId: project.id,
+        storageRevision: saved.storageRevision,
+      });
     });
 
   const prepareImportConsumption = async (
@@ -1642,14 +1688,17 @@ const createLocalWorkspaceStoreAtVersion = (
               'conflict',
             );
           }
-          installDurableState(records, snapshot);
-          const readyResult = ready(snapshot, persistedLedger);
+          const installed = installDurableState(records, snapshot);
+          const readyResult = ready(
+            cloneWorkspaceSnapshotWithProjectAuthority(installed),
+            persistedLedger,
+          );
           assertRecoveryLifecycle();
           authority = 'ready';
           cachedReady = readyResult;
           lifecycleResult = undefined;
           resetCommandQueue?.();
-          return structuredClone(snapshot);
+          return cloneWorkspaceSnapshotWithProjectAuthority(installed);
         }
 
         const recorded = await recordLegacyDrift(current, currentLedger);

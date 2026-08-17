@@ -1,14 +1,24 @@
 import React from 'react';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import 'fake-indexeddb/auto';
+import { webcrypto } from 'node:crypto';
+import { IDBFactory } from 'fake-indexeddb';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { createMemoryRouter, RouterProvider } from 'react-router-dom';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AppState } from '../../types';
-import type {
-  LocalWorkspaceStore,
-  WorkspaceCommand,
-  WorkspaceProject,
-  WorkspaceSnapshot,
+import {
+  createLocalWorkspaceStore,
+  type LocalWorkspaceEnvironment,
+  type WorkspaceProject,
+  type WorkspaceSnapshot,
 } from '../../services/localWorkspace/index';
+import { createIndexedDbAdapter } from '../../services/localWorkspace/indexedDbAdapter';
 import { createBlankProject } from '../../services/presets';
+import {
+  LEGACY_KEYS,
+  memoryStorage,
+  validLegacyValues,
+} from '../helpers/localWorkspaceFixtures';
 
 vi.mock('../../services/analytics', () => ({ trackEvent: vi.fn() }));
 vi.mock('../../components/Sidebar', () => ({
@@ -40,9 +50,29 @@ vi.mock('../../components/HierarchyGeneratorModal', () => ({ HierarchyGeneratorM
 vi.mock('../../components/SavePresetModal', () => ({ SavePresetModal: () => null }));
 vi.mock('../../components/NewVariantModal', () => ({ NewVariantModal: () => null }));
 vi.mock('../../components/EditorToolbar', () => ({ EditorToolbar: () => null }));
+vi.mock('../../components/TabBar', () => ({ TabBar: () => null }));
+vi.mock('../../components/NewProjectModal', () => ({ NewProjectModal: () => null }));
+vi.mock('../../components/CloseProjectConfirmModal', () => ({ CloseProjectConfirmModal: () => null }));
+vi.mock('../../components/AccountMenu', () => ({ AccountMenu: () => null }));
+vi.mock('../../components/cloud/CloudMenu', () => ({
+  CloudMenu: ({ project, onRestoreState }: {
+    project: WorkspaceProject;
+    onRestoreState: (state: AppState) => Promise<boolean>;
+  }) => (
+    <button
+      type="button"
+      onClick={() => { void onRestoreState({ ...project.initialState, scale: 1.25 }); }}
+    >
+      Restore project
+    </button>
+  ),
+}));
+vi.mock('../../services/browserDownload', () => ({ downloadJson: vi.fn(), downloadBlob: vi.fn() }));
 
 import { ProjectEditor } from '../../components/ProjectEditor';
-import { useWorkspaceProjectWrites } from '../../hooks/useWorkspaceProjectWrites';
+import { EditorPage } from '../../pages/EditorPage';
+
+afterEach(() => vi.restoreAllMocks());
 
 const markedState = (title: string, marker: string): AppState => {
   const state = createBlankProject();
@@ -83,8 +113,8 @@ const readOnlyEditorState = (container: HTMLElement = document.body): AppState =
   return JSON.parse(output.textContent || '{}');
 };
 
-describe('ProjectEditor authoritative state reconciliation', () => {
-  it('adopts changed authoritative bytes at the same project and public revision before editing', async () => {
+describe('ProjectEditor authority remount semantics', () => {
+  it('edits from changed authority after an internal-lineage remount', async () => {
     const stale = markedState('Stale A', 'stale-a');
     const foreign = markedState('Foreign A', 'foreign-a');
     const onStateChange = vi.fn();
@@ -92,7 +122,7 @@ describe('ProjectEditor authoritative state reconciliation', () => {
     const view = render(<ProjectEditor {...props} />);
 
     expect(onStateChange).not.toHaveBeenCalled();
-    view.rerender(<ProjectEditor {...props} initialState={foreign} />);
+    view.rerender(<ProjectEditor key="foreign-authority" {...props} initialState={foreign} />);
     fireEvent.click(screen.getByRole('button', { name: 'Edit document' }));
 
     await waitFor(() => expect(onStateChange).toHaveBeenCalledOnce());
@@ -140,7 +170,7 @@ describe('ProjectEditor authoritative state reconciliation', () => {
     onNameChange.mockClear();
     onStateChange.mockClear();
 
-    view.rerender(<ProjectEditor {...props} initialState={foreign} />);
+    view.rerender(<ProjectEditor key="foreign-authority" {...props} initialState={foreign} />);
 
     await waitFor(() => expect(readOnlyEditorState().nodes['foreign-a-only']).toBeDefined());
     expect(onStateChange).not.toHaveBeenCalled();
@@ -157,7 +187,7 @@ describe('ProjectEditor authoritative state reconciliation', () => {
     const props = editorProps(stale, { isActive: false, onStateChange });
     const view = render(<ProjectEditor {...props} />);
 
-    view.rerender(<ProjectEditor {...props} initialState={foreign} />);
+    view.rerender(<ProjectEditor key="foreign-authority" {...props} initialState={foreign} />);
     await waitFor(() => expect(readOnlyEditorState().nodes['foreign-a-only']).toBeDefined());
     view.rerender(<ProjectEditor {...props} initialState={structuredClone(foreign)} isActive />);
     fireEvent.click(screen.getByRole('button', { name: 'Edit document' }));
@@ -176,91 +206,220 @@ const project = (id: string, name: string, initialState: AppState): WorkspacePro
   revision: 0,
 });
 
-const workspace = (
-  projectA: WorkspaceProject,
-  projectB: WorkspaceProject,
-  activeProjectId = projectB.id,
-): WorkspaceSnapshot => ({
-  projects: [projectA, projectB],
-  activeProjectId,
-  customPresets: [],
-  pendingImports: [],
-});
-
-function RealWriteHarness({
-  store,
-  initialWorkspace,
-}: {
-  store: LocalWorkspaceStore;
-  initialWorkspace: WorkspaceSnapshot;
-}): React.ReactElement {
-  const { workspace: current, updateProject } = useWorkspaceProjectWrites(store, initialWorkspace);
-  return (
-    <>
-      {current.projects.map(item => (
-        <section
-          key={`${item.id}:${item.revision ?? 0}`}
-          data-testid={`project-${item.id}`}
-          data-active={String(item.id === current.activeProjectId)}
-        >
-          <ProjectEditor
-            projectId={item.id}
-            projectName={item.name}
-            initialState={item.initialState}
-            isActive={item.id === current.activeProjectId}
-            onNameChange={name => { void updateProject(item.id, value => ({ ...value, name })); }}
-            onStateChange={state => {
-              void updateProject(item.id, value => ({ ...value, initialState: state }));
-            }}
-            onCreateGeneratedProject={vi.fn(async () => true)}
-            onSaveCustomPreset={vi.fn(async () => true)}
-          />
-        </section>
-      ))}
-    </>
-  );
+interface Deferred {
+  promise: Promise<void>;
+  resolve(): void;
 }
 
-describe('ProjectEditor with useWorkspaceProjectWrites', () => {
-  it('bases the next A save on foreign A bytes returned by a B command', async () => {
+const deferred = (): Deferred => {
+  let resolve!: () => void;
+  const promise = new Promise<void>(nextResolve => { resolve = nextResolve; });
+  return { promise, resolve };
+};
+
+const sameStores = (actual: readonly string[], expected: readonly string[]): boolean =>
+  actual.length === expected.length && expected.every(store => actual.includes(store));
+
+const invokeListener = (
+  listener: EventListenerOrEventListenerObject,
+  event: Event,
+): void => {
+  if (typeof listener === 'function') listener(event);
+  else listener.handleEvent(event);
+};
+
+const transactionCompletionHold = (scope: readonly string[]) => {
+  const started = deferred();
+  const release = deferred();
+  let armed = false;
+  let held = false;
+  return {
+    started: started.promise,
+    release: release.resolve,
+    arm: () => { armed = true; },
+    hook(stores: string[], mode: IDBTransactionMode, transaction: IDBTransaction) {
+      if (!armed || held || mode !== 'readwrite' || !sameStores(stores, scope)) return;
+      held = true;
+      const addEventListener = transaction.addEventListener.bind(transaction);
+      transaction.addEventListener = ((
+        type: string,
+        listener: EventListenerOrEventListenerObject,
+        options?: boolean | AddEventListenerOptions,
+      ) => {
+        if (type !== 'complete') return addEventListener(type, listener, options);
+        return addEventListener(type, event => {
+          void release.promise.then(() => invokeListener(listener, event));
+        }, options);
+      }) as IDBTransaction['addEventListener'];
+      started.resolve();
+    },
+  };
+};
+
+const instrumentFactory = (
+  indexedDB: IDBFactory,
+  hook: (stores: string[], mode: IDBTransactionMode, transaction: IDBTransaction) => void,
+): void => {
+  const originalOpen = indexedDB.open.bind(indexedDB);
+  const patched = new WeakSet<IDBDatabase>();
+  indexedDB.open = ((name: string, version?: number) => {
+    const request = version === undefined ? originalOpen(name) : originalOpen(name, version);
+    request.addEventListener('success', () => {
+      const database = request.result;
+      if (patched.has(database)) return;
+      patched.add(database);
+      const originalTransaction = database.transaction.bind(database);
+      database.transaction = ((
+        storeNames: string | string[],
+        mode?: IDBTransactionMode,
+        options?: IDBTransactionOptions,
+      ) => {
+        const transaction = originalTransaction(storeNames, mode, options);
+        const stores = typeof storeNames === 'string' ? [storeNames] : Array.from(storeNames);
+        hook(stores, mode ?? 'readonly', transaction);
+        return transaction;
+      }) as IDBDatabase['transaction'];
+    });
+    return request;
+  }) as IDBFactory['open'];
+};
+
+const paneContaining = (nodeId: string): HTMLElement => {
+  const pane = screen.getAllByTestId('project-pane').find(candidate => (
+    readOnlyEditorState(candidate).nodes[nodeId] !== undefined
+  ));
+  if (!pane) throw new Error(`No project pane contains ${nodeId}.`);
+  return pane;
+};
+
+describe('EditorPage project authority lineage', () => {
+  it('rejects a stale A edit batched with B readback adopting foreign A', async () => {
     const staleA = project('project-a', 'Project A', markedState('Stale A', 'stale-a'));
     const initialB = project('project-b', 'Project B', markedState('Initial B', 'initial-b'));
-    const foreignA = project('project-a', 'Project A', markedState('Foreign A', 'foreign-a'));
-    let durable = workspace(staleA, initialB);
-    const commit = vi.fn(async (command: WorkspaceCommand): Promise<WorkspaceSnapshot> => {
-      if (command.type !== 'save-project') return structuredClone(durable);
-      if (command.project.id === 'project-b') {
-        durable = workspace(foreignA, structuredClone(command.project), 'project-a');
-      } else {
-        durable = {
-          ...durable,
-          projects: durable.projects.map(item => (
-            item.id === command.project.id ? structuredClone(command.project) : item
-          )),
-        };
-      }
-      return structuredClone(durable);
-    });
-    const store: LocalWorkspaceStore = {
-      bootstrap: vi.fn(),
-      commit,
-      exportRecoveryBundle: vi.fn(),
+    const foreignState = markedState('Foreign A', 'foreign-a');
+    const hold = transactionCompletionHold(['projects', 'migrationLedger']);
+    const indexedDB = new IDBFactory();
+    instrumentFactory(indexedDB, hold.hook);
+    const environment: LocalWorkspaceEnvironment = {
+      indexedDB,
+      legacyStorage: memoryStorage(validLegacyValues({
+        [LEGACY_KEYS.projects]: JSON.stringify([staleA, initialB]),
+        [LEGACY_KEYS.activeProject]: 'project-b',
+      })),
+      addStorageListener: () => () => {},
+      crypto: webcrypto as unknown as Crypto,
+      now: () => '2026-08-16T19:00:00.000Z',
+      randomUUID: () => 'authority-race-fixture',
+      createBlankProject,
     };
-    render(<RealWriteHarness store={store} initialWorkspace={workspace(staleA, initialB)} />);
-    const projectB = screen.getByTestId('project-project-b');
+    const store = createLocalWorkspaceStore(environment);
+    const foreignStore = createLocalWorkspaceStore(environment);
+    const initialResult = await store.bootstrap();
+    const foreignResult = await foreignStore.bootstrap();
+    expect(initialResult.status).toBe('ready');
+    expect(foreignResult.status).toBe('ready');
+    if (initialResult.status !== 'ready' || foreignResult.status !== 'ready') return;
+    const commit = vi.spyOn(store, 'commit');
+    const router = createMemoryRouter([{
+      path: '/app',
+      element: (
+        <EditorPage
+          store={store}
+          initialWorkspace={initialResult.snapshot}
+          initialWarnings={[]}
+        />
+      ),
+    }], { initialEntries: ['/app'] });
+    render(<RouterProvider router={router} />);
+    const staleAPane = paneContaining('stale-a-only');
+    const projectBPane = paneContaining('initial-b-only');
+    const staleEdit = within(staleAPane).getByRole('button', { name: 'Edit document' });
+    hold.arm();
 
-    fireEvent.click(within(projectB).getByRole('button', { name: 'Edit document' }));
-    await waitFor(() => expect(commit).toHaveBeenCalledTimes(1));
-    const projectA = screen.getByTestId('project-project-a');
-    await waitFor(() => expect(projectA).toHaveAttribute('data-active', 'true'));
-    fireEvent.click(within(projectA).getByRole('button', { name: 'Edit document' }));
-
-    await waitFor(() => expect(commit).toHaveBeenCalledTimes(2));
-    const nextACommand = commit.mock.calls[1][0] as Extract<WorkspaceCommand, { type: 'save-project' }>;
-    expect(nextACommand.project.id).toBe('project-a');
-    expect(nextACommand.project.initialState.nodes['foreign-a-only']).toMatchObject({
-      data: { authority: 'foreign-a' },
+    fireEvent.click(within(projectBPane).getByRole('button', { name: 'Edit document' }));
+    const bCommit = commit.mock.results[0]?.value as Promise<WorkspaceSnapshot>;
+    await hold.started;
+    const foreignA = foreignResult.snapshot.projects.find(item => item.id === 'project-a');
+    if (!foreignA) throw new Error('Foreign store did not bootstrap project A.');
+    await foreignStore.commit({
+      type: 'save-project',
+      project: { ...foreignA, initialState: foreignState },
     });
-    expect(nextACommand.project.initialState.nodes['stale-a-only']).toBeUndefined();
-  });
+
+    await act(async () => {
+      hold.release();
+      await bCommit;
+      staleEdit.click();
+    });
+    expect(staleEdit).not.toBeInTheDocument();
+    expect(readOnlyEditorState(paneContaining('foreign-a-only')).nodes['stale-a-only'])
+      .toBeUndefined();
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 1_100));
+    });
+
+    expect(commit).toHaveBeenCalledTimes(1);
+    expect(commit.mock.calls[0][0]).toMatchObject({
+      type: 'save-project',
+      project: { id: 'project-b' },
+    });
+    const inspector = createIndexedDbAdapter({ indexedDB, now: environment.now });
+    await inspector.open();
+    const durableA = (await inspector.inspect()).projects.find(item => item.id === 'project-a');
+    inspector.close();
+    expect(durableA?.storageRevision).toBe(1);
+    expect(durableA?.project.initialState.nodes['foreign-a-only']).toBeDefined();
+    expect(durableA?.project.initialState.nodes['stale-a-only']).toBeUndefined();
+    expect(durableA?.project.initialState.nodes[foreignState.rootId].data.locallyEdited).toBeUndefined();
+  }, 15_000);
+
+  it('keeps history for an own save but public restore still remounts the editor', async () => {
+    const source = project('project-a', 'Project A', markedState('Project A', 'source-a'));
+    const indexedDB = new IDBFactory();
+    const environment: LocalWorkspaceEnvironment = {
+      indexedDB,
+      legacyStorage: memoryStorage(validLegacyValues({
+        [LEGACY_KEYS.projects]: JSON.stringify([source]),
+        [LEGACY_KEYS.activeProject]: 'project-a',
+      })),
+      addStorageListener: () => () => {},
+      crypto: webcrypto as unknown as Crypto,
+      now: () => '2026-08-16T19:00:00.000Z',
+      randomUUID: () => 'authority-history-fixture',
+      createBlankProject,
+    };
+    const store = createLocalWorkspaceStore(environment);
+    const initialResult = await store.bootstrap();
+    expect(initialResult.status).toBe('ready');
+    if (initialResult.status !== 'ready') return;
+    const commit = vi.spyOn(store, 'commit');
+    const router = createMemoryRouter([{
+      path: '/app',
+      element: (
+        <EditorPage
+          store={store}
+          initialWorkspace={initialResult.snapshot}
+          initialWarnings={[]}
+        />
+      ),
+    }], { initialEntries: ['/app'] });
+    render(<RouterProvider router={router} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit document' }));
+    const undoBeforeSave = screen.getByTitle('Undo (Ctrl+Z)');
+    expect(undoBeforeSave).toBeEnabled();
+    await act(async () => {
+      await (commit.mock.results[0].value as Promise<WorkspaceSnapshot>);
+    });
+
+    expect(screen.getByTitle('Undo (Ctrl+Z)')).toBe(undoBeforeSave);
+    expect(undoBeforeSave).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Restore project' }));
+    await act(async () => {
+      await (commit.mock.results[1].value as Promise<WorkspaceSnapshot>);
+    });
+
+    expect(screen.getByTitle('Undo (Ctrl+Z)')).not.toBe(undoBeforeSave);
+    expect(screen.getByTitle('Undo (Ctrl+Z)')).toBeDisabled();
+  }, 10_000);
 });

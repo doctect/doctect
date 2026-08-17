@@ -62,6 +62,7 @@ export function EditorPage({
 }: EditorPageProps): React.ReactElement {
   const {
     workspace,
+    authorityEpochs,
     saveStates,
     hasUnsavedWork,
     updateProject,
@@ -218,12 +219,24 @@ export function EditorPage({
     await executeCloseProject();
   };
 
-  const handleUpdateProjectName = (projectId: string, name: string): void => {
-    void updateProject(projectId, project => ({ ...project, name }));
+  const handleUpdateProjectName = (
+    projectId: string,
+    authorityEpoch: number,
+    name: string,
+  ): void => {
+    void updateProject(projectId, project => ({ ...project, name }), authorityEpoch);
   };
 
-  const handleUpdateProjectState = (projectId: string, initialState: AppState): void => {
-    void updateProject(projectId, project => ({ ...project, initialState }));
+  const handleUpdateProjectState = (
+    projectId: string,
+    authorityEpoch: number,
+    initialState: AppState,
+  ): void => {
+    void updateProject(
+      projectId,
+      project => ({ ...project, initialState }),
+      authorityEpoch,
+    );
   };
 
   const handleCreateGeneratedProject = async (
@@ -256,13 +269,15 @@ export function EditorPage({
 
   const handleLinkCloud = async (
     projectId: string,
+    authorityEpoch: number,
     cloud: { projectId: string; lastSyncedCommitId: string },
   ): Promise<boolean> => {
-    return updateProject(projectId, project => ({ ...project, cloud }));
+    return updateProject(projectId, project => ({ ...project, cloud }), authorityEpoch);
   };
 
   const handleRestoreState = async (
     projectId: string,
+    authorityEpoch: number,
     initialState: AppState,
     cloud?: { projectId: string; lastSyncedCommitId: string },
   ): Promise<boolean> => {
@@ -271,7 +286,7 @@ export function EditorPage({
       initialState,
       revision: (project.revision ?? 0) + 1,
       ...(cloud ? { cloud } : {}),
-    }));
+    }), authorityEpoch);
   };
 
   return (
@@ -318,8 +333,17 @@ export function EditorPage({
           {activeProject && (
             <CloudMenu
               project={activeProject}
-              onLinkCloud={cloud => handleLinkCloud(activeProject.id, cloud)}
-              onRestoreState={(state, cloud) => handleRestoreState(activeProject.id, state, cloud)}
+              onLinkCloud={cloud => handleLinkCloud(
+                activeProject.id,
+                authorityEpochs.get(activeProject.id) ?? 0,
+                cloud,
+              )}
+              onRestoreState={(state, cloud) => handleRestoreState(
+                activeProject.id,
+                authorityEpochs.get(activeProject.id) ?? 0,
+                state,
+                cloud,
+              )}
             />
           )}
           <a
@@ -384,32 +408,35 @@ export function EditorPage({
       )}
 
       <div className="relative flex-1 overflow-hidden bg-slate-100">
-        {projects.map(project => (
-          <div
-            key={`${project.id}:${project.revision ?? 0}`}
-            data-testid="project-pane"
-            data-active={project.id === activeProjectId ? 'true' : 'false'}
-            className={clsx(
-              'absolute inset-0 h-full w-full',
-              project.id === activeProjectId
-                ? 'z-10 opacity-100'
-                : 'pointer-events-none z-0 opacity-0',
-            )}
-          >
-            <ProjectEditor
-              projectId={project.id}
-              projectName={project.name}
-              initialState={project.initialState}
-              isActive={project.id === activeProjectId}
-              onNameChange={name => handleUpdateProjectName(project.id, name)}
-              onStateChange={state => handleUpdateProjectState(project.id, state)}
-              onCreateGeneratedProject={(name, generated, source) => (
-                handleCreateGeneratedProject(project.id, name, generated, source)
+        {projects.map(project => {
+          const authorityEpoch = authorityEpochs.get(project.id) ?? 0;
+          return (
+            <div
+              key={`${project.id}:${project.revision ?? 0}:${authorityEpoch}`}
+              data-testid="project-pane"
+              data-active={project.id === activeProjectId ? 'true' : 'false'}
+              className={clsx(
+                'absolute inset-0 h-full w-full',
+                project.id === activeProjectId
+                  ? 'z-10 opacity-100'
+                  : 'pointer-events-none z-0 opacity-0',
               )}
-              onSaveCustomPreset={handleSaveCustomPreset}
-            />
-          </div>
-        ))}
+            >
+              <ProjectEditor
+                projectId={project.id}
+                projectName={project.name}
+                initialState={project.initialState}
+                isActive={project.id === activeProjectId}
+                onNameChange={name => handleUpdateProjectName(project.id, authorityEpoch, name)}
+                onStateChange={state => handleUpdateProjectState(project.id, authorityEpoch, state)}
+                onCreateGeneratedProject={(name, generated, source) => (
+                  handleCreateGeneratedProject(project.id, name, generated, source)
+                )}
+                onSaveCustomPreset={handleSaveCustomPreset}
+              />
+            </div>
+          );
+        })}
       </div>
 
       <NewProjectModal

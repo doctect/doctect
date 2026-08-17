@@ -36,6 +36,7 @@ import {
 import {
   WORKSPACE_DB_NAME,
 } from '../../../services/localWorkspace/schema';
+import { getInstalledProjectAuthorityToken } from '../../../services/localWorkspace/projectAuthority';
 import {
   LEGACY_KEYS,
   MemoryStorage,
@@ -408,6 +409,65 @@ describe('semantic transaction scopes', () => {
 });
 
 describe('project save queues', () => {
+  it('reuses project authority identity across readbacks when installed revisions are unchanged', async () => {
+    const { store } = await readyStore({ values: twoProjectValues() });
+
+    const first = await store.commit({ type: 'activate-project', projectId: 'project-b' });
+    const second = await store.commit({ type: 'activate-project', projectId: 'project-a' });
+
+    const firstA = first.projects.find(project => project.id === 'project-a')!;
+    const firstB = first.projects.find(project => project.id === 'project-b')!;
+    const firstAToken = getInstalledProjectAuthorityToken(firstA);
+    const firstBToken = getInstalledProjectAuthorityToken(firstB);
+    expect(firstAToken).toBeDefined();
+    expect(firstBToken).toBeDefined();
+    expect(getInstalledProjectAuthorityToken(
+      second.projects.find(project => project.id === 'project-a')!,
+    )).toBe(firstAToken);
+    expect(getInstalledProjectAuthorityToken(
+      second.projects.find(project => project.id === 'project-b')!,
+    )).toBe(firstBToken);
+  });
+
+  it('replaces only a project whose installed revision changed in another store', async () => {
+    const { store, harness } = await readyStore({ values: twoProjectValues() });
+    const before = await store.commit({ type: 'activate-project', projectId: 'project-b' });
+    const beforeA = before.projects.find(project => project.id === 'project-a');
+    const beforeB = before.projects.find(project => project.id === 'project-b');
+    const beforeAToken = getInstalledProjectAuthorityToken(beforeA!);
+    const beforeBToken = getInstalledProjectAuthorityToken(beforeB!);
+    const foreign = createIndexedDbAdapter({ indexedDB: harness.indexedDB, now: () => TEST_NOW });
+    await foreign.saveProject(projectNamed('Foreign A'), 0);
+
+    const observed = await store.commit({ type: 'activate-project', projectId: 'project-a' });
+
+    const observedA = observed.projects.find(project => project.id === 'project-a')!;
+    const observedB = observed.projects.find(project => project.id === 'project-b')!;
+    expect(getInstalledProjectAuthorityToken(observedA)).not.toBe(beforeAToken);
+    expect(observedA.name).toBe('Foreign A');
+    expect(getInstalledProjectAuthorityToken(observedB)).toBe(beforeBToken);
+    foreign.close();
+  });
+
+  it('preserves authority identity for the exact revision written by an own save', async () => {
+    const { store, snapshot } = await readyStore();
+    const before = snapshot.projects.find(project => project.id === 'project-a')!;
+    const beforeToken = getInstalledProjectAuthorityToken(before);
+    expect(beforeToken).toBeDefined();
+    useQueueTimers();
+
+    const saving = store.commit({
+      type: 'save-project',
+      project: { ...before, name: 'Own save' },
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    const saved = await saving;
+    const savedProject = saved.projects.find(project => project.id === 'project-a')!;
+
+    expect(savedProject.name).toBe('Own save');
+    expect(getInstalledProjectAuthorityToken(savedProject)).toBe(beforeToken);
+  });
+
   it('coalesces rapid saves and persists only the newest project', async () => {
     const { store, harness } = await readyStore();
     useQueueTimers();
@@ -451,10 +511,13 @@ describe('project save queues', () => {
 
   it('keeps a queued stale intent pinned while an unrelated readback sees a newer revision', async () => {
     const hold = transactionCompletionHold(['projects', 'migrationLedger']);
-    const { store: storeA, harness } = await readyStore({
+    const { store: storeA, harness, snapshot } = await readyStore({
       values: twoProjectValues(),
       hook: hold.hook,
     });
+    const initialAToken = getInstalledProjectAuthorityToken(
+      snapshot.projects.find(project => project.id === 'project-a')!,
+    );
     const storeB = createLocalWorkspaceStore(harness.environment);
     await expect(storeB.bootstrap()).resolves.toMatchObject({ status: 'ready' });
     useQueueTimers();
@@ -490,6 +553,9 @@ describe('project save queues', () => {
     const unrelatedResult = await unrelated;
     expect(unrelatedResult.projects.find(project => project.id === 'project-a')?.name)
       .toBe('Store B durable');
+    expect(getInstalledProjectAuthorityToken(
+      unrelatedResult.projects.find(project => project.id === 'project-a')!,
+    )).not.toBe(initialAToken);
     await staleAssertions;
     expect((await inspect(harness)).projects.find(record => record.id === 'project-a'))
       .toMatchObject({

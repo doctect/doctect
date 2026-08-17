@@ -6,6 +6,7 @@ import {
   type WorkspaceProject,
   type WorkspaceSnapshot,
 } from '../services/localWorkspace/index';
+import { getInstalledProjectAuthorityToken } from '../services/localWorkspace/projectAuthority';
 
 export type StructuralWorkspaceCommand = Exclude<
   WorkspaceCommand,
@@ -20,11 +21,13 @@ export type ProjectSaveState =
 
 export interface WorkspaceProjectWrites {
   workspace: WorkspaceSnapshot;
+  authorityEpochs: ReadonlyMap<string, number>;
   saveStates: ReadonlyMap<string, ProjectSaveState>;
   hasUnsavedWork: boolean;
   updateProject(
     projectId: string,
     update: (project: WorkspaceProject) => WorkspaceProject,
+    expectedAuthorityEpoch?: number,
   ): Promise<boolean>;
   commitStructural(command: StructuralWorkspaceCommand): Promise<WorkspaceSnapshot>;
   retryProject(projectId: string): void;
@@ -60,10 +63,22 @@ export function useWorkspaceProjectWrites(
   const durableSnapshotRef = useRef(initialWorkspace);
   const workingCopiesRef = useRef(new Map<string, WorkingCopy>());
   const generationsRef = useRef(new Map<string, number>());
+  const authorityIdentitiesRef = useRef(new Map(
+    initialWorkspace.projects.map(project => [
+      project.id,
+      getInstalledProjectAuthorityToken(project) ?? project,
+    ]),
+  ));
+  const authorityEpochsRef = useRef(new Map(
+    initialWorkspace.projects.map(project => [project.id, 0]),
+  ));
   const structuralQueueRef = useRef<Promise<void> | null>(null);
   const onWorkspaceChangeRef = useRef(onWorkspaceChange);
   onWorkspaceChangeRef.current = onWorkspaceChange;
   const [workspace, setWorkspace] = useState(initialWorkspace);
+  const [authorityEpochs, setAuthorityEpochs] = useState<ReadonlyMap<string, number>>(
+    authorityEpochsRef.current,
+  );
   const [saveStates, setSaveStates] = useState<ReadonlyMap<string, ProjectSaveState>>(
     () => new Map(initialWorkspace.projects.map(project => [project.id, { status: 'saved' }])),
   );
@@ -73,12 +88,47 @@ export function useWorkspaceProjectWrites(
     setWorkspace(snapshot);
   }, []);
 
-  const reconcileSnapshot = useCallback((snapshot: WorkspaceSnapshot): WorkspaceSnapshot => {
+  const reconcileSnapshot = useCallback((
+    snapshot: WorkspaceSnapshot,
+    currentOwnProjectId?: string,
+  ): WorkspaceSnapshot => {
     const survivingProjectIds = new Set(snapshot.projects.map(project => project.id));
     for (const projectId of workingCopiesRef.current.keys()) {
       if (survivingProjectIds.has(projectId)) continue;
       generationsRef.current.set(projectId, (generationsRef.current.get(projectId) ?? 0) + 1);
       workingCopiesRef.current.delete(projectId);
+    }
+
+    const nextIdentities = new Map<string, object>();
+    const nextEpochs = new Map(authorityEpochsRef.current);
+    let epochsChanged = false;
+    for (const project of snapshot.projects) {
+      const installedToken = getInstalledProjectAuthorityToken(project);
+      const identity = installedToken ?? project;
+      const previousIdentity = authorityIdentitiesRef.current.get(project.id);
+      const unmanagedOwnReadback = project.id === currentOwnProjectId
+        && installedToken === undefined;
+      if (previousIdentity !== undefined
+        && previousIdentity !== identity
+        && !workingCopiesRef.current.has(project.id)
+        && !unmanagedOwnReadback) {
+        nextEpochs.set(project.id, (nextEpochs.get(project.id) ?? 0) + 1);
+        epochsChanged = true;
+      } else if (!nextEpochs.has(project.id)) {
+        nextEpochs.set(project.id, 0);
+        epochsChanged = true;
+      }
+      nextIdentities.set(project.id, identity);
+    }
+    for (const projectId of nextEpochs.keys()) {
+      if (survivingProjectIds.has(projectId)) continue;
+      nextEpochs.delete(projectId);
+      epochsChanged = true;
+    }
+    authorityIdentitiesRef.current = nextIdentities;
+    if (epochsChanged) {
+      authorityEpochsRef.current = nextEpochs;
+      setAuthorityEpochs(nextEpochs);
     }
 
     durableSnapshotRef.current = snapshot;
@@ -125,7 +175,7 @@ export function useWorkspaceProjectWrites(
       const currentGeneration = generationsRef.current.get(project.id) === generation
         && currentCopy?.generation === generation;
       if (currentGeneration) workingCopiesRef.current.delete(project.id);
-      reconcileSnapshot(snapshot);
+      reconcileSnapshot(snapshot, currentGeneration ? project.id : undefined);
       if (!currentGeneration) return true;
       setSaveStates(current => {
         const next = new Map(current);
@@ -148,7 +198,12 @@ export function useWorkspaceProjectWrites(
   const updateProject = useCallback((
     projectId: string,
     update: (project: WorkspaceProject) => WorkspaceProject,
+    expectedAuthorityEpoch?: number,
   ): Promise<boolean> => {
+    if (expectedAuthorityEpoch !== undefined
+      && authorityEpochsRef.current.get(projectId) !== expectedAuthorityEpoch) {
+      return Promise.resolve(false);
+    }
     const currentProject = workingCopiesRef.current.get(projectId)?.project
       ?? durableSnapshotRef.current.projects.find(project => project.id === projectId);
     if (!currentProject) return Promise.resolve(false);
@@ -190,6 +245,7 @@ export function useWorkspaceProjectWrites(
 
   return {
     workspace,
+    authorityEpochs,
     saveStates,
     hasUnsavedWork,
     updateProject,

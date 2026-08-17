@@ -4,6 +4,7 @@ import {
   type WorkspaceProject,
   type WorkspaceSnapshot,
 } from './contracts';
+import { cloneWorkspaceSnapshotWithProjectAuthority } from './projectAuthority';
 
 type ExclusiveCommand = Exclude<WorkspaceCommand, { type: 'save-project' }>;
 
@@ -61,7 +62,7 @@ const lineageError = (projectId: string): WorkspaceStoreError => new WorkspaceSt
 );
 
 const cloneSnapshot = (snapshot: WorkspaceSnapshot): WorkspaceSnapshot =>
-  structuredClone(snapshot);
+  cloneWorkspaceSnapshotWithProjectAuthority(snapshot);
 
 const SAVE_DEBOUNCE_MS = 1_000;
 

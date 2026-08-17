@@ -107,12 +107,16 @@ describe('useWorkspaceProjectWrites', () => {
       projects: [authoritativeA, savedB],
     }));
     const { result } = renderHook(() => useWorkspaceProjectWrites(store, initial));
+    const initialAEpoch = result.current.authorityEpochs.get('project-a');
+    const initialBEpoch = result.current.authorityEpochs.get('project-b');
 
     await act(async () => {
       await result.current.updateProject('project-b', () => savedB);
     });
 
     expect(result.current.workspace.projects).toEqual([authoritativeA, savedB]);
+    expect(result.current.authorityEpochs.get('project-a')).toBe((initialAEpoch ?? 0) + 1);
+    expect(result.current.authorityEpochs.get('project-b')).toBe(initialBEpoch);
     let updateBase: WorkspaceProject | undefined;
     act(() => {
       void result.current.updateProject('project-a', current => {
@@ -123,6 +127,39 @@ describe('useWorkspaceProjectWrites', () => {
     expect(updateBase).toEqual(authoritativeA);
   });
 
+  it('keeps the authority epoch for a current-generation own save readback', async () => {
+    const store = storeWithCommit(async command => (
+      command.type === 'save-project'
+        ? snapshot(structuredClone(command.project))
+        : snapshot()
+    ));
+    const { result } = renderHook(() => useWorkspaceProjectWrites(store, snapshot()));
+    const initialEpoch = result.current.authorityEpochs.get('project-1');
+
+    await act(async () => {
+      await result.current.updateProject('project-1', () => project('Saved', 2));
+    });
+
+    expect(result.current.authorityEpochs.get('project-1')).toBe(initialEpoch);
+  });
+
+  it('rejects an editor callback from an invalidated authority epoch', async () => {
+    const store = storeWithCommit(async () => snapshot());
+    const { result } = renderHook(() => useWorkspaceProjectWrites(store, snapshot()));
+    const staleEpoch = result.current.authorityEpochs.get('project-1') ?? 0;
+
+    await act(async () => {
+      await result.current.updateProject(
+        'project-1',
+        () => project('Must not save', 9),
+        staleEpoch + 1,
+      );
+    });
+
+    expect(store.commit).not.toHaveBeenCalled();
+    expect(result.current.workspace.projects[0].name).toBe('Original');
+  });
+
   it('keeps a newer working copy over an older save completion', async () => {
     const first = deferred<WorkspaceSnapshot>();
     const second = deferred<WorkspaceSnapshot>();
@@ -130,6 +167,7 @@ describe('useWorkspaceProjectWrites', () => {
       .mockReturnValueOnce(first.promise)
       .mockReturnValueOnce(second.promise));
     const { result } = renderHook(() => useWorkspaceProjectWrites(store, snapshot()));
+    const initialEpoch = result.current.authorityEpochs.get('project-1');
     act(() => { void result.current.updateProject('project-1', () => project('First', 2)); });
     act(() => { void result.current.updateProject('project-1', () => project('Second', 3)); });
 
@@ -144,6 +182,7 @@ describe('useWorkspaceProjectWrites', () => {
     });
     expect(result.current.saveStates.get('project-1')).toEqual({ status: 'saving' });
     expect(result.current.hasUnsavedWork).toBe(true);
+    expect(result.current.authorityEpochs.get('project-1')).toBe(initialEpoch);
 
     await act(async () => {
       second.resolve(snapshot(project('Second', 3)));
@@ -153,6 +192,7 @@ describe('useWorkspaceProjectWrites', () => {
     expect(result.current.workspace.projects[0].name).toBe('Second');
     expect(result.current.saveStates.get('project-1')).toEqual({ status: 'saved' });
     expect(result.current.hasUnsavedWork).toBe(false);
+    expect(result.current.authorityEpochs.get('project-1')).toBe(initialEpoch);
   });
 
   it('keeps a coalesced physical snapshot when callers settle out of order', async () => {
