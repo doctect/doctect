@@ -23,6 +23,7 @@ import { PLACEHOLDER_SVG, createPlacedSvgElement } from '../services/svgEditing'
 import { DocumentSnapshot, restoreDocument, snapshotDocument } from '../services/projectDocumentSnapshot';
 import type { GeneratedProject } from '../services/validateGeneratedProject';
 import type { GeneratorSourceDraft } from '../services/generatorVisualPreview';
+import { canonicalStringify } from '../services/localWorkspace/canonical';
 
 interface HistoryState {
     past: DocumentSnapshot[];
@@ -60,6 +61,7 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, project
     const onStateChangeRef = useRef(onStateChange);
     const previousRootTitleRef = useRef(state.nodes[state.rootId]?.title);
     const lastReportedStateRef = useRef(state);
+    const lastInitialStateRef = useRef(initialState);
 
     useEffect(() => {
         onNameChangeRef.current = onNameChange;
@@ -75,10 +77,26 @@ export const ProjectEditor: React.FC<ProjectEditorProps> = ({ projectId, project
     }, [state.nodes[state.rootId]?.title]);
 
     useEffect(() => {
-        if (lastReportedStateRef.current === state) return;
-        lastReportedStateRef.current = state;
-        onStateChangeRef.current?.(state);
-    }, [state]);
+        const stateChanged = lastReportedStateRef.current !== state;
+        const initialStateChanged = lastInitialStateRef.current !== initialState;
+        lastInitialStateRef.current = initialState;
+
+        if (stateChanged) {
+            lastReportedStateRef.current = state;
+            onStateChangeRef.current?.(state);
+            return;
+        }
+        if (!initialStateChanged || state === initialState) return;
+
+        // Readbacks clone project objects. Compare only this project, only when its
+        // prop identity changes while local state is stable; editor updates stay O(1).
+        if (canonicalStringify(state) === canonicalStringify(initialState)) return;
+
+        historyRef.current = { past: [], future: [] };
+        previousRootTitleRef.current = initialState.nodes[initialState.rootId]?.title;
+        lastReportedStateRef.current = initialState;
+        setState(initialState);
+    }, [initialState, state]);
 
     const saveToHistory = useCallback(() => {
         historyRef.current.past.push(snapshotDocument(state));
