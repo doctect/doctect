@@ -7,6 +7,22 @@ import { TOURS } from '../../../onboarding/src/content/tours.mjs';
 
 const refs = buildRefs(REPO_ROOT);
 
+const ACTIVE_LOCAL_STORAGE_SUBJECT = /\b(?:projects?|project state|documents?|editor)\b/i;
+const ACTIVE_LOCAL_STORAGE_VERB = /\b(?:live|lives|persist|persists|persisted|save|saves|saved|read|reads|write|writes|written|runs? against)\b(?!-)/i;
+const claimsActiveLocalStorageAuthority = sentence =>
+    /\blocalStorage\b/i.test(sentence)
+    && ((ACTIVE_LOCAL_STORAGE_SUBJECT.test(sentence) && ACTIVE_LOCAL_STORAGE_VERB.test(sentence))
+        || /\bpure\s+`?localStorage`?\b/i.test(sentence));
+const contentStrings = (value, out = []) => {
+    if (typeof value === 'string') out.push(value);
+    else if (value && typeof value === 'object') Object.values(value).forEach(item => contentStrings(item, out));
+    return out;
+};
+const contentSentences = value => contentStrings(value)
+    .flatMap(text => text.split(/(?<=[.!?])\s+|\n+/))
+    .map(sentence => sentence.trim())
+    .filter(Boolean);
+
 describe('content integrity', () => {
     it('every content module is JSON-serializable and passes validation', async () => {
         const content = await buildContent();
@@ -52,6 +68,64 @@ describe('TOURS content', () => {
             expect(tour.diagram.length).toBeGreaterThanOrEqual(4);
             expect(tour.steps.every(s => s.files.length >= 1)).toBe(true);
         }
+    });
+
+    it('teaches IndexedDB authority without reviving active localStorage claims', () => {
+        const introCopy = INTRO.about.join(' ');
+        const localFirst = TOURS.find(tour => tour.id === 'local-first');
+        const tourCopy = contentStrings(localFirst, []).join(' ');
+        const diagram = localFirst.diagram.join('\n');
+
+        expect(introCopy).toMatch(/\bIndexedDB\b[^.]{0,100}\b(?:document\s+)?authority\b/i);
+        expect(introCopy).toMatch(/\bLocalWorkspaceStore\b[^.]{0,100}\b(?:local\s+)?document authority\b/i);
+        expect(introCopy).toMatch(/explicit(?:ly)?[^.]{0,50}opt-in|opt-in[^.]{0,50}explicit/i);
+        for (const label of ['WorkspaceBootstrapGate', 'LocalWorkspaceStore', 'IndexedDB', 'useWorkspaceProjectWrites']) {
+            expect(diagram, `local-first diagram missing ${label}`).toContain(label);
+        }
+
+        expect(tourCopy).toMatch(/three-method[^.]{0,80}LocalWorkspaceStore|LocalWorkspaceStore[^.]{0,80}three-method/i);
+        for (const method of ['bootstrap', 'commit', 'exportRecoveryBundle']) {
+            expect(tourCopy, `local-first tour missing ${method}`).toMatch(new RegExp(`\\b${method}\\b`));
+        }
+        expect(tourCopy).toMatch(/\bsix\b[^.]{0,100}\bstores\b[^.]{0,120}\batomic/i);
+        for (const store of [
+            'projects', 'workspace', 'presets', 'pendingImports', 'migrationLedger', 'legacyBackup',
+        ]) {
+            expect(tourCopy, `local-first tour missing IndexedDB store ${store}`).toContain(store);
+        }
+        expect(tourCopy).toContain('useWorkspaceProjectWrites');
+        expect(tourCopy).toMatch(/per-project[^.]{0,80}\bqueue|\bqueue[^.]{0,80}per-project/i);
+        expect(tourCopy).toMatch(/compare-and-swap|\bCAS\b/);
+        expect(tourCopy).toContain('loadProjectState');
+        expect(tourCopy).toContain('migrateState');
+        expect(tourCopy).toMatch(/legacy[^.]{0,80}\blocalStorage\b[^.]{0,80}retained[^.]{0,40}only[^.]{0,40}read-only[^.]{0,120}(?:migration|recovery)/i);
+        expect(tourCopy).toMatch(/\bno\b[^.]{0,80}\bcleanup\b/i);
+        expect(tourCopy).toMatch(/\bno\b[^.]{0,80}\bfallback\b/i);
+        expect(tourCopy).toMatch(/\bno\b[^.]{0,80}\bdual[- ]write\b/i);
+        expect(tourCopy).toMatch(/cloud[^.]{0,80}(?:explicit[^.]{0,30}opt-in|opt-in[^.]{0,30}explicit)/i);
+
+        const files = new Set(localFirst.steps.flatMap(step => step.files));
+        for (const requiredPath of [
+            'components/workspace/WorkspaceBootstrapGate.tsx',
+            'services/localWorkspace/LocalWorkspaceStore.ts',
+            'services/localWorkspace/schema.ts',
+            'hooks/useWorkspaceProjectWrites.ts',
+            'services/loadProjectState.ts',
+            'services/migration.ts',
+        ]) {
+            expect(files.has(requiredPath), `local-first tour missing ${requiredPath}`).toBe(true);
+        }
+
+        const staleClaims = [
+            'Projects live in browser localStorage.',
+            'The whole editor runs against one JSON document in localStorage.',
+            'Projects persist to localStorage on every change.',
+            'A project without cloud metadata uses pure localStorage.',
+        ];
+        expect(staleClaims.every(claimsActiveLocalStorageAuthority)).toBe(true);
+        const offenders = contentSentences({ intro: INTRO, tours: TOURS })
+            .filter(claimsActiveLocalStorageAuthority);
+        expect(offenders, `active localStorage claims:\n${offenders.join('\n')}`).toEqual([]);
     });
 });
 

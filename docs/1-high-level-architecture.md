@@ -1,6 +1,6 @@
 # 1. High-Level Architecture
 
-PDF Architect is built as a pure client-side web application. It relies heavily on the user's browser for processing, rendering, and exporting, eliminating the need for a complex backend infrastructure. This architecture ensures privacy (data never leaves the device) and responsiveness.
+PDF Architect's core editor is a client-side web application. It relies heavily on the user's browser for processing, rendering, local persistence, and exporting. Projects stay on the device by default; the separate cloud service is used only after an explicit user action.
 
 ## Tech Stack Deep Dive
 
@@ -10,7 +10,7 @@ PDF Architect is built as a pure client-side web application. It relies heavily 
 *   **React Router (Routing)**: Manages navigation between the landing page, editor workspace, and documentation.
 *   **lucide-react (Icons)**: Provides the consistent icon set used throughout the UI.
 *   **jsPDF (PDF Generation)**: The core engine for exporting the visual canvas into a real PDF document. (See [PDF Generation](5-pdf-generation.md) for more details).
-*   **LocalStorage (Persistence)**: Projects are serialized to JSON and saved directly in the browser's `localStorage`. (See [State Management](3-state-management.md)).
+*   **IndexedDB (Local Persistence)**: `LocalWorkspaceStore` is the local document authority. Its six object stores - `projects`, `workspace`, `presets`, `pendingImports`, `migrationLedger`, and `legacyBackup` - separate document records from workspace metadata while allowing multi-record changes to commit atomically. (See [State Management](3-state-management.md)).
 
 ## Application Entry Points and Routing
 
@@ -26,9 +26,10 @@ It uses `react-router-dom`'s `<BrowserRouter>` to manage the following routes:
 
 ## Project Workspace (`EditorPage.tsx`)
 
-When navigating to `/app`, the `EditorPage` component mounts. Its primary responsibility is project management, not editing itself.
+When navigating to `/app`, `WorkspaceBootstrapGate` mounts before `EditorPage`. The editor is rendered only after the gate receives a verified `ready` workspace, so unresolved migration, unavailable storage, or recovery state cannot create a competing blank project.
 
-*   **Initialization**: It reads all saved projects from `localStorage` under the key `hype_projects`.
-*   **Migration**: Before loading a project into memory, it passes the raw JSON through `migrateState()` (from `services/migration.ts`). This ensures backward compatibility if the data models have changed (e.g., migrating from old global templates to the new "Variants" system).
-*   **Tab Management**: It manages the `<TabBar>`, allowing users to switch between multiple open projects. It keeps the `activeProjectId` in sync with `localStorage` (`hype_active_project`).
+*   **Persistence Boundary**: `LocalWorkspaceStore` exposes only three methods: `bootstrap`, `commit`, and `exportRecoveryBundle`. UI code uses workspace snapshots and semantic commands without knowing IndexedDB transactions, object-store layout, migration ledgers, or recovery bundle formats.
+*   **Authority Cutover**: IndexedDB becomes document authority only after the initial six-store copy commits atomically and an independent read-back verifies it. Legacy `localStorage` document keys are retained only as read-only inputs for migration and recovery. Epoch 1 has no cleanup, fallback, or dual-write path.
+*   **Document Migration**: Every loaded project passes through `loadProjectState()` and `migrateState()` (from `services/migration.ts`) before validation. This keeps older document schemas compatible independently of the one-time storage-engine cutover.
+*   **Tab Management**: `EditorPage` manages the `<TabBar>` from the verified workspace snapshot. Activation, creation, and closing are semantic store commands that update project order and the active project atomically.
 *   **Delegation**: For the currently active project, it renders a `<ProjectEditor>` component, passing the `initialState` down. Hidden projects are kept mounted but hidden via CSS (`opacity-0 pointer-events-none`) to preserve their undo/redo history and state without unmounting and remounting.

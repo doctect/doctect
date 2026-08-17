@@ -1,6 +1,6 @@
 # 8. Cloud, Gallery & Merge Requests
 
-PDF Architect is, and remains, a client-side-first application (see [High-Level Architecture](1-high-level-architecture.md)) — every project still lives in `localStorage` and works fully offline with no account. This layer is an **additive, opt-in backend** (`server/`, an Express + better-auth + Postgres/SQLite service) that lets a signed-in user optionally back a project with cloud-saved history, publish it to a public gallery, let others fork it, and propose changes back upstream via merge requests.
+PDF Architect is, and remains, a client-side-first application (see [High-Level Architecture](1-high-level-architecture.md)): IndexedDB is local document authority and works fully offline with no account. This layer is an **additive, explicit opt-in backend** (`server/`, an Express + better-auth + Postgres/SQLite service) that lets a signed-in user optionally back a project with cloud-saved history, publish it to a public gallery, let others fork it, and propose changes back upstream via merge requests.
 
 ## Local-First + Explicit Sync Model
 
@@ -8,7 +8,7 @@ Nothing syncs automatically. A project only gains a cloud identity when the user
 
 A linked save sends `If-Match: "<lastSyncedCommitId>"`. The server locks the project, verifies that expected parent, inserts the commit, advances the head with compare-and-swap, prunes, and commits as one transaction. A stale tab receives `409 PROJECT_HEAD_CHANGED`; CloudMenu preserves local edits and offers an explicit **Reload cloud version** action rather than overwriting them automatically.
 
-A project with no `project.cloud` field behaves exactly as it always has — pure `localStorage`, no network calls. Cloning a public gallery project into your editor via **Open in editor** (see below) also produces a plain local, non-cloud-linked project unless you separately sign in and fork it.
+A project with no `project.cloud` field remains IndexedDB-only and makes no project-storage network calls. Cloning a public gallery project into your editor via **Open in editor** (see below) also produces a plain local, non-cloud-linked project unless you separately sign in and fork it.
 
 ## Commits, History & Restore
 

@@ -3,14 +3,14 @@
 export const INTRO = {
     about: [
         'PDF Architect is a local-first editor for structured PDF products — planners, journals, trackers, gamebooks — aimed at e-ink tablets (the flagship page size is the reMarkable Paper Pro’s 509×679 pt). A document is a hierarchy of nodes; each node renders through a template; templates carry elements (text, rectangles, lines, SVG artwork, dynamic grids, smart links); variants are alternate template sets over the same hierarchy — one document, many looks.',
-        'Everything works without an account: projects live in browser localStorage and PDF export runs client-side through jsPDF. An account adds cloud saves (immutable, gzip’d full-snapshot commits), publishing to a public gallery, GitHub-style forking, and merge requests judged by a structured three-way diff — the same engine the server enforces at merge time.',
+        'Everything works without an account: IndexedDB, accessed through LocalWorkspaceStore, is local document authority and PDF export runs client-side through jsPDF. Cloud storage remains explicit opt-in — signing in exposes the controls, but only a user-triggered save sends an immutable, gzip’d full-snapshot commit. The account layer also adds publishing to a public gallery, GitHub-style forking, and merge requests judged by a structured three-way diff — the same engine the server enforces at merge time.',
         'It is one repo with no monorepo tooling: the React 19 + Vite client sits at the root (components/, pages/, services/, hooks/), the Express 5 server in server/ (SQLite in dev, Postgres in prod, versioned run-once migrations), and shared/ holds plain-ESM code either side can import (password policy, generator metadata, project limits). The diff engine lives there too, but only the server imports it today — the client just renders the ChangeSet it gets back.',
         'Two production ideas dominate the codebase: nothing public ever tracks your private working head (publishing pins an explicit published commit), and nothing that came from someone else ever executes or renders unsanitized (the generator sandbox, DOMPurify at the single SVG render site).',
     ],
     run: [
         { cmd: 'npm run dev', note: 'Vite client :3000 + Express API :3001, concurrently' },
-        { cmd: 'npm test', note: 'vitest unit suite (jsdom) — the ~1,850-test wall every round leans on' },
-        { cmd: 'npm run test:e2e', note: 'Playwright end-to-end across the three configured projects (chromium, firefox, webkit), boots its own server' },
+        { cmd: 'npm test', note: 'Vitest unit suite (jsdom) — the 2,900+ test wall every round leans on' },
+        { cmd: 'npm run test:e2e', note: 'Playwright end-to-end across five configured projects: three browsers plus two large-workspace storage profiles; boots its own server' },
         { cmd: 'node docs-capture/run.js <track>', note: 'regenerate the in-app docs screenshots from a live scripted app' },
         { cmd: 'node onboarding/build.mjs', note: 'regenerate this page from the current repo' },
         { cmd: 'npm run build', note: 'production client build into dist/, served by the Express fallback route' },
