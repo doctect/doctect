@@ -141,6 +141,10 @@ describe('TOURS content', () => {
             'localStorage stores only a non-document preference, but it remains workspace authority.',
             'The sandbox denies localStorage access, but the editor persists its workspace there.',
             'Legacy localStorage document keys are read-only during migration. They still store every project.',
+            'Legacy localStorage is read-only during migration, but it is still used by every workspace.',
+            'Legacy localStorage is read-only during migration, but every project is still using it.',
+            'Legacy browser storage is read-only for recovery, but it remains the source-of-truth for every workspace.',
+            'Legacy Web Storage is read-only during migration, but those keys remain the system-of-record for editor state.',
         ];
         expect(reviewMixedClaims.flatMap(localStorageStatements)
             .filter(statement => classifyLocalStorageContext(statement) === null))

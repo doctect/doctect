@@ -261,12 +261,44 @@ describe('docs anti-rot guards', () => {
             isHome: 'Legacy localStorage is read-only during migration, but it is the home for every project.',
             actsAsSourceOfTruth: 'Legacy localStorage is read-only during migration, but it acts as source of truth for every project.',
             referenceBetweenEntityAndAuthority: 'Legacy localStorage is read-only during migration, but every project remains in that storage as its home.',
+            used: 'Legacy localStorage is read-only during migration, but it is still used by every workspace.',
+            using: 'Legacy localStorage is read-only during migration, but every project is still using it.',
+            sourceOfTruthHyphenated: 'Legacy browser storage is read-only for recovery, but it remains the source-of-truth for every workspace.',
+            systemOfRecordHyphenated: 'Legacy Web Storage is read-only during migration, but those keys remain the system-of-record for editor state.',
         };
 
         expect(Object.fromEntries(Object.entries(staleClaims).map(([name, claim]) => [
             name,
             classifyLocalStorageContext(claim),
         ]))).toEqual(Object.fromEntries(Object.keys(staleClaims).map(name => [name, null])));
+    });
+
+    it('rejects exact bounded stale-authority variants through maintained Markdown integration', () => {
+        const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'doctect-docs-copy-'));
+        const staleClaims = [
+            'Legacy localStorage is read-only during migration, but it is still used by every workspace.',
+            'Legacy localStorage is read-only during migration, but every project is still using it.',
+            'Legacy browser storage is read-only for recovery, but it remains the source-of-truth for every workspace.',
+            'Legacy Web Storage is read-only during migration, but those keys remain the system-of-record for editor state.',
+        ];
+        try {
+            fs.mkdirSync(path.join(temporaryRoot, 'docs'));
+            fs.mkdirSync(path.join(temporaryRoot, 'docs-content'));
+            fs.writeFileSync(path.join(temporaryRoot, 'README.md'), '# README\n');
+            fs.writeFileSync(path.join(temporaryRoot, 'PRODUCT.md'), '# Product\n');
+            staleClaims.forEach((claim, index) => {
+                fs.writeFileSync(path.join(temporaryRoot, 'docs-content', `probe-${index}.md`), `${claim}\n`);
+            });
+
+            const offenders = discoverMaintainedMarkdownPaths(temporaryRoot)
+                .flatMap(relativePath => localStorageStatements(
+                    fs.readFileSync(path.join(temporaryRoot, relativePath), 'utf8'),
+                ))
+                .filter(statement => classifyLocalStorageContext(statement) === null);
+            expect(offenders).toEqual(staleClaims);
+        } finally {
+            fs.rmSync(temporaryRoot, { recursive: true, force: true });
+        }
     });
 
     it('recognizes explicit legacy, preference, and sandbox contexts', () => {

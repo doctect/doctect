@@ -62,8 +62,8 @@ const storageMention = new RegExp(`(?:${storageMentionSource})`, 'i');
 const legacyDocumentKeyMention = new RegExp(`(?:${legacyDocumentKeySource})`, 'i');
 
 const activeDocumentEntitySource = String.raw`\b(?:projects?|documents?|presets?|workspaces?|designs?|(?:editor|app(?:lication)?)[- ]state)\b`;
-const activeStorageActionSource = String.raw`\b(?:stor(?:e[sd]?|ing)|sav(?:e[sd]?|ing)|persist(?:s|ed|ing)?|writ(?:e[sd]?|ing|ten)|wrote|read(?:s|ing)?|liv(?:e[sd]?|ing)|resid(?:e[sd]?|ing)|keep(?:s|ing)?|kept|hold(?:s|ing)?|held|contain(?:s|ed|ing)?|back(?:s|ed|ing)?|uses?|remov(?:e[sd]?|ing)|delet(?:e[sd]?|ing))\b`;
-const activeStorageAuthoritySource = String.raw`\b(?:authority|source of truth|system of record|home|backing store)\b`;
+const activeStorageActionSource = String.raw`\b(?:stor(?:e[sd]?|ing)|sav(?:e[sd]?|ing)|persist(?:s|ed|ing)?|writ(?:e[sd]?|ing|ten)|wrote|read(?:s|ing)?|liv(?:e[sd]?|ing)|resid(?:e[sd]?|ing)|keep(?:s|ing)?|kept|hold(?:s|ing)?|held|contain(?:s|ed|ing)?|back(?:s|ed|ing)?|us(?:e[sd]?|ing)|remov(?:e[sd]?|ing)|delet(?:e[sd]?|ing))\b`;
+const activeStorageAuthoritySource = String.raw`\b(?:authority|source(?:\s+|-)of(?:\s+|-)truth|system(?:\s+|-)of(?:\s+|-)record|home|backing store)\b`;
 const activeStorageAuthorityVerbSource = String.raw`\b(?:remain(?:s|ed|ing)?|is|are|was|were|be(?:en|ing)?|act(?:s|ed|ing)?(?:\s+as)?)\b`;
 const storageAnaphorSource = String.raw`\b(?:it|they|them|there|(?:this|that)\s+storage|(?:these|those)\s+keys)\b`;
 const groupedStorageMentionSource = `(?:${storageMentionSource})`;
