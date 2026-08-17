@@ -50,17 +50,29 @@ const excludedDirectories = new Set([
   'scratch',
   'test-results',
 ]);
-const decodedSpecifier = (specifier: string, trimWhitespace = false): string => {
-  const value = trimWhitespace
-    ? specifier.replace(/^[\t\n\f\r ]+|[\t\n\f\r ]+$/g, '')
-    : specifier;
-  const pathOnly = value.split(/[?#]/, 1)[0];
+const decodedSpecifier = (specifier: string): string => {
+  const pathOnly = specifier.split(/[?#]/, 1)[0];
   try {
     return decodeURIComponent(pathOnly).replace(/\\/g, '/');
   } catch {
     return pathOnly.replace(/\\/g, '/');
   }
 };
+
+interface BrowserUrlBase {
+  url?: string;
+  invalid?: true;
+}
+
+const repositoryBrowserOrigin = 'https://doctect.invalid';
+const browserUrlInput = (specifier: string): string =>
+  specifier
+    .replace(/[\t\n\r]/g, '')
+    .replace(/^[\t\n\f\r ]+|[\t\n\f\r ]+$/g, '');
+
+const repositoryBrowserBase = (path: string): BrowserUrlBase => ({
+  url: new URL(`/${path}`, `${repositoryBrowserOrigin}/`).href,
+});
 
 const resolvedModuleEdge = (sourcePath: string, specifier: string): string | undefined => {
   const decoded = decodedSpecifier(specifier);
@@ -71,11 +83,25 @@ const resolvedModuleEdge = (sourcePath: string, specifier: string): string | und
   return posix.normalize(posix.join(posix.dirname(sourcePath), decoded));
 };
 
-const resolvedBrowserEdge = (documentPath: string, specifier: string): string | undefined => {
-  const decoded = decodedSpecifier(specifier, true);
-  if (/^(?:[a-z][a-z\d+.-]*:|\/\/)/i.test(decoded)) return undefined;
-  if (decoded.startsWith('/')) return posix.normalize(decoded.slice(1));
-  return posix.normalize(posix.join(posix.dirname(documentPath), decoded));
+const resolvedBrowserEdge = (
+  base: BrowserUrlBase,
+  specifier: string,
+): string | null | undefined => {
+  const input = browserUrlInput(specifier);
+  let resolved: URL;
+  try {
+    resolved = base.invalid || !base.url ? new URL(input) : new URL(input, base.url);
+  } catch {
+    return null;
+  }
+  if (resolved.origin !== repositoryBrowserOrigin) return undefined;
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(resolved.pathname).replace(/\\/g, '/');
+  } catch {
+    return null;
+  }
+  return posix.normalize(decoded.replace(/^\/+/, ''));
 };
 
 const excludedDirectorySegment = (segment: string, index: number): boolean => (
@@ -91,11 +117,9 @@ const resolvedEntersExcludedDirectory = (resolved: string | undefined): boolean 
 const moduleEntersExcludedDirectory = (sourcePath: string, specifier: string): boolean =>
   resolvedEntersExcludedDirectory(resolvedModuleEdge(sourcePath, specifier));
 
-const browserEntersExcludedDirectory = (documentPath: string, specifier: string): boolean => {
-  const resolved = resolvedBrowserEdge(documentPath, specifier);
-  return resolved === '..'
-    || resolved?.startsWith('../') === true
-    || resolvedEntersExcludedDirectory(resolved);
+const browserEntersExcludedDirectory = (base: BrowserUrlBase, specifier: string): boolean => {
+  const resolved = resolvedBrowserEdge(base, specifier);
+  return resolved === null || resolvedEntersExcludedDirectory(resolved);
 };
 const legacyKeys = [
   ['hype', 'projects'].join('_'),
@@ -191,6 +215,7 @@ interface ParseFailure {
 interface SourceInput {
   path: string;
   source: string;
+  browserBase?: BrowserUrlBase;
   directStorageBoundary?: boolean;
   moduleGoal?: boolean;
   parseFailure?: ParseFailure;
@@ -533,6 +558,7 @@ const executableScriptType = (script: Element): 'classic' | 'module' | undefined
 interface ExternalScriptEdge {
   specifier: string;
   offset: number;
+  browserBase: BrowserUrlBase;
 }
 
 const externalScriptCanExecute = (script: Element): boolean => {
@@ -546,10 +572,27 @@ const externalScriptCanExecute = (script: Element): boolean => {
   return type === 'module' || javascriptMimeEssences.has(type);
 };
 
+const staticDocumentBrowserBase = (
+  document: Document,
+  documentPath: string,
+): BrowserUrlBase => {
+  const fallback = repositoryBrowserBase(documentPath);
+  const base = [...document.querySelectorAll('base[href]')].find(element => (
+    element.namespaceURI === 'http://www.w3.org/1999/xhtml'
+  ));
+  if (!base) return fallback;
+  try {
+    return { url: new URL(browserUrlInput(base.getAttribute('href') ?? ''), fallback.url).href };
+  } catch {
+    return { invalid: true };
+  }
+};
+
 const externalScriptEdges = (input: SourceInput): ExternalScriptEdge[] => {
   const extension = extname(input.path);
   if (extension !== '.html' && extension !== '.htm' && extension !== '.svg') return [];
   const document = new JSDOM(input.source, { includeNodeLocations: true });
+  const browserBase = staticDocumentBrowserBase(document.window.document, input.path);
   const edges: ExternalScriptEdge[] = [];
   for (const script of document.window.document.querySelectorAll('script')) {
     if (!externalScriptCanExecute(script)) continue;
@@ -559,7 +602,7 @@ const externalScriptEdges = (input: SourceInput): ExternalScriptEdge[] => {
     if (specifier === null) continue;
     const location = document.nodeLocation(script);
     if (!location?.startTag) throw new Error(`Workspace boundary could not locate script in ${input.path}`);
-    edges.push({ specifier, offset: location.startTag.startOffset });
+    edges.push({ specifier, offset: location.startTag.startOffset, browserBase });
   }
   return edges;
 };
@@ -569,6 +612,7 @@ const executableInputs = (inputs: readonly SourceInput[]): SourceInput[] => inpu
   if (extension !== '.html' && extension !== '.htm' && extension !== '.svg') return [input];
   const scripts: SourceInput[] = [];
   const document = new JSDOM(input.source, { includeNodeLocations: true });
+  const browserBase = staticDocumentBrowserBase(document.window.document, input.path);
   let index = 0;
   for (const script of document.window.document.querySelectorAll('script')) {
     const type = executableScriptType(script);
@@ -594,6 +638,7 @@ const executableInputs = (inputs: readonly SourceInput[]): SourceInput[] => inpu
     scripts.push({
       path: `${input.path}.__inline_${index}.js`,
       source: prepared.source,
+      browserBase,
       directStorageBoundary: input.directStorageBoundary,
       moduleGoal: type === 'module',
       parseFailure: type === 'classic' ? classicScriptParseFailure(prepared.source) : undefined,
@@ -790,9 +835,29 @@ const sourceHasRuntimeWrite = (
   let found = false;
   const matchesTarget = (expression: ts.Expression): boolean => {
     const candidate = unwrap(expression);
-    if (memberName === undefined) return ts.isIdentifier(candidate) && candidate.text === rootName;
-    const member = directStaticMember(candidate);
-    return member?.root === rootName && (member.member === undefined || member.member === memberName);
+    if (memberName === undefined) {
+      if (ts.isIdentifier(candidate) && candidate.text === rootName) return true;
+    } else {
+      const member = directStaticMember(candidate);
+      if (member?.root === rootName
+        && (member.member === undefined || member.member === memberName)) return true;
+    }
+    if (ts.isArrayLiteralExpression(candidate)) {
+      return candidate.elements.some(element => (
+        !ts.isOmittedExpression(element)
+        && matchesTarget(ts.isSpreadElement(element) ? element.expression : element)
+      ));
+    }
+    if (ts.isObjectLiteralExpression(candidate)) {
+      return candidate.properties.some(property => {
+        if (ts.isPropertyAssignment(property)) return matchesTarget(property.initializer);
+        if (ts.isShorthandPropertyAssignment(property)) return matchesTarget(property.name);
+        return ts.isSpreadAssignment(property) && matchesTarget(property.expression);
+      });
+    }
+    return ts.isBinaryExpression(candidate)
+      && candidate.operatorToken.kind === ts.SyntaxKind.EqualsToken
+      && matchesTarget(candidate.left);
   };
   const reflectiveWrite = (call: ts.CallExpression): boolean => {
     const operation = directStaticMember(call.expression);
@@ -827,6 +892,12 @@ const sourceHasRuntimeWrite = (
       return;
     }
     if (ts.isDeleteExpression(node) && matchesTarget(node.expression)) {
+      found = true;
+      return;
+    }
+    if ((ts.isForInStatement(node) || ts.isForOfStatement(node))
+      && !ts.isVariableDeclarationList(node.initializer)
+      && matchesTarget(node.initializer)) {
       found = true;
       return;
     }
@@ -1059,15 +1130,31 @@ const localWorkspaceStorageApprovals = (sourceFile: ts.SourceFile): ts.CallExpre
   const legacyObject = legacyStorage[0].initializer;
   if (!ts.isObjectLiteralExpression(legacyObject)) return [];
   const getItems = legacyObject.properties.filter(property => (
-    ts.isMethodDeclaration(property) && directPropertyName(property.name) === 'getItem'
+    ts.isMethodDeclaration(property)
+    && ts.isIdentifier(property.name)
+    && property.name.text === 'getItem'
+    && property.name.getText(sourceFile) === 'getItem'
   ));
   if (getItems.length !== 1 || !ts.isMethodDeclaration(getItems[0])) return [];
   const getItem = getItems[0];
+  const parameter = getItem.parameters[0];
   if (!getItem.body
     || getItem.body.statements.length !== 1
     || getItem.parameters.length !== 1
-    || !ts.isIdentifier(getItem.parameters[0].name)
-    || getItem.parameters[0].name.text !== 'key') return [];
+    || getItem.modifiers !== undefined
+    || getItem.asteriskToken !== undefined
+    || getItem.questionToken !== undefined
+    || getItem.typeParameters !== undefined
+    || getItem.type !== undefined
+    || !parameter
+    || parameter.modifiers !== undefined
+    || parameter.dotDotDotToken !== undefined
+    || parameter.questionToken !== undefined
+    || parameter.initializer !== undefined
+    || !ts.isIdentifier(parameter.name)
+    || parameter.name.text !== 'key'
+    || parameter.name.getText(sourceFile) !== 'key'
+    || parameter.type?.kind !== ts.SyntaxKind.StringKeyword) return [];
   const returnStatement = getItem.body.statements[0];
   if (!ts.isReturnStatement(returnStatement) || !returnStatement.expression) return [];
   const call = exactStorageCall(returnStatement.expression, 'getItem', ['key']);
@@ -1180,7 +1267,7 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
   for (const input of inputs) {
     if (input.path.startsWith('tests/')) continue;
     for (const edge of externalScriptEdges(input)) {
-      if (!browserEntersExcludedDirectory(input.path, edge.specifier)) continue;
+      if (!browserEntersExcludedDirectory(edge.browserBase, edge.specifier)) continue;
       const finding = `${input.path}:${sourceLine(input.source, edge.offset)}: `
         + 'loads executable code from excluded repository paths';
       if (resultIdentities.get(input.path)!.has(finding)) continue;
@@ -1335,7 +1422,7 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
     };
     const workerEntry = (
       node: ts.NewExpression,
-    ): { specifier: string; context: 'browser' | 'module' } | undefined => {
+    ): { specifier: string; context: 'browser' | 'source-url' } | undefined => {
       const constructor = unwrap(node.expression);
       if (!ts.isIdentifier(constructor)
         || (constructor.text !== 'Worker' && constructor.text !== 'SharedWorker')) return undefined;
@@ -1350,7 +1437,7 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
         && urlConstructor.text === 'URL'
         && specifier !== undefined
         && importMetaUrl(url.arguments?.[1])
-        ? { specifier, context: 'module' }
+        ? { specifier, context: 'source-url' }
         : undefined;
     };
     const transparentExpression = (node: ts.Identifier): ts.Expression => {
@@ -1616,13 +1703,13 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
       }
       if (productionSource && ts.isNewExpression(node)) {
         const edge = workerEntry(node);
-        const browserDocument = ['.htm', '.html', '.svg'].includes(extname(policyPath))
-          ? policyPath
-          : 'index.html';
-        const excluded = edge?.context === 'module'
-          ? moduleEntersExcludedDirectory(policyPath, edge.specifier)
+        const excluded = edge?.context === 'source-url'
+          ? browserEntersExcludedDirectory(repositoryBrowserBase(policyPath), edge.specifier)
           : edge?.context === 'browser'
-            ? browserEntersExcludedDirectory(browserDocument, edge.specifier)
+            ? browserEntersExcludedDirectory(
+              input.browserBase ?? repositoryBrowserBase('index.html'),
+              edge.specifier,
+            )
             : false;
         if (excluded) {
           report(node, 'loads executable code from excluded repository paths');
@@ -1808,6 +1895,79 @@ describe('local workspace static boundary', () => {
   });
 
   it.each([
+    ['embedded HTML tab', 'shell.html', '<script src="te\tsts/unit/value.js"></script>'],
+    ['embedded HTML newline', 'shell.html', '<script src="te\nsts/unit/value.js"></script>'],
+    [
+      'embedded SVG carriage return',
+      'assets/icon.svg',
+      '<svg><script href="../te\rsts/unit/value.js"></script></svg>',
+    ],
+    ['embedded direct Worker tab', 'components/excluded.ts', "new Worker('te\\tsts/unit/worker.ts');"],
+    [
+      'embedded direct Worker newline',
+      'components/excluded.ts',
+      "new Worker('te\\nsts/unit/worker.ts');",
+    ],
+    [
+      'embedded source-relative URL newline',
+      'components/excluded.ts',
+      "new Worker(new URL('..\\n/tests/unit/worker.ts', import.meta.url));",
+    ],
+  ])('rejects excluded browser URL through %s', (_case, path, source) => {
+    expect(analyzeProductionSource(path, source)).toEqual(expect.arrayContaining([
+      expect.stringContaining('loads executable code from excluded repository paths'),
+    ]));
+  });
+
+  it.each([
+    [
+      'a root base',
+      'pages/shell.html',
+      '<base href="/"><script src="tests/unit/value.js"></script>',
+    ],
+    [
+      'a parent-relative base',
+      'pages/shell.html',
+      '<base href="../"><script src="tests/unit/value.js"></script>',
+    ],
+    [
+      'the first of multiple bases',
+      'pages/shell.html',
+      '<base href="/"><base href="https://cdn.example/"><script src="tests/unit/value.js"></script>',
+    ],
+    [
+      'the first base with href',
+      'pages/shell.html',
+      '<base target="_blank"><base href="/"><script src="tests/unit/value.js"></script>',
+    ],
+    [
+      'an HTML base applied to SVG script',
+      'pages/shell.html',
+      '<base href="/"><svg><script href="tests/unit/value.js"></script></svg>',
+    ],
+    [
+      'an HTML base applied to an inline Worker',
+      'pages/shell.html',
+      '<base href="/"><script>new Worker(\'tests/unit/worker.js\');</script>',
+    ],
+    [
+      'an invalid static base',
+      'pages/shell.html',
+      '<base href="http://["><script src="app.js"></script>',
+    ],
+    [
+      'source-relative import.meta.url despite a remote base',
+      'pages/shell.html',
+      '<base href="https://cdn.example/"><script type="module">'
+        + 'new Worker(new URL(\'../tests/unit/worker.js\', import.meta.url));</script>',
+    ],
+  ])('resolves executable edges against %s', (_case, path, source) => {
+    expect(analyzeProductionSource(path, source)).toEqual(expect.arrayContaining([
+      expect.stringContaining('loads executable code from excluded repository paths'),
+    ]));
+  });
+
+  it.each([
     ['source import', 'components/allowed.ts', "import value from '../services/browserPreferences';"],
     ['bare package import', 'components/allowed.ts', "import value from 'tests/unit/value';"],
     ['scoped package import', 'components/allowed.ts', "import value from '@scope/tests';"],
@@ -1825,6 +1985,41 @@ describe('local workspace static boundary', () => {
     ],
     ['root HTML script', 'shell.html', '<script type="module" src="/index.tsx"></script>'],
     ['remote HTML script', 'shell.html', '<script src="https://cdn.example/app.js"></script>'],
+    [
+      'remote HTML base',
+      'pages/shell.html',
+      '<base href="https://cdn.example/assets/"><script src="tests/unit/value.js"></script>',
+    ],
+    [
+      'first remote base wins',
+      'pages/shell.html',
+      '<base href="https://cdn.example/"><base href="/"><script src="tests/unit/value.js"></script>',
+    ],
+    [
+      'remote inline Worker base',
+      'pages/shell.html',
+      '<base href="https://cdn.example/"><script>new Worker(\'tests/unit/worker.js\');</script>',
+    ],
+    [
+      'embedded control in remote URL',
+      'shell.html',
+      '<script src="https:\t//cdn.example/app.js"></script>',
+    ],
+    [
+      'absolute remote URL under invalid base',
+      'pages/shell.html',
+      '<base href="http://["><script src="https://cdn.example/app.js"></script>',
+    ],
+    [
+      'remote direct Worker URL',
+      'components/allowed.ts',
+      "new Worker('https:\\t//cdn.example/worker.js');",
+    ],
+    [
+      'inert script under invalid base',
+      'pages/shell.html',
+      '<base href="http://["><script type="application/json" src="tests/unit/data.json"></script>',
+    ],
     [
       'inert external data',
       'shell.html',
@@ -2057,6 +2252,57 @@ describe('local workspace static boundary', () => {
   });
 
   it.each([
+    ['an array member target', '[Object.defineProperty] = [replacement];'],
+    [
+      'an object property target',
+      '({ value: Object.defineProperty } = { value: replacement });',
+    ],
+    ['a for-of member target', 'for (Object.defineProperty of [replacement]) {}'],
+    ['a for-in member target', "for (Object['defineProperty'] in replacement) {}"],
+    ['an array root target', '[Object] = [replacement];'],
+    ['a for-of root target', 'for (Object of [replacement]) {}'],
+    ['a computed array member target', "[Object['defineProperty']] = [replacement];"],
+    ['a nested array target', '[[Object.defineProperty]] = [[replacement]];'],
+    [
+      'a nested object target',
+      '({ outer: { value: Object.defineProperty } } = replacement);',
+    ],
+    ['an array rest target', '[...Object.defineProperty] = replacement;'],
+    ['an object rest target', '({...Object} = replacement);'],
+    ['a default target', '[Object.defineProperty = replacement] = supplied;'],
+    ['a shorthand target', '({ Object } = replacement);'],
+    ['a shorthand default target', '({ Object = replacement } = supplied);'],
+    ['a parenthesized target', '[((Object.defineProperty))] = [replacement];'],
+    ['an assertion-wrapped target', '[(Object.defineProperty as any)] = [replacement];'],
+  ])('revokes reflection exceptions after %s', (_case, mutation) => {
+    const path = 'services/localWorkspace/indexedDbAdapter.ts';
+    const original = readFileSync(join(root, path), 'utf8');
+    const source = `${original}\n${mutation}\n`;
+    expect(analyzeProductionSource(path, source)).toEqual(expect.arrayContaining([
+      expect.stringContaining('passes a browser global outside approved static access'),
+    ]));
+  });
+
+  it.each([
+    'services/generatorSandbox.ts',
+    'services/localWorkspace/indexedDbAdapter.ts',
+  ])('allows current trusted reflection syntax in %s', path => {
+    expect(analyzeProductionSource(path, readFileSync(join(root, path), 'utf8'))).toEqual([]);
+  });
+
+  it.each([
+    ['an array pattern', '[trustedObjectAssign] = [Object.assign];'],
+    ['a for-of target', 'for (trustedObjectAssign of [Object.assign]) {}'],
+  ])('revokes the trusted assignment alias through %s', (_case, mutation) => {
+    const path = 'services/generatorSandbox.ts';
+    const original = readFileSync(join(root, path), 'utf8');
+    const source = `${original}\n${mutation}\n`;
+    expect(analyzeProductionSource(path, source)).toEqual(expect.arrayContaining([
+      expect.stringContaining('passes a browser global outside approved static access'),
+    ]));
+  });
+
+  it.each([
     [
       'ASI changes a return into a separate call',
       (source: string) => source.replace(
@@ -2136,6 +2382,106 @@ describe('local workspace static boundary', () => {
     'services/localWorkspace/index.ts',
   ])('allows only current exact storage implementation in %s', path => {
     expect(analyzeProductionSource(path, readFileSync(join(root, path), 'utf8'))).toEqual([]);
+  });
+
+  it.each([
+    [
+      'an arbitrary default',
+      (source: string) => source.replace(
+        'getItem(key: string) {',
+        "getItem(key: string = 'arbitrary-preference') {",
+      ),
+    ],
+    [
+      'an escaped legacy-key default',
+      (source: string) => source.replace(
+        'getItem(key: string) {',
+        "getItem(key: string = '\\x68ype_projects') {",
+      ),
+    ],
+    [
+      'escaped parameter spelling',
+      (source: string) => source.replace('getItem(key: string) {', 'getItem(k\\u0065y: string) {'),
+    ],
+    [
+      'escaped method spelling',
+      (source: string) => source.replace('getItem(key: string) {', 'g\\u0065tItem(key: string) {'),
+    ],
+    [
+      'an optional parameter',
+      (source: string) => source.replace('getItem(key: string) {', 'getItem(key?: string) {'),
+    ],
+    [
+      'a rest parameter',
+      (source: string) => source.replace('getItem(key: string) {', 'getItem(...key: string[]) {'),
+    ],
+    [
+      'an any parameter',
+      (source: string) => source.replace('getItem(key: string) {', 'getItem(key: any) {'),
+    ],
+    [
+      'a missing parameter type',
+      (source: string) => source.replace('getItem(key: string) {', 'getItem(key) {'),
+    ],
+    [
+      'a parenthesized parameter type',
+      (source: string) => source.replace('getItem(key: string) {', 'getItem(key: (string)) {'),
+    ],
+    [
+      'a type parameter',
+      (source: string) => source.replace('getItem(key: string) {', 'getItem<T>(key: string) {'),
+    ],
+    [
+      'an async modifier',
+      (source: string) => source.replace('getItem(key: string) {', 'async getItem(key: string) {'),
+    ],
+    [
+      'a generator method',
+      (source: string) => source.replace('getItem(key: string) {', '*getItem(key: string) {'),
+    ],
+    [
+      'a computed method name',
+      (source: string) => source.replace('getItem(key: string) {', "['getItem'](key: string) {"),
+    ],
+    [
+      'a string-literal method name',
+      (source: string) => source.replace('getItem(key: string) {', "'getItem'(key: string) {"),
+    ],
+    [
+      'an explicit return type',
+      (source: string) => source.replace(
+        'getItem(key: string) {',
+        'getItem(key: string): string | null {',
+      ),
+    ],
+    [
+      'an arbitrary identifier',
+      (source: string) => source
+        .replace('getItem(key: string) {', 'getItem(value: string) {')
+        .replace('window.localStorage.getItem(key)', 'window.localStorage.getItem(value)'),
+    ],
+    [
+      'a wrapped call argument',
+      (source: string) => source.replace(
+        'window.localStorage.getItem(key)',
+        'window.localStorage.getItem((key))',
+      ),
+    ],
+    [
+      'an optional call',
+      (source: string) => source.replace(
+        'window.localStorage.getItem(key)',
+        'window.localStorage.getItem?.(key)',
+      ),
+    ],
+  ])('revokes localWorkspace storage approval after %s', (_case, mutate) => {
+    const path = 'services/localWorkspace/index.ts';
+    const original = readFileSync(join(root, path), 'utf8');
+    const source = mutate(original);
+    expect(source).not.toBe(original);
+    expect(analyzeProductionSource(path, source)).toEqual(expect.arrayContaining([
+      expect.stringContaining('accesses production localStorage outside approved persistence modules'),
+    ]));
   });
 
   it.each([
