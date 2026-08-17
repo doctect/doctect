@@ -195,6 +195,164 @@ const javascriptMimeEssences = new Set([
 const htmlNamespace = 'http://www.w3.org/1999/xhtml';
 const svgNamespace = 'http://www.w3.org/2000/svg';
 const xlinkNamespace = 'http://www.w3.org/1999/xlink';
+// Chromium 143.0.7499.4 prototype and live content-attribute probes produced
+// these pinned sets. Generic HTML, XHTML, and SVG elements compiled the same set.
+const chromium143GlobalElementHandlers = new Set([
+  'onabort',
+  'onanimationend',
+  'onanimationiteration',
+  'onanimationstart',
+  'onauxclick',
+  'onbeforecopy',
+  'onbeforecut',
+  'onbeforeinput',
+  'onbeforepaste',
+  'onbeforetoggle',
+  'onblur',
+  'oncancel',
+  'oncanplay',
+  'oncanplaythrough',
+  'onchange',
+  'onclick',
+  'onclose',
+  'oncommand',
+  'oncontentvisibilityautostatechange',
+  'oncontextlost',
+  'oncontextmenu',
+  'oncontextrestored',
+  'oncopy',
+  'oncuechange',
+  'oncut',
+  'ondblclick',
+  'ondrag',
+  'ondragend',
+  'ondragenter',
+  'ondragleave',
+  'ondragover',
+  'ondragstart',
+  'ondrop',
+  'ondurationchange',
+  'onemptied',
+  'onended',
+  'onerror',
+  'onfocus',
+  'onformdata',
+  'ongotpointercapture',
+  'oninput',
+  'oninvalid',
+  'onkeydown',
+  'onkeypress',
+  'onkeyup',
+  'onload',
+  'onloadeddata',
+  'onloadedmetadata',
+  'onloadstart',
+  'onlostpointercapture',
+  'onmousedown',
+  'onmouseenter',
+  'onmouseleave',
+  'onmousemove',
+  'onmouseout',
+  'onmouseover',
+  'onmouseup',
+  'onmousewheel',
+  'onpaste',
+  'onpause',
+  'onplay',
+  'onplaying',
+  'onpointercancel',
+  'onpointerdown',
+  'onpointerenter',
+  'onpointerleave',
+  'onpointermove',
+  'onpointerout',
+  'onpointerover',
+  'onpointerup',
+  'onprogress',
+  'onratechange',
+  'onreset',
+  'onresize',
+  'onscroll',
+  'onscrollend',
+  'onscrollsnapchange',
+  'onscrollsnapchanging',
+  'onsecuritypolicyviolation',
+  'onseeked',
+  'onseeking',
+  'onselect',
+  'onselectionchange',
+  'onselectstart',
+  'onslotchange',
+  'onstalled',
+  'onsubmit',
+  'onsuspend',
+  'ontimeupdate',
+  'ontoggle',
+  'onvolumechange',
+  'onwaiting',
+  'onwebkitanimationend',
+  'onwebkitanimationiteration',
+  'onwebkitanimationstart',
+  'onwebkitfullscreenchange',
+  'onwebkitfullscreenerror',
+  'onwebkittransitionend',
+  'onwheel',
+]);
+const chromium143BodyAndFramesetHandlers = new Set([
+  'onafterprint',
+  'onbeforeprint',
+  'onbeforeunload',
+  'onhashchange',
+  'onlanguagechange',
+  'onmessage',
+  'onmessageerror',
+  'onoffline',
+  'ononline',
+  'onpagehide',
+  'onpageshow',
+  'onpopstate',
+  'onstorage',
+  'onunload',
+]);
+const chromium143SvgAnimationHandlers = new Set(['onbegin', 'onend', 'onrepeat']);
+const chromium143SvgAnimationElements = new Set([
+  'animate',
+  'animateMotion',
+  'animateTransform',
+  'set',
+]);
+// JSDOM 24 lacks these Chromium-confirmed properties. Other pinned handlers
+// still require JSDOM membership, but JSDOM alone can never admit a handler.
+const chromium143HandlersMissingFromJsdom24 = new Set([
+  'onanimationend',
+  'onanimationiteration',
+  'onanimationstart',
+  'onbeforecopy',
+  'onbeforecut',
+  'onbeforepaste',
+  'oncommand',
+  'oncontentvisibilityautostatechange',
+  'ongotpointercapture',
+  'onlostpointercapture',
+  'onmousewheel',
+  'onpointercancel',
+  'onpointerdown',
+  'onpointerenter',
+  'onpointerleave',
+  'onpointermove',
+  'onpointerout',
+  'onpointerover',
+  'onpointerup',
+  'onscrollsnapchange',
+  'onscrollsnapchanging',
+  'onselectionchange',
+  'onselectstart',
+  'onwebkitfullscreenchange',
+  'onwebkitfullscreenerror',
+  'onbegin',
+  'onend',
+  'onrepeat',
+]);
 
 interface HtmlNodeLocation {
   startOffset: number;
@@ -963,6 +1121,20 @@ const functionBodySource = (
   };
 };
 
+const chromium143RecognizesHandler = (element: Element, name: string): boolean => {
+  const html = element.namespaceURI === htmlNamespace;
+  const svg = element.namespaceURI === svgNamespace;
+  if (!html && !svg) return false;
+  const pinned = chromium143GlobalElementHandlers.has(name)
+    || (html
+      && (element.localName === 'body' || element.localName === 'frameset')
+      && chromium143BodyAndFramesetHandlers.has(name))
+    || (svg
+      && chromium143SvgAnimationElements.has(element.localName)
+      && chromium143SvgAnimationHandlers.has(name));
+  return pinned && (name in element || chromium143HandlersMissingFromJsdom24.has(name));
+};
+
 const executableJavascriptUrlAttribute = (element: Element): Attr | undefined => {
   // Keep resource URL attributes inert; Chromium 143 executes only these static navigation sinks.
   if (element.namespaceURI === htmlNamespace) {
@@ -1127,17 +1299,26 @@ const staticDocumentBrowserBase = (
   document: Document,
   documentPath: string,
   inherited = repositoryBrowserBase(documentPath),
+  xml = false,
 ): BrowserUrlBase => {
-  const base = [...document.querySelectorAll('base[href]')].find(element => (
-    element.namespaceURI === 'http://www.w3.org/1999/xhtml'
-  ));
-  if (!base) return inherited;
+  const elements = xml
+    ? document.getElementsByTagName('*')
+    : document.querySelectorAll('base[href]');
+  let href: Attr | undefined;
+  for (const element of elements) {
+    if (element.namespaceURI !== htmlNamespace || element.localName !== 'base') continue;
+    href = [...element.attributes].find(attribute => (
+      attribute.namespaceURI === null && attribute.name === 'href'
+    ));
+    if (href) break;
+  }
+  if (!href) return inherited;
   try {
-    const href = browserUrlInput(base.getAttribute('href') ?? '');
+    const value = browserUrlInput(href.value);
     return {
       url: inherited.invalid || !inherited.url
-        ? new URL(href).href
-        : new URL(href, inherited.url).href,
+        ? new URL(value).href
+        : new URL(value, inherited.url).href,
     };
   } catch {
     return { invalid: true };
@@ -1176,7 +1357,12 @@ const executableDocumentExtraction = (input: SourceInput): ExecutableDocumentExt
     const inheritedBase = input.browserBase ?? repositoryBrowserBase(reportPath);
     const browserBase = document.parsed.xml && !xhtmlExtensions.has(extension)
       ? inheritedBase
-      : staticDocumentBrowserBase(document.parsed.window.document, input.path, inheritedBase);
+      : staticDocumentBrowserBase(
+        document.parsed.window.document,
+        input.path,
+        inheritedBase,
+        document.parsed.xml,
+      );
     const inputs: SourceInput[] = [];
     const externalEdges: ExternalScriptEdge[] = [];
     let index = 0;
@@ -1229,7 +1415,7 @@ const executableDocumentExtraction = (input: SourceInput): ExecutableDocumentExt
         for (const attribute of element.attributes) {
           if (attribute.namespaceURI !== null
             || !attribute.name.startsWith('on')
-            || !(attribute.name in element)) continue;
+            || !chromium143RecognizesHandler(element, attribute.name)) continue;
           const authored = authoredAttributeValue(document.parsed, element, attribute, input.source);
           const prepared = functionBodySource(authored.source, authored.offsets);
           inputs.push({
@@ -4151,6 +4337,56 @@ ${publicReturn}`);
     ]));
   });
 
+  it.each(['xhtml', 'xht'])('applies first prefixed XHTML base in .%s to an external script', extension => {
+    const path = `pages/prefixed-base.${extension}`;
+    const source = [
+      '<h:html xmlns:h="http://www.w3.org/1999/xhtml">',
+      '  <h:head><h:base href="/"/><h:base href="https://cdn.example/"/></h:head>',
+      '  <h:body>',
+      '    <h:script src="tests/edge.js"></h:script>',
+      '  </h:body>',
+      '</h:html>',
+    ].join('\n');
+    expect(analyzeProductionSource(path, source)).toEqual(expect.arrayContaining([
+      expect.stringContaining(`${path}:4: loads executable code from excluded repository paths`),
+    ]));
+  });
+
+  it.each(['xhtml', 'xht'])('inherits prefixed XHTML base in .%s srcdoc', extension => {
+    const path = `pages/prefixed-srcdoc-base.${extension}`;
+    const source = [
+      '<web:html xmlns:web="http://www.w3.org/1999/xhtml">',
+      '  <web:head><web:base href="/"/></web:head>',
+      '  <web:body>',
+      '    <web:iframe srcdoc="&lt;script src=&quot;tests/edge.js&quot;&gt;&lt;/script&gt;"/>',
+      '  </web:body>',
+      '</web:html>',
+    ].join('\n');
+    expect(analyzeProductionSource(path, source)).toEqual(expect.arrayContaining([
+      expect.stringContaining(`${path}:4: loads executable code from excluded repository paths`),
+    ]));
+  });
+
+  it.each(['xhtml', 'xht'])('uses next prefixed XHTML .%s base when first has no href', extension => {
+    const path = `pages/prefixed-next-base.${extension}`;
+    const source = '<h:html xmlns:h="http://www.w3.org/1999/xhtml"><h:head>'
+      + '<h:base/><h:base href="/"/></h:head><h:body>'
+      + '<h:script src="tests/edge.js"></h:script></h:body></h:html>';
+    expect(analyzeProductionSource(path, source)).toEqual(expect.arrayContaining([
+      expect.stringContaining('loads executable code from excluded repository paths'),
+    ]));
+  });
+
+  it('keeps first remote prefixed XHTML base authoritative for both suffixes', () => {
+    for (const extension of ['xhtml', 'xht']) {
+      const path = `pages/prefixed-first-remote.${extension}`;
+      const source = '<h:html xmlns:h="http://www.w3.org/1999/xhtml"><h:head>'
+        + '<h:base href="https://cdn.example/"/><h:base href="/"/></h:head><h:body>'
+        + '<h:script src="tests/edge.js"></h:script></h:body></h:html>';
+      expect(analyzeProductionSource(path, source)).toEqual([]);
+    }
+  });
+
   it.each(['xhtml', 'xht'])('analyzes standalone XHTML .%s handler at its authored line', extension => {
     const path = `pages/handler.${extension}`;
     const source = [
@@ -4164,6 +4400,114 @@ ${publicReturn}`);
     expect(analyzeProductionSource(path, source)).toEqual(expect.arrayContaining([
       expect.stringContaining(`${path}:4: accesses production localStorage`),
     ]));
+  });
+
+  it.each(['xhtml', 'xht'])('analyzes Chromium 143 pointer handler in standalone XHTML .%s', extension => {
+    const path = `pages/pointer.${extension}`;
+    const source = [
+      '<html xmlns="http://www.w3.org/1999/xhtml">',
+      '  <body>',
+      '    <button',
+      '      onpointerdown="window.localStorage.clear()">go</button>',
+      '  </body>',
+      '</html>',
+    ].join('\n');
+    expect(analyzeProductionSource(path, source)).toEqual(expect.arrayContaining([
+      expect.stringContaining(`${path}:4: accesses production localStorage`),
+    ]));
+  });
+
+  it.each(['xhtml', 'xht'])('analyzes nested Chromium 143 pointer handler from XHTML .%s', extension => {
+    const path = `pages/pointer-srcdoc.${extension}`;
+    const source = [
+      '<html xmlns="http://www.w3.org/1999/xhtml">',
+      '  <body>',
+      '    <iframe',
+      '      srcdoc="&lt;button onpointerdown=&quot;window.localStorage.clear()&quot;&gt;go&lt;/button&gt;"/>',
+      '  </body>',
+      '</html>',
+    ].join('\n');
+    expect(analyzeProductionSource(path, source)).toEqual(expect.arrayContaining([
+      expect.stringContaining(`${path}:4: accesses production localStorage`),
+    ]));
+  });
+
+  it.each([
+    'ongotpointercapture',
+    'onlostpointercapture',
+    'onpointercancel',
+    'onpointerdown',
+    'onpointerenter',
+    'onpointerleave',
+    'onpointermove',
+    'onpointerout',
+    'onpointerover',
+    'onpointerup',
+  ])('analyzes Chromium 143 global handler %s in HTML and SVG', handler => {
+    const htmlPath = 'pages/pointer.html';
+    const svgPath = 'pages/pointer.svg';
+    expect(analyzeProductionSource(
+      htmlPath,
+      `<button ${handler}="window.localStorage.clear()">go</button>`,
+    )).toEqual(expect.arrayContaining([
+      expect.stringContaining(`${htmlPath}:1: accesses production localStorage`),
+    ]));
+    expect(analyzeProductionSource(
+      svgPath,
+      '<svg xmlns="http://www.w3.org/2000/svg">'
+        + `<rect ${handler}="window.localStorage.clear()"/></svg>`,
+    )).toEqual(expect.arrayContaining([
+      expect.stringContaining(`${svgPath}:1: accesses production localStorage`),
+    ]));
+  });
+
+  it.each([
+    [
+      'body-only window handler',
+      'pages/special.html',
+      '<body onafterprint="window.localStorage.clear()"></body>',
+    ],
+    [
+      'globally compiled form handler',
+      'pages/special.html',
+      '<form onformdata="window.localStorage.clear()"></form>',
+    ],
+    [
+      'SVG animation handler',
+      'pages/special.svg',
+      '<svg xmlns="http://www.w3.org/2000/svg"><animate '
+        + 'onbegin="window.localStorage.clear()"/></svg>',
+    ],
+  ])('analyzes Chromium 143 %s', (_case, path, source) => {
+    expect(analyzeProductionSource(path, source)).toEqual(expect.arrayContaining([
+      expect.stringContaining(`${path}:1: accesses production localStorage`),
+    ]));
+  });
+
+  it.each([
+    ['unknown handler', '<button onpointermadeup="window.localStorage.clear()"></button>'],
+    ['body-only handler on div', '<div onafterprint="window.localStorage.clear()"></div>'],
+    ['media prototype-only handler', '<audio onencrypted="window.localStorage.clear()"></audio>'],
+    ['video prototype-only handler', '<video onenterpictureinpicture="window.localStorage.clear()"></video>'],
+    ['prototype-only transition handler', '<div ontransitionend="window.localStorage.clear()"></div>'],
+    ['prototype-only fullscreen handler', '<div onfullscreenchange="window.localStorage.clear()"></div>'],
+    [
+      'SVG animation handler on a rect',
+      '<svg><rect onbegin="window.localStorage.clear()"/></svg>',
+    ],
+  ])('keeps Chromium 143 inert %s out of handler analysis', (_case, source) => {
+    expect(analyzeProductionSource('pages/inert-handler.html', source)).toEqual([]);
+  });
+
+  it.each(['xhtml', 'xht'])('keeps XML pointer lookalikes inert in .%s', extension => {
+    const path = `pages/inert-pointer.${extension}`;
+    const source = '<html xmlns="http://www.w3.org/1999/xhtml" xmlns:f="urn:foreign"><body>'
+      + '<button ONPOINTERDOWN="localStorage.clear()">upper</button>'
+      + '<button f:onpointerdown="localStorage.clear()">namespaced attr</button>'
+      + '<f:button onpointerdown="localStorage.clear()">foreign element</f:button>'
+      + '<section xmlns=""><button onpointerdown="localStorage.clear()">no namespace</button></section>'
+      + '</body></html>';
+    expect(analyzeProductionSource(path, source)).toEqual([]);
   });
 
   it.each(['xhtml', 'xht'])('analyzes standalone XHTML .%s javascript URL at its authored line', extension => {
@@ -4236,6 +4580,10 @@ ${publicReturn}`);
     ['uppercase XHTML attribute', '<base HREF="/"/>'],
     ['foreign-namespace element', '<f:base xmlns:f="urn:foreign" href="/"/>'],
     ['no-namespace element', '<base xmlns="" href="/"/>'],
+    [
+      'namespaced href attribute',
+      '<h:base xmlns:h="http://www.w3.org/1999/xhtml" xmlns:a="urn:attribute" a:href="/"/>',
+    ],
   ])('ignores %s when resolving standalone XHTML bases', (_case, base) => {
     for (const extension of ['xhtml', 'xht']) {
       const path = `pages/inert-base.${extension}`;
@@ -4243,6 +4591,13 @@ ${publicReturn}`);
         + `${base}</head><body><script src="tests/edge.js"></script></body></html>`;
       expect(analyzeProductionSource(path, source)).toEqual([]);
     }
+  });
+
+  it('keeps prefixed XHTML base inert inside standalone SVG', () => {
+    const source = '<svg xmlns="http://www.w3.org/2000/svg" '
+      + 'xmlns:h="http://www.w3.org/1999/xhtml"><h:base href="/"/>'
+      + '<h:script src="tests/edge.js"></h:script></svg>';
+    expect(analyzeProductionSource('assets/inert-base.svg', source)).toEqual([]);
   });
 
   it.each(['xhtml', 'xht'])('fails closed for malformed standalone XHTML .%s XML', extension => {
