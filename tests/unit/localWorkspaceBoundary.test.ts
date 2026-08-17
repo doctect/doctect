@@ -596,9 +596,15 @@ const externalScriptEdges = (input: SourceInput): ExternalScriptEdge[] => {
   const edges: ExternalScriptEdge[] = [];
   for (const script of document.window.document.querySelectorAll('script')) {
     if (!externalScriptCanExecute(script)) continue;
-    const specifier = script.getAttribute('src')
-      ?? script.getAttribute('href')
-      ?? script.getAttributeNS('http://www.w3.org/1999/xlink', 'href');
+    let specifier: string | null;
+    if (script.namespaceURI === 'http://www.w3.org/1999/xhtml') {
+      specifier = script.getAttribute('src');
+    } else if (script.namespaceURI === 'http://www.w3.org/2000/svg') {
+      specifier = script.getAttribute('href')
+        ?? script.getAttributeNS('http://www.w3.org/1999/xlink', 'href');
+    } else {
+      continue;
+    }
     if (specifier === null) continue;
     const location = document.nodeLocation(script);
     if (!location?.startTag) throw new Error(`Workspace boundary could not locate script in ${input.path}`);
@@ -1413,12 +1419,21 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
     };
     const importMetaUrl = (expression: ts.Expression | undefined): boolean => {
       const url = expression && unwrap(expression);
-      return Boolean(url
-        && ts.isPropertyAccessExpression(url)
-        && url.name.text === 'url'
-        && ts.isMetaProperty(url.expression)
-        && url.expression.keywordToken === ts.SyntaxKind.ImportKeyword
-        && url.expression.name.text === 'meta');
+      if (!url) return false;
+      let receiver: ts.Expression;
+      if (ts.isPropertyAccessExpression(url)) {
+        if (url.name.text !== 'url') return false;
+        receiver = url.expression;
+      } else if (ts.isElementAccessExpression(url)) {
+        if (directStringLiteral(url.argumentExpression) !== 'url') return false;
+        receiver = url.expression;
+      } else {
+        return false;
+      }
+      const meta = unwrap(receiver);
+      return ts.isMetaProperty(meta)
+        && meta.keywordToken === ts.SyntaxKind.ImportKeyword
+        && meta.name.text === 'meta';
     };
     const workerEntry = (
       node: ts.NewExpression,
@@ -1854,13 +1869,50 @@ describe('local workspace static boundary', () => {
       "new SharedWorker(new URL('../tests/unit/worker.ts', import.meta.url));",
     ],
     [
+      'parenthesized import.meta Worker URL',
+      'pages/shell.ts',
+      "new Worker(new URL('../tests/unit/worker.ts', (import.meta).url));",
+    ],
+    [
+      'computed import.meta SharedWorker URL',
+      'pages/shell.ts',
+      "new SharedWorker(new URL('../tests/unit/worker.ts', import.meta['url']));",
+    ],
+    [
+      'wrapped literal import.meta Worker URL',
+      'pages/shell.ts',
+      "new Worker(new URL('../tests/unit/worker.ts', ((import.meta as ImportMeta)[(`url` as 'url')] as string)));",
+    ],
+    [
       'normalized traversal',
       'components/excluded.ts',
       "import value from '../components/../tests/unit/value';",
     ],
     ['root alias', 'components/excluded.ts', "import value from '@/tests/unit/value';"],
     ['HTML script', 'shell.html', '<script src="./tests/unit/value.js"></script>'],
-    ['SVG script', 'assets/image.svg', '<svg><script src="../tests/unit/value.js"></script></svg>'],
+    ['SVG script', 'assets/image.svg', '<svg><script href="../tests/unit/value.js"></script></svg>'],
+    [
+      'SVG href over competing src',
+      'shell.html',
+      '<svg><script src="/app.js" href="/tests/unit/value.js"></script></svg>',
+    ],
+    [
+      'SVG xlink fallback over competing src',
+      'shell.html',
+      '<svg xmlns:xlink="http://www.w3.org/1999/xlink"><script src="/app.js" '
+        + 'xlink:href="/tests/unit/value.js"></script></svg>',
+    ],
+    [
+      'SVG href over competing xlink',
+      'shell.html',
+      '<svg xmlns:xlink="http://www.w3.org/1999/xlink"><script href="/tests/unit/value.js" '
+        + 'xlink:href="/app.js"></script></svg>',
+    ],
+    [
+      'HTML src over competing href',
+      'shell.html',
+      '<script src="/tests/unit/value.js" href="/app.js"></script>',
+    ],
   ])('rejects production executable edges into excluded paths through %s', (_case, path, source) => {
     expect(analyzeProductionSource(path, source)).toEqual(expect.arrayContaining([
       expect.stringContaining('loads executable code from excluded repository paths'),
@@ -1983,8 +2035,64 @@ describe('local workspace static boundary', () => {
       'components/allowed.ts',
       "new Worker(new URL('./worker.ts', import.meta.url));",
     ],
+    [
+      'source-local parenthesized import.meta Worker',
+      'components/allowed.ts',
+      "new Worker(new URL('./worker.ts', (import.meta).url));",
+    ],
+    [
+      'source-local computed import.meta SharedWorker',
+      'components/allowed.ts',
+      "new SharedWorker(new URL('./worker.ts', import.meta['url']));",
+    ],
+    [
+      'source-local wrapped literal import.meta Worker',
+      'components/allowed.ts',
+      "new Worker(new URL('./worker.ts', ((import.meta as ImportMeta)[(`url` as 'url')] as string)));",
+    ],
+    [
+      'variable import.meta receiver remains uninterpreted',
+      'pages/shell.ts',
+      "const meta = import.meta; new Worker(new URL('../tests/unit/worker.ts', meta.url));",
+    ],
+    [
+      'computed import.meta key remains uninterpreted',
+      'pages/shell.ts',
+      "new SharedWorker(new URL('../tests/unit/worker.ts', import.meta['ur' + 'l']));",
+    ],
     ['root HTML script', 'shell.html', '<script type="module" src="/index.tsx"></script>'],
     ['remote HTML script', 'shell.html', '<script src="https://cdn.example/app.js"></script>'],
+    [
+      'SVG src ignored when href is app-local',
+      'shell.html',
+      '<svg><script src="/tests/unit/value.js" href="/app.js"></script></svg>',
+    ],
+    [
+      'SVG src-only attribute ignored',
+      'shell.html',
+      '<svg><script src="/tests/unit/value.js"></script></svg>',
+    ],
+    [
+      'SVG href precedes excluded xlink',
+      'shell.html',
+      '<svg xmlns:xlink="http://www.w3.org/1999/xlink"><script href="/app.js" '
+        + 'xlink:href="/tests/unit/value.js"></script></svg>',
+    ],
+    [
+      'HTML href ignored when src is app-local',
+      'shell.html',
+      '<script src="/app.js" href="/tests/unit/value.js"></script>',
+    ],
+    [
+      'HTML href-only attribute ignored',
+      'shell.html',
+      '<script href="/tests/unit/value.js"></script>',
+    ],
+    [
+      'other namespace external attributes ignored',
+      'shell.html',
+      '<math><script src="/tests/unit/value.js" href="/tests/unit/value.js"></script></math>',
+    ],
     [
       'remote HTML base',
       'pages/shell.html',
