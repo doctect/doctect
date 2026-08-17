@@ -450,6 +450,12 @@ interface AuthoredXmlElement {
   location: HtmlNodeLocation;
 }
 
+class AuthoredXmlParseError extends Error {
+  constructor(message: string, readonly offset: number) {
+    super(message);
+  }
+}
+
 const xmlMarkupEnd = (source: string, start: number, doctype = false): number => {
   let quote: string | undefined;
   let subsetDepth = 0;
@@ -552,6 +558,11 @@ const authoredXmlLocations = (
 const standaloneSvgDocument = (source: string): ParsedExecutableDocument => {
   const dom = new JSDOM(source, { contentType: 'image/svg+xml' });
   const document = dom.window.document;
+  if (document.doctype) {
+    const offset = source.indexOf('<!DOCTYPE');
+    if (offset === -1) throw new Error('XML source location mapping mismatch');
+    throw new AuthoredXmlParseError('standalone SVG DTD syntax is not supported', offset);
+  }
   const authored = authoredXmlLocations(source);
   const elements = [...document.getElementsByTagName('*')];
   const characters: Node[] = [];
@@ -581,6 +592,9 @@ const standaloneSvgDocument = (source: string): ParsedExecutableDocument => {
 };
 
 const xmlParseFailure = (source: string, error: unknown): ParseFailure => {
+  if (error instanceof AuthoredXmlParseError) {
+    return { message: error.message, offset: error.offset };
+  }
   if (!(error instanceof Error)) throw error;
   const location = error.message.match(/:(\d+):(\d+):\s*(.*)$/);
   return {
@@ -710,33 +724,38 @@ const svgScriptSource = (
   return { source, positionSegments: positionSegments(offsets) };
 };
 
-const executableScriptType = (script: Element): 'classic' | 'module' | undefined => {
+interface ExecutableScriptEligibility {
+  type: 'classic' | 'module';
+  externalSpecifier?: string;
+}
+
+const executableScriptEligibility = (script: Element): ExecutableScriptEligibility | undefined => {
   const html = script.namespaceURI === 'http://www.w3.org/1999/xhtml';
-  if (html) {
-    if (script.hasAttribute('src')) return undefined;
-  } else if (script.namespaceURI === 'http://www.w3.org/2000/svg') {
-    if (script.hasAttribute('href')
-      || script.hasAttributeNS('http://www.w3.org/1999/xlink', 'href')) return undefined;
-  } else {
-    return undefined;
-  }
+  const svg = script.namespaceURI === 'http://www.w3.org/2000/svg';
+  if (!html && !svg) return undefined;
   const classic = (): 'classic' | undefined => (
     html && script.hasAttribute('nomodule') ? undefined : 'classic'
   );
   const attribute = script.getAttribute('type');
-  let type: string;
+  let type: 'classic' | 'module' | undefined;
   if (attribute === null) {
-    if (!html) return classic();
-    const language = script.getAttribute('language');
-    if (language === null || language === '') return classic();
-    type = `text/${language}`;
+    const language = html ? script.getAttribute('language') : null;
+    if (language === null || language === '') type = classic();
+    else type = javascriptMimeEssences.has(trimAsciiWhitespace(`text/${language}`).toLowerCase())
+      ? classic()
+      : undefined;
   } else {
-    if (attribute === '') return classic();
-    type = attribute;
+    const normalized = trimAsciiWhitespace(attribute).toLowerCase();
+    if (attribute === '') type = classic();
+    else if (javascriptMimeEssences.has(normalized)) type = classic();
+    else if (normalized === 'module') type = 'module';
   }
-  const normalized = trimAsciiWhitespace(type).toLowerCase();
-  if (javascriptMimeEssences.has(normalized)) return classic();
-  return normalized === 'module' ? 'module' : undefined;
+  if (!type) return undefined;
+  const externalSpecifier = html
+    ? script.getAttribute('src')
+    : script.getAttribute('href')
+      ?? script.getAttributeNS('http://www.w3.org/1999/xlink', 'href');
+  return externalSpecifier === null ? { type } : { type, externalSpecifier };
 };
 
 interface ExternalScriptEdge {
@@ -744,17 +763,6 @@ interface ExternalScriptEdge {
   offset: number;
   browserBase: BrowserUrlBase;
 }
-
-const externalScriptCanExecute = (script: Element): boolean => {
-  const typeAttribute = script.getAttribute('type');
-  if (typeAttribute === null || typeAttribute === '') {
-    const language = script.getAttribute('language');
-    if (language === null || language === '') return true;
-    return javascriptMimeEssences.has(`text/${trimAsciiWhitespace(language).toLowerCase()}`);
-  }
-  const type = trimAsciiWhitespace(typeAttribute).toLowerCase();
-  return type === 'module' || javascriptMimeEssences.has(type);
-};
 
 const staticDocumentBrowserBase = (
   document: Document,
@@ -782,20 +790,15 @@ const externalScriptEdges = (input: SourceInput): ExternalScriptEdge[] => {
     : staticDocumentBrowserBase(document.parsed.window.document, input.path);
   const edges: ExternalScriptEdge[] = [];
   for (const script of executableScriptElements(document.parsed)) {
-    if (!externalScriptCanExecute(script)) continue;
-    let specifier: string | null;
-    if (script.namespaceURI === 'http://www.w3.org/1999/xhtml') {
-      specifier = script.getAttribute('src');
-    } else if (script.namespaceURI === 'http://www.w3.org/2000/svg') {
-      specifier = script.getAttribute('href')
-        ?? script.getAttributeNS('http://www.w3.org/1999/xlink', 'href');
-    } else {
-      continue;
-    }
-    if (specifier === null) continue;
+    const eligibility = executableScriptEligibility(script);
+    if (eligibility?.externalSpecifier === undefined) continue;
     const location = document.parsed.nodeLocation(script);
     if (!location?.startTag) throw new Error(`Workspace boundary could not locate script in ${input.path}`);
-    edges.push({ specifier, offset: location.startTag.startOffset, browserBase });
+    edges.push({
+      specifier: eligibility.externalSpecifier,
+      offset: location.startTag.startOffset,
+      browserBase,
+    });
   }
   return edges;
 };
@@ -819,8 +822,8 @@ const executableInputs = (inputs: readonly SourceInput[]): SourceInput[] => inpu
     : staticDocumentBrowserBase(document.parsed.window.document, input.path);
   let index = 0;
   for (const script of executableScriptElements(document.parsed)) {
-    const type = executableScriptType(script);
-    if (!type) continue;
+    const eligibility = executableScriptEligibility(script);
+    if (!eligibility || eligibility.externalSpecifier !== undefined) continue;
     const location = document.parsed.nodeLocation(script);
     if (!location?.startTag) throw new Error(`Workspace boundary could not locate script in ${input.path}`);
     const bodyStart = location.startTag.endOffset;
@@ -845,8 +848,10 @@ const executableInputs = (inputs: readonly SourceInput[]): SourceInput[] => inpu
       source: prepared.source,
       browserBase,
       directStorageBoundary: input.directStorageBoundary,
-      moduleGoal: type === 'module',
-      parseFailure: type === 'classic' ? classicScriptParseFailure(prepared.source) : undefined,
+      moduleGoal: eligibility.type === 'module',
+      parseFailure: eligibility.type === 'classic'
+        ? classicScriptParseFailure(prepared.source)
+        : undefined,
       positionSegments: prepared.positionSegments,
       reportPath: input.path,
       reportSource: input.source,
@@ -2348,6 +2353,167 @@ describe('local workspace static boundary', () => {
 
   it.each([
     [
+      'HTML empty type before language',
+      'shell.html',
+      '<script type="" language="json" src="/tests/edge.js"></script>',
+    ],
+    [
+      'HTML module despite nomodule',
+      'shell.html',
+      '<script type="module" nomodule src="/tests/edge.js"></script>',
+    ],
+    [
+      'HTML normalized JavaScript MIME',
+      'shell.html',
+      '<script type=" Text/JavaScript " src="/tests/edge.js"></script>',
+    ],
+    [
+      'SVG absent type ignoring language and nomodule',
+      'assets/types.svg',
+      '<svg xmlns="http://www.w3.org/2000/svg"><script language="json" nomodule="" '
+        + 'href="../tests/edge.js"/></svg>',
+    ],
+    [
+      'SVG empty type ignoring language and nomodule',
+      'assets/types.svg',
+      '<svg xmlns="http://www.w3.org/2000/svg"><script type="" language="json" nomodule="" '
+        + 'href="../tests/edge.js"/></svg>',
+    ],
+    [
+      'XHTML empty type before language',
+      'assets/types.svg',
+      '<svg xmlns="http://www.w3.org/2000/svg" xmlns:h="http://www.w3.org/1999/xhtml">'
+        + '<h:script type="" language="json" src="../tests/edge.js"/></svg>',
+    ],
+    [
+      'XHTML absent type with JavaScript language',
+      'assets/types.svg',
+      '<svg xmlns="http://www.w3.org/2000/svg" xmlns:h="http://www.w3.org/1999/xhtml">'
+        + '<h:script language="javascript" src="../tests/edge.js"/></svg>',
+    ],
+    [
+      'XHTML module despite nomodule',
+      'assets/types.svg',
+      '<svg xmlns="http://www.w3.org/2000/svg" xmlns:h="http://www.w3.org/1999/xhtml">'
+        + '<h:script type="module" nomodule="" src="../tests/edge.js"/></svg>',
+    ],
+  ])('rejects excluded external script through %s', (_case, path, source) => {
+    expect(analyzeProductionSource(path, source)).toEqual(expect.arrayContaining([
+      expect.stringContaining('loads executable code from excluded repository paths'),
+    ]));
+  });
+
+  it.each([
+    [
+      'HTML absent type with non-JavaScript language',
+      'shell.html',
+      '<script language="json" src="/tests/edge.js"></script>',
+    ],
+    [
+      'HTML classic nomodule',
+      'shell.html',
+      '<script type="text/javascript" nomodule src="/tests/edge.js"></script>',
+    ],
+    [
+      'SVG non-JavaScript type despite language',
+      'assets/types.svg',
+      '<svg xmlns="http://www.w3.org/2000/svg"><script type="application/json" '
+        + 'language="javascript" nomodule="" href="../tests/edge.js"/></svg>',
+    ],
+    [
+      'XHTML absent type with non-JavaScript language',
+      'assets/types.svg',
+      '<svg xmlns="http://www.w3.org/2000/svg" xmlns:h="http://www.w3.org/1999/xhtml">'
+        + '<h:script language="json" src="../tests/edge.js"/></svg>',
+    ],
+    [
+      'XHTML classic nomodule',
+      'assets/types.svg',
+      '<svg xmlns="http://www.w3.org/2000/svg" xmlns:h="http://www.w3.org/1999/xhtml">'
+        + '<h:script type="text/javascript" nomodule="" src="../tests/edge.js"/></svg>',
+    ],
+  ])('allows inert external script through %s', (_case, path, source) => {
+    expect(analyzeProductionSource(path, source)).toEqual([]);
+  });
+
+  it.each([
+    [
+      'HTML empty type before language',
+      'shell.html',
+      '<script type="" language="json">window.localStorage.getItem(\'x\');</script>',
+    ],
+    [
+      'HTML module despite nomodule',
+      'shell.html',
+      '<script type="module" nomodule>window.localStorage.getItem(\'x\');</script>',
+    ],
+    [
+      'SVG absent type ignoring language and nomodule',
+      'assets/types.svg',
+      '<svg xmlns="http://www.w3.org/2000/svg"><script language="json" nomodule="">'
+        + "window.localStorage.getItem('x');</script></svg>",
+    ],
+    [
+      'SVG empty type ignoring language and nomodule',
+      'assets/types.svg',
+      '<svg xmlns="http://www.w3.org/2000/svg"><script type="" language="json" nomodule="">'
+        + "window.localStorage.getItem('x');</script></svg>",
+    ],
+    [
+      'XHTML empty type before language',
+      'assets/types.svg',
+      '<svg xmlns="http://www.w3.org/2000/svg" xmlns:h="http://www.w3.org/1999/xhtml">'
+        + '<h:script type="" language="json">window.localStorage.getItem(\'x\');</h:script></svg>',
+    ],
+    [
+      'XHTML module despite nomodule',
+      'assets/types.svg',
+      '<svg xmlns="http://www.w3.org/2000/svg" xmlns:h="http://www.w3.org/1999/xhtml">'
+        + '<h:script type="module" nomodule="">'
+        + "window.localStorage.getItem('x');</h:script></svg>",
+    ],
+  ])('analyzes eligible inline script through %s', (_case, path, source) => {
+    expect(analyzeProductionSource(path, source)).toEqual(expect.arrayContaining([
+      expect.stringContaining('accesses production localStorage outside approved persistence modules'),
+    ]));
+  });
+
+  it.each([
+    [
+      'HTML absent type with non-JavaScript language',
+      'shell.html',
+      '<script language="json">window.localStorage.getItem(\'x\');</script>',
+    ],
+    [
+      'HTML classic nomodule',
+      'shell.html',
+      '<script type="text/javascript" nomodule>window.localStorage.getItem(\'x\');</script>',
+    ],
+    [
+      'SVG non-JavaScript type despite language',
+      'assets/types.svg',
+      '<svg xmlns="http://www.w3.org/2000/svg"><script type="application/json" '
+        + 'language="javascript" nomodule="">window.localStorage.getItem(\'x\');</script></svg>',
+    ],
+    [
+      'XHTML absent type with non-JavaScript language',
+      'assets/types.svg',
+      '<svg xmlns="http://www.w3.org/2000/svg" xmlns:h="http://www.w3.org/1999/xhtml">'
+        + '<h:script language="json">window.localStorage.getItem(\'x\');</h:script></svg>',
+    ],
+    [
+      'XHTML classic nomodule',
+      'assets/types.svg',
+      '<svg xmlns="http://www.w3.org/2000/svg" xmlns:h="http://www.w3.org/1999/xhtml">'
+        + '<h:script type="text/javascript" nomodule="">'
+        + "window.localStorage.getItem('x');</h:script></svg>",
+    ],
+  ])('skips inert inline script through %s', (_case, path, source) => {
+    expect(analyzeProductionSource(path, source)).toEqual([]);
+  });
+
+  it.each([
+    [
       'a prefixed SVG script',
       'assets/prefixed.svg',
       [
@@ -2494,6 +2660,55 @@ describe('local workspace static boundary', () => {
     ],
   ])('skips standalone SVG inline %s', (_case, source) => {
     expect(analyzeProductionSource('assets/inert-inline.svg', source)).toEqual([]);
+  });
+
+  it.each([
+    [
+      'external general-entity expansion',
+      'assets/external-entity.svg',
+      [
+        '<?xml version="1.0"?>',
+        '<!DOCTYPE svg [',
+        '  <!ENTITY payload "<script xmlns=\'http://www.w3.org/2000/svg\' '
+          + 'href=\'../tests/edge.js\'/>">',
+        ']>',
+        '<svg xmlns="http://www.w3.org/2000/svg">&payload;</svg>',
+      ].join('\n'),
+    ],
+    [
+      'inline general-entity expansion',
+      'assets/inline-entity.svg',
+      [
+        '<?xml version="1.0"?>',
+        '<!DOCTYPE svg [',
+        '  <!ENTITY payload "<script xmlns=\'http://www.w3.org/2000/svg\'>'
+          + 'window.localStorage.getItem(\'x\');</script>">',
+        ']>',
+        '<svg xmlns="http://www.w3.org/2000/svg">&payload;</svg>',
+      ].join('\n'),
+    ],
+    [
+      'valid internal-subset comment',
+      'assets/comment-subset.svg',
+      [
+        '<?xml version="1.0"?>',
+        '<!DOCTYPE svg [<!-- ]] -->]>',
+        '<svg xmlns="http://www.w3.org/2000/svg"/>',
+      ].join('\n'),
+    ],
+    [
+      'valid internal-subset processing instruction',
+      'assets/pi-subset.svg',
+      [
+        '<?xml version="1.0"?>',
+        '<!DOCTYPE svg [<?policy keep?>]>',
+        '<svg xmlns="http://www.w3.org/2000/svg"/>',
+      ].join('\n'),
+    ],
+  ])('rejects standalone SVG DTD through %s', (_case, path, source) => {
+    expect(analyzeProductionSource(path, source)).toEqual([
+      `${path}:2: could not be parsed: standalone SVG DTD syntax is not supported`,
+    ]);
   });
 
   it('fails closed for malformed standalone SVG XML at the authored line', () => {
