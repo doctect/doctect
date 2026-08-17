@@ -133,6 +133,19 @@ describe('TOURS content', () => {
             'localStorage stores a non-document onboarding profile preference.',
         )).toBe('non-document-preference');
 
+        const reviewMixedClaims = [
+            'Legacy localStorage document keys are read-only migration inputs, but they still store every project.',
+            'Legacy browser storage keys are read-only during migration, but those keys remain project authority.',
+            'Legacy localStorage is read-only during migration, but it still stores the workspace.',
+            'Legacy localStorage is read-only during migration, but it still backs every project.',
+            'localStorage stores only a non-document preference, but it remains workspace authority.',
+            'The sandbox denies localStorage access, but the editor persists its workspace there.',
+            'Legacy localStorage document keys are read-only during migration. They still store every project.',
+        ];
+        expect(reviewMixedClaims.flatMap(localStorageStatements)
+            .filter(statement => classifyLocalStorageContext(statement) === null))
+            .toEqual(reviewMixedClaims);
+
         const runtimeCopy = [
             fs.readFileSync(path.join(REPO_ROOT, 'onboarding/src/shell.html'), 'utf8'),
             ...RUNTIME_MODULES.map(relativePath =>
