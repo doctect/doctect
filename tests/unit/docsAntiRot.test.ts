@@ -1,9 +1,14 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { docsIndex } from '../../lib/docsContentIndex';
 import { slugifyHeading } from '../../lib/docsContent';
-import { classifyLocalStorageContext, localStorageStatements } from './storageCopyAntiRot';
+import {
+    classifyLocalStorageContext,
+    discoverMaintainedMarkdownPaths,
+    localStorageStatements,
+} from './storageCopyAntiRot';
 
 const ROOT = path.resolve(__dirname, '../..');
 
@@ -12,25 +17,6 @@ const AUTHORITY_DOC_PATHS = [
     'docs/3-state-management.md',
     'docs/8-cloud-and-gallery.md',
 ] as const;
-
-const markdownPathsUnder = (relativeDirectory: string): string[] => {
-    const paths: string[] = [];
-    for (const entry of fs.readdirSync(path.join(ROOT, relativeDirectory), { withFileTypes: true })) {
-        const relativePath = path.posix.join(relativeDirectory, entry.name);
-        if (entry.isDirectory()) {
-            if (relativePath !== 'docs/superpowers') paths.push(...markdownPathsUnder(relativePath));
-        } else if (entry.isFile() && entry.name.endsWith('.md')) {
-            paths.push(relativePath);
-        }
-    }
-    return paths.sort();
-};
-
-const maintainedMarkdownPaths = (): string[] => [
-    'README.md',
-    'PRODUCT.md',
-    ...markdownPathsUnder('docs'),
-];
 
 const readMarkdown = (relativePaths: readonly string[]): Record<string, string> =>
     Object.fromEntries(relativePaths.map(relativePath => [
@@ -56,6 +42,36 @@ const headingAnchors = (body: string): Set<string> => {
 };
 
 describe('docs anti-rot guards', () => {
+    it('discovers every maintained Markdown root recursively except historical docs', () => {
+        const paths = discoverMaintainedMarkdownPaths(ROOT);
+
+        expect(paths).toContain('README.md');
+        expect(paths).toContain('PRODUCT.md');
+        expect(paths).toContain('docs/components/Modals.md');
+        expect(paths).toContain('docs-content/README.md');
+        expect(paths).toContain('docs-content/tutorials/getting-started/01-what-is-pdf-architect.md');
+        expect(paths).toContain('docs-content/reference/editor/save-preset.md');
+        expect(paths.some(relativePath => relativePath.startsWith('docs/superpowers/'))).toBe(false);
+    });
+
+    it('rejects Markdown symlinks instead of silently skipping maintained copy', () => {
+        const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'doctect-docs-copy-'));
+        try {
+            fs.mkdirSync(path.join(temporaryRoot, 'docs'), { recursive: true });
+            fs.mkdirSync(path.join(temporaryRoot, 'docs-content'), { recursive: true });
+            fs.writeFileSync(path.join(temporaryRoot, 'README.md'), '# README\n');
+            fs.writeFileSync(path.join(temporaryRoot, 'PRODUCT.md'), '# Product\n');
+            const target = path.join(temporaryRoot, 'outside.md');
+            fs.writeFileSync(target, '# Outside\n');
+            fs.symlinkSync(target, path.join(temporaryRoot, 'docs-content', 'linked.md'));
+
+            expect(() => discoverMaintainedMarkdownPaths(temporaryRoot))
+                .toThrow(/Markdown symlink.*docs-content\/linked\.md/i);
+        } finally {
+            fs.rmSync(temporaryRoot, { recursive: true, force: true });
+        }
+    });
+
     it('keeps top-level architecture docs on the IndexedDB authority model', () => {
         const docs = readMarkdown(AUTHORITY_DOC_PATHS);
         const corpus = Object.values(docs).join('\n');
@@ -99,34 +115,84 @@ describe('docs anti-rot guards', () => {
         expect(corpus).toMatch(/\bno\b[^.\n]{0,80}\bdual[- ]write\b/i);
     });
 
-    it('allows localStorage in maintained Markdown only with explicit legitimate context', () => {
+    it('detects storage spelling variants and every exact legacy document key', () => {
+        const legacyDocumentKeys = [
+            ['hype', 'projects'].join('_'),
+            ['hype', 'active', 'project'].join('_'),
+            ['hype', 'custom', 'presets'].join('_'),
+            ['hype', 'import', 'pending'].join('_'),
+        ];
+        const claims = {
+            camelCase: 'Projects persist in localStorage on every edit.',
+            spaced: 'Projects persist in local storage on every edit.',
+            browserStorage: 'Every offline document lives in browser storage.',
+            possessiveBrowserStorage: "Every custom preset lives in the browser's storage.",
+            webStorage: 'Web Storage remains project authority.',
+            ...Object.fromEntries(legacyDocumentKeys.map((key, index) => [
+                `legacyDocumentKey${index}`,
+                `${key} remains active project storage.`,
+            ])),
+        };
+
+        expect(Object.fromEntries(Object.entries(claims).map(([name, claim]) => [
+            name,
+            localStorageStatements(claim),
+        ]))).toEqual(Object.fromEntries(Object.entries(claims).map(([name, claim]) => [
+            name,
+            [claim],
+        ])));
+    });
+
+    it('rejects active project storage claims before narrow legitimate contexts', () => {
         const staleClaims = {
             README: 'Sign in to back any project with cloud-saved version history - entirely opt-in; local `localStorage` projects work exactly as before.',
             SavePreset: 'SavePresetModal cleans the project and persists the custom preset directly to localStorage for future initialization.',
             equivalentAuthority: 'Browser localStorage remains the home for every offline document.',
+            reviewMixedLegacy: 'Legacy localStorage is read-only for migration, but localStorage remains project authority',
+            reviewMixedPreference: 'localStorage stores a non-document preference and every project',
+            reviewMixedSandbox: 'The sandbox denies localStorage access, while the editor persists projects there',
+            mixedLegacyPronoun: 'Legacy localStorage is read-only for migration, but it still stores every project',
+            mixedPreferencePronoun: 'localStorage stores only a non-document preference, but it remains preset authority',
+            mixedSandboxPronoun: 'The sandbox denies localStorage access, but it remains document authority for the editor',
         };
-        for (const [name, claim] of Object.entries(staleClaims)) {
-            expect(classifyLocalStorageContext(claim), `stale fixture passed: ${name}`).toBeNull();
-        }
 
+        expect(Object.fromEntries(Object.entries(staleClaims).map(([name, claim]) => [
+            name,
+            classifyLocalStorageContext(claim),
+        ]))).toEqual(Object.fromEntries(Object.keys(staleClaims).map(name => [name, null])));
+    });
+
+    it('recognizes explicit legacy, preference, and sandbox contexts', () => {
         const legitimateClaims = {
             legacy: 'Legacy localStorage document keys remain read-only inputs for migration and recovery.',
-            preference: 'localStorage holds only a non-document onboarding profile preference.',
-            sandbox: 'The generator sandbox denies localStorage access.',
+            legacyNeverWritten: 'Legacy browser storage is a migration and recovery source and is never written.',
+            legacyAfterIndexedDb: 'Projects persist in IndexedDB; legacy browser storage is read only during migration.',
+            preference: 'localStorage stores only a non-document onboarding profile preference.',
+            onboardingProfile: 'An onboarding-profile preference is the only value stored in local storage.',
+            sandbox: 'Your code runs in a disposable generator sandbox where localStorage is explicitly blanked out.',
+            sandboxStorageDenial: 'The generator sandbox blanks local storage and denies all browser storage access.',
         };
         expect(Object.fromEntries(Object.entries(legitimateClaims).map(([name, claim]) => [
             name,
             classifyLocalStorageContext(claim),
         ]))).toEqual({
             legacy: 'legacy-read-only-migration-recovery',
+            legacyNeverWritten: 'legacy-read-only-migration-recovery',
+            legacyAfterIndexedDb: 'legacy-read-only-migration-recovery',
             preference: 'non-document-preference',
+            onboardingProfile: 'non-document-preference',
             sandbox: 'sandbox-denial',
+            sandboxStorageDenial: 'sandbox-denial',
         });
+    });
 
-        const paths = maintainedMarkdownPaths();
+    it('allows storage mentions in maintained Markdown only with explicit legitimate context', () => {
+        const paths = discoverMaintainedMarkdownPaths(ROOT);
         expect(paths).toContain('README.md');
         expect(paths).toContain('PRODUCT.md');
         expect(paths.some(relativePath => relativePath.startsWith('docs/components/'))).toBe(true);
+        expect(paths.some(relativePath => relativePath.startsWith('docs-content/tutorials/'))).toBe(true);
+        expect(paths.some(relativePath => relativePath.startsWith('docs-content/reference/'))).toBe(true);
         expect(paths.some(relativePath => relativePath.startsWith('docs/superpowers/'))).toBe(false);
 
         const offenders = Object.entries(readMarkdown(paths)).flatMap(([relativePath, body]) =>

@@ -16,7 +16,7 @@ Both buttons sit in the same column on any [project page](/docs/gallery/browsing
 | Question | Open in editor | Fork this project |
 | --- | --- | --- |
 | Do you need to sign in? | No — fully anonymous | Yes — an account **and** a username |
-| Where does the copy live? | Your browser only | A private project in your cloud |
+| Where does the copy live? | Your local IndexedDB workspace only | Your local IndexedDB workspace and a private project in your cloud |
 | Does it remember the original? | No link back at all | Yes — it records a "forked from" lineage |
 | Can you send changes upstream? | No | Yes — as a merge request |
 | Does it show up in the gallery? | Never — it's only local | Only if *you* publish it yourself |
@@ -35,7 +35,7 @@ The whole flow is two clicks and a short wait. The clip below runs it end to end
 ![Clicking Fork this project on a gallery page, landing in the editor with the fork loaded, then opening the Cloud menu to reveal the forked-from-upstream link](/docs-assets/gallery/clip-fork-flow.webp "Fork, land in the editor, and the Cloud menu now shows a link back to the upstream original")
 
 1. **Click Fork this project.** The button reads **Forking…** for a moment while the server copies the published version into a new project under your account.
-2. **Land in the editor.** The fork opens as a new tab, carrying the original's name, and it arrives **already saved to your cloud** — its first commit, messaged `Fork of "…"`, is written for you. This is the quiet difference from Open in editor, which drops an *unsaved local* copy in your lap: a fork is a real cloud project from the first second.
+2. **Land in the editor.** The fork opens as a new tab, carrying the original's name, and it arrives **already saved to your cloud** — its first commit, messaged `Fork of "…"`, is written for you. This is the quiet difference from Open in editor, which adds a cloud-unlinked copy to your local workspace: a fork is a real cloud project from the first second, while both remain locally persistent.
 3. **Open the Cloud menu** (the cloud icon, top-right). Alongside the usual Save to cloud, Version history, and Publish items, a fork shows one extra line the [ordinary Cloud menu](/docs/gallery/cloud-saves-and-history#the-cloud-menu) never does:
 
 > **↳ forked from upstream — view source**

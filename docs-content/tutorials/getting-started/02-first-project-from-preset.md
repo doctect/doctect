@@ -28,7 +28,7 @@ Each card is a real, focusable button — tab to one and press `kbd:Enter` or `k
 A new tab appears next to "Blank Project" — but read its label closely: it says "Planner 2026," word order flipped from the card you just clicked. That's just this one tab's own name; the project itself, and every page inside it, uses the title you'd expect, "2026 Planner." Either way, it's the same project, and it's what the rest of this tutorial explores.
 
 > [!TIP]
-> Projects like this one live only in your browser's local storage — nothing is uploaded anywhere until you explicitly save to the cloud, which a later tutorial in the Gallery track covers. That also means the tab bar really is just a list of "currently open," nothing more: it holds as many projects side by side as you want, and opening a preset never closes or replaces a tab that's already there — it adds a new one.
+> Projects like this one persist locally in IndexedDB through `LocalWorkspaceStore`. Cloud storage is explicit opt-in: nothing is uploaded until you choose **Save to cloud**, and that remote snapshot does not replace local persistence. The tab bar really is just a list of "currently open," nothing more: it holds as many projects side by side as you want, and opening a preset never closes or replaces a tab that's already there — it adds a new one.
 
 ## Explore the hierarchy
 

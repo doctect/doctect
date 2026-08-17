@@ -1,6 +1,15 @@
 // tests/unit/onboarding/content.test.js
 import { describe, it, expect } from 'vitest';
-import { REPO_ROOT, buildRefs, buildContent, scanTree, flattenTreePaths } from '../../../onboarding/build.mjs';
+import fs from 'node:fs';
+import path from 'node:path';
+import {
+    REPO_ROOT,
+    RUNTIME_MODULES,
+    buildRefs,
+    buildContent,
+    scanTree,
+    flattenTreePaths,
+} from '../../../onboarding/build.mjs';
 import { validateContent } from '../../../onboarding/src/content/validate.mjs';
 import { INTRO } from '../../../onboarding/src/content/intro.mjs';
 import { TOURS } from '../../../onboarding/src/content/tours.mjs';
@@ -124,13 +133,14 @@ describe('TOURS content', () => {
             'localStorage stores a non-document onboarding profile preference.',
         )).toBe('non-document-preference');
 
-        const allowedContexts = new Set([
-            'legacy-read-only-migration-recovery',
-            'non-document-preference',
-        ]);
-        const offenders = contentStrings(await buildContent(), [])
+        const runtimeCopy = [
+            fs.readFileSync(path.join(REPO_ROOT, 'onboarding/src/shell.html'), 'utf8'),
+            ...RUNTIME_MODULES.map(relativePath =>
+                fs.readFileSync(path.join(REPO_ROOT, 'onboarding', relativePath), 'utf8')),
+        ];
+        const offenders = [...contentStrings(await buildContent(), []), ...runtimeCopy]
             .flatMap(localStorageStatements)
-            .filter(statement => !allowedContexts.has(classifyLocalStorageContext(statement)));
+            .filter(statement => classifyLocalStorageContext(statement) === null);
         expect(offenders, `localStorage mentions without explicit onboarding context:\n${offenders.join('\n')}`)
             .toEqual([]);
     });
@@ -327,9 +337,6 @@ describe('CODE_MAP annotations', () => {
         expect(importers.sort()).toEqual(['server/routes/mergeRequests.js', 'server/stateCodec.js']);
     });
 });
-
-import fs from 'node:fs';
-import path from 'node:path';
 
 // Sibling guards to the shared/diff.js importer pin above, for the claims that are
 // COUNTABLE against the repo. Every one of these shipped wrong at least once: a

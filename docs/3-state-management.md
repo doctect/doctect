@@ -52,7 +52,7 @@ Stored and imported documents can use older `AppState` schemas even though Index
 
 ## Local Save Flow
 
-`ProjectEditor` reports a changed `AppState` to `EditorPage`. The page updates the matching working copy through the hook rather than writing browser storage itself:
+`ProjectEditor` reports a changed `AppState` to `EditorPage`. The page updates the matching working copy through the hook rather than writing IndexedDB directly:
 
 ```typescript
 void updateProject(

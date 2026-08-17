@@ -11,7 +11,7 @@ The whole choice is Fork versus [Open in editor](/docs/reference/open-in-editor)
 
 | | Open in Editor | Fork |
 | --- | --- | --- |
-| Sign-in, and where the copy lives | None — a local copy in your browser | Account **and** username — a private project in your cloud |
+| Sign-in, and where the copy lives | None — a copy in your local IndexedDB workspace | Account **and** username — a copy in your local IndexedDB workspace plus a private project in your cloud |
 | Link to the original | None — a dead end | Records "forked from" lineage; can propose changes upstream |
 
 See [Forking, step by step](/docs/gallery/forking#forking-step-by-step).

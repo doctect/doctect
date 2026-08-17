@@ -11,7 +11,7 @@ You have [an account and a username](/docs/gallery/accounts-and-usernames). This
 
 ## Explicit saves, immutable commits
 
-The single most important thing to understand about cloud saves is what they *aren't*: they aren't sync. Nothing watches your editing, nothing uploads in the background, and closing the tab sends nothing anywhere. Your project lives in your browser, exactly as it has since [your first project](/docs/getting-started/first-project-from-preset), until the moment you open the **Cloud** menu and click [**Save to cloud**](/docs/reference/cloud-save) — and what that sends is a snapshot of that moment, not a live connection.
+The single most important thing to understand about cloud saves is what they *aren't*: they aren't sync. Nothing watches your editing, nothing uploads in the background, and closing the tab sends nothing anywhere. Your project persists locally in IndexedDB through `LocalWorkspaceStore` before and after you open the **Cloud** menu and click [**Save to cloud**](/docs/reference/cloud-save). That explicit action sends a snapshot of that moment, not a live connection or a replacement for local persistence.
 
 Each save asks you one question: *"Describe this save (commit message)"* — it suggests "Initial save" the first time and "Update" after that, but a message in your own words ("Added the habit tracker", "Fixed the cover font") is what makes the history readable later. Press Cancel and nothing is saved at all; leave the message empty and it's recorded as "Update".
 

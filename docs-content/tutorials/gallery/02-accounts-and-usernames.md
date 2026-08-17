@@ -11,7 +11,7 @@ You've built projects, exported PDFs, and [toured the whole gallery](/docs/galle
 
 ## Local-first, account-optional
 
-PDF Architect is local-first. Your projects live in your browser, the editor and generator run there, PDFs render there — none of it touches an account, and none of that changes today. Signing up doesn't move, upload, or convert anything; your local projects stay exactly where they are until you explicitly save one to the cloud.
+PDF Architect is local-first. Your projects persist locally in IndexedDB through `LocalWorkspaceStore`, the editor and generator run in your browser, and PDFs render there — none of it touches an account, and none of that changes today. Signing up doesn't move, upload, or convert anything. Cloud storage remains explicit opt-in: **Save to cloud** adds a remote snapshot without replacing the local project.
 
 What an account adds is precisely the actions that reach beyond your machine:
 

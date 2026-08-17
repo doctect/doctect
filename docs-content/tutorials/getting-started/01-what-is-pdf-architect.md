@@ -19,7 +19,7 @@ Most page-layout tools — Canva, Adobe InDesign, Google Slides — work one pag
 PDF Architect inverts that relationship. You draw a small number of reusable page **templates**, then build a tree of **nodes** — one per logical page, like a day, a chapter, or a stop on a route — where each node simply points at one of those templates. Edit the template once and every node that uses it changes with it, instantly, everywhere. The built-in **2026 Planner** starter project — the one you'll open in the next tutorial — makes the ratio concrete: it's 1,733 nodes total (a full year of quarters, months, and weeks, down to individual days, plus journal, notes, and to-do pages) and every single one of those pages is drawn from just ten templates.
 
 > [!NOTE]
-> Everything above happens entirely in your browser. Projects live in local storage until you explicitly save them, and no account or sign-in is required to design, preview, or export a PDF. An account only matters once you want to save a project to the cloud, publish it to the gallery, or fork someone else's design.
+> Everything above happens entirely in your browser. Projects persist locally in IndexedDB through `LocalWorkspaceStore`; cloud storage is explicit opt-in, and saving a snapshot there does not replace the local copy. No account or sign-in is required to design, preview, or export a PDF. An account only matters once you want to save a project to the cloud, publish it to the gallery, or fork someone else's design.
 
 ## The four ideas
 
