@@ -456,6 +456,27 @@ class AuthoredXmlParseError extends Error {
   }
 }
 
+const authoredXmlDoctypeOffset = (source: string): number | undefined => {
+  let cursor = source.charCodeAt(0) === 0xfeff ? 1 : 0;
+  while (cursor < source.length) {
+    while (cursor < source.length && /[\t\n\r ]/.test(source[cursor])) cursor += 1;
+    if (source.startsWith('<!--', cursor)) {
+      const close = source.indexOf('-->', cursor + 4);
+      if (close === -1) return undefined;
+      cursor = close + 3;
+      continue;
+    }
+    if (source.startsWith('<?', cursor)) {
+      const close = source.indexOf('?>', cursor + 2);
+      if (close === -1) return undefined;
+      cursor = close + 2;
+      continue;
+    }
+    return source.startsWith('<!DOCTYPE', cursor) ? cursor : undefined;
+  }
+  return undefined;
+};
+
 const xmlMarkupEnd = (source: string, start: number, doctype = false): number => {
   let quote: string | undefined;
   let subsetDepth = 0;
@@ -559,8 +580,7 @@ const standaloneSvgDocument = (source: string): ParsedExecutableDocument => {
   const dom = new JSDOM(source, { contentType: 'image/svg+xml' });
   const document = dom.window.document;
   if (document.doctype) {
-    const offset = source.indexOf('<!DOCTYPE');
-    if (offset === -1) throw new Error('XML source location mapping mismatch');
+    const offset = authoredXmlDoctypeOffset(source) ?? 0;
     throw new AuthoredXmlParseError('standalone SVG DTD syntax is not supported', offset);
   }
   const authored = authoredXmlLocations(source);
@@ -741,14 +761,14 @@ const executableScriptEligibility = (script: Element): ExecutableScriptEligibili
   if (attribute === null) {
     const language = html ? script.getAttribute('language') : null;
     if (language === null || language === '') type = classic();
-    else type = javascriptMimeEssences.has(trimAsciiWhitespace(`text/${language}`).toLowerCase())
+    else type = javascriptMimeEssences.has(`text/${language}`.toLowerCase())
       ? classic()
       : undefined;
   } else {
     const normalized = trimAsciiWhitespace(attribute).toLowerCase();
     if (attribute === '') type = classic();
     else if (javascriptMimeEssences.has(normalized)) type = classic();
-    else if (normalized === 'module') type = 'module';
+    else if (attribute.toLowerCase() === 'module') type = 'module';
   }
   if (!type) return undefined;
   const externalSpecifier = html
@@ -2368,6 +2388,23 @@ describe('local workspace static boundary', () => {
       '<script type=" Text/JavaScript " src="/tests/edge.js"></script>',
     ],
     [
+      'HTML exact mixed-case module',
+      'shell.html',
+      '<script type="MoDuLe" src="/tests/edge.js"></script>',
+    ],
+    [
+      'SVG exact mixed-case module',
+      'assets/types.svg',
+      '<svg xmlns="http://www.w3.org/2000/svg"><script type="MoDuLe" '
+        + 'href="../tests/edge.js"/></svg>',
+    ],
+    [
+      'XHTML exact mixed-case module',
+      'assets/types.svg',
+      '<svg xmlns="http://www.w3.org/2000/svg" xmlns:h="http://www.w3.org/1999/xhtml">'
+        + '<h:script type="MoDuLe" src="../tests/edge.js"/></svg>',
+    ],
+    [
       'SVG absent type ignoring language and nomodule',
       'assets/types.svg',
       '<svg xmlns="http://www.w3.org/2000/svg"><script language="json" nomodule="" '
@@ -2410,6 +2447,26 @@ describe('local workspace static boundary', () => {
       '<script language="json" src="/tests/edge.js"></script>',
     ],
     [
+      'HTML absent type with trailing language whitespace',
+      'shell.html',
+      '<script language="javascript " src="/tests/edge.js"></script>',
+    ],
+    [
+      'HTML absent type with leading language whitespace',
+      'shell.html',
+      '<script language=" javascript" src="/tests/edge.js"></script>',
+    ],
+    [
+      'HTML whitespace-only type',
+      'shell.html',
+      '<script type=" " src="/tests/edge.js"></script>',
+    ],
+    [
+      'HTML padded module',
+      'shell.html',
+      '<script type=" module " src="/tests/edge.js"></script>',
+    ],
+    [
       'HTML classic nomodule',
       'shell.html',
       '<script type="text/javascript" nomodule src="/tests/edge.js"></script>',
@@ -2421,10 +2478,46 @@ describe('local workspace static boundary', () => {
         + 'language="javascript" nomodule="" href="../tests/edge.js"/></svg>',
     ],
     [
+      'SVG whitespace-only type',
+      'assets/types.svg',
+      '<svg xmlns="http://www.w3.org/2000/svg"><script type=" " '
+        + 'href="../tests/edge.js"/></svg>',
+    ],
+    [
+      'SVG padded module',
+      'assets/types.svg',
+      '<svg xmlns="http://www.w3.org/2000/svg"><script type=" module " '
+        + 'href="../tests/edge.js"/></svg>',
+    ],
+    [
       'XHTML absent type with non-JavaScript language',
       'assets/types.svg',
       '<svg xmlns="http://www.w3.org/2000/svg" xmlns:h="http://www.w3.org/1999/xhtml">'
         + '<h:script language="json" src="../tests/edge.js"/></svg>',
+    ],
+    [
+      'XHTML absent type with trailing language whitespace',
+      'assets/types.svg',
+      '<svg xmlns="http://www.w3.org/2000/svg" xmlns:h="http://www.w3.org/1999/xhtml">'
+        + '<h:script language="javascript " src="../tests/edge.js"/></svg>',
+    ],
+    [
+      'XHTML absent type with leading language whitespace',
+      'assets/types.svg',
+      '<svg xmlns="http://www.w3.org/2000/svg" xmlns:h="http://www.w3.org/1999/xhtml">'
+        + '<h:script language=" javascript" src="../tests/edge.js"/></svg>',
+    ],
+    [
+      'XHTML whitespace-only type',
+      'assets/types.svg',
+      '<svg xmlns="http://www.w3.org/2000/svg" xmlns:h="http://www.w3.org/1999/xhtml">'
+        + '<h:script type=" " src="../tests/edge.js"/></svg>',
+    ],
+    [
+      'XHTML padded module',
+      'assets/types.svg',
+      '<svg xmlns="http://www.w3.org/2000/svg" xmlns:h="http://www.w3.org/1999/xhtml">'
+        + '<h:script type=" module " src="../tests/edge.js"/></svg>',
     ],
     [
       'XHTML classic nomodule',
@@ -2446,6 +2539,23 @@ describe('local workspace static boundary', () => {
       'HTML module despite nomodule',
       'shell.html',
       '<script type="module" nomodule>window.localStorage.getItem(\'x\');</script>',
+    ],
+    [
+      'HTML exact mixed-case module',
+      'shell.html',
+      '<script type="MoDuLe">window.localStorage.getItem(\'x\');</script>',
+    ],
+    [
+      'SVG exact mixed-case module',
+      'assets/types.svg',
+      '<svg xmlns="http://www.w3.org/2000/svg"><script type="MoDuLe">'
+        + "window.localStorage.getItem('x');</script></svg>",
+    ],
+    [
+      'XHTML exact mixed-case module',
+      'assets/types.svg',
+      '<svg xmlns="http://www.w3.org/2000/svg" xmlns:h="http://www.w3.org/1999/xhtml">'
+        + '<h:script type="MoDuLe">window.localStorage.getItem(\'x\');</h:script></svg>',
     ],
     [
       'SVG absent type ignoring language and nomodule',
@@ -2485,6 +2595,26 @@ describe('local workspace static boundary', () => {
       '<script language="json">window.localStorage.getItem(\'x\');</script>',
     ],
     [
+      'HTML absent type with trailing language whitespace',
+      'shell.html',
+      '<script language="javascript ">window.localStorage.getItem(\'x\');</script>',
+    ],
+    [
+      'HTML absent type with leading language whitespace',
+      'shell.html',
+      '<script language=" javascript">window.localStorage.getItem(\'x\');</script>',
+    ],
+    [
+      'HTML whitespace-only type',
+      'shell.html',
+      '<script type=" ">window.localStorage.getItem(\'x\');</script>',
+    ],
+    [
+      'HTML padded module',
+      'shell.html',
+      '<script type=" module ">window.localStorage.getItem(\'x\');</script>',
+    ],
+    [
       'HTML classic nomodule',
       'shell.html',
       '<script type="text/javascript" nomodule>window.localStorage.getItem(\'x\');</script>',
@@ -2496,10 +2626,46 @@ describe('local workspace static boundary', () => {
         + 'language="javascript" nomodule="">window.localStorage.getItem(\'x\');</script></svg>',
     ],
     [
+      'SVG whitespace-only type',
+      'assets/types.svg',
+      '<svg xmlns="http://www.w3.org/2000/svg"><script type=" ">'
+        + "window.localStorage.getItem('x');</script></svg>",
+    ],
+    [
+      'SVG padded module',
+      'assets/types.svg',
+      '<svg xmlns="http://www.w3.org/2000/svg"><script type=" module ">'
+        + "window.localStorage.getItem('x');</script></svg>",
+    ],
+    [
       'XHTML absent type with non-JavaScript language',
       'assets/types.svg',
       '<svg xmlns="http://www.w3.org/2000/svg" xmlns:h="http://www.w3.org/1999/xhtml">'
         + '<h:script language="json">window.localStorage.getItem(\'x\');</h:script></svg>',
+    ],
+    [
+      'XHTML absent type with trailing language whitespace',
+      'assets/types.svg',
+      '<svg xmlns="http://www.w3.org/2000/svg" xmlns:h="http://www.w3.org/1999/xhtml">'
+        + '<h:script language="javascript ">window.localStorage.getItem(\'x\');</h:script></svg>',
+    ],
+    [
+      'XHTML absent type with leading language whitespace',
+      'assets/types.svg',
+      '<svg xmlns="http://www.w3.org/2000/svg" xmlns:h="http://www.w3.org/1999/xhtml">'
+        + '<h:script language=" javascript">window.localStorage.getItem(\'x\');</h:script></svg>',
+    ],
+    [
+      'XHTML whitespace-only type',
+      'assets/types.svg',
+      '<svg xmlns="http://www.w3.org/2000/svg" xmlns:h="http://www.w3.org/1999/xhtml">'
+        + '<h:script type=" ">window.localStorage.getItem(\'x\');</h:script></svg>',
+    ],
+    [
+      'XHTML padded module',
+      'assets/types.svg',
+      '<svg xmlns="http://www.w3.org/2000/svg" xmlns:h="http://www.w3.org/1999/xhtml">'
+        + '<h:script type=" module ">window.localStorage.getItem(\'x\');</h:script></svg>',
     ],
     [
       'XHTML classic nomodule',
@@ -2674,6 +2840,7 @@ describe('local workspace static boundary', () => {
         ']>',
         '<svg xmlns="http://www.w3.org/2000/svg">&payload;</svg>',
       ].join('\n'),
+      2,
     ],
     [
       'inline general-entity expansion',
@@ -2686,6 +2853,7 @@ describe('local workspace static boundary', () => {
         ']>',
         '<svg xmlns="http://www.w3.org/2000/svg">&payload;</svg>',
       ].join('\n'),
+      2,
     ],
     [
       'valid internal-subset comment',
@@ -2695,6 +2863,7 @@ describe('local workspace static boundary', () => {
         '<!DOCTYPE svg [<!-- ]] -->]>',
         '<svg xmlns="http://www.w3.org/2000/svg"/>',
       ].join('\n'),
+      2,
     ],
     [
       'valid internal-subset processing instruction',
@@ -2704,10 +2873,50 @@ describe('local workspace static boundary', () => {
         '<!DOCTYPE svg [<?policy keep?>]>',
         '<svg xmlns="http://www.w3.org/2000/svg"/>',
       ].join('\n'),
+      2,
     ],
-  ])('rejects standalone SVG DTD through %s', (_case, path, source) => {
+    [
+      'legal prolog comment containing a DOCTYPE decoy',
+      'assets/comment-decoy.svg',
+      [
+        '<?xml version="1.0"?>',
+        '<!-- <!DOCTYPE decoy> -->',
+        '<!DOCTYPE svg>',
+        '<svg xmlns="http://www.w3.org/2000/svg"/>',
+      ].join('\n'),
+      3,
+    ],
+    [
+      'legal prolog processing instruction containing a DOCTYPE decoy',
+      'assets/pi-decoy.svg',
+      [
+        '<?xml version="1.0"?>',
+        '<?audit <!DOCTYPE decoy>?>',
+        '<!DOCTYPE svg>',
+        '<svg xmlns="http://www.w3.org/2000/svg"/>',
+      ].join('\n'),
+      3,
+    ],
+    [
+      'CRLF multiline prolog trivia and declaration',
+      'assets/multiline-decoy.svg',
+      [
+        '<?xml version="1.0"?>',
+        '<!--',
+        '  <!DOCTYPE comment-decoy>',
+        '-->',
+        '<?audit',
+        '  <!DOCTYPE pi-decoy>',
+        '?>',
+        '<!DOCTYPE',
+        '  svg>',
+        '<svg xmlns="http://www.w3.org/2000/svg"/>',
+      ].join('\r\n'),
+      8,
+    ],
+  ])('rejects standalone SVG DTD through %s', (_case, path, source, line) => {
     expect(analyzeProductionSource(path, source)).toEqual([
-      `${path}:2: could not be parsed: standalone SVG DTD syntax is not supported`,
+      `${path}:${line}: could not be parsed: standalone SVG DTD syntax is not supported`,
     ]);
   });
 
