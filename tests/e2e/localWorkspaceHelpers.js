@@ -131,34 +131,47 @@ export const seedNativeProject = (page, project) => seedNativeWorkspace(page, {
 
 export const setActiveProjectGenerator = (page, generator) => page.evaluate(async nextGenerator => {
     const { localWorkspaceStore } = await import('/services/localWorkspace/index.ts');
+    const { inheritInstalledProjectAuthority } = await import(
+        '/services/localWorkspace/projectAuthority.ts'
+    );
     const result = await localWorkspaceStore.bootstrap();
     if (result.status !== 'ready') throw new Error(`workspace ${result.status}`);
-    const project = structuredClone(result.snapshot.projects.find(
+    const current = result.snapshot.projects.find(
         candidate => candidate.id === result.snapshot.activeProjectId,
-    ));
-    if (!project) throw new Error('Active project not found while saving generator source.');
+    );
+    if (!current) throw new Error('Active project not found while saving generator source.');
+    const project = structuredClone(current);
     project.initialState.generator = {
         formatVersion: 1,
         generatedAt: new Date().toISOString(),
         ...nextGenerator,
     };
+    inheritInstalledProjectAuthority(project, current);
     await localWorkspaceStore.commit({ type: 'save-project', project });
 }, generator);
 
 export const setActiveProjectCloud = (page, cloud) => page.evaluate(async nextCloud => {
     const { localWorkspaceStore } = await import('/services/localWorkspace/index.ts');
+    const { inheritInstalledProjectAuthority } = await import(
+        '/services/localWorkspace/projectAuthority.ts'
+    );
     const result = await localWorkspaceStore.bootstrap();
     if (result.status !== 'ready') throw new Error(`workspace ${result.status}`);
-    const project = structuredClone(result.snapshot.projects.find(
+    const current = result.snapshot.projects.find(
         candidate => candidate.id === result.snapshot.activeProjectId,
-    ));
-    if (!project) throw new Error('Active project not found while saving cloud linkage.');
+    );
+    if (!current) throw new Error('Active project not found while saving cloud linkage.');
+    const project = structuredClone(current);
     project.cloud = nextCloud;
+    inheritInstalledProjectAuthority(project, current);
     await localWorkspaceStore.commit({ type: 'save-project', project });
 }, cloud);
 
 export const updateActiveProject = (page, changes) => page.evaluate(async nextChanges => {
     const { localWorkspaceStore } = await import('/services/localWorkspace/index.ts');
+    const { inheritInstalledProjectAuthority } = await import(
+        '/services/localWorkspace/projectAuthority.ts'
+    );
     const result = await localWorkspaceStore.bootstrap();
     if (result.status !== 'ready') throw new Error(`workspace ${result.status}`);
     const current = result.snapshot.projects.find(
@@ -166,6 +179,7 @@ export const updateActiveProject = (page, changes) => page.evaluate(async nextCh
     );
     if (!current) throw new Error('Active project not found while updating it.');
     const project = { ...structuredClone(current), ...structuredClone(nextChanges) };
+    inheritInstalledProjectAuthority(project, current);
     return localWorkspaceStore.commit({ type: 'save-project', project });
 }, changes);
 
