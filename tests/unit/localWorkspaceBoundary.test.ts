@@ -67,6 +67,10 @@ const scriptKinds = new Map<string, ts.ScriptKind>([
 ]);
 const storageMutators = new Set(['setItem', 'removeItem', 'clear']);
 const keyedStorageMethods = new Set(['getItem', 'setItem', 'removeItem']);
+const staticStringCandidateLimit = 256;
+const staticStringOverflow = '\0doctect-static-string-overflow';
+const staticStringListOverflow = Symbol('static-string-list-overflow');
+const staticStringOverflowMessage = `static string candidate expansion exceeds policy bound of ${staticStringCandidateLimit}`;
 const javascriptMimeEssences = new Set([
   'application/ecmascript',
   'application/javascript',
@@ -1656,16 +1660,160 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
     }
   };
 
-  const staticStrings = (
+  const overflowStaticStrings = (): Set<string> => new Set([staticStringOverflow]);
+
+  const boundedStaticStrings = (candidates: Iterable<string>): Set<string> => {
+    const values = new Set<string>();
+    for (const candidate of candidates) {
+      if (candidate === staticStringOverflow) return overflowStaticStrings();
+      if (!values.has(candidate) && values.size >= staticStringCandidateLimit) {
+        return overflowStaticStrings();
+      }
+      values.add(candidate);
+    }
+    return values;
+  };
+
+  const combineStaticStrings = (
+    left: ReadonlySet<string>,
+    right: ReadonlySet<string>,
+    combine: (leftValue: string, rightValue: string) => string,
+  ): Set<string> => {
+    if (left.has(staticStringOverflow) || right.has(staticStringOverflow)) {
+      return overflowStaticStrings();
+    }
+    const values = new Set<string>();
+    for (const leftValue of left) {
+      for (const rightValue of right) {
+        const candidate = combine(leftValue, rightValue);
+        if (!values.has(candidate) && values.size >= staticStringCandidateLimit) {
+          return overflowStaticStrings();
+        }
+        values.add(candidate);
+      }
+    }
+    return values;
+  };
+
+  interface StaticStringList {
+    elements: readonly ts.Expression[];
+    position: number;
+  }
+
+  type StaticStringListCandidate = StaticStringList | typeof staticStringListOverflow;
+
+  const boundedStaticStringLists = (
+    candidates: Iterable<StaticStringListCandidate>,
+  ): StaticStringListCandidate[] => {
+    const values: StaticStringListCandidate[] = [];
+    for (const candidate of candidates) {
+      if (candidate === staticStringListOverflow) return [staticStringListOverflow];
+      if (values.length >= staticStringCandidateLimit) return [staticStringListOverflow];
+      values.push(candidate);
+    }
+    return values;
+  };
+
+  function staticStringLists(
     input: ts.Expression,
     atPosition: number,
     trail: ResolutionTrail = new Map(),
-  ): Set<string> => {
+  ): StaticStringListCandidate[] {
+    const expression = unwrap(input);
+    if (ts.isArrayLiteralExpression(expression)) {
+      const elements: ts.Expression[] = [];
+      for (const element of expression.elements) {
+        if (ts.isOmittedExpression(element) || ts.isSpreadElement(element)) return [];
+        elements.push(element);
+      }
+      return [{ elements, position: atPosition }];
+    }
+    if (ts.isIdentifier(expression)) {
+      const symbol = identifierSymbol(expression);
+      return boundedStaticStringLists(withIdentifierOrigins(
+        expression,
+        symbol,
+        atPosition,
+        trail,
+        (origin, nextTrail) => origin.value.kind === 'expression'
+          ? staticStringLists(origin.value.expression, origin.position, nextTrail)
+          : [],
+      ));
+    }
+    if (ts.isConditionalExpression(expression)) {
+      return boundedStaticStringLists([
+        ...staticStringLists(expression.whenTrue, atPosition, trail),
+        ...staticStringLists(expression.whenFalse, atPosition, trail),
+      ]);
+    }
+    return [];
+  }
+
+  function staticJoinStrings(
+    call: ts.CallExpression,
+    atPosition: number,
+    trail: ResolutionTrail,
+  ): Set<string> {
+    if (call.arguments.length > 1) return new Set();
+    const callee = unwrap(call.expression);
+    let receiver: ts.Expression;
+    let computedName: ts.Expression | undefined;
+    if (ts.isPropertyAccessExpression(callee) && callee.name.text === 'join') {
+      receiver = callee.expression;
+    } else if (ts.isElementAccessExpression(callee) && callee.argumentExpression) {
+      receiver = callee.expression;
+      computedName = callee.argumentExpression;
+    } else {
+      return new Set();
+    }
+
+    const lists = staticStringLists(receiver, atPosition, trail);
+    if (lists.length === 0) return new Set();
+    if (computedName) {
+      const names = staticStrings(computedName, atPosition, trail);
+      if (names.has(staticStringOverflow)) return overflowStaticStrings();
+      if (!names.has('join')) return new Set();
+    }
+    if (lists.includes(staticStringListOverflow)) return overflowStaticStrings();
+    const separators = call.arguments.length === 0
+      ? new Set([','])
+      : staticStrings(call.arguments[0], atPosition, trail);
+    if (separators.size === 0) return new Set();
+    if (separators.has(staticStringOverflow)) return overflowStaticStrings();
+
+    let values = new Set<string>();
+    for (const candidate of lists) {
+      if (candidate === staticStringListOverflow) return overflowStaticStrings();
+      for (const separator of separators) {
+        let joined = new Set(['']);
+        for (const [index, element] of candidate.elements.entries()) {
+          const elementValues = staticStrings(element, candidate.position, trail);
+          if (elementValues.size === 0) {
+            joined = new Set();
+            break;
+          }
+          joined = combineStaticStrings(joined, elementValues, (prefix, value) => (
+            index === 0 ? value : `${prefix}${separator}${value}`
+          ));
+          if (joined.has(staticStringOverflow)) return joined;
+        }
+        values = boundedStaticStrings([...values, ...joined]);
+        if (values.has(staticStringOverflow)) return values;
+      }
+    }
+    return values;
+  }
+
+  function staticStrings(
+    input: ts.Expression,
+    atPosition: number,
+    trail: ResolutionTrail = new Map(),
+  ): Set<string> {
     const expression = unwrap(input);
     if (ts.isStringLiteralLike(expression)) return new Set([expression.text]);
     if (ts.isIdentifier(expression)) {
       const symbol = identifierSymbol(expression);
-      return new Set(withIdentifierOrigins(expression, symbol, atPosition, trail, (origin, nextTrail) => (
+      return boundedStaticStrings(withIdentifierOrigins(expression, symbol, atPosition, trail, (origin, nextTrail) => (
         origin.value.kind === 'expression'
           ? [...staticStrings(origin.value.expression, origin.position, nextTrail)]
           : []
@@ -1673,35 +1821,35 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
     }
     if (ts.isBinaryExpression(expression)
       && expression.operatorToken.kind === ts.SyntaxKind.PlusToken) {
-      const values = new Set<string>();
-      for (const left of staticStrings(expression.left, atPosition, trail)) {
-        for (const right of staticStrings(expression.right, atPosition, trail)) {
-          values.add(left + right);
-        }
-      }
-      return values;
+      return combineStaticStrings(
+        staticStrings(expression.left, atPosition, trail),
+        staticStrings(expression.right, atPosition, trail),
+        (left, right) => left + right,
+      );
     }
     if (ts.isTemplateExpression(expression)) {
       let values = new Set([expression.head.text]);
       for (const span of expression.templateSpans) {
-        const next = new Set<string>();
-        for (const prefix of values) {
-          for (const substitution of staticStrings(span.expression, atPosition, trail)) {
-            next.add(prefix + substitution + span.literal.text);
-          }
-        }
-        values = next;
+        values = combineStaticStrings(
+          values,
+          staticStrings(span.expression, atPosition, trail),
+          (prefix, substitution) => prefix + substitution + span.literal.text,
+        );
+        if (values.has(staticStringOverflow)) return values;
       }
       return values;
     }
     if (ts.isConditionalExpression(expression)) {
-      return new Set([
+      return boundedStaticStrings([
         ...staticStrings(expression.whenTrue, atPosition, trail),
         ...staticStrings(expression.whenFalse, atPosition, trail),
       ]);
     }
+    if (ts.isCallExpression(expression)) {
+      return staticJoinStrings(expression, atPosition, trail);
+    }
     return new Set();
-  };
+  }
 
   const propertyNames = (
     name: ts.PropertyName,
@@ -1715,6 +1863,10 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
       ? staticStrings(name.expression, atPosition, trail)
       : new Set();
   };
+
+  const matchesStaticCandidate = (candidate: string, expected: string): boolean => (
+    candidate === expected || candidate === staticStringOverflow
+  );
 
   const memberCandidates = (
     input: ts.Expression,
@@ -1767,14 +1919,14 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
           return isLocalStorage(origin.value.expression, origin.position, nextTrail) ? [true] : [];
         }
         const names = propertyNames(origin.value.propertyName, origin.position, nextTrail);
-        return names.has('localStorage')
+        return [...names].some(name => matchesStaticCandidate(name, 'localStorage'))
           && isGlobalObject(origin.value.receiver, origin.position, nextTrail)
           ? [true]
           : [];
       }).length > 0;
     }
     return memberCandidates(expression, atPosition, trail).some(member => (
-      member.name === 'localStorage'
+      matchesStaticCandidate(member.name, 'localStorage')
       && isGlobalObject(member.receiver, atPosition, trail)
     ));
   };
@@ -1801,7 +1953,7 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
     }
     if (ts.isCallExpression(expression)) {
       const bound = memberCandidates(expression.expression, atPosition, trail)
-        .filter(member => member.name === 'bind');
+        .filter(member => matchesStaticCandidate(member.name, 'bind'));
       const boundArguments = expression.arguments.slice(1).map(argument => ({
         expression: argument,
         position: expression.end,
@@ -1822,12 +1974,28 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
   const invokedMembers = (call: ts.CallExpression): InvokedMember[] => {
     const atPosition = call.expression.getStart(call.getSourceFile());
     const wrappers = memberCandidates(call.expression, atPosition)
-      .filter(member => member.name === 'call' || member.name === 'apply');
+      .filter(member => (
+        matchesStaticCandidate(member.name, 'call')
+        || matchesStaticCandidate(member.name, 'apply')
+      ));
     if (wrappers.length > 0) {
-      return wrappers.flatMap(wrapper => callableMembers(wrapper.receiver, atPosition).map(member => ({
-        ...member,
-        invocation: wrapper.name as 'call' | 'apply',
-      })));
+      const wrapped = wrappers.flatMap(wrapper => {
+        const invocations: Array<'call' | 'apply'> = wrapper.name === staticStringOverflow
+          ? ['call', 'apply']
+          : [wrapper.name as 'call' | 'apply'];
+        return callableMembers(wrapper.receiver, atPosition).flatMap(member => (
+          invocations.map(invocation => ({ ...member, invocation }))
+        ));
+      });
+      return wrappers.some(wrapper => wrapper.name === staticStringOverflow)
+        ? [
+          ...wrapped,
+          ...callableMembers(call.expression, atPosition).map(member => ({
+            ...member,
+            invocation: 'direct' as const,
+          })),
+        ]
+        : wrapped;
     }
     return callableMembers(call.expression, atPosition).map(member => ({
       ...member,
@@ -1887,7 +2055,10 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
     if (invoked.invocation === 'apply') {
       const argumentArray = call.arguments[1];
       if (!argumentArray) return new Set();
-      return new Set(firstArrayElements(argumentArray, call.expression.getStart()).flatMap(candidate => (
+      return boundedStaticStrings(firstArrayElements(
+        argumentArray,
+        call.expression.getStart(),
+      ).flatMap(candidate => (
         [...staticStrings(candidate.expression, candidate.position)]
       )));
     }
@@ -1965,9 +2136,13 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
     if (authoredParseFailed) continue;
 
     const inspectModuleSpecifier = (node: ts.Node, expression: ts.Expression | undefined): void => {
-      if (!importsAllowed && expression && [...staticStrings(expression, node.getStart(sourceFile))]
-        .some(isLegacyTypesModule)) {
-        report(node, 'imports local-workspace migration internals');
+      if (!importsAllowed && expression) {
+        const candidates = staticStrings(expression, node.getStart(sourceFile));
+        if (candidates.has(staticStringOverflow)) {
+          report(node, staticStringOverflowMessage);
+        } else if ([...candidates].some(isLegacyTypesModule)) {
+          report(node, 'imports local-workspace migration internals');
+        }
       }
     };
 
@@ -1988,6 +2163,18 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
         }
 
         const invoked = invokedMembers(node);
+        let expansionReported = false;
+        const reportExpansion = (): void => {
+          if (expansionReported) return;
+          expansionReported = true;
+          report(node, staticStringOverflowMessage);
+        };
+        if (invoked.some(member => (
+          member.method === staticStringOverflow
+          && (localWorkspaceSource || member.localStorage)
+        ))) {
+          reportExpansion();
+        }
         if (localWorkspaceSource
           && invoked.some(member => storageMutators.has(member.method))) {
           report(node, 'mutates storage during rollout epoch 1');
@@ -1999,12 +2186,17 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
           && invoked.some(member => member.method === 'clear' && member.localStorage)) {
           report(node, 'clears all production local storage');
         }
-        if (!allowed.has(policyPath) && invoked.some(member => (
-          member.localStorage
-          && keyedStorageMethods.has(member.method)
-          && [...keyCandidates(node, member)].some(key => legacyKeys.includes(key))
-        ))) {
-          report(node, 'accesses legacy document key through localStorage');
+        if (!allowed.has(policyPath)) {
+          const storageKeyCandidates = invoked
+            .filter(member => member.localStorage && keyedStorageMethods.has(member.method))
+            .map(member => keyCandidates(node, member));
+          if (storageKeyCandidates.some(candidates => candidates.has(staticStringOverflow))) {
+            reportExpansion();
+          } else if (storageKeyCandidates.some(candidates => (
+            [...candidates].some(key => legacyKeys.includes(key))
+          ))) {
+            report(node, 'accesses legacy document key through localStorage');
+          }
         }
       }
       if (inAnalysisSegment) ts.forEachChild(node, inspectNode);
@@ -2063,6 +2255,17 @@ describe('local workspace static boundary', () => {
       'utf8',
     );
     expect(workflowRunsOnEveryPullRequest(workflow)).toBe(true);
+  });
+
+  it('runs the bounded complete Vitest suite without selected unit paths', () => {
+    const workflow = readFileSync(
+      join(root, '.github/workflows/local-workspace-migration.yml'),
+      'utf8',
+    );
+    expect(workflow).toMatch(/^\s*run:\s+npx vitest run --maxWorkers=4\s*$/m);
+    expect(workflow.match(/\bnpx vitest run\b/g)).toHaveLength(1);
+    expect(workflow).not.toContain('Focused unit suites');
+    expect(workflow).not.toMatch(/^\s+tests\/unit(?:\/|\b)/m);
   });
 
   it.each([
@@ -2238,6 +2441,99 @@ describe('local workspace static boundary', () => {
   ])('rejects statically reconstructed localStorage legacy keys in %s', (path, source) => {
     expect(analyzeSource(path, source)).toEqual(expect.arrayContaining([
       expect.stringContaining('accesses legacy document key through localStorage'),
+    ]));
+  });
+
+  it.each([
+    [
+      'JavaScript with an explicit separator',
+      'components/JoinedLegacyRead.js',
+      "localStorage.getItem(['hype', 'projects'].join('_'));",
+    ],
+    [
+      'TypeScript with a default separator and nested origin',
+      'components/NestedJoinedLegacyRead.ts',
+      "const parts = ['hype_' + 'projects']; const nested = parts; const key: string = nested.join(); localStorage.getItem(key);",
+    ],
+    [
+      'TypeScript with static element and separator alternatives',
+      'components/AlternativeJoinedLegacyRead.ts',
+      "const parts = ['hype', choosePart ? 'projects' : 'preference']; const separator = chooseSeparator ? '_' : '-'; localStorage.getItem(parts.join(separator));",
+    ],
+  ])('rejects array join reconstructed legacy keys in %s', (_case, path, source) => {
+    expect(analyzeSource(path, source)).toEqual(expect.arrayContaining([
+      expect.stringContaining('accesses legacy document key through localStorage'),
+    ]));
+  });
+
+  it('rejects array join reconstructed legacy keys inside executable inline HTML', () => {
+    const source = [
+      '<script type="module">',
+      "const parts = ['hype', 'projects'];",
+      "const separator = '_';",
+      'const key = parts.join(separator);',
+      'localStorage.getItem(key);',
+      '</script>',
+    ].join('\n');
+    expect(analyzeSource('joined-shell.html', source)).toEqual(expect.arrayContaining([
+      expect.stringContaining('joined-shell.html:5: accesses legacy document key'),
+    ]));
+  });
+
+  it.each([
+    [
+      'a safe built-in array join',
+      "localStorage.getItem(['doctect', 'last', 'fontSize'].join('_'));",
+    ],
+    [
+      'a custom object join method',
+      "const custom = { join: suppliedJoin }; localStorage.getItem(custom.join('_'));",
+    ],
+    [
+      'an arbitrary nested join method',
+      "const custom = supplied; const nested = custom; localStorage.getItem(nested.join('_'));",
+    ],
+    [
+      'an array join with a dynamic separator',
+      "localStorage.getItem(['hype', 'projects'].join(suppliedSeparator));",
+    ],
+  ])('does not infer %s as a legacy key', (_case, source) => {
+    expect(analyzeSource('components/SafeJoin.ts', source)).toEqual([]);
+  });
+
+  it('fails closed when static join candidate expansion exceeds its bound', () => {
+    const alternatives = (prefix: string, first: string): string => [
+      `'${first}'`,
+      ...Array.from({ length: 16 }, (_, index) => `'${prefix}-${index}'`),
+    ].reduceRight((otherwise, value, index) => (
+      `choice${prefix}${index} ? ${value} : (${otherwise})`
+    ));
+    const source = `localStorage.getItem([${alternatives('left', 'hype')}, ${alternatives('right', 'projects')}].join('_'));`;
+
+    expect(analyzeSource('components/BoundedJoin.ts', source)).toEqual(expect.arrayContaining([
+      expect.stringContaining('static string candidate expansion exceeds policy bound'),
+    ]));
+  });
+
+  it('does not apply join evaluation to overflowing custom method alternatives', () => {
+    const method = [
+      "'join'",
+      ...Array.from({ length: staticStringCandidateLimit }, (_, index) => `'custom-${index}'`),
+    ].reduceRight((otherwise, value, index) => `choice${index} ? ${value} : (${otherwise})`);
+    const source = `const custom = supplied; localStorage.getItem(custom[${method}]('_'));`;
+
+    expect(analyzeSource('components/CustomJoin.ts', source)).toEqual([]);
+  });
+
+  it('fails closed when storage method candidate expansion exceeds its bound', () => {
+    const method = [
+      "'getItem'",
+      ...Array.from({ length: staticStringCandidateLimit }, (_, index) => `'custom-${index}'`),
+    ].reduceRight((otherwise, value, index) => `choice${index} ? ${value} : (${otherwise})`);
+    const source = `const method = ${method}; localStorage[method](['hype', 'projects'].join('_'));`;
+
+    expect(analyzeSource('components/BoundedMethod.ts', source)).toEqual(expect.arrayContaining([
+      expect.stringContaining('static string candidate expansion exceeds policy bound'),
     ]));
   });
 

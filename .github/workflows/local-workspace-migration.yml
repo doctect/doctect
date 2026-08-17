@@ -16,16 +16,8 @@ jobs:
       - run: npm ci --legacy-peer-deps
       - run: npx playwright install --with-deps chromium firefox webkit
       - run: npm run check:workspace-boundary --legacy-peer-deps
-      - name: Focused unit suites
-        run: >-
-          npx vitest run
-          tests/unit/localWorkspace
-          tests/unit/WorkspaceBootstrapGate.test.tsx
-          tests/unit/EditorPageWorkspaceCommands.test.tsx
-          tests/unit/importProject.test.ts
-          tests/unit/forkProject.test.ts
-          tests/unit/server/migrations.test.js
-          tests/unit/server/migrationsPostgres.test.js
+      - name: Complete unit suite
+        run: npx vitest run --maxWorkers=4
       - run: npm run build --legacy-peer-deps
       - name: Browser migration matrix
         run: >-
