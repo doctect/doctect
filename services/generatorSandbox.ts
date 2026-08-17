@@ -102,7 +102,6 @@ const validateRequest = (request: unknown): Extract<GeneratorSandboxResult, { ok
 };
 
 function generatorEvaluatorMain(maxOutputBytes: number) {
-    const workerScope = self;
     const TrustedError = Error;
     const TrustedFunction = Function;
     const TrustedSet = Set;
@@ -147,9 +146,9 @@ function generatorEvaluatorMain(maxOutputBytes: number) {
     ];
     for (const name of blockedGlobals) {
         try {
-            Object.defineProperty(workerScope, name, { value: undefined, configurable: false, writable: false });
+            Object.defineProperty(self, name, { value: undefined, configurable: false, writable: false });
         } catch {
-            try { trustedObjectAssign(workerScope, { [name]: undefined }); } catch { /* CSP remains the network backstop. */ }
+            try { trustedObjectAssign(self, { [name]: undefined }); } catch { /* CSP remains the network backstop. */ }
         }
     }
 
@@ -290,8 +289,8 @@ function generatorEvaluatorMain(maxOutputBytes: number) {
         return trustedStringSlice(message, 0, 1000);
     };
 
-    workerScope.onmessage = event => {
-        workerScope.onmessage = null;
+    self.onmessage = event => {
+        self.onmessage = null;
         const resultPort = event.ports[0];
         if (!resultPort) return;
         const trustedPost = resultPort.postMessage.bind(resultPort);
@@ -337,7 +336,6 @@ function generatorEvaluatorMain(maxOutputBytes: number) {
 }
 
 function generatorSupervisorMain(evaluatorSource: string) {
-    const supervisorScope = self;
     const TrustedError = Error;
     let evaluator: Worker | null = null;
     let evaluatorUrl: string | null = null;
@@ -365,15 +363,15 @@ function generatorSupervisorMain(evaluatorSource: string) {
         safely(() => controlPort?.close());
         resultPort = null;
         controlPort = null;
-        safely(() => supervisorScope.close());
+        safely(() => self.close());
     };
     const finish = (message: unknown) => {
         safely(() => resultPort?.postMessage(message));
         shutdown();
     };
 
-    supervisorScope.onmessage = event => {
-        supervisorScope.onmessage = null;
+    self.onmessage = event => {
+        self.onmessage = null;
         resultPort = event.ports[0] || null;
         controlPort = event.ports[1] || null;
         if (!resultPort) {

@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { OverlayTextEditor } from '../../components/canvas/OverlayTextEditor';
 import type { TemplateElement } from '../../types';
@@ -51,5 +51,36 @@ describe('OverlayTextEditor padding', () => {
     expect(screen.getByTestId('overlay-text-editor')).toHaveStyle({
       whiteSpace: 'pre', maxWidth: 'none',
     });
+  });
+});
+
+describe('OverlayTextEditor scroll lock', () => {
+  it('restores captured window scroll when the scroll event targets window', () => {
+    const originalX = Object.getOwnPropertyDescriptor(window, 'scrollX');
+    const originalY = Object.getOwnPropertyDescriptor(window, 'scrollY');
+    let x = 10;
+    let y = 20;
+    Object.defineProperty(window, 'scrollX', { configurable: true, get: () => x });
+    Object.defineProperty(window, 'scrollY', { configurable: true, get: () => y });
+    const scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation((left, top) => {
+      x = Number(left);
+      y = Number(top);
+    });
+
+    try {
+      renderEditor(element());
+      fireEvent.input(screen.getByTestId('overlay-text-editor'));
+      x = 30;
+      y = 40;
+      window.dispatchEvent(new Event('scroll', { cancelable: true }));
+
+      expect(scrollTo).toHaveBeenCalledWith(10, 20);
+    } finally {
+      scrollTo.mockRestore();
+      if (originalX) Object.defineProperty(window, 'scrollX', originalX);
+      else delete (window as unknown as { scrollX?: number }).scrollX;
+      if (originalY) Object.defineProperty(window, 'scrollY', originalY);
+      else delete (window as unknown as { scrollY?: number }).scrollY;
+    }
   });
 });

@@ -70,34 +70,33 @@ export const OverlayTextEditor: React.FC<OverlayTextEditorProps> = ({ element, o
     const [initialText] = useState(element.text || '');
 
     // Universal Scroll Lock Refs
-    const lockedScrollsRef = useRef<Map<HTMLElement | Window, { left: number, top: number }>>(new Map());
+    const lockedScrollsRef = useRef<Map<HTMLElement, { left: number, top: number }>>(new Map());
+    const lockedWindowScrollRef = useRef<{ left: number, top: number } | null>(null);
     const lockBufferRef = useRef<NodeJS.Timeout | null>(null);
 
     // Universal Capture Listener
     useEffect(() => {
         const onScrollCapture = (e: Event) => {
-            if (lockedScrollsRef.current.size > 0) {
-                const target = e.target as HTMLElement | Document;
-                const el = target instanceof Document ? window : target as HTMLElement;
-
-                if (lockedScrollsRef.current.has(el)) {
-                    const saved = lockedScrollsRef.current.get(el);
+            if (lockedScrollsRef.current.size > 0 || lockedWindowScrollRef.current) {
+                const target = e.target;
+                if (!(target instanceof HTMLElement)) {
+                    const saved = lockedWindowScrollRef.current;
                     if (saved) {
-                        const currentLeft = el === window ? window.scrollX : (el as HTMLElement).scrollLeft;
-                        const currentTop = el === window ? window.scrollY : (el as HTMLElement).scrollTop;
-
-                        if (Math.abs(currentLeft - saved.left) > 0 || Math.abs(currentTop - saved.top) > 0) {
-                            // Revert!
-                            if (el === window) {
-                                window.scrollTo(saved.left, saved.top);
-                            } else {
-                                (el as HTMLElement).scrollLeft = saved.left;
-                                (el as HTMLElement).scrollTop = saved.top;
-                            }
+                        if (Math.abs(window.scrollX - saved.left) > 0 || Math.abs(window.scrollY - saved.top) > 0) {
+                            window.scrollTo(saved.left, saved.top);
                             e.preventDefault();
                             e.stopPropagation();
                         }
                     }
+                    return;
+                }
+
+                const saved = lockedScrollsRef.current.get(target);
+                if (saved && (Math.abs(target.scrollLeft - saved.left) > 0 || Math.abs(target.scrollTop - saved.top) > 0)) {
+                    target.scrollLeft = saved.left;
+                    target.scrollTop = saved.top;
+                    e.preventDefault();
+                    e.stopPropagation();
                 }
             }
         };
@@ -115,8 +114,7 @@ export const OverlayTextEditor: React.FC<OverlayTextEditorProps> = ({ element, o
             }
             curr = curr.parentElement;
         }
-        // Always lock window too
-        lockedScrollsRef.current.set(window, { left: window.scrollX, top: window.scrollY });
+        lockedWindowScrollRef.current = { left: window.scrollX, top: window.scrollY };
     };
 
     // Auto-focus on mount
