@@ -115,7 +115,7 @@ describe('useWorkspaceProjectWrites', () => {
     });
 
     expect(result.current.workspace.projects).toEqual([authoritativeA, savedB]);
-    expect(result.current.authorityEpochs.get('project-a')).toBe((initialAEpoch ?? 0) + 1);
+    expect(result.current.authorityEpochs.get('project-a')).toBeGreaterThan(initialAEpoch ?? -1);
     expect(result.current.authorityEpochs.get('project-b')).toBe(initialBEpoch);
     let updateBase: WorkspaceProject | undefined;
     act(() => {
@@ -160,7 +160,7 @@ describe('useWorkspaceProjectWrites', () => {
     expect(result.current.workspace.projects[0].name).toBe('Original');
   });
 
-  it('retains a monotonic tombstone and rejects a callback from before same-id re-add', async () => {
+  it('removes dead epochs and rejects a callback from before same-id re-add', async () => {
     const original = project('Original');
     const survivor = projectWithId('project-2', 'Survivor');
     const replacement = project('Replacement', 7);
@@ -189,7 +189,7 @@ describe('useWorkspaceProjectWrites', () => {
     await act(async () => {
       await result.current.commitStructural({ type: 'close-project', projectId: original.id });
     });
-    const tombstoneEpoch = result.current.authorityEpochs.get(original.id);
+    const removedEpoch = result.current.authorityEpochs.get(original.id);
     await act(async () => {
       await result.current.commitStructural({
         type: 'create-and-activate-project',
@@ -202,13 +202,65 @@ describe('useWorkspaceProjectWrites', () => {
       staleResult = await staleCallback();
     });
 
-    expect(tombstoneEpoch).toBeGreaterThan(staleEpoch);
+    expect(removedEpoch).toBeUndefined();
     expect(replacementEpoch).toBeGreaterThan(staleEpoch);
-    expect(replacementEpoch).toBeGreaterThanOrEqual(tombstoneEpoch!);
     expect(staleResult).toBe(false);
     expect(store.commit).toHaveBeenCalledTimes(2);
     expect(result.current.workspace.projects.find(item => item.id === original.id)?.name)
       .toBe('Replacement');
+  });
+
+  it('keeps globally increasing epochs in a map bounded to live projects', async () => {
+    const survivor = projectWithId('survivor', 'Survivor');
+    let currentProject = projectWithId('project-0', 'Project 0');
+    let durable: WorkspaceSnapshot = {
+      ...snapshot(survivor),
+      projects: [survivor, currentProject],
+    };
+    const store = storeWithCommit(async command => {
+      if (command.type === 'close-project') {
+        durable = {
+          ...durable,
+          projects: durable.projects.filter(item => item.id !== command.projectId),
+          activeProjectId: survivor.id,
+        };
+      } else if (command.type === 'create-and-activate-project') {
+        durable = {
+          ...durable,
+          projects: [...durable.projects, command.project],
+          activeProjectId: command.project.id,
+        };
+      }
+      return durable;
+    });
+    const { result } = renderHook(() => useWorkspaceProjectWrites(store, durable));
+    let priorEpoch = result.current.authorityEpochs.get(currentProject.id)!;
+
+    for (let index = 1; index <= 8; index += 1) {
+      await act(async () => {
+        await result.current.commitStructural({
+          type: 'close-project',
+          projectId: currentProject.id,
+        });
+      });
+      expect(result.current.authorityEpochs.size).toBe(1);
+      expect(result.current.authorityEpochs.has(currentProject.id)).toBe(false);
+
+      currentProject = projectWithId(
+        index === 8 ? 'project-0' : `project-${index}`,
+        `Project ${index}`,
+      );
+      await act(async () => {
+        await result.current.commitStructural({
+          type: 'create-and-activate-project',
+          project: currentProject,
+        });
+      });
+      const epoch = result.current.authorityEpochs.get(currentProject.id)!;
+      expect(epoch).toBeGreaterThan(priorEpoch);
+      expect(result.current.authorityEpochs.size).toBe(durable.projects.length);
+      priorEpoch = epoch;
+    }
   });
 
   it('keeps a newer working copy over an older save completion', async () => {

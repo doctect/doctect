@@ -12,13 +12,19 @@ import {
 } from './schema';
 
 type ExclusiveCommand = Exclude<WorkspaceCommand, { type: 'save-project' }>;
+type CloseProjectCommand = Extract<ExclusiveCommand, { type: 'close-project' }>;
+type NonCloseExclusiveCommand = Exclude<ExclusiveCommand, CloseProjectCommand>;
+
+export type ExclusiveAdmission =
+  | { kind: 'command'; command: NonCloseExclusiveCommand }
+  | { kind: 'close'; command: CloseProjectCommand; targetLineage: ProjectLineage };
 
 export interface MutationQueue {
   enqueueProjectSave(
     project: WorkspaceProject,
     expectedLineage: ProjectLineage,
   ): Promise<WorkspaceSnapshot>;
-  runExclusive(command: ExclusiveCommand): Promise<WorkspaceSnapshot>;
+  runExclusive(admission: ExclusiveAdmission): Promise<WorkspaceSnapshot>;
   freeze(): void;
   drain(): Promise<void>;
   hasPending(): boolean;
@@ -30,7 +36,7 @@ interface MutationOperations {
     project: WorkspaceProject,
     expectedLineage: ProjectLineage,
   ): Promise<WorkspaceSnapshot>;
-  runExclusive(command: ExclusiveCommand): Promise<WorkspaceSnapshot>;
+  runExclusive(admission: ExclusiveAdmission): Promise<WorkspaceSnapshot>;
 }
 
 interface Waiter {
@@ -43,6 +49,7 @@ interface SaveEntry {
   project: WorkspaceProject;
   authorityLineage: ProjectLineage;
   expectedLineage: ProjectLineage;
+  predecessorLineage?: ProjectLineage;
   ready: boolean;
   timer?: ReturnType<typeof setTimeout>;
   waiters: Waiter[];
@@ -50,7 +57,7 @@ interface SaveEntry {
 
 interface ExclusiveEntry {
   kind: 'exclusive';
-  command: ExclusiveCommand;
+  admission: ExclusiveAdmission;
   waiters: Waiter[];
   canceledSaveWaiters: Waiter[];
 }
@@ -63,7 +70,7 @@ const frozenError = (): WorkspaceStoreError => new WorkspaceStoreError(
 );
 
 const lineageError = (projectId: string): WorkspaceStoreError => new WorkspaceStoreError(
-  `Project ${projectId} save lineage did not advance.`,
+  `Project ${projectId} mutation lineage did not advance.`,
   'conflict',
 );
 
@@ -129,11 +136,29 @@ export const createMutationQueue = (
     const pinnedLineage = entry.kind === 'save'
       ? projectLineages.get(entry.project.id)
       : undefined;
+    const authorityCanReachExpected = entry.kind === 'save'
+      && (sameProjectLineage(entry.authorityLineage, entry.expectedLineage)
+        || (entry.predecessorLineage !== undefined
+          && sameProjectLineage(entry.authorityLineage, entry.predecessorLineage)
+          && sameProjectLineage(
+            nextProjectLineage(entry.predecessorLineage),
+            entry.expectedLineage,
+          )));
+    const closePinnedLineage = entry.kind === 'exclusive' && entry.admission.kind === 'close'
+      ? projectLineages.get(entry.admission.command.projectId)
+      : undefined;
     const operation = entry.kind === 'save'
-      ? pinnedLineage && sameProjectLineage(pinnedLineage, entry.expectedLineage)
+      ? pinnedLineage
+        && sameProjectLineage(pinnedLineage, entry.expectedLineage)
+        && authorityCanReachExpected
         ? operations.saveProject(entry.project, entry.expectedLineage)
         : Promise.reject(lineageError(entry.project.id))
-      : operations.runExclusive(entry.command);
+      : entry.admission.kind === 'close'
+        ? closePinnedLineage
+          && sameProjectLineage(closePinnedLineage, entry.admission.targetLineage)
+          ? operations.runExclusive(entry.admission)
+          : Promise.reject(lineageError(entry.admission.command.projectId))
+        : operations.runExclusive(entry.admission);
     void operation.then(snapshot => {
       if (entry.kind === 'save') {
         projectLineages.set(entry.project.id, nextProjectLineage(entry.expectedLineage));
@@ -141,9 +166,6 @@ export const createMutationQueue = (
       settleSuccess(entry.waiters, snapshot);
       if (entry.kind === 'exclusive') {
         settleSuccess(entry.canceledSaveWaiters, snapshot);
-        if (entry.command.type === 'close-project') {
-          projectLineages.delete(entry.command.projectId);
-        }
       }
     }, error => {
       settleFailure(entry.waiters, error);
@@ -154,9 +176,14 @@ export const createMutationQueue = (
       if (entry.kind === 'save') {
         activeSave = undefined;
         if (!entries.some(candidate =>
-          candidate.kind === 'save' && candidate.project.id === entry.project.id)) {
+          (candidate.kind === 'save' && candidate.project.id === entry.project.id)
+          || (candidate.kind === 'exclusive'
+            && candidate.admission.kind === 'close'
+            && candidate.admission.command.projectId === entry.project.id))) {
           projectLineages.delete(entry.project.id);
         }
+      } else if (entry.admission.kind === 'close') {
+        projectLineages.delete(entry.admission.command.projectId);
       }
       running = false;
       pump();
@@ -178,11 +205,23 @@ export const createMutationQueue = (
       if (frozen) return Promise.reject(frozenError());
       const queued = queuedSaves.get(project.id);
       if (queued) {
-        if (queued.authorityLineage.incarnation !== expectedLineage.incarnation) {
+        const pinnedLineage = projectLineages.get(project.id);
+        if (!pinnedLineage || !sameProjectLineage(pinnedLineage, expectedLineage)) {
           return Promise.reject(lineageError(project.id));
         }
+        const authorityCanReachExpected = sameProjectLineage(
+          expectedLineage,
+          queued.expectedLineage,
+        ) || (queued.predecessorLineage !== undefined
+          && sameProjectLineage(expectedLineage, queued.predecessorLineage)
+          && sameProjectLineage(
+            nextProjectLineage(queued.predecessorLineage),
+            queued.expectedLineage,
+          ));
+        if (!authorityCanReachExpected) return Promise.reject(lineageError(project.id));
         const { promise, waiter } = waiterPromise();
         queued.project = structuredClone(project);
+        queued.authorityLineage = { ...expectedLineage };
         queued.waiters.push(waiter);
         return promise;
       }
@@ -192,13 +231,19 @@ export const createMutationQueue = (
       const predecessor = priorEntry
         ?? (activeSave?.project.id === projectId ? activeSave : undefined);
       const pinnedLineage = projectLineages.get(projectId);
-      if (pinnedLineage && !predecessor
-        && pinnedLineage.incarnation !== expectedLineage.incarnation) {
+      if (pinnedLineage && !sameProjectLineage(pinnedLineage, expectedLineage)) {
         return Promise.reject(lineageError(projectId));
       }
-      if (predecessor
-        && predecessor.expectedLineage.incarnation !== expectedLineage.incarnation) {
-        return Promise.reject(lineageError(projectId));
+      let dispatchLineage = { ...expectedLineage };
+      let predecessorLineage: ProjectLineage | undefined;
+      if (predecessor) {
+        const nextPredecessorLineage = nextProjectLineage(predecessor.expectedLineage);
+        if (sameProjectLineage(expectedLineage, predecessor.expectedLineage)) {
+          predecessorLineage = { ...predecessor.expectedLineage };
+          dispatchLineage = nextPredecessorLineage;
+        } else if (!sameProjectLineage(expectedLineage, nextPredecessorLineage)) {
+          return Promise.reject(lineageError(projectId));
+        }
       }
       const lineage = pinnedLineage ?? expectedLineage;
       projectLineages.set(projectId, lineage);
@@ -208,9 +253,8 @@ export const createMutationQueue = (
         kind: 'save',
         project: structuredClone(project),
         authorityLineage: { ...expectedLineage },
-        expectedLineage: predecessor
-          ? nextProjectLineage(predecessor.expectedLineage)
-          : { ...lineage },
+        expectedLineage: dispatchLineage,
+        ...(predecessorLineage ? { predecessorLineage } : {}),
         ready: activeSave?.project.id === projectId,
         waiters: [waiter],
       };
@@ -226,11 +270,36 @@ export const createMutationQueue = (
       return promise;
     },
 
-    runExclusive(command) {
+    runExclusive(admission) {
       if (frozen) return Promise.reject(frozenError());
+      let queuedAdmission = admission;
+      let shouldPinCloseLineage = false;
+      if (admission.kind === 'close') {
+        const activeTargetSave = activeSave?.project.id === admission.command.projectId
+          ? activeSave
+          : undefined;
+        const pinnedLineage = projectLineages.get(admission.command.projectId);
+        let targetLineage = { ...admission.targetLineage };
+        if (activeTargetSave) {
+          const nextActiveLineage = nextProjectLineage(activeTargetSave.expectedLineage);
+          if (sameProjectLineage(targetLineage, activeTargetSave.expectedLineage)) {
+            targetLineage = nextActiveLineage;
+          } else if (!sameProjectLineage(targetLineage, nextActiveLineage)) {
+            return Promise.reject(lineageError(admission.command.projectId));
+          }
+        } else {
+          if (pinnedLineage && !sameProjectLineage(pinnedLineage, targetLineage)) {
+            return Promise.reject(lineageError(admission.command.projectId));
+          }
+          shouldPinCloseLineage = true;
+        }
+        queuedAdmission = { ...admission, targetLineage };
+      }
+
       const { promise, waiter } = waiterPromise();
       const canceledSaveWaiters: Waiter[] = [];
-      if (command.type === 'close-project') {
+      if (admission.kind === 'close') {
+        const { command } = admission;
         for (let index = entries.length - 1; index >= 0; index -= 1) {
           const entry = entries[index];
           if (entry.kind !== 'save' || entry.project.id !== command.projectId) continue;
@@ -239,13 +308,16 @@ export const createMutationQueue = (
           if (queuedSaves.get(entry.project.id) === entry) queuedSaves.delete(entry.project.id);
           canceledSaveWaiters.unshift(...entry.waiters);
         }
+        if (shouldPinCloseLineage && queuedAdmission.kind === 'close') {
+          projectLineages.set(command.projectId, queuedAdmission.targetLineage);
+        }
       }
 
       flushSaves();
       queuedSaves = new Map();
       entries.push({
         kind: 'exclusive',
-        command: structuredClone(command),
+        admission: structuredClone(queuedAdmission),
         waiters: [waiter],
         canceledSaveWaiters,
       });
@@ -272,8 +344,8 @@ export const createMutationQueue = (
       return entries.some(entry =>
         (entry.kind === 'save' && entry.project.id === projectId)
         || (entry.kind === 'exclusive'
-          && entry.command.type === 'close-project'
-          && entry.command.projectId === projectId));
+          && entry.admission.kind === 'close'
+          && entry.admission.command.projectId === projectId));
     },
   };
 };

@@ -42,6 +42,7 @@ import {
 } from './migration';
 import {
   createMutationQueue,
+  type ExclusiveAdmission,
   type MutationQueue,
 } from './mutationQueue';
 import {
@@ -1503,8 +1504,39 @@ const createLocalWorkspaceStoreAtVersion = (
   };
 
   const executeExclusiveCommand = (
-    command: Exclude<WorkspaceCommand, { type: 'save-project' }>,
+    admission: ExclusiveAdmission,
   ): Promise<WorkspaceSnapshot> => runCommandOperation(async () => {
+    if (admission.kind === 'close') {
+      const { command, targetLineage } = admission;
+      const currentLineage = expectedProjectLineages.get(command.projectId);
+      if (currentLineage === undefined) {
+        throw new WorkspaceStoreError(
+          `Project ${command.projectId} does not exist.`,
+          'validation',
+        );
+      }
+      if (!sameProjectLineage(currentLineage, targetLineage)) {
+        throw new WorkspaceStoreError(
+          `Project ${command.projectId} close lineage changed.`,
+          'conflict',
+        );
+      }
+      await getAdapter().closeProject(
+        command.projectId,
+        command.successor
+          ? {
+              project: command.successor,
+              incarnation: createProjectIncarnation(),
+            }
+          : undefined,
+        currentWorkspaceRevision(),
+        targetLineage,
+      );
+      expectedProjectLineages.delete(command.projectId);
+      return readPostCommandSnapshot();
+    }
+
+    const { command } = admission;
     switch (command.type) {
       case 'create-and-activate-project':
         await getAdapter().createAndActivateProject(
@@ -1517,26 +1549,6 @@ const createLocalWorkspaceStoreAtVersion = (
         break;
       case 'activate-project':
         await getAdapter().activateProject(command.projectId, currentWorkspaceRevision());
-        break;
-      case 'close-project':
-        if (!expectedProjectLineages.has(command.projectId)) {
-          throw new WorkspaceStoreError(
-            `Project ${command.projectId} does not exist.`,
-            'validation',
-          );
-        }
-        await getAdapter().closeProject(
-          command.projectId,
-          command.successor
-            ? {
-                project: command.successor,
-                incarnation: createProjectIncarnation(),
-              }
-            : undefined,
-          currentWorkspaceRevision(),
-          expectedProjectLineages.get(command.projectId) as ProjectLineage,
-        );
-        expectedProjectLineages.delete(command.projectId);
         break;
       case 'save-custom-preset':
         await getAdapter().saveCustomPreset(command.preset);
@@ -1891,7 +1903,23 @@ const createLocalWorkspaceStoreAtVersion = (
       } catch (error) {
         return Promise.reject(validationError(error));
       }
-      if (prepared.type !== 'save-project') return queue.runExclusive(prepared);
+      if (prepared.type === 'close-project') {
+        const targetLineage = expectedProjectLineages.get(prepared.projectId);
+        if (targetLineage === undefined) {
+          return Promise.reject(new WorkspaceStoreError(
+            `Project ${prepared.projectId} does not exist.`,
+            'validation',
+          ));
+        }
+        return queue.runExclusive({
+          kind: 'close',
+          command: prepared,
+          targetLineage: { ...targetLineage },
+        });
+      }
+      if (prepared.type !== 'save-project') {
+        return queue.runExclusive({ kind: 'command', command: prepared });
+      }
       const expectedLineage = expectedProjectLineages.get(prepared.project.id);
       if (expectedLineage === undefined) {
         return Promise.reject(new WorkspaceStoreError(
@@ -1899,9 +1927,16 @@ const createLocalWorkspaceStoreAtVersion = (
           'validation',
         ));
       }
+      const authorityLineage = getInstalledProjectAuthorityLineage(prepared.project);
+      if (authorityLineage === undefined) {
+        return Promise.reject(new WorkspaceStoreError(
+          `Project ${prepared.project.id} save authority is unavailable.`,
+          'conflict',
+        ));
+      }
       return queue.enqueueProjectSave(
         prepared.project,
-        getInstalledProjectAuthorityLineage(prepared.project) ?? expectedLineage,
+        authorityLineage,
       );
     },
 

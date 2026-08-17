@@ -37,7 +37,10 @@ import {
   WORKSPACE_DB_NAME,
   storedProjectLineage,
 } from '../../../services/localWorkspace/schema';
-import { getInstalledProjectAuthorityToken } from '../../../services/localWorkspace/projectAuthority';
+import {
+  getInstalledProjectAuthorityToken,
+  inheritInstalledProjectAuthority,
+} from '../../../services/localWorkspace/projectAuthority';
 import {
   LEGACY_KEYS,
   MemoryStorage,
@@ -146,11 +149,13 @@ const invokeListener = (
 
 const transactionCompletionHold = (scope: readonly string[]) => {
   const started = deferred();
+  const committed = deferred();
   const release = deferred();
   let armed = false;
   let held = false;
   return {
     started: started.promise,
+    committed: committed.promise,
     release: () => release.resolve(),
     arm: () => { armed = true; },
     hook(stores: string[], mode: IDBTransactionMode, transaction: IDBTransaction) {
@@ -166,6 +171,7 @@ const transactionCompletionHold = (scope: readonly string[]) => {
           return addEventListener(type, listener, options);
         }
         return addEventListener(type, event => {
+          committed.resolve();
           void release.promise.then(() => invokeListener(listener, event));
         }, options);
       }) as IDBTransaction['addEventListener'];
@@ -226,6 +232,15 @@ const projectNamed = (
   name: string,
   id = 'project-a',
 ): WorkspaceProject => legacyProject(id, 11, { name }) as WorkspaceProject;
+
+const trustedProjectNamed = (
+  source: WorkspaceProject,
+  name: string,
+): WorkspaceProject => {
+  const project = { ...source, name };
+  inheritInstalledProjectAuthority(project, source);
+  return project;
+};
 
 const blankProject = (id = 'blank-project'): WorkspaceProject => ({
   id,
@@ -354,7 +369,10 @@ describe('semantic transaction scopes', () => {
     {
       label: 'save-project',
       scope: ['projects', 'migrationLedger'],
-      command: () => ({ type: 'save-project', project: projectNamed('Saved') }),
+      command: snapshot => ({
+        type: 'save-project',
+        project: trustedProjectNamed(snapshot.projects[0], 'Saved'),
+      }),
       debounce: true,
     },
     {
@@ -465,7 +483,7 @@ describe('project save queues', () => {
 
     const saving = store.commit({
       type: 'save-project',
-      project: { ...before, name: 'Own save' },
+      project: trustedProjectNamed(before, 'Own save'),
     });
     await vi.advanceTimersByTimeAsync(1_000);
     const saved = await saving;
@@ -498,7 +516,10 @@ describe('project save queues', () => {
     useQueueTimers();
     const readback = staleStore.commit({
       type: 'save-project',
-      project: projectNamed('Stale store B save', 'project-b'),
+      project: trustedProjectNamed(
+        snapshot.projects.find(project => project.id === 'project-b')!,
+        'Stale store B save',
+      ),
     });
     await vi.advanceTimersByTimeAsync(1_000);
     const observed = await readback;
@@ -520,12 +541,63 @@ describe('project save queues', () => {
     expect(durableA.incarnation).not.toBe(staleRecord.incarnation);
   });
 
+  it('rejects a tokenless old clone after adopting a same-id replacement', async () => {
+    const { store: staleStore, harness, snapshot } = await readyStore({
+      values: twoProjectValues(),
+    });
+    const replacingStore = createLocalWorkspaceStore(harness.environment);
+    await expect(replacingStore.bootstrap()).resolves.toMatchObject({ status: 'ready' });
+    const tokenlessOldA = structuredClone(
+      snapshot.projects.find(project => project.id === 'project-a')!,
+    );
+
+    await replacingStore.commit({ type: 'close-project', projectId: 'project-a' });
+    harness.environment.randomUUID = () => 'tokenless-replacement-incarnation';
+    await replacingStore.commit({
+      type: 'create-and-activate-project',
+      project: projectNamed('Tokenless replacement'),
+    });
+
+    useQueueTimers();
+    const readback = staleStore.commit({
+      type: 'save-project',
+      project: trustedProjectNamed(
+        snapshot.projects.find(project => project.id === 'project-b')!,
+        'Read replacement through B',
+      ),
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    await expect(readback).resolves.toMatchObject({
+      projects: expect.arrayContaining([
+        expect.objectContaining({ id: 'project-a', name: 'Tokenless replacement' }),
+      ]),
+    });
+    const staleSave = staleStore.commit({ type: 'save-project', project: tokenlessOldA });
+    const staleSaveAssertion = expect(staleSave).rejects.toMatchObject({ code: 'conflict' });
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    await staleSaveAssertion;
+    expect((await inspect(harness)).projects.find(record => record.id === 'project-a'))
+      .toMatchObject({
+        incarnation: 'tokenless-replacement-incarnation',
+        storageRevision: 0,
+        project: { name: 'Tokenless replacement' },
+      });
+  });
+
   it('coalesces rapid saves and persists only the newest project', async () => {
-    const { store, harness } = await readyStore();
+    const { store, harness, snapshot } = await readyStore();
+    const source = snapshot.projects.find(project => project.id === 'project-a')!;
     useQueueTimers();
 
-    const first = store.commit({ type: 'save-project', project: projectNamed('A') });
-    const second = store.commit({ type: 'save-project', project: projectNamed('B') });
+    const first = store.commit({
+      type: 'save-project',
+      project: trustedProjectNamed(source, 'A'),
+    });
+    const second = store.commit({
+      type: 'save-project',
+      project: trustedProjectNamed(source, 'B'),
+    });
     await vi.advanceTimersByTimeAsync(999);
     expect(writeTransactions(harness.records)).toHaveLength(0);
     await vi.advanceTimersByTimeAsync(1);
@@ -541,15 +613,25 @@ describe('project save queues', () => {
 
   it('retains exactly one newest follow-up while a project save is in flight', async () => {
     const hold = transactionCompletionHold(['projects', 'migrationLedger']);
-    const { store, harness } = await readyStore({ hook: hold.hook });
+    const { store, harness, snapshot } = await readyStore({ hook: hold.hook });
+    const source = snapshot.projects.find(project => project.id === 'project-a')!;
     useQueueTimers();
     hold.arm();
 
-    const first = store.commit({ type: 'save-project', project: projectNamed('A') });
+    const first = store.commit({
+      type: 'save-project',
+      project: trustedProjectNamed(source, 'A'),
+    });
     await vi.advanceTimersByTimeAsync(1_000);
     await hold.started;
-    const second = store.commit({ type: 'save-project', project: projectNamed('B') });
-    const third = store.commit({ type: 'save-project', project: projectNamed('C') });
+    const second = store.commit({
+      type: 'save-project',
+      project: trustedProjectNamed(source, 'B'),
+    });
+    const third = store.commit({
+      type: 'save-project',
+      project: trustedProjectNamed(source, 'C'),
+    });
     hold.release();
 
     const results = await Promise.all([first, second, third]);
@@ -571,23 +653,34 @@ describe('project save queues', () => {
       snapshot.projects.find(project => project.id === 'project-a')!,
     );
     const storeB = createLocalWorkspaceStore(harness.environment);
-    await expect(storeB.bootstrap()).resolves.toMatchObject({ status: 'ready' });
+    const storeBBootstrap = await storeB.bootstrap();
+    expect(storeBBootstrap.status).toBe('ready');
+    if (storeBBootstrap.status !== 'ready') return;
     useQueueTimers();
     hold.arm();
 
     const unrelated = storeA.commit({
       type: 'save-project',
-      project: projectNamed('Store A unrelated', 'project-b'),
+      project: trustedProjectNamed(
+        snapshot.projects.find(project => project.id === 'project-b')!,
+        'Store A unrelated',
+      ),
     });
     await vi.advanceTimersByTimeAsync(1_000);
     await hold.started;
     const stale = storeA.commit({
       type: 'save-project',
-      project: projectNamed('Store A stale'),
+      project: trustedProjectNamed(
+        snapshot.projects.find(project => project.id === 'project-a')!,
+        'Store A stale',
+      ),
     });
     const coalesced = storeA.commit({
       type: 'save-project',
-      project: projectNamed('Store A newest stale'),
+      project: trustedProjectNamed(
+        snapshot.projects.find(project => project.id === 'project-a')!,
+        'Store A newest stale',
+      ),
     });
     const staleAssertions = Promise.all([
       expect(stale).rejects.toMatchObject({ code: 'conflict' }),
@@ -596,7 +689,10 @@ describe('project save queues', () => {
 
     const foreign = storeB.commit({
       type: 'save-project',
-      project: projectNamed('Store B durable'),
+      project: trustedProjectNamed(
+        storeBBootstrap.snapshot.projects.find(project => project.id === 'project-a')!,
+        'Store B durable',
+      ),
     });
     await vi.advanceTimersByTimeAsync(1_000);
     hold.release();
@@ -618,7 +714,8 @@ describe('project save queues', () => {
 
   it('pins a follow-up behind an in-flight save to that local write lineage', async () => {
     const hold = transactionCompletionHold(['projects', 'migrationLedger']);
-    const { store: storeA, harness } = await readyStore({ hook: hold.hook });
+    const { store: storeA, harness, snapshot } = await readyStore({ hook: hold.hook });
+    const source = snapshot.projects.find(project => project.id === 'project-a')!;
     const initialLineage = storedProjectLineage(
       (await inspect(harness)).projects.find(record => record.id === 'project-a')!,
     );
@@ -627,13 +724,13 @@ describe('project save queues', () => {
 
     const first = storeA.commit({
       type: 'save-project',
-      project: projectNamed('Store A first'),
+      project: trustedProjectNamed(source, 'Store A first'),
     });
     await vi.advanceTimersByTimeAsync(1_000);
     await hold.started;
     const followUp = storeA.commit({
       type: 'save-project',
-      project: projectNamed('Store A follow-up'),
+      project: trustedProjectNamed(source, 'Store A follow-up'),
     });
     const followUpAssertion = expect(followUp).rejects.toMatchObject({ code: 'conflict' });
 
@@ -664,7 +761,8 @@ describe('project save queues', () => {
 
   it('adopts a foreign post-save revision after the local save lineage drains', async () => {
     const hold = transactionCompletionHold(['projects', 'migrationLedger']);
-    const { store: storeA, harness } = await readyStore({ hook: hold.hook });
+    const { store: storeA, harness, snapshot } = await readyStore({ hook: hold.hook });
+    const source = snapshot.projects.find(project => project.id === 'project-a')!;
     const initialLineage = storedProjectLineage(
       (await inspect(harness)).projects.find(record => record.id === 'project-a')!,
     );
@@ -673,7 +771,7 @@ describe('project save queues', () => {
 
     const first = storeA.commit({
       type: 'save-project',
-      project: projectNamed('Store A first'),
+      project: trustedProjectNamed(source, 'Store A first'),
     });
     await vi.advanceTimersByTimeAsync(1_000);
     await hold.started;
@@ -689,7 +787,8 @@ describe('project save queues', () => {
     hold.release();
     await foreign;
 
-    await expect(first).resolves.toMatchObject({
+    const firstResult = await first;
+    expect(firstResult).toMatchObject({
       projects: expect.arrayContaining([
         expect.objectContaining({ id: 'project-a', name: 'Store B after first' }),
       ]),
@@ -698,7 +797,10 @@ describe('project save queues', () => {
 
     const basedOnObserved = storeA.commit({
       type: 'save-project',
-      project: projectNamed('Store A based on observed revision'),
+      project: trustedProjectNamed(
+        firstResult.projects.find(project => project.id === 'project-a')!,
+        'Store A based on observed revision',
+      ),
     });
     await vi.advanceTimersByTimeAsync(1_000);
     await expect(basedOnObserved).resolves.toMatchObject({
@@ -715,21 +817,29 @@ describe('project save queues', () => {
   });
 
   it('adopts a newer revision for a project with no admitted local intent', async () => {
-    const { store: storeA, harness } = await readyStore({ values: twoProjectValues() });
+    const { store: storeA, harness, snapshot } = await readyStore({ values: twoProjectValues() });
     const storeB = createLocalWorkspaceStore(harness.environment);
-    await expect(storeB.bootstrap()).resolves.toMatchObject({ status: 'ready' });
+    const storeBBootstrap = await storeB.bootstrap();
+    expect(storeBBootstrap.status).toBe('ready');
+    if (storeBBootstrap.status !== 'ready') return;
     useQueueTimers();
 
     const foreign = storeB.commit({
       type: 'save-project',
-      project: projectNamed('Store B durable'),
+      project: trustedProjectNamed(
+        storeBBootstrap.snapshot.projects.find(project => project.id === 'project-a')!,
+        'Store B durable',
+      ),
     });
     await vi.advanceTimersByTimeAsync(1_000);
     await foreign;
 
     const unrelated = storeA.commit({
       type: 'save-project',
-      project: projectNamed('Store A unrelated', 'project-b'),
+      project: trustedProjectNamed(
+        snapshot.projects.find(project => project.id === 'project-b')!,
+        'Store A unrelated',
+      ),
     });
     await vi.advanceTimersByTimeAsync(1_000);
     const observed = await unrelated;
@@ -740,7 +850,7 @@ describe('project save queues', () => {
 
     const saveAfterObservation = storeA.commit({
       type: 'save-project',
-      project: { ...observedProject!, name: 'Store A based on observed revision' },
+      project: trustedProjectNamed(observedProject!, 'Store A based on observed revision'),
     });
     await vi.advanceTimersByTimeAsync(1_000);
     await expect(saveAfterObservation).resolves.toMatchObject({
@@ -756,9 +866,12 @@ describe('project save queues', () => {
   });
 
   it('drains earlier saves before crossing a structural command barrier', async () => {
-    const { store, harness } = await readyStore({ values: twoProjectValues() });
+    const { store, harness, snapshot } = await readyStore({ values: twoProjectValues() });
 
-    const save = store.commit({ type: 'save-project', project: projectNamed('Before barrier') });
+    const save = store.commit({
+      type: 'save-project',
+      project: trustedProjectNamed(snapshot.projects[0], 'Before barrier'),
+    });
     const activate = store.commit({ type: 'activate-project', projectId: 'project-b' });
     const [saved, activated] = await Promise.all([save, activate]);
 
@@ -773,7 +886,7 @@ describe('project save queues', () => {
   it('does not start a later save until an in-flight structural barrier finishes', async () => {
     const structuralScope = ['projects', 'workspace', 'migrationLedger'] as const;
     const hold = transactionCompletionHold(structuralScope);
-    const { store, harness } = await readyStore({
+    const { store, harness, snapshot } = await readyStore({
       values: twoProjectValues(),
       hook: hold.hook,
     });
@@ -782,7 +895,10 @@ describe('project save queues', () => {
 
     const activate = store.commit({ type: 'activate-project', projectId: 'project-b' });
     await hold.started;
-    const save = store.commit({ type: 'save-project', project: projectNamed('After barrier') });
+    const save = store.commit({
+      type: 'save-project',
+      project: trustedProjectNamed(snapshot.projects[0], 'After barrier'),
+    });
     await vi.advanceTimersByTimeAsync(1_000);
     expect(writeTransactions(harness.records).filter(record =>
       sameStores(record.stores, ['projects', 'migrationLedger']))).toHaveLength(0);
@@ -795,14 +911,18 @@ describe('project save queues', () => {
   });
 
   it('freezes new work immediately while allowing accepted queued saves to drain', async () => {
-    const { store, harness } = await readyStore();
+    const { store, harness, snapshot } = await readyStore();
+    const source = snapshot.projects[0];
     useQueueTimers();
 
-    const accepted = store.commit({ type: 'save-project', project: projectNamed('Accepted') });
+    const accepted = store.commit({
+      type: 'save-project',
+      project: trustedProjectNamed(source, 'Accepted'),
+    });
     harness.dispatchStorage(LEGACY_KEYS.projects);
     await expect(store.commit({
       type: 'save-project',
-      project: projectNamed('Rejected'),
+      project: trustedProjectNamed(source, 'Rejected'),
     })).rejects.toMatchObject({ code: 'authority-lost' });
 
     await vi.advanceTimersByTimeAsync(1_000);
@@ -815,11 +935,14 @@ describe('project save queues', () => {
 
   it('drains a queued save before rebootstrap reads and installs durable state', async () => {
     const guard = rebootstrapReadGuard();
-    const { store, harness } = await readyStore({ hook: guard.hook });
+    const { store, harness, snapshot } = await readyStore({ hook: guard.hook });
     useQueueTimers();
     guard.arm();
 
-    const save = store.commit({ type: 'save-project', project: projectNamed('Before reload') });
+    const save = store.commit({
+      type: 'save-project',
+      project: trustedProjectNamed(snapshot.projects[0], 'Before reload'),
+    });
     harness.dispatchStorage(LEGACY_KEYS.projects);
     const rebootstrap = store.bootstrap();
     await vi.advanceTimersByTimeAsync(0);
@@ -843,12 +966,15 @@ describe('project save queues', () => {
       hold.hook(stores, mode, transaction);
       guard.hook(stores, mode);
     };
-    const { store, harness } = await readyStore({ hook });
+    const { store, harness, snapshot } = await readyStore({ hook });
     useQueueTimers();
     hold.arm();
     guard.arm();
 
-    const save = store.commit({ type: 'save-project', project: projectNamed('In flight') });
+    const save = store.commit({
+      type: 'save-project',
+      project: trustedProjectNamed(snapshot.projects[0], 'In flight'),
+    });
     await vi.advanceTimersByTimeAsync(1_000);
     await hold.started;
     harness.dispatchStorage(LEGACY_KEYS.projects);
@@ -965,10 +1091,13 @@ describe('project structure commands', () => {
   });
 
   it('cancels a queued target save and resolves it from close without resurrection', async () => {
-    const { store, harness } = await readyStore({ values: twoProjectValues() });
+    const { store, harness, snapshot } = await readyStore({ values: twoProjectValues() });
     useQueueTimers();
 
-    const save = store.commit({ type: 'save-project', project: projectNamed('Must not return') });
+    const save = store.commit({
+      type: 'save-project',
+      project: trustedProjectNamed(snapshot.projects[0], 'Must not return'),
+    });
     const close = store.commit({ type: 'close-project', projectId: 'project-a' });
     const [saveResult, closeResult] = await Promise.all([save, close]);
 
@@ -978,6 +1107,47 @@ describe('project structure commands', () => {
       sameStores(record.stores, ['projects', 'migrationLedger']))).toHaveLength(0);
     await vi.advanceTimersByTimeAsync(1_000);
     expect((await inspect(harness)).projects.map(record => record.id)).toEqual(['project-b']);
+  });
+
+  it('binds a queued close to the target lineage before an unrelated save readback', async () => {
+    const hold = transactionCompletionHold(['projects', 'migrationLedger']);
+    const { store: staleStore, harness, snapshot } = await readyStore({
+      values: twoProjectValues(),
+      hook: hold.hook,
+    });
+    const replacingStore = createLocalWorkspaceStore(harness.environment);
+    await expect(replacingStore.bootstrap()).resolves.toMatchObject({ status: 'ready' });
+    useQueueTimers();
+    hold.arm();
+
+    const unrelatedSave = staleStore.commit({
+      type: 'save-project',
+      project: trustedProjectNamed(
+        snapshot.projects.find(project => project.id === 'project-b')!,
+        'Held B save',
+      ),
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    await hold.started;
+    await hold.committed;
+    const queuedClose = staleStore.commit({ type: 'close-project', projectId: 'project-a' });
+
+    await replacingStore.commit({ type: 'close-project', projectId: 'project-a' });
+    harness.environment.randomUUID = () => 'queued-close-replacement-incarnation';
+    await replacingStore.commit({
+      type: 'create-and-activate-project',
+      project: projectNamed('Queued close replacement'),
+    });
+    hold.release();
+
+    await unrelatedSave;
+    await expect(queuedClose).rejects.toMatchObject({ code: 'conflict' });
+    expect((await inspect(harness)).projects.find(record => record.id === 'project-a'))
+      .toMatchObject({
+        incarnation: 'queued-close-replacement-incarnation',
+        storageRevision: 0,
+        project: { name: 'Queued close replacement' },
+      });
   });
 
   it('rejects close when another same-version tab saved the target project', async () => {
@@ -1230,7 +1400,7 @@ describe('preset and import commands', () => {
 
     const save = store.commit({
       type: 'save-project',
-      project: { ...target, name: 'Saved after consume' },
+      project: trustedProjectNamed(target, 'Saved after consume'),
     });
     await vi.advanceTimersByTimeAsync(1_000);
     await save;
@@ -1374,7 +1544,7 @@ describe('failure handling and private revisions', () => {
   });
 
   it('rejects a stale same-version-tab project save without retrying or changing cache', async () => {
-    const { store, harness } = await readyStore();
+    const { store, harness, snapshot } = await readyStore();
     const cached = await store.bootstrap();
     const other = createIndexedDbAdapter({ indexedDB: harness.indexedDB, now: () => TEST_NOW });
     const foreignBase = (await other.inspect()).projects.find(record => record.id === 'project-a')!;
@@ -1382,7 +1552,10 @@ describe('failure handling and private revisions', () => {
     harness.records.length = 0;
     useQueueTimers();
 
-    const stale = store.commit({ type: 'save-project', project: projectNamed('Stale tab') });
+    const stale = store.commit({
+      type: 'save-project',
+      project: trustedProjectNamed(snapshot.projects[0], 'Stale tab'),
+    });
     await vi.advanceTimersByTimeAsync(1_000);
     await expect(stale).rejects.toMatchObject({ code: 'conflict' });
 
@@ -1446,13 +1619,16 @@ describe('failure handling and private revisions', () => {
         throw new Error('Injected post-commit read failure.');
       }
     };
-    const { store } = await readyStore({ hook });
+    const { store, snapshot } = await readyStore({ hook });
     const onAuthorityLost = vi.fn();
     await store.bootstrap({ onAuthorityLost });
     useQueueTimers();
     failPostCommitRead = true;
 
-    const save = store.commit({ type: 'save-project', project: projectNamed('Committed') });
+    const save = store.commit({
+      type: 'save-project',
+      project: trustedProjectNamed(snapshot.projects[0], 'Committed'),
+    });
     await vi.advanceTimersByTimeAsync(1_000);
     await expect(save).rejects.toMatchObject({ code: 'io' });
 

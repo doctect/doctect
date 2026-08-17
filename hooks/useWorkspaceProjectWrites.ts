@@ -32,7 +32,10 @@ export interface WorkspaceProjectWrites {
     update: (project: WorkspaceProject) => WorkspaceProject,
     expectedAuthorityEpoch?: number,
   ): Promise<boolean>;
-  commitStructural(command: StructuralWorkspaceCommand): Promise<WorkspaceSnapshot>;
+  commitStructural(
+    command: StructuralWorkspaceCommand,
+    expectedAuthorityEpoch?: number,
+  ): Promise<WorkspaceSnapshot>;
   retryProject(projectId: string): void;
 }
 
@@ -73,8 +76,9 @@ export function useWorkspaceProjectWrites(
     ]),
   ));
   const authorityEpochsRef = useRef(new Map(
-    initialWorkspace.projects.map(project => [project.id, 0]),
+    initialWorkspace.projects.map((project, index) => [project.id, index]),
   ));
+  const nextAuthorityEpochRef = useRef(initialWorkspace.projects.length);
   const structuralQueueRef = useRef<Promise<void> | null>(null);
   const onWorkspaceChangeRef = useRef(onWorkspaceChange);
   onWorkspaceChangeRef.current = onWorkspaceChange;
@@ -102,33 +106,31 @@ export function useWorkspaceProjectWrites(
       workingCopiesRef.current.delete(projectId);
     }
 
+    const previousEpochs = authorityEpochsRef.current;
     const nextIdentities = new Map<string, object>();
-    const nextEpochs = new Map(authorityEpochsRef.current);
-    let epochsChanged = false;
-    for (const projectId of authorityIdentitiesRef.current.keys()) {
-      if (survivingProjectIds.has(projectId)) continue;
-      nextEpochs.set(projectId, (nextEpochs.get(projectId) ?? 0) + 1);
-      epochsChanged = true;
-    }
+    const nextEpochs = new Map<string, number>();
     for (const project of snapshot.projects) {
       const installedToken = getInstalledProjectAuthorityToken(project);
       const identity = installedToken ?? project;
       const previousIdentity = authorityIdentitiesRef.current.get(project.id);
       const unmanagedOwnReadback = project.id === currentOwnProjectId
         && installedToken === undefined;
-      if (previousIdentity !== undefined
+      const authorityChanged = previousIdentity !== undefined
         && previousIdentity !== identity
         && !workingCopiesRef.current.has(project.id)
-        && !unmanagedOwnReadback) {
-        nextEpochs.set(project.id, (nextEpochs.get(project.id) ?? 0) + 1);
-        epochsChanged = true;
-      } else if (!nextEpochs.has(project.id)) {
-        nextEpochs.set(project.id, 0);
-        epochsChanged = true;
-      }
+        && !unmanagedOwnReadback;
+      const previousEpoch = previousEpochs.get(project.id);
+      const epoch = previousEpoch === undefined || authorityChanged
+        ? nextAuthorityEpochRef.current++
+        : previousEpoch;
+      nextEpochs.set(project.id, epoch);
       nextIdentities.set(project.id, identity);
     }
     authorityIdentitiesRef.current = nextIdentities;
+    const epochsChanged = previousEpochs.size !== nextEpochs.size
+      || Array.from(nextEpochs).some(([projectId, epoch]) => (
+        previousEpochs.get(projectId) !== epoch
+      ));
     if (epochsChanged) {
       authorityEpochsRef.current = nextEpochs;
       setAuthorityEpochs(nextEpochs);
@@ -152,7 +154,16 @@ export function useWorkspaceProjectWrites(
 
   const commitStructural = useCallback((
     command: StructuralWorkspaceCommand,
+    expectedAuthorityEpoch?: number,
   ): Promise<WorkspaceSnapshot> => {
+    if (command.type === 'close-project'
+      && expectedAuthorityEpoch !== undefined
+      && authorityEpochsRef.current.get(command.projectId) !== expectedAuthorityEpoch) {
+      return Promise.reject(new WorkspaceStoreError(
+        `Project ${command.projectId} authority changed before close.`,
+        'conflict',
+      ));
+    }
     const execute = async (): Promise<WorkspaceSnapshot> => {
       const snapshot = await store.commit(command);
       return reconcileSnapshot(snapshot);

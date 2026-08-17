@@ -42,6 +42,11 @@ export interface EditorPageProps {
   onWorkspaceChange?: (snapshot: WorkspaceSnapshot) => void;
 }
 
+interface ClosingProjectIntent {
+  projectId: string;
+  authorityEpoch: number;
+}
+
 const newProjectId = (): string => `proj_${crypto.randomUUID()}`;
 const newCustomPresetId = (): string => `custom_${crypto.randomUUID()}`;
 
@@ -73,7 +78,9 @@ export function EditorPage({
   const [commandError, setCommandError] = useState<string | null>(null);
   const [showNewProjectModal, setShowNewProjectModal] = useState(false);
   const [presetCommandBusy, setPresetCommandBusy] = useState(false);
-  const [closingProjectId, setClosingProjectId] = useState<string | null>(null);
+  const [closingProjectIntent, setClosingProjectIntent] = useState<ClosingProjectIntent | null>(
+    null,
+  );
   const editorShellRef = useRef<HTMLDivElement>(null);
   const presetCommandBusyRef = useRef(false);
   const blocker = useBlocker(hasUnsavedWork);
@@ -81,8 +88,8 @@ export function EditorPage({
 
   const { projects, activeProjectId } = workspace;
   const activeProject = projects.find(project => project.id === activeProjectId);
-  const closingProject = closingProjectId
-    ? projects.find(project => project.id === closingProjectId)
+  const closingProject = closingProjectIntent
+    ? projects.find(project => project.id === closingProjectIntent.projectId)
     : undefined;
 
   useEffect(() => {
@@ -97,10 +104,11 @@ export function EditorPage({
 
   const commitAndApply = async (
     command: StructuralWorkspaceCommand,
+    expectedAuthorityEpoch?: number,
   ): Promise<WorkspaceSnapshot | null> => {
     setCommandError(null);
     try {
-      const snapshot = await commitStructural(command);
+      const snapshot = await commitStructural(command, expectedAuthorityEpoch);
       setCommandError(null);
       return snapshot;
     } catch (error) {
@@ -192,7 +200,7 @@ export function EditorPage({
   };
 
   const executeCloseProject = async (): Promise<void> => {
-    if (!closingProjectId) return;
+    if (!closingProjectIntent) return;
     const successor = projects.length === 1
       ? {
           id: newProjectId(),
@@ -202,11 +210,11 @@ export function EditorPage({
       : undefined;
     const closed = await commitAndApply({
       type: 'close-project',
-      projectId: closingProjectId,
+      projectId: closingProjectIntent.projectId,
       ...(successor ? { successor } : {}),
-    });
+    }, closingProjectIntent.authorityEpoch);
     if (!closed) return;
-    setClosingProjectId(null);
+    setClosingProjectIntent(null);
   };
 
   const downloadProjectJson = (project: WorkspaceProject): void => {
@@ -312,7 +320,11 @@ export function EditorPage({
             projects={projects}
             activeProjectId={activeProjectId}
             onSelect={projectId => { void handleActivateProject(projectId); }}
-            onClose={setClosingProjectId}
+            onClose={projectId => {
+              const authorityEpoch = authorityEpochs.get(projectId);
+              if (authorityEpoch === undefined) return;
+              setClosingProjectIntent({ projectId, authorityEpoch });
+            }}
             onNew={() => {
               setCommandError(null);
               setShowNewProjectModal(true);
@@ -454,8 +466,8 @@ export function EditorPage({
       />
 
       <CloseProjectConfirmModal
-        isOpen={Boolean(closingProjectId)}
-        onClose={() => setClosingProjectId(null)}
+        isOpen={Boolean(closingProjectIntent)}
+        onClose={() => setClosingProjectIntent(null)}
         onConfirmClose={() => { void executeCloseProject(); }}
         onSaveAndClose={() => { void handleSaveAndClose(); }}
         projectName={closingProject?.name ?? 'Project'}

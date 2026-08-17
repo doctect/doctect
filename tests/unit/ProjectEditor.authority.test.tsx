@@ -13,6 +13,7 @@ import {
   type WorkspaceSnapshot,
 } from '../../services/localWorkspace/index';
 import { createIndexedDbAdapter } from '../../services/localWorkspace/indexedDbAdapter';
+import { inheritInstalledProjectAuthority } from '../../services/localWorkspace/projectAuthority';
 import { createBlankProject } from '../../services/presets';
 import {
   LEGACY_KEYS,
@@ -50,9 +51,29 @@ vi.mock('../../components/HierarchyGeneratorModal', () => ({ HierarchyGeneratorM
 vi.mock('../../components/SavePresetModal', () => ({ SavePresetModal: () => null }));
 vi.mock('../../components/NewVariantModal', () => ({ NewVariantModal: () => null }));
 vi.mock('../../components/EditorToolbar', () => ({ EditorToolbar: () => null }));
-vi.mock('../../components/TabBar', () => ({ TabBar: () => null }));
+vi.mock('../../components/TabBar', () => ({
+  TabBar: ({ projects, onClose }: {
+    projects: WorkspaceProject[];
+    onClose: (projectId: string) => void;
+  }) => (
+    <div>
+      {projects.map(item => (
+        <button key={item.id} type="button" onClick={() => onClose(item.id)}>
+          Close {item.name}
+        </button>
+      ))}
+    </div>
+  ),
+}));
 vi.mock('../../components/NewProjectModal', () => ({ NewProjectModal: () => null }));
-vi.mock('../../components/CloseProjectConfirmModal', () => ({ CloseProjectConfirmModal: () => null }));
+vi.mock('../../components/CloseProjectConfirmModal', () => ({
+  CloseProjectConfirmModal: ({ isOpen, onConfirmClose }: {
+    isOpen: boolean;
+    onConfirmClose: () => void;
+  }) => isOpen ? (
+    <button type="button" onClick={onConfirmClose}>Confirm close</button>
+  ) : null,
+}));
 vi.mock('../../components/AccountMenu', () => ({ AccountMenu: () => null }));
 vi.mock('../../components/cloud/CloudMenu', () => ({
   CloudMenu: ({ project, onRestoreState }: {
@@ -230,11 +251,13 @@ const invokeListener = (
 
 const transactionCompletionHold = (scope: readonly string[]) => {
   const started = deferred();
+  const committed = deferred();
   const release = deferred();
   let armed = false;
   let held = false;
   return {
     started: started.promise,
+    committed: committed.promise,
     release: release.resolve,
     arm: () => { armed = true; },
     hook(stores: string[], mode: IDBTransactionMode, transaction: IDBTransaction) {
@@ -248,6 +271,7 @@ const transactionCompletionHold = (scope: readonly string[]) => {
       ) => {
         if (type !== 'complete') return addEventListener(type, listener, options);
         return addEventListener(type, event => {
+          committed.resolve();
           void release.promise.then(() => invokeListener(listener, event));
         }, options);
       }) as IDBTransaction['addEventListener'];
@@ -341,9 +365,11 @@ describe('EditorPage project authority lineage', () => {
     await hold.started;
     const foreignA = foreignResult.snapshot.projects.find(item => item.id === 'project-a');
     if (!foreignA) throw new Error('Foreign store did not bootstrap project A.');
+    const foreignEdit = { ...foreignA, initialState: foreignState };
+    inheritInstalledProjectAuthority(foreignEdit, foreignA);
     await foreignStore.commit({
       type: 'save-project',
-      project: { ...foreignA, initialState: foreignState },
+      project: foreignEdit,
     });
 
     await act(async () => {
@@ -372,6 +398,79 @@ describe('EditorPage project authority lineage', () => {
     expect(durableA?.project.initialState.nodes['stale-a-only']).toBeUndefined();
     expect(durableA?.project.initialState.nodes[foreignState.rootId].data.locallyEdited).toBeUndefined();
   }, 15_000);
+
+  it('rejects a stale close modal after same-id replacement readback', async () => {
+    const staleA = project('project-a', 'Project A', markedState('Stale A', 'stale-a'));
+    const initialB = project('project-b', 'Project B', markedState('Initial B', 'initial-b'));
+    const replacementA = project(
+      'project-a',
+      'Replacement A',
+      markedState('Replacement A', 'replacement-a'),
+    );
+    const hold = transactionCompletionHold(['projects', 'migrationLedger']);
+    const indexedDB = new IDBFactory();
+    instrumentFactory(indexedDB, hold.hook);
+    let nextUuid = 0;
+    const environment: LocalWorkspaceEnvironment = {
+      indexedDB,
+      legacyStorage: memoryStorage(validLegacyValues({
+        [LEGACY_KEYS.projects]: JSON.stringify([staleA, initialB]),
+        [LEGACY_KEYS.activeProject]: 'project-b',
+      })),
+      addStorageListener: () => () => {},
+      crypto: webcrypto as unknown as Crypto,
+      now: () => '2026-08-16T19:30:00.000Z',
+      randomUUID: () => `stale-modal-${nextUuid++}`,
+      createBlankProject,
+    };
+    const store = createLocalWorkspaceStore(environment);
+    const foreignStore = createLocalWorkspaceStore(environment);
+    const initialResult = await store.bootstrap();
+    const foreignResult = await foreignStore.bootstrap();
+    expect(initialResult.status).toBe('ready');
+    expect(foreignResult.status).toBe('ready');
+    if (initialResult.status !== 'ready' || foreignResult.status !== 'ready') return;
+    const commit = vi.spyOn(store, 'commit');
+    const router = createMemoryRouter([{
+      path: '/app',
+      element: (
+        <EditorPage
+          store={store}
+          initialWorkspace={initialResult.snapshot}
+          initialWarnings={[]}
+        />
+      ),
+    }], { initialEntries: ['/app'] });
+    render(<RouterProvider router={router} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Close Project A' }));
+    const staleConfirm = screen.getByRole('button', { name: 'Confirm close' });
+    const projectBPane = paneContaining('initial-b-only');
+    hold.arm();
+
+    fireEvent.click(within(projectBPane).getByRole('button', { name: 'Edit document' }));
+    const bCommit = commit.mock.results[0]?.value as Promise<WorkspaceSnapshot>;
+    await hold.started;
+    await hold.committed;
+    await foreignStore.commit({ type: 'close-project', projectId: 'project-a' });
+    await foreignStore.commit({ type: 'create-and-activate-project', project: replacementA });
+
+    await act(async () => {
+      hold.release();
+      await bCommit;
+      staleConfirm.click();
+    });
+    await waitFor(() => expect(commit).toHaveBeenCalledTimes(1));
+
+    const inspector = createIndexedDbAdapter({ indexedDB, now: environment.now });
+    await inspector.open();
+    const durableA = (await inspector.inspect()).projects.find(item => item.id === 'project-a');
+    inspector.close();
+    expect(durableA).toMatchObject({
+      project: { name: 'Replacement A' },
+      storageRevision: 0,
+    });
+    expect(durableA?.project.initialState.nodes['replacement-a-only']).toBeDefined();
+  }, 20_000);
 
   it('keeps history for an own save but public restore still remounts the editor', async () => {
     const source = project('project-a', 'Project A', markedState('Project A', 'source-a'));

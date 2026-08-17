@@ -32,6 +32,7 @@ import { digestLegacySnapshot } from '../../../services/localWorkspace/canonical
 import {
   WORKSPACE_DB_NAME,
 } from '../../../services/localWorkspace/schema';
+import { inheritInstalledProjectAuthority } from '../../../services/localWorkspace/projectAuthority';
 import {
   LEGACY_DOCUMENT_KEYS,
   LEGACY_KEYS,
@@ -134,14 +135,26 @@ const inspect = async (harness: Harness): Promise<IndexedDbInspection> => {
 const readyStore = async (
   harness = createHarness(),
   onAuthorityLost = vi.fn(),
-): Promise<{ store: LocalWorkspaceStore; onAuthorityLost: ReturnType<typeof vi.fn> }> => {
+): Promise<{
+  store: LocalWorkspaceStore;
+  onAuthorityLost: ReturnType<typeof vi.fn>;
+  project: WorkspaceProject;
+}> => {
   const store = createLocalWorkspaceStore(harness.environment);
-  await expect(store.bootstrap({ onAuthorityLost })).resolves.toMatchObject({ status: 'ready' });
-  return { store, onAuthorityLost };
+  const result = await store.bootstrap({ onAuthorityLost });
+  expect(result.status).toBe('ready');
+  if (result.status !== 'ready') throw new Error(`Expected ready, got ${result.status}.`);
+  return { store, onAuthorityLost, project: result.snapshot.projects[0] };
 };
 
 const projectNamed = (name: string): WorkspaceProject =>
   legacyProject('project-a', 11, { name }) as WorkspaceProject;
+
+const trustedProjectNamed = (source: WorkspaceProject, name: string): WorkspaceProject => {
+  const project = { ...source, name };
+  inheritInstalledProjectAuthority(project, source);
+  return project;
+};
 
 const deferred = () => {
   let resolve!: () => void;
@@ -195,8 +208,11 @@ describe('old-tab drift lifecycle', () => {
   it('drains accepted saves before persisting drift, rejects new work, and reports split brain', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const harness = createHarness();
-    const { store, onAuthorityLost } = await readyStore(harness);
-    const accepted = store.commit({ type: 'save-project', project: projectNamed('Latest durable') });
+    const { store, onAuthorityLost, project } = await readyStore(harness);
+    const accepted = store.commit({
+      type: 'save-project',
+      project: trustedProjectNamed(project, 'Latest durable'),
+    });
     const changedValues = validLegacyValues({
       [LEGACY_KEYS.projects]: JSON.stringify([
         legacyProject('project-a', 11, { name: 'Old tab edit' }),
@@ -208,7 +224,7 @@ describe('old-tab drift lifecycle', () => {
 
     await expect(store.commit({
       type: 'save-project',
-      project: projectNamed('Must be rejected'),
+      project: trustedProjectNamed(project, 'Must be rejected'),
     })).rejects.toMatchObject({ code: 'authority-lost' });
     expect(onAuthorityLost).not.toHaveBeenCalled();
 
