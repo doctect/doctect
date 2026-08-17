@@ -3,24 +3,42 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { docsIndex } from '../../lib/docsContentIndex';
 import { slugifyHeading } from '../../lib/docsContent';
+import { classifyLocalStorageContext, localStorageStatements } from './storageCopyAntiRot';
 
 const ROOT = path.resolve(__dirname, '../..');
 
-const ARCHITECTURE_DOC_PATHS = [
+const AUTHORITY_DOC_PATHS = [
     'docs/1-high-level-architecture.md',
     'docs/3-state-management.md',
     'docs/8-cloud-and-gallery.md',
 ] as const;
 
-const ACTIVE_LOCAL_STORAGE_SUBJECT = /\b(?:projects?|project state|documents?|editor)\b/i;
-const ACTIVE_LOCAL_STORAGE_VERB = /\b(?:live|lives|persist|persists|persisted|save|saves|saved|read|reads|write|writes|written|runs? against)\b(?!-)/i;
-const claimsActiveLocalStorageAuthority = (sentence: string): boolean =>
-    /\blocalStorage\b/i.test(sentence)
-    && ((ACTIVE_LOCAL_STORAGE_SUBJECT.test(sentence) && ACTIVE_LOCAL_STORAGE_VERB.test(sentence))
-        || /\bpure\s+`?localStorage`?\b/i.test(sentence));
+const markdownPathsUnder = (relativeDirectory: string): string[] => {
+    const paths: string[] = [];
+    for (const entry of fs.readdirSync(path.join(ROOT, relativeDirectory), { withFileTypes: true })) {
+        const relativePath = path.posix.join(relativeDirectory, entry.name);
+        if (entry.isDirectory()) {
+            if (relativePath !== 'docs/superpowers') paths.push(...markdownPathsUnder(relativePath));
+        } else if (entry.isFile() && entry.name.endsWith('.md')) {
+            paths.push(relativePath);
+        }
+    }
+    return paths.sort();
+};
 
-const sentencesOf = (body: string): string[] =>
-    body.split(/(?<=[.!?])\s+|\n+/).map(sentence => sentence.trim()).filter(Boolean);
+const maintainedMarkdownPaths = (): string[] => [
+    'README.md',
+    'PRODUCT.md',
+    ...markdownPathsUnder('docs'),
+];
+
+const readMarkdown = (relativePaths: readonly string[]): Record<string, string> =>
+    Object.fromEntries(relativePaths.map(relativePath => [
+        relativePath,
+        fs.readFileSync(path.join(ROOT, relativePath), 'utf8'),
+    ]));
+
+const PROJECT_PREPARATION_ORDER = /\bsource[- ]shape validation\b[^.\n]{0,180}\bschema migration\b[^.\n]{0,180}\bfinal validation(?:\s+and\s+|\/)normalization\b[^.\n]{0,180}\bpersistence\b/i;
 
 const allDocs = () => [
     ...docsIndex.tutorials.map(t => ({ id: `${t.track}/${t.slug}`, body: t.body })),
@@ -39,10 +57,7 @@ const headingAnchors = (body: string): Set<string> => {
 
 describe('docs anti-rot guards', () => {
     it('keeps top-level architecture docs on the IndexedDB authority model', () => {
-        const docs = Object.fromEntries(ARCHITECTURE_DOC_PATHS.map(relativePath => [
-            relativePath,
-            fs.readFileSync(path.join(ROOT, relativePath), 'utf8'),
-        ]));
+        const docs = readMarkdown(AUTHORITY_DOC_PATHS);
         const corpus = Object.values(docs).join('\n');
 
         for (const [relativePath, body] of Object.entries(docs)) {
@@ -68,6 +83,13 @@ describe('docs anti-rot guards', () => {
         expect(stateDoc).toMatch(/compare-and-swap|\bCAS\b/);
         expect(stateDoc).toContain('loadProjectState');
         expect(stateDoc).toContain('migrateState');
+        for (const relativePath of [
+            'docs/1-high-level-architecture.md',
+            'docs/3-state-management.md',
+        ]) {
+            expect(docs[relativePath], `${relativePath} must state project preparation order`)
+                .toMatch(PROJECT_PREPARATION_ORDER);
+        }
 
         const cloudDoc = docs['docs/8-cloud-and-gallery.md'];
         expect(cloudDoc).toMatch(/explicit(?:ly)?[^.\n]{0,50}opt-in|opt-in[^.\n]{0,50}explicit/i);
@@ -75,20 +97,44 @@ describe('docs anti-rot guards', () => {
         expect(corpus).toMatch(/\bno\b[^.\n]{0,80}\bcleanup\b/i);
         expect(corpus).toMatch(/\bno\b[^.\n]{0,80}\bfallback\b/i);
         expect(corpus).toMatch(/\bno\b[^.\n]{0,80}\bdual[- ]write\b/i);
+    });
 
-        const staleClaims = [
-            'Projects live in localStorage.',
-            'EditorPage reads all saved projects from localStorage.',
-            'Project state is persisted in localStorage.',
-            'The whole editor runs against one JSON document in localStorage.',
-            'A project without cloud metadata uses pure localStorage.',
-        ];
-        expect(staleClaims.every(claimsActiveLocalStorageAuthority)).toBe(true);
-        const offenders = Object.entries(docs).flatMap(([relativePath, body]) =>
-            sentencesOf(body)
-                .filter(claimsActiveLocalStorageAuthority)
-                .map(sentence => `${relativePath}: ${sentence}`));
-        expect(offenders, `active localStorage claims:\n${offenders.join('\n')}`).toEqual([]);
+    it('allows localStorage in maintained Markdown only with explicit legitimate context', () => {
+        const staleClaims = {
+            README: 'Sign in to back any project with cloud-saved version history - entirely opt-in; local `localStorage` projects work exactly as before.',
+            SavePreset: 'SavePresetModal cleans the project and persists the custom preset directly to localStorage for future initialization.',
+            equivalentAuthority: 'Browser localStorage remains the home for every offline document.',
+        };
+        for (const [name, claim] of Object.entries(staleClaims)) {
+            expect(classifyLocalStorageContext(claim), `stale fixture passed: ${name}`).toBeNull();
+        }
+
+        const legitimateClaims = {
+            legacy: 'Legacy localStorage document keys remain read-only inputs for migration and recovery.',
+            preference: 'localStorage holds only a non-document onboarding profile preference.',
+            sandbox: 'The generator sandbox denies localStorage access.',
+        };
+        expect(Object.fromEntries(Object.entries(legitimateClaims).map(([name, claim]) => [
+            name,
+            classifyLocalStorageContext(claim),
+        ]))).toEqual({
+            legacy: 'legacy-read-only-migration-recovery',
+            preference: 'non-document-preference',
+            sandbox: 'sandbox-denial',
+        });
+
+        const paths = maintainedMarkdownPaths();
+        expect(paths).toContain('README.md');
+        expect(paths).toContain('PRODUCT.md');
+        expect(paths.some(relativePath => relativePath.startsWith('docs/components/'))).toBe(true);
+        expect(paths.some(relativePath => relativePath.startsWith('docs/superpowers/'))).toBe(false);
+
+        const offenders = Object.entries(readMarkdown(paths)).flatMap(([relativePath, body]) =>
+            localStorageStatements(body)
+                .filter(statement => classifyLocalStorageContext(statement) === null)
+                .map(statement => `${relativePath}: ${statement}`));
+        expect(offenders, `localStorage mentions without explicit legitimate context:\n${offenders.join('\n')}`)
+            .toEqual([]);
     });
 
     it('every referenced image exists under public/docs-assets or public/walkthroughs', () => {

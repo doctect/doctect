@@ -4,24 +4,16 @@ import { REPO_ROOT, buildRefs, buildContent, scanTree, flattenTreePaths } from '
 import { validateContent } from '../../../onboarding/src/content/validate.mjs';
 import { INTRO } from '../../../onboarding/src/content/intro.mjs';
 import { TOURS } from '../../../onboarding/src/content/tours.mjs';
+import { classifyLocalStorageContext, localStorageStatements } from '../storageCopyAntiRot';
 
 const refs = buildRefs(REPO_ROOT);
 
-const ACTIVE_LOCAL_STORAGE_SUBJECT = /\b(?:projects?|project state|documents?|editor)\b/i;
-const ACTIVE_LOCAL_STORAGE_VERB = /\b(?:live|lives|persist|persists|persisted|save|saves|saved|read|reads|write|writes|written|runs? against)\b(?!-)/i;
-const claimsActiveLocalStorageAuthority = sentence =>
-    /\blocalStorage\b/i.test(sentence)
-    && ((ACTIVE_LOCAL_STORAGE_SUBJECT.test(sentence) && ACTIVE_LOCAL_STORAGE_VERB.test(sentence))
-        || /\bpure\s+`?localStorage`?\b/i.test(sentence));
 const contentStrings = (value, out = []) => {
     if (typeof value === 'string') out.push(value);
     else if (value && typeof value === 'object') Object.values(value).forEach(item => contentStrings(item, out));
     return out;
 };
-const contentSentences = value => contentStrings(value)
-    .flatMap(text => text.split(/(?<=[.!?])\s+|\n+/))
-    .map(sentence => sentence.trim())
-    .filter(Boolean);
+const PROJECT_PREPARATION_ORDER = /\bsource[- ]shape validation\b[^.\n]{0,180}\bschema migration\b[^.\n]{0,180}\bfinal validation(?:\s+and\s+|\/)normalization\b[^.\n]{0,180}\bpersistence\b/i;
 
 describe('content integrity', () => {
     it('every content module is JSON-serializable and passes validation', async () => {
@@ -70,7 +62,7 @@ describe('TOURS content', () => {
         }
     });
 
-    it('teaches IndexedDB authority without reviving active localStorage claims', () => {
+    it('teaches IndexedDB authority without reviving active localStorage claims', async () => {
         const introCopy = INTRO.about.join(' ');
         const localFirst = TOURS.find(tour => tour.id === 'local-first');
         const tourCopy = contentStrings(localFirst, []).join(' ');
@@ -98,6 +90,7 @@ describe('TOURS content', () => {
         expect(tourCopy).toMatch(/compare-and-swap|\bCAS\b/);
         expect(tourCopy).toContain('loadProjectState');
         expect(tourCopy).toContain('migrateState');
+        expect(tourCopy).toMatch(PROJECT_PREPARATION_ORDER);
         expect(tourCopy).toMatch(/legacy[^.]{0,80}\blocalStorage\b[^.]{0,80}retained[^.]{0,40}only[^.]{0,40}read-only[^.]{0,120}(?:migration|recovery)/i);
         expect(tourCopy).toMatch(/\bno\b[^.]{0,80}\bcleanup\b/i);
         expect(tourCopy).toMatch(/\bno\b[^.]{0,80}\bfallback\b/i);
@@ -121,11 +114,25 @@ describe('TOURS content', () => {
             'The whole editor runs against one JSON document in localStorage.',
             'Projects persist to localStorage on every change.',
             'A project without cloud metadata uses pure localStorage.',
+            'Offline documents still call localStorage home.',
         ];
-        expect(staleClaims.every(claimsActiveLocalStorageAuthority)).toBe(true);
-        const offenders = contentSentences({ intro: INTRO, tours: TOURS })
-            .filter(claimsActiveLocalStorageAuthority);
-        expect(offenders, `active localStorage claims:\n${offenders.join('\n')}`).toEqual([]);
+        expect(staleClaims.every(claim => classifyLocalStorageContext(claim) === null)).toBe(true);
+        expect(classifyLocalStorageContext(
+            'Legacy localStorage document keys remain read-only inputs for migration and recovery.',
+        )).toBe('legacy-read-only-migration-recovery');
+        expect(classifyLocalStorageContext(
+            'localStorage stores a non-document onboarding profile preference.',
+        )).toBe('non-document-preference');
+
+        const allowedContexts = new Set([
+            'legacy-read-only-migration-recovery',
+            'non-document-preference',
+        ]);
+        const offenders = contentStrings(await buildContent(), [])
+            .flatMap(localStorageStatements)
+            .filter(statement => !allowedContexts.has(classifyLocalStorageContext(statement)));
+        expect(offenders, `localStorage mentions without explicit onboarding context:\n${offenders.join('\n')}`)
+            .toEqual([]);
     });
 });
 

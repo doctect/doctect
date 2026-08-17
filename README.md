@@ -49,7 +49,7 @@ The most powerful tool for planner creation.
 *   **Device-Specific PDF Export**: Export PDFs tailored to each device's dimensions.
 
 ### ☁️ Cloud, Gallery & Merge Requests
-*   **Optional Accounts**: Sign in to back any project with cloud-saved version history — entirely opt-in; local `localStorage` projects work exactly as before.
+*   **Optional Accounts**: Local projects use IndexedDB through `LocalWorkspaceStore`; signing in and cloud-saved version history remain entirely opt-in.
 *   **Version History**: Every cloud save is an immutable, restorable commit — never a silent overwrite.
 *   **Public Gallery**: Publish a project with rendered preview thumbnails; anyone can browse, search, and clone it into their own editor without an account.
 *   **Fork & Propose**: Fork a public project into your own private copy, edit it, and open a Merge Request to propose your changes back upstream.

@@ -24,4 +24,4 @@ Used when a component on the canvas (like a Grid or a linked Button) needs to po
 ### 4. Lifecycle Modals
 *   **`NewProjectModal.tsx`**: Provides the UI for creating a blank project or initializing from a system template variant (handled by `services/presets.ts`).
 *   **`CloseProjectConfirmModal.tsx` & `DeleteConfirmModal.tsx`**: Standard interceptors preventing destructive mutations resulting in unrecoverable data loss. 
-*   **`SavePresetModal.tsx`**: Takes the active project's state string, cleans out volatile UI data, and persists it uniquely to `localStorage` under `hype_custom_presets` for future initialization.
+*   **`SavePresetModal.tsx`**: Validates the title and starts a preset save; `ProjectEditor` removes volatile UI state, then `EditorPage` routes the `save-custom-preset` command through `LocalWorkspaceStore` into IndexedDB's `presets` store. It never writes legacy `localStorage`; those document keys remain read-only migration and recovery inputs.

@@ -43,7 +43,7 @@ const saveToHistory = useCallback(() => {
 
 Stored and imported documents can use older `AppState` schemas even though IndexedDB is the current document authority.
 
-`LocalWorkspaceStore` routes every project through `loadProjectState`, which calls `migrateState(state)` before structural validation and persistence.
+`LocalWorkspaceStore` performs source-shape validation first (including full `AppState` validation for schema v10/v11), then schema migration through `loadProjectState` and `migrateState(state)`, final validation and normalization, and only then persistence.
 
 *   **Versioning**: The state object includes a `schemaVersion` flag.
 *   **Upgrades**: `migration.ts` contains sequential upgrade functions (e.g., `v3_to_v4`). Example: Migrating an old project that had `{ templates: {...} }` at the root object into the new `{ variants: { default: { templates: {...} } } }` structure introduced in `schemaVersion = 4`.
