@@ -160,6 +160,57 @@ describe('useWorkspaceProjectWrites', () => {
     expect(result.current.workspace.projects[0].name).toBe('Original');
   });
 
+  it('retains a monotonic tombstone and rejects a callback from before same-id re-add', async () => {
+    const original = project('Original');
+    const survivor = projectWithId('project-2', 'Survivor');
+    const replacement = project('Replacement', 7);
+    const initial = {
+      ...snapshot(original),
+      projects: [original, survivor],
+    };
+    let structuralCalls = 0;
+    const store = storeWithCommit(async command => {
+      if (command.type === 'save-project') {
+        return { ...initial, projects: [replacement, survivor] };
+      }
+      structuralCalls += 1;
+      return structuralCalls === 1
+        ? { ...initial, projects: [survivor], activeProjectId: survivor.id }
+        : { ...initial, projects: [replacement, survivor] };
+    });
+    const { result } = renderHook(() => useWorkspaceProjectWrites(store, initial));
+    const staleEpoch = result.current.authorityEpochs.get(original.id) ?? 0;
+    const staleCallback = () => result.current.updateProject(
+      original.id,
+      current => ({ ...current, name: 'Stale overwrite' }),
+      staleEpoch,
+    );
+
+    await act(async () => {
+      await result.current.commitStructural({ type: 'close-project', projectId: original.id });
+    });
+    const tombstoneEpoch = result.current.authorityEpochs.get(original.id);
+    await act(async () => {
+      await result.current.commitStructural({
+        type: 'create-and-activate-project',
+        project: replacement,
+      });
+    });
+    const replacementEpoch = result.current.authorityEpochs.get(original.id);
+    let staleResult!: boolean;
+    await act(async () => {
+      staleResult = await staleCallback();
+    });
+
+    expect(tombstoneEpoch).toBeGreaterThan(staleEpoch);
+    expect(replacementEpoch).toBeGreaterThan(staleEpoch);
+    expect(replacementEpoch).toBeGreaterThanOrEqual(tombstoneEpoch!);
+    expect(staleResult).toBe(false);
+    expect(store.commit).toHaveBeenCalledTimes(2);
+    expect(result.current.workspace.projects.find(item => item.id === original.id)?.name)
+      .toBe('Replacement');
+  });
+
   it('keeps a newer working copy over an older save completion', async () => {
     const first = deferred<WorkspaceSnapshot>();
     const second = deferred<WorkspaceSnapshot>();

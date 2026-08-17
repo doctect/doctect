@@ -337,6 +337,7 @@ export async function prepareInitialCopy(
   const projects: StoredProject[] = migratedProjects.map(project => ({
     id: project.id,
     project,
+    incarnation: environment.randomUUID(),
     storageRevision: 0,
     updatedAt: migratedAt,
   }));
@@ -427,7 +428,7 @@ const validateProjectRecords = (records: unknown): Map<string, WorkspaceProject>
     if (!isPlainObject(rawRecord)) throw targetError(`Project record ${index} must be an object.`);
     requireExactKeys(
       rawRecord,
-      ['id', 'project', 'storageRevision', 'updatedAt'],
+      ['id', 'project', 'incarnation', 'storageRevision', 'updatedAt'],
       ['consumedImportId', 'consumedImportCreatedAt', 'consumedImportDigest'],
       `Project record ${index}`,
     );
@@ -435,6 +436,9 @@ const validateProjectRecords = (records: unknown): Map<string, WorkspaceProject>
       throw targetError(`Project record ${index} id must be a non-empty string.`);
     }
     if (projects.has(rawRecord.id)) throw targetError(`Duplicate project record id ${rawRecord.id}.`);
+    if (typeof rawRecord.incarnation !== 'string' || rawRecord.incarnation.length === 0) {
+      throw targetError(`Project record ${rawRecord.id} incarnation must be a non-empty string.`);
+    }
     requireNonNegativeInteger(rawRecord.storageRevision, `Project record ${rawRecord.id} storageRevision`);
     validateTimestamp(rawRecord.updatedAt, `Project record ${rawRecord.id} updatedAt`);
     if (Object.hasOwn(rawRecord, 'consumedImportId')) {

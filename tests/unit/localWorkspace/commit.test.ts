@@ -35,6 +35,7 @@ import {
 } from '../../../services/localWorkspace/canonical';
 import {
   WORKSPACE_DB_NAME,
+  storedProjectLineage,
 } from '../../../services/localWorkspace/schema';
 import { getInstalledProjectAuthorityToken } from '../../../services/localWorkspace/projectAuthority';
 import {
@@ -431,13 +432,15 @@ describe('project save queues', () => {
 
   it('replaces only a project whose installed revision changed in another store', async () => {
     const { store, harness } = await readyStore({ values: twoProjectValues() });
+    const initialRecord = (await inspect(harness)).projects.find(record => record.id === 'project-a')!;
     const before = await store.commit({ type: 'activate-project', projectId: 'project-b' });
     const beforeA = before.projects.find(project => project.id === 'project-a');
     const beforeB = before.projects.find(project => project.id === 'project-b');
     const beforeAToken = getInstalledProjectAuthorityToken(beforeA!);
     const beforeBToken = getInstalledProjectAuthorityToken(beforeB!);
     const foreign = createIndexedDbAdapter({ indexedDB: harness.indexedDB, now: () => TEST_NOW });
-    await foreign.saveProject(projectNamed('Foreign A'), 0);
+    const foreignA = (await foreign.inspect()).projects.find(record => record.id === 'project-a')!;
+    await foreign.saveProject(projectNamed('Foreign A'), storedProjectLineage(foreignA));
 
     const observed = await store.commit({ type: 'activate-project', projectId: 'project-a' });
 
@@ -446,11 +449,15 @@ describe('project save queues', () => {
     expect(getInstalledProjectAuthorityToken(observedA)).not.toBe(beforeAToken);
     expect(observedA.name).toBe('Foreign A');
     expect(getInstalledProjectAuthorityToken(observedB)).toBe(beforeBToken);
+    const foreignRecord = (await foreign.inspect()).projects.find(record => record.id === 'project-a')!;
+    expect(foreignRecord.incarnation).toBe(initialRecord.incarnation);
+    expect(foreignRecord.storageRevision).toBe(initialRecord.storageRevision + 1);
     foreign.close();
   });
 
   it('preserves authority identity for the exact revision written by an own save', async () => {
-    const { store, snapshot } = await readyStore();
+    const { store, harness, snapshot } = await readyStore();
+    const initialRecord = (await inspect(harness)).projects.find(record => record.id === 'project-a')!;
     const before = snapshot.projects.find(project => project.id === 'project-a')!;
     const beforeToken = getInstalledProjectAuthorityToken(before);
     expect(beforeToken).toBeDefined();
@@ -466,6 +473,51 @@ describe('project save queues', () => {
 
     expect(savedProject.name).toBe('Own save');
     expect(getInstalledProjectAuthorityToken(savedProject)).toBe(beforeToken);
+    const savedRecord = (await inspect(harness)).projects.find(record => record.id === 'project-a')!;
+    expect(savedRecord.incarnation).toBe(initialRecord.incarnation);
+    expect(savedRecord.storageRevision).toBe(initialRecord.storageRevision + 1);
+  });
+
+  it('adopts a same-id replacement incarnation and rejects the stale incarnation save', async () => {
+    const { store: staleStore, harness, snapshot } = await readyStore({
+      values: twoProjectValues(),
+    });
+    const replacingStore = createLocalWorkspaceStore(harness.environment);
+    const replacingBootstrap = await replacingStore.bootstrap();
+    expect(replacingBootstrap.status).toBe('ready');
+    if (replacingBootstrap.status !== 'ready') return;
+    const staleA = snapshot.projects.find(project => project.id === 'project-a')!;
+    const staleToken = getInstalledProjectAuthorityToken(staleA);
+    const staleRecord = (await inspect(harness)).projects.find(record => record.id === 'project-a')!;
+    const replacementA = projectNamed('Replacement A');
+
+    await replacingStore.commit({ type: 'close-project', projectId: 'project-a' });
+    harness.environment.randomUUID = () => 'replacement-incarnation';
+    await replacingStore.commit({ type: 'create-and-activate-project', project: replacementA });
+
+    useQueueTimers();
+    const readback = staleStore.commit({
+      type: 'save-project',
+      project: projectNamed('Stale store B save', 'project-b'),
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    const observed = await readback;
+    const observedA = observed.projects.find(project => project.id === 'project-a')!;
+    const staleSave = staleStore.commit({ type: 'save-project', project: staleA });
+    const staleResultPromise = staleSave.then(
+      () => ({ status: 'fulfilled' as const }),
+      error => ({ status: 'rejected' as const, error }),
+    );
+    await vi.advanceTimersByTimeAsync(1_000);
+    const staleResult = await staleResultPromise;
+    const durableA = (await inspect(harness)).projects.find(record => record.id === 'project-a')!;
+
+    expect(observedA.name).toBe('Replacement A');
+    expect(getInstalledProjectAuthorityToken(observedA)).not.toBe(staleToken);
+    expect(staleResult).toMatchObject({ status: 'rejected', error: { code: 'conflict' } });
+    expect(durableA.project.name).toBe('Replacement A');
+    expect(durableA.storageRevision).toBe(0);
+    expect(durableA.incarnation).not.toBe(staleRecord.incarnation);
   });
 
   it('coalesces rapid saves and persists only the newest project', async () => {
@@ -567,6 +619,9 @@ describe('project save queues', () => {
   it('pins a follow-up behind an in-flight save to that local write lineage', async () => {
     const hold = transactionCompletionHold(['projects', 'migrationLedger']);
     const { store: storeA, harness } = await readyStore({ hook: hold.hook });
+    const initialLineage = storedProjectLineage(
+      (await inspect(harness)).projects.find(record => record.id === 'project-a')!,
+    );
     useQueueTimers();
     hold.arm();
 
@@ -586,7 +641,10 @@ describe('project save queues', () => {
       indexedDB: harness.indexedDB,
       now: () => TEST_NOW,
     });
-    const foreign = other.saveProject(projectNamed('Store B after first'), 1);
+    const foreign = other.saveProject(
+      projectNamed('Store B after first'),
+      { ...initialLineage, revision: initialLineage.revision + 1 },
+    );
     hold.release();
     await foreign;
 
@@ -607,6 +665,9 @@ describe('project save queues', () => {
   it('adopts a foreign post-save revision after the local save lineage drains', async () => {
     const hold = transactionCompletionHold(['projects', 'migrationLedger']);
     const { store: storeA, harness } = await readyStore({ hook: hold.hook });
+    const initialLineage = storedProjectLineage(
+      (await inspect(harness)).projects.find(record => record.id === 'project-a')!,
+    );
     useQueueTimers();
     hold.arm();
 
@@ -621,7 +682,10 @@ describe('project save queues', () => {
       indexedDB: harness.indexedDB,
       now: () => TEST_NOW,
     });
-    const foreign = other.saveProject(projectNamed('Store B after first'), 1);
+    const foreign = other.saveProject(
+      projectNamed('Store B after first'),
+      { ...initialLineage, revision: initialLineage.revision + 1 },
+    );
     hold.release();
     await foreign;
 
@@ -826,7 +890,11 @@ describe('project structure commands', () => {
       revision: 1,
     });
     expect(stored.projects.find(record => record.id === 'project-c'))
-      .toMatchObject({ storageRevision: 0, updatedAt: TEST_NOW });
+      .toMatchObject({
+        incarnation: expect.any(String),
+        storageRevision: 0,
+        updatedAt: TEST_NOW,
+      });
 
     await expect(store.commit({
       type: 'create-and-activate-project',
@@ -915,7 +983,8 @@ describe('project structure commands', () => {
   it('rejects close when another same-version tab saved the target project', async () => {
     const { store, harness } = await readyStore({ values: twoProjectValues() });
     const other = createIndexedDbAdapter({ indexedDB: harness.indexedDB, now: () => TEST_NOW });
-    await other.saveProject(projectNamed('Saved elsewhere'), 0);
+    const foreignBase = (await other.inspect()).projects.find(record => record.id === 'project-a')!;
+    await other.saveProject(projectNamed('Saved elsewhere'), storedProjectLineage(foreignBase));
 
     await expect(store.commit({
       type: 'close-project',
@@ -1083,7 +1152,11 @@ describe('preset and import commands', () => {
     expect(second.projects.filter(project => project.id === 'target-1')).toHaveLength(1);
     expect(second.pendingImports.some(item => item.id === 'import-1')).toBe(false);
     const stored = await inspect(harness);
-    expect(stored.projects.filter(record => record.id === 'target-1')).toHaveLength(1);
+    const imported = stored.projects.filter(record => record.id === 'target-1');
+    expect(imported).toHaveLength(1);
+    expect(imported[0].incarnation).toEqual(expect.any(String));
+    expect(Object.hasOwn(second.projects.find(project => project.id === 'target-1')!, 'incarnation'))
+      .toBe(false);
     expect(stored.pendingImports.some(record => record.id === 'import-1')).toBe(false);
     expect(stored.workspace[0].revision).toBe(1);
   });
@@ -1304,7 +1377,8 @@ describe('failure handling and private revisions', () => {
     const { store, harness } = await readyStore();
     const cached = await store.bootstrap();
     const other = createIndexedDbAdapter({ indexedDB: harness.indexedDB, now: () => TEST_NOW });
-    await other.saveProject(projectNamed('Other tab'), 0);
+    const foreignBase = (await other.inspect()).projects.find(record => record.id === 'project-a')!;
+    await other.saveProject(projectNamed('Other tab'), storedProjectLineage(foreignBase));
     harness.records.length = 0;
     useQueueTimers();
 

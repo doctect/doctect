@@ -81,6 +81,8 @@ describe('initial migration preparation', () => {
       revision: 0,
     });
     expect(prepared.projects.map(record => record.id)).toEqual(['project-a', 'project-b']);
+    expect(prepared.projects.map(record => record.incarnation))
+      .toEqual(['fixture-uuid', 'fixture-uuid']);
     expect(prepared.projects.every(record => record.storageRevision === 0)).toBe(true);
     expect(prepared.projects.every(record => record.updatedAt === '2026-08-14T15:00:00.000Z'))
       .toBe(true);
@@ -94,6 +96,25 @@ describe('initial migration preparation', () => {
       .toEqual(first.initialState.generator);
     expect(prepared.projects[0].project.initialState.nodes.root.data.label).toBe('Café ☕');
     expect(prepared.projects[0].project.initialState.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+  });
+
+  it('assigns one private incarnation to every migrated project record', async () => {
+    const randomUUID = vi.fn()
+      .mockReturnValueOnce('incarnation-a')
+      .mockReturnValueOnce('incarnation-b');
+    const source = sourceFrom({
+      ...validLegacyValues(),
+      [LEGACY_KEYS.projects]: JSON.stringify([legacyProject(), secondProject()]),
+    });
+
+    const prepared = await prepareInitialCopy(source, deterministicEnvironment({
+      crypto: webcrypto as Crypto,
+      randomUUID,
+    }));
+
+    expect(prepared.projects.map(record => record.incarnation))
+      .toEqual(['incarnation-a', 'incarnation-b']);
+    expect(randomUUID).toHaveBeenCalledTimes(2);
   });
 
   it('migrates every historical project state in source order', async () => {
@@ -373,6 +394,8 @@ describe('target reconstruction', () => {
       records.workspace.projectOrder.push(records.workspace.projectOrder[0]);
     }],
     ['unknown active project', (records: any) => { records.workspace.activeProjectId = 'missing'; }],
+    ['missing project incarnation', (records: any) => { delete records.projects[0].incarnation; }],
+    ['empty project incarnation', (records: any) => { records.projects[0].incarnation = ''; }],
     ['negative storage revision', (records: any) => { records.projects[0].storageRevision = -1; }],
     ['fractional workspace revision', (records: any) => { records.workspace.revision = 0.5; }],
     ['malformed project state', (records: any) => { records.projects[0].project.initialState = {}; }],
@@ -409,6 +432,8 @@ describe('target reconstruction', () => {
     expect(Object.hasOwn(publicWith.projects[0], 'consumedImportId')).toBe(false);
     expect(Object.hasOwn(publicWith.projects[0], 'consumedImportCreatedAt')).toBe(false);
     expect(Object.hasOwn(publicWith.projects[0], 'consumedImportDigest')).toBe(false);
+    expect(Object.hasOwn(publicWith.projects[0], 'incarnation')).toBe(false);
+    expect(Object.hasOwn(publicWith.projects[0], 'storageRevision')).toBe(false);
     await expect(digestWorkspaceContent(publicWith, testSubtle))
       .resolves.toBe(await digestWorkspaceContent(publicWithout, testSubtle));
   });

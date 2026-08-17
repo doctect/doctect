@@ -6,7 +6,10 @@ import {
   type WorkspaceProject,
   type WorkspaceSnapshot,
 } from '../services/localWorkspace/index';
-import { getInstalledProjectAuthorityToken } from '../services/localWorkspace/projectAuthority';
+import {
+  getInstalledProjectAuthorityToken,
+  inheritInstalledProjectAuthority,
+} from '../services/localWorkspace/projectAuthority';
 
 export type StructuralWorkspaceCommand = Exclude<
   WorkspaceCommand,
@@ -102,6 +105,11 @@ export function useWorkspaceProjectWrites(
     const nextIdentities = new Map<string, object>();
     const nextEpochs = new Map(authorityEpochsRef.current);
     let epochsChanged = false;
+    for (const projectId of authorityIdentitiesRef.current.keys()) {
+      if (survivingProjectIds.has(projectId)) continue;
+      nextEpochs.set(projectId, (nextEpochs.get(projectId) ?? 0) + 1);
+      epochsChanged = true;
+    }
     for (const project of snapshot.projects) {
       const installedToken = getInstalledProjectAuthorityToken(project);
       const identity = installedToken ?? project;
@@ -119,11 +127,6 @@ export function useWorkspaceProjectWrites(
         epochsChanged = true;
       }
       nextIdentities.set(project.id, identity);
-    }
-    for (const projectId of nextEpochs.keys()) {
-      if (survivingProjectIds.has(projectId)) continue;
-      nextEpochs.delete(projectId);
-      epochsChanged = true;
     }
     authorityIdentitiesRef.current = nextIdentities;
     if (epochsChanged) {
@@ -209,6 +212,7 @@ export function useWorkspaceProjectWrites(
     if (!currentProject) return Promise.resolve(false);
 
     const project = update(currentProject);
+    inheritInstalledProjectAuthority(project, currentProject);
     const generation = (generationsRef.current.get(projectId) ?? 0) + 1;
     const workingCopies = new Map(workingCopiesRef.current);
     workingCopies.set(projectId, { generation, project });

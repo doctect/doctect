@@ -385,6 +385,7 @@ export async function prepareLegacyRecovery(
         id,
         name: `Recovered — ${item.value.name}`,
       },
+      incarnation: environment.randomUUID(),
       storageRevision: 0,
       updatedAt,
     } satisfies StoredProject;

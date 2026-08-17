@@ -449,6 +449,10 @@ describe('explicit recover legacy as copies', () => {
     expect(Object.hasOwn(snapshot.pendingImports.at(-1)!, 'cloud')).toBe(false);
 
     const stored = await inspect(harness);
+    const recoveredIds = new Set(recovered.map(project => project.id));
+    expect(stored.projects.filter(record => recoveredIds.has(record.id))
+      .every(record => record.incarnation.length > 0)).toBe(true);
+    expect(recovered.every(project => !Object.hasOwn(project, 'incarnation'))).toBe(true);
     expect(stored.workspace[0]).toMatchObject({
       activeProjectId: 'project-a',
       projectOrder: snapshot.projects.map(project => project.id),

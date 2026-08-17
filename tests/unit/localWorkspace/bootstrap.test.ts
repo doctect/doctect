@@ -42,6 +42,7 @@ import {
 import {
   WORKSPACE_DB_NAME,
   WORKSPACE_MIGRATION_ID,
+  storedProjectLineage,
   type MigrationLedger,
 } from '../../../services/localWorkspace/schema';
 import {
@@ -1164,7 +1165,7 @@ describe('existing target decision table', () => {
     await adapter.saveProject({
       ...copy.projects[0].project,
       name: 'Valid edit after migration',
-    }, 0);
+    }, storedProjectLineage(copy.projects[0]));
     adapter.close();
 
     const result = readyResult(

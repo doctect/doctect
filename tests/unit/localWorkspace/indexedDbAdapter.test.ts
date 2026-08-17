@@ -69,6 +69,7 @@ const preparedCopy = (digest = 'source-digest'): PreparedInitialCopy => {
   const projects = snapshot.projects.map(project => ({
     id: project.id,
     project,
+    incarnation: `incarnation-${project.id}`,
     storageRevision: 0,
     updatedAt: migratedAt,
   }));
@@ -260,13 +261,20 @@ const changedProject = (project: WorkspaceProject, name: string): WorkspaceProje
   name,
 });
 
+const lineageOf = (
+  record: Pick<StoredProject, 'incarnation' | 'storageRevision'>,
+) => ({
+  incarnation: record.incarnation,
+  revision: record.storageRevision,
+});
+
 const WRITE_OPERATIONS = [
   ['initial copy', (adapter: IndexedDbAdapter, copy: PreparedInitialCopy) =>
     adapter.writeInitialCopy(copy)],
   ['ledger verification', (adapter: IndexedDbAdapter, copy: PreparedInitialCopy) =>
     adapter.markVerified(verificationExpectation(copy))],
   ['project save', (adapter: IndexedDbAdapter, copy: PreparedInitialCopy) =>
-    adapter.saveProject(copy.projects[0].project, 0)],
+    adapter.saveProject(copy.projects[0].project, lineageOf(copy.projects[0]))],
   ['workspace save', (adapter: IndexedDbAdapter, copy: PreparedInitialCopy) =>
     adapter.saveWorkspace(copy.workspace, 0)],
 ] as const;
@@ -782,6 +790,81 @@ describe('independent reads and ledger transition', () => {
 });
 
 describe('normal mutation compare-and-swap', () => {
+  it('saves only at the exact project incarnation and revision', async () => {
+    const indexedDB = new IDBFactory();
+    const adapter = createTestAdapter({ indexedDB });
+    const copy = preparedCopy();
+    await copyAndVerify(adapter, copy);
+    const original = copy.projects[0];
+
+    const saved = await adapter.saveProject(changedProject(original.project, 'Exact lineage'), {
+      incarnation: original.incarnation,
+      revision: original.storageRevision,
+    });
+    expect(saved).toMatchObject({
+      incarnation: original.incarnation,
+      storageRevision: 1,
+      project: { name: 'Exact lineage' },
+    });
+
+    const replacement = {
+      ...saved,
+      incarnation: 'replacement-incarnation',
+      project: changedProject(saved.project, 'Replacement'),
+    };
+    await seedRawRecord(indexedDB, WORKSPACE_DB_NAME, 'projects', replacement);
+
+    await expect(adapter.saveProject(changedProject(saved.project, 'Stale overwrite'), {
+      incarnation: original.incarnation,
+      revision: replacement.storageRevision,
+    })).rejects.toMatchObject({ code: 'conflict' });
+    expect((await adapter.inspect()).projects.find(record => record.id === replacement.id))
+      .toEqual(replacement);
+  });
+
+  it('closes only at the exact project incarnation and revision', async () => {
+    const exactIndexedDB = new IDBFactory();
+    const exactAdapter = createTestAdapter({ indexedDB: exactIndexedDB });
+    const exactCopy = preparedCopy();
+    await copyAndVerify(exactAdapter, exactCopy);
+
+    await exactAdapter.closeProject(
+      exactCopy.projects[0].id,
+      undefined,
+      exactCopy.workspace.revision,
+      {
+        incarnation: exactCopy.projects[0].incarnation,
+        revision: exactCopy.projects[0].storageRevision,
+      },
+    );
+    expect((await exactAdapter.inspect()).projects.some(record => (
+      record.id === exactCopy.projects[0].id
+    ))).toBe(false);
+
+    const staleIndexedDB = new IDBFactory();
+    const staleAdapter = createTestAdapter({ indexedDB: staleIndexedDB });
+    const staleCopy = preparedCopy();
+    await copyAndVerify(staleAdapter, staleCopy);
+    const replacement = {
+      ...staleCopy.projects[0],
+      incarnation: 'replacement-incarnation',
+      project: changedProject(staleCopy.projects[0].project, 'Replacement'),
+    };
+    await seedRawRecord(staleIndexedDB, WORKSPACE_DB_NAME, 'projects', replacement);
+
+    await expect(staleAdapter.closeProject(
+      replacement.id,
+      undefined,
+      staleCopy.workspace.revision,
+      {
+        incarnation: staleCopy.projects[0].incarnation,
+        revision: replacement.storageRevision,
+      },
+    )).rejects.toMatchObject({ code: 'conflict' });
+    expect((await staleAdapter.inspect()).projects.find(record => record.id === replacement.id))
+      .toEqual(replacement);
+  });
+
   it('rejects project mutation before verified authority', async () => {
     const adapter = createTestAdapter();
     const copy = preparedCopy();
@@ -789,7 +872,7 @@ describe('normal mutation compare-and-swap', () => {
 
     await expect(adapter.saveProject(
       changedProject(copy.projects[0].project, 'Too early'),
-      0,
+      lineageOf(copy.projects[0]),
     )).rejects.toMatchObject({ code: 'authority-lost' });
     expect((await adapter.inspect()).projects[0]).toEqual(copy.projects[0]);
   });
@@ -801,7 +884,7 @@ describe('normal mutation compare-and-swap', () => {
 
     await expect(adapter.saveProject(
       changedProject(copy.projects[0].project, 'Durable name'),
-      0,
+      lineageOf(copy.projects[0]),
     )).resolves.toMatchObject({
       project: { name: 'Durable name' },
       storageRevision: 1,
@@ -835,6 +918,7 @@ describe('normal mutation compare-and-swap', () => {
       project: {
         id: project.id,
         project,
+        incarnation: 'consumed-import-incarnation',
         storageRevision: 0,
         updatedAt: TEST_NOW,
         consumedImportId: pending.id,
@@ -870,6 +954,7 @@ describe('normal mutation compare-and-swap', () => {
       project: {
         id: project.id,
         project,
+        incarnation: 'consumed-import-incarnation',
         storageRevision: 0,
         updatedAt: TEST_NOW,
         consumedImportId: pending.id,
@@ -877,7 +962,10 @@ describe('normal mutation compare-and-swap', () => {
         consumedImportDigest: digest,
       },
     });
-    await adapter.saveProject({ ...project, name: 'Edited after import' }, 0);
+    await adapter.saveProject(
+      { ...project, name: 'Edited after import' },
+      { incarnation: 'consumed-import-incarnation', revision: 0 },
+    );
 
     await expect(adapter.stageImport(structuredClone(pending), digest)).resolves.toBeUndefined();
     expect((await adapter.inspect()).projects.find(record => record.id === project.id))
@@ -905,6 +993,7 @@ describe('normal mutation compare-and-swap', () => {
       project: {
         id: project.id,
         project,
+        incarnation: 'consumed-import-incarnation',
         storageRevision: 0,
         updatedAt: TEST_NOW,
         consumedImportId: pending.id,
@@ -928,8 +1017,8 @@ describe('normal mutation compare-and-swap', () => {
     await copyAndVerify(left, copy);
 
     const results = await Promise.allSettled([
-      left.saveProject(changedProject(copy.projects[0].project, 'Left'), 0),
-      right.saveProject(changedProject(copy.projects[0].project, 'Right'), 0),
+      left.saveProject(changedProject(copy.projects[0].project, 'Left'), lineageOf(copy.projects[0])),
+      right.saveProject(changedProject(copy.projects[0].project, 'Right'), lineageOf(copy.projects[0])),
     ]);
 
     expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1);
@@ -982,7 +1071,7 @@ describe('normal mutation compare-and-swap', () => {
       },
     });
 
-    await expect(adapter.saveProject(copy.projects[0].project, 0))
+    await expect(adapter.saveProject(copy.projects[0].project, lineageOf(copy.projects[0])))
       .rejects.toMatchObject({ code: 'authority-lost' });
   });
 
@@ -1001,7 +1090,7 @@ describe('normal mutation compare-and-swap', () => {
 
     await expect(adapter.saveProject(
       changedProject(copy.projects[0].project, 'Must roll back'),
-      0,
+      lineageOf(copy.projects[0]),
     )).rejects.toMatchObject({ code: 'quota' });
     expect((await adapter.inspect()).projects[0]).toEqual(copy.projects[0]);
   });

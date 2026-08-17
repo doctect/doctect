@@ -26,11 +26,14 @@ import {
   type LegacyBackupRecord,
   type LocalWorkspaceDatabase,
   type MigrationLedger,
+  type ProjectLineage,
   type RecoveryMarker,
   type StoredPendingImport,
   type StoredPreset,
   type StoredProject,
   type StoredWorkspace,
+  sameProjectLineage,
+  storedProjectLineage,
 } from './schema';
 
 const STORE_NAMES = [
@@ -89,6 +92,11 @@ export interface PreparedImportConsumption {
   project: StoredProject;
 }
 
+export interface PreparedProjectCreation {
+  project: WorkspaceProject;
+  incarnation: string;
+}
+
 export interface LegacyDriftExpectation {
   expectedLedgerRevision: number;
   expectedAcceptedLegacyDigest: string;
@@ -112,18 +120,18 @@ export interface IndexedDbAdapter {
   markVerified(expected: VerificationExpectation): Promise<MigrationLedger>;
   markLegacyDrift(expected: LegacyDriftExpectation): Promise<MigrationLedger>;
   recoverLegacyAsCopies(prepared: PreparedLegacyRecovery): Promise<MigrationLedger>;
-  saveProject(project: WorkspaceProject, expectedStorageRevision: number): Promise<StoredProject>;
+  saveProject(project: WorkspaceProject, expectedLineage: ProjectLineage): Promise<StoredProject>;
   saveWorkspace(workspace: StoredWorkspace, expectedRevision: number): Promise<StoredWorkspace>;
   createAndActivateProject(
-    project: WorkspaceProject,
+    prepared: PreparedProjectCreation,
     expectedWorkspaceRevision: number,
   ): Promise<StoredWorkspace>;
   activateProject(projectId: string, expectedWorkspaceRevision: number): Promise<StoredWorkspace>;
   closeProject(
     projectId: string,
-    successor: WorkspaceProject | undefined,
+    successor: PreparedProjectCreation | undefined,
     expectedWorkspaceRevision: number,
-    expectedStorageRevision: number,
+    expectedLineage: ProjectLineage,
   ): Promise<StoredWorkspace>;
   saveCustomPreset(preset: WorkspaceCustomPreset): Promise<void>;
   deleteCustomPreset(presetId: string): Promise<void>;
@@ -248,6 +256,13 @@ const requireWorkspaceRevision = (
     throw conflict('Workspace revision changed.');
   }
   return workspace;
+};
+
+const requireProjectIncarnation = (incarnation: unknown): string => {
+  if (typeof incarnation !== 'string' || incarnation.length === 0) {
+    throw validation('Project incarnation must be non-empty.');
+  }
+  return incarnation;
 };
 
 export const createIndexedDbAdapter = (
@@ -720,7 +735,7 @@ export const createIndexedDbAdapter = (
 
   const saveProject = async (
     project: WorkspaceProject,
-    expectedStorageRevision: number,
+    expectedLineage: ProjectLineage,
   ): Promise<StoredProject> => {
     const activeDatabase = await getDatabase();
     const updatedAt = environment.now();
@@ -734,8 +749,8 @@ export const createIndexedDbAdapter = (
         .get(WORKSPACE_MIGRATION_ID);
       requireVerifiedAuthority(ledger);
       const stored = await projectTransaction.objectStore('projects').get(project.id);
-      if (!stored || stored.storageRevision !== expectedStorageRevision) {
-        throw conflict(`Project ${project.id} storage revision changed.`);
+      if (!stored || !sameProjectLineage(storedProjectLineage(stored), expectedLineage)) {
+        throw conflict(`Project ${project.id} storage lineage changed.`);
       }
       const next: StoredProject = {
         ...stored,
@@ -788,9 +803,11 @@ export const createIndexedDbAdapter = (
   };
 
   const createAndActivateProject = async (
-    project: WorkspaceProject,
+    prepared: PreparedProjectCreation,
     expectedWorkspaceRevision: number,
   ): Promise<StoredWorkspace> => {
+    const { project } = prepared;
+    const incarnation = requireProjectIncarnation(prepared.incarnation);
     const activeDatabase = await getDatabase();
     const updatedAt = environment.now();
     const storeNames = ['projects', 'workspace', 'migrationLedger'] as const;
@@ -813,6 +830,7 @@ export const createIndexedDbAdapter = (
       const storedProject: StoredProject = {
         id: project.id,
         project,
+        incarnation,
         storageRevision: 0,
         updatedAt,
       };
@@ -872,9 +890,9 @@ export const createIndexedDbAdapter = (
 
   const closeProject = async (
     projectId: string,
-    successor: WorkspaceProject | undefined,
+    successor: PreparedProjectCreation | undefined,
     expectedWorkspaceRevision: number,
-    expectedStorageRevision: number,
+    expectedLineage: ProjectLineage,
   ): Promise<StoredWorkspace> => {
     const activeDatabase = await getDatabase();
     const updatedAt = environment.now();
@@ -894,8 +912,8 @@ export const createIndexedDbAdapter = (
       const projectStore = workspaceTransaction.objectStore('projects');
       const target = await projectStore.get(projectId);
       const targetIndex = workspace.projectOrder.indexOf(projectId);
-      if (!target || target.storageRevision !== expectedStorageRevision) {
-        throw conflict(`Project ${projectId} storage revision changed.`);
+      if (!target || !sameProjectLineage(storedProjectLineage(target), expectedLineage)) {
+        throw conflict(`Project ${projectId} storage lineage changed.`);
       }
       if (targetIndex < 0) throw validation(`Project ${projectId} does not exist.`);
 
@@ -907,17 +925,20 @@ export const createIndexedDbAdapter = (
         if (!successor) {
           throw validation('Closing the last project requires a successor.');
         }
-        if (successor.id === projectId || await projectStore.get(successor.id)) {
-          throw validation(`Successor project ${successor.id} is not unique.`);
+        const successorProject = successor.project;
+        const successorIncarnation = requireProjectIncarnation(successor.incarnation);
+        if (successorProject.id === projectId || await projectStore.get(successorProject.id)) {
+          throw validation(`Successor project ${successorProject.id} is not unique.`);
         }
         requests.push(projectStore.add({
-          id: successor.id,
-          project: successor,
+          id: successorProject.id,
+          project: successorProject,
+          incarnation: successorIncarnation,
           storageRevision: 0,
           updatedAt,
         }));
-        nextOrder = [successor.id];
-        activeProjectId = successor.id;
+        nextOrder = [successorProject.id];
+        activeProjectId = successorProject.id;
       } else {
         nextOrder = remainingOrder;
         activeProjectId = remainingOrder[Math.max(0, targetIndex - 1)];

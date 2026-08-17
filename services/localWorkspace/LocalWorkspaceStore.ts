@@ -46,7 +46,9 @@ import {
 } from './mutationQueue';
 import {
   cloneWorkspaceSnapshotWithProjectAuthority,
+  getInstalledProjectAuthorityLineage,
   getInstalledProjectAuthorityToken,
+  inheritInstalledProjectAuthority,
   registerInstalledProjectAuthority,
 } from './projectAuthority';
 import {
@@ -61,8 +63,11 @@ import {
   WORKSPACE_MIGRATION_ID,
   type LegacyBackupRecord,
   type MigrationLedger,
+  type ProjectLineage,
   type RecoveryMarker,
   type StoredProject,
+  sameProjectLineage,
+  storedProjectLineage,
 } from './schema';
 import {
   preparePendingImport,
@@ -437,10 +442,10 @@ const createLocalWorkspaceStoreAtVersion = (
   const observers = new Set<WorkspaceBootstrapObserver>();
   let durableSnapshot: WorkspaceSnapshot | undefined;
   let expectedWorkspaceRevision: number | undefined;
-  let expectedProjectRevisions = new Map<string, number>();
-  // Installed revisions identify readback authority even while save lineages
-  // keep expected revisions pinned.
-  let installedProjectRevisions = new Map<string, number>();
+  let expectedProjectLineages = new Map<string, ProjectLineage>();
+  // Installed lineages identify readback authority even while save lineages
+  // keep expected values pinned.
+  let installedProjectLineages = new Map<string, ProjectLineage>();
   let consumedImportTargets = new Map<string, string>();
   let mutationQueue: MutationQueue | undefined;
   let startReadyLegacyRevalidation: (() => void) | undefined;
@@ -466,8 +471,8 @@ const createLocalWorkspaceStoreAtVersion = (
     cachedReady = undefined;
     durableSnapshot = undefined;
     expectedWorkspaceRevision = undefined;
-    expectedProjectRevisions = new Map();
-    installedProjectRevisions = new Map();
+    expectedProjectLineages = new Map();
+    installedProjectLineages = new Map();
     consumedImportTargets = new Map();
   };
 
@@ -532,15 +537,15 @@ const createLocalWorkspaceStoreAtVersion = (
     snapshot: WorkspaceSnapshot,
     options: {
       updateCachedReady?: boolean;
-      preservePinnedProjectRevisions?: boolean;
-      preserveProjectAuthority?: { projectId: string; storageRevision: number };
+      preservePinnedProjectLineages?: boolean;
+      preserveProjectAuthority?: { projectId: string; lineage: ProjectLineage };
     } = {},
   ): WorkspaceSnapshot => {
     let nextSnapshot = structuredClone(snapshot);
-    const nextInstalledProjectRevisions = new Map(
-      records.projects.map(record => [record.id, record.storageRevision]),
+    const nextInstalledProjectLineages = new Map(
+      records.projects.map(record => [record.id, storedProjectLineage(record)]),
     );
-    const nextProjectRevisions = new Map(nextInstalledProjectRevisions);
+    const nextProjectLineages = new Map(nextInstalledProjectLineages);
     const previousProjects = new Map(
       durableSnapshot?.projects.map(project => [project.id, project]) ?? [],
     );
@@ -550,26 +555,31 @@ const createLocalWorkspaceStoreAtVersion = (
       projects: nextSnapshot.projects.map(project => {
         const record = recordsById.get(project.id);
         const previous = previousProjects.get(project.id);
-        if (record && previous
-          && installedProjectRevisions.get(project.id) === record.storageRevision) {
+        const lineage = record && storedProjectLineage(record);
+        const previousLineage = installedProjectLineages.get(project.id);
+        if (lineage && previous && previousLineage
+          && sameProjectLineage(previousLineage, lineage)) {
           return previous;
         }
-        const preserveAuthority = Boolean(record && previous
+        const preserveAuthority = Boolean(lineage && previous
           && options.preserveProjectAuthority?.projectId === project.id
-          && options.preserveProjectAuthority.storageRevision === record.storageRevision);
-        registerInstalledProjectAuthority(
-          project,
-          preserveAuthority
-            ? getInstalledProjectAuthorityToken(previous)
-            : undefined,
-        );
+          && sameProjectLineage(options.preserveProjectAuthority.lineage, lineage));
+        if (lineage) {
+          registerInstalledProjectAuthority(
+            project,
+            lineage,
+            preserveAuthority
+              ? getInstalledProjectAuthorityToken(previous)
+              : undefined,
+          );
+        }
         return project;
       }),
     };
-    if (options.preservePinnedProjectRevisions) {
-      for (const [projectId, revision] of expectedProjectRevisions) {
-        if (mutationQueue?.hasPinnedProjectRevision(projectId)) {
-          nextProjectRevisions.set(projectId, revision);
+    if (options.preservePinnedProjectLineages) {
+      for (const [projectId, lineage] of expectedProjectLineages) {
+        if (mutationQueue?.hasPinnedProjectLineage(projectId)) {
+          nextProjectLineages.set(projectId, lineage);
         }
       }
     }
@@ -581,8 +591,8 @@ const createLocalWorkspaceStoreAtVersion = (
     }
     const nextWorkspaceRevision = records.workspace.revision;
     durableSnapshot = nextSnapshot;
-    installedProjectRevisions = nextInstalledProjectRevisions;
-    expectedProjectRevisions = nextProjectRevisions;
+    installedProjectLineages = nextInstalledProjectLineages;
+    expectedProjectLineages = nextProjectLineages;
     expectedWorkspaceRevision = nextWorkspaceRevision;
     consumedImportTargets = nextConsumedImportTargets;
     if (options.updateCachedReady && cachedReady) {
@@ -1299,10 +1309,22 @@ const createLocalWorkspaceStoreAtVersion = (
     return value;
   };
 
+  const createProjectIncarnation = (): string => {
+    const incarnation = environment.randomUUID();
+    if (typeof incarnation !== 'string' || incarnation.length === 0) {
+      throw new WorkspaceStoreError('Project incarnation must be non-empty.', 'validation');
+    }
+    return incarnation;
+  };
+
   const prepareCommand = (command: WorkspaceCommand): WorkspaceCommand => {
     try {
       switch (command.type) {
-        case 'save-project':
+        case 'save-project': {
+          const project = validateWorkspaceProject(command.project, { warningPolicy: 'reject' });
+          inheritInstalledProjectAuthority(project, command.project);
+          return { ...command, project };
+        }
         case 'create-and-activate-project':
           return {
             ...command,
@@ -1359,7 +1381,7 @@ const createLocalWorkspaceStoreAtVersion = (
   };
 
   const readPostCommandSnapshot = async (
-    preserveProjectAuthority?: { projectId: string; storageRevision: number },
+    preserveProjectAuthority?: { projectId: string; lineage: ProjectLineage },
   ): Promise<WorkspaceSnapshot> => {
     let records: WorkspaceRecords;
     let snapshot: WorkspaceSnapshot;
@@ -1388,7 +1410,7 @@ const createLocalWorkspaceStoreAtVersion = (
     }
     return installDurableState(records, snapshot, {
       updateCachedReady: true,
-      preservePinnedProjectRevisions: true,
+      preservePinnedProjectLineages: true,
       preserveProjectAuthority,
     });
   };
@@ -1421,24 +1443,25 @@ const createLocalWorkspaceStoreAtVersion = (
 
   const executeProjectSave = (
     project: WorkspaceProject,
-    expectedRevision: number,
+    expectedLineage: ProjectLineage,
   ): Promise<WorkspaceSnapshot> =>
     runCommandOperation(async () => {
-      const currentRevision = expectedProjectRevisions.get(project.id);
-      if (currentRevision === undefined) {
+      const currentLineage = expectedProjectLineages.get(project.id);
+      if (currentLineage === undefined) {
         throw new WorkspaceStoreError(`Project ${project.id} does not exist.`, 'validation');
       }
-      if (currentRevision !== expectedRevision) {
+      if (!sameProjectLineage(currentLineage, expectedLineage)) {
         throw new WorkspaceStoreError(
           `Project ${project.id} local revision lineage changed.`,
           'conflict',
         );
       }
-      const saved = await getAdapter().saveProject(project, expectedRevision);
-      expectedProjectRevisions.set(project.id, saved.storageRevision);
+      const saved = await getAdapter().saveProject(project, expectedLineage);
+      const savedLineage = storedProjectLineage(saved);
+      expectedProjectLineages.set(project.id, savedLineage);
       return readPostCommandSnapshot({
         projectId: project.id,
-        storageRevision: saved.storageRevision,
+        lineage: savedLineage,
       });
     });
 
@@ -1463,6 +1486,7 @@ const createLocalWorkspaceStoreAtVersion = (
     const storedProject: StoredProject = {
       id: project.id,
       project,
+      incarnation: createProjectIncarnation(),
       storageRevision: 0,
       updatedAt,
       consumedImportId: importId,
@@ -1484,7 +1508,10 @@ const createLocalWorkspaceStoreAtVersion = (
     switch (command.type) {
       case 'create-and-activate-project':
         await getAdapter().createAndActivateProject(
-          command.project,
+          {
+            project: command.project,
+            incarnation: createProjectIncarnation(),
+          },
           currentWorkspaceRevision(),
         );
         break;
@@ -1492,7 +1519,7 @@ const createLocalWorkspaceStoreAtVersion = (
         await getAdapter().activateProject(command.projectId, currentWorkspaceRevision());
         break;
       case 'close-project':
-        if (!expectedProjectRevisions.has(command.projectId)) {
+        if (!expectedProjectLineages.has(command.projectId)) {
           throw new WorkspaceStoreError(
             `Project ${command.projectId} does not exist.`,
             'validation',
@@ -1500,11 +1527,16 @@ const createLocalWorkspaceStoreAtVersion = (
         }
         await getAdapter().closeProject(
           command.projectId,
-          command.successor,
+          command.successor
+            ? {
+                project: command.successor,
+                incarnation: createProjectIncarnation(),
+              }
+            : undefined,
           currentWorkspaceRevision(),
-          expectedProjectRevisions.get(command.projectId) as number,
+          expectedProjectLineages.get(command.projectId) as ProjectLineage,
         );
-        expectedProjectRevisions.delete(command.projectId);
+        expectedProjectLineages.delete(command.projectId);
         break;
       case 'save-custom-preset':
         await getAdapter().saveCustomPreset(command.preset);
@@ -1860,14 +1892,17 @@ const createLocalWorkspaceStoreAtVersion = (
         return Promise.reject(validationError(error));
       }
       if (prepared.type !== 'save-project') return queue.runExclusive(prepared);
-      const expectedRevision = expectedProjectRevisions.get(prepared.project.id);
-      if (expectedRevision === undefined) {
+      const expectedLineage = expectedProjectLineages.get(prepared.project.id);
+      if (expectedLineage === undefined) {
         return Promise.reject(new WorkspaceStoreError(
           `Project ${prepared.project.id} does not exist.`,
           'validation',
         ));
       }
-      return queue.enqueueProjectSave(prepared.project, expectedRevision);
+      return queue.enqueueProjectSave(
+        prepared.project,
+        getInstalledProjectAuthorityLineage(prepared.project) ?? expectedLineage,
+      );
     },
 
     async exportRecoveryBundle(source: RecoverySource): Promise<Blob> {

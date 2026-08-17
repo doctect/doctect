@@ -11,15 +11,38 @@ export const WORKSPACE_DB_VERSION = 1;
 export const WORKSPACE_MIGRATION_ID = 'local-storage-to-indexeddb-v1';
 export const PERSISTENCE_ROLLOUT_EPOCH = 1;
 
+export interface ProjectLineage {
+  readonly incarnation: string;
+  readonly revision: number;
+}
+
 export interface StoredProject {
   id: string;
   project: WorkspaceProject;
+  incarnation: string;
   storageRevision: number;
   updatedAt: string;
   consumedImportId?: string;
   consumedImportCreatedAt?: string;
   consumedImportDigest?: string;
 }
+
+export const storedProjectLineage = (
+  record: Pick<StoredProject, 'incarnation' | 'storageRevision'>,
+): ProjectLineage => ({
+  incarnation: record.incarnation,
+  revision: record.storageRevision,
+});
+
+export const sameProjectLineage = (
+  left: ProjectLineage,
+  right: ProjectLineage,
+): boolean => left.incarnation === right.incarnation && left.revision === right.revision;
+
+export const nextProjectLineage = (lineage: ProjectLineage): ProjectLineage => ({
+  incarnation: lineage.incarnation,
+  revision: lineage.revision + 1,
+});
 
 export interface StoredWorkspace {
   id: 'current';
