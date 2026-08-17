@@ -46,6 +46,7 @@ type GateState =
       importsReady: boolean;
       initialWarnings: string[];
       warningImportIds: string[];
+      editorMountGeneration: number;
     };
 
 interface PendingImportDescriptor {
@@ -201,11 +202,16 @@ export function WorkspaceBootstrapGate({
   const consumeAttemptRef = useRef(0);
   const consumingRef = useRef<{ store: LocalWorkspaceStore; attempt: number } | null>(null);
   const openWorkspaceRef = useRef<OpenWorkspaceCapture | null>(null);
+  const nextEditorMountGenerationRef = useRef(0);
+  const activeEditorMountGenerationRef = useRef<number | null>(null);
   const committedStoreRef = useRef(store);
   const committedStateRef = useRef(state);
 
   useLayoutEffect(() => {
-    if (committedStoreRef.current !== store) openWorkspaceRef.current = null;
+    if (committedStoreRef.current !== store) {
+      openWorkspaceRef.current = null;
+      activeEditorMountGenerationRef.current = null;
+    }
     committedStoreRef.current = store;
     committedStateRef.current = state;
   }, [state, store]);
@@ -247,10 +253,14 @@ export function WorkspaceBootstrapGate({
   ) => {
     resetActions();
     if (result.status === 'ready') {
-      openWorkspaceRef.current = {
-        store: resultStore,
-        workspace: structuredClone(result.snapshot),
-      };
+      const editorMountGeneration = ++nextEditorMountGenerationRef.current;
+      activeEditorMountGenerationRef.current = editorMountGeneration;
+      if (openWorkspaceRef.current?.store !== resultStore) {
+        openWorkspaceRef.current = {
+          store: resultStore,
+          workspace: structuredClone(result.snapshot),
+        };
+      }
       const importState = prepareImportQueue(resultStore, result.snapshot);
       const warnings = unacknowledgedWarnings(resultStore);
       setState({
@@ -259,10 +269,12 @@ export function WorkspaceBootstrapGate({
         result,
         showReceipt: Boolean(result.receipt && !receiptWasSeen(result.receipt)),
         importsReady: importState.unresolved.length === 0,
+        editorMountGeneration,
         ...warnings,
       });
       return;
     }
+    activeEditorMountGenerationRef.current = null;
     setState(blockedState(resultStore, result));
   };
 
@@ -274,6 +286,7 @@ export function WorkspaceBootstrapGate({
     authorityVersionRef.current += 1;
     consumeAttemptRef.current += 1;
     consumingRef.current = null;
+    activeEditorMountGenerationRef.current = null;
     let authorityLost = false;
     resetActions();
     setState({
@@ -299,6 +312,7 @@ export function WorkspaceBootstrapGate({
           authorityVersionRef.current += 1;
           consumeAttemptRef.current += 1;
           consumingRef.current = null;
+          activeEditorMountGenerationRef.current = null;
           resetActions();
           setState(blockedState(bootstrapStore, result));
         },
@@ -321,6 +335,7 @@ export function WorkspaceBootstrapGate({
       actionRef.current += 1;
       consumeAttemptRef.current += 1;
       consumingRef.current = null;
+      activeEditorMountGenerationRef.current = null;
       controller.abort();
       if (controllerRef.current === controller) controllerRef.current = null;
     };
@@ -359,10 +374,6 @@ export function WorkspaceBootstrapGate({
       const currentState = committedStateRef.current;
       if (currentState.kind !== 'ready' || currentState.store !== actionStore) return;
       const warnings = unacknowledgedWarnings(actionStore);
-      openWorkspaceRef.current = {
-        store: actionStore,
-        workspace: structuredClone(snapshot),
-      };
       setState({
         ...currentState,
         result: { ...currentState.result, snapshot },
@@ -371,6 +382,7 @@ export function WorkspaceBootstrapGate({
       });
     } catch {
       if (isCurrent()) {
+        activeEditorMountGenerationRef.current = null;
         resetActions();
         setState(blockedState(actionStore, rejectedImportConsumptionResult()));
       }
@@ -574,6 +586,8 @@ export function WorkspaceBootstrapGate({
       const current = committedStateRef.current;
       if (current.kind !== 'ready'
         || current.store !== state.store
+        || current.editorMountGeneration !== state.editorMountGeneration
+        || activeEditorMountGenerationRef.current !== state.editorMountGeneration
         || state.store !== committedStoreRef.current) return;
       openWorkspaceRef.current = {
         store: state.store,

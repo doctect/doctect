@@ -17,6 +17,7 @@ import type {
   WorkspaceBootstrapPhase,
   WorkspacePendingImport,
   WorkspaceProject,
+  WorkspaceSnapshot,
 } from '../../services/localWorkspace/index';
 import {
   deferred,
@@ -692,6 +693,305 @@ describe('WorkspaceBootstrapGate', () => {
       version: 1,
       capturedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/),
       workspace: openWorkspace,
+    }, 'doctect-open-workspace.json');
+  });
+
+  it('seeds a verified initial snapshot before an editor publishes', async () => {
+    const initial = workspaceSnapshot({
+      projects: [{ ...workspaceSnapshot().projects[0], name: 'Verified initial work' }],
+    });
+    const store = fakeReadyStore({ snapshot: initial });
+    render(<WorkspaceBootstrapGate store={store} renderEditor={fakeEditorRenderer} />);
+    await screen.findByTestId('editor-page');
+
+    act(() => store.emitAuthorityLost(recoveryResult(splitBrainRecovery())));
+    fireEvent.click(screen.getByRole('button', { name: 'Download open work' }));
+
+    expect(downloadJson).toHaveBeenCalledWith({
+      format: 'doctect.open-workspace-recovery',
+      version: 1,
+      capturedAt: expect.any(String),
+      workspace: initial,
+    }, 'doctect-open-workspace.json');
+  });
+
+  it('retains blocked open work through Retry until the replacement editor publishes', async () => {
+    const initial = workspaceSnapshot({ activeProjectId: 'initial-project' });
+    const blockedOpenWork = workspaceSnapshot({
+      activeProjectId: 'initial-project',
+      projects: [{ ...initial.projects[0], name: 'Blocked unsaved work' }],
+    });
+    const retried = workspaceSnapshot({ activeProjectId: 'retried-project' });
+    const store = fakeStore({
+      bootstrap: [
+        readyResult({ snapshot: initial }),
+        readyResult({ snapshot: retried }),
+      ],
+    });
+    let initialPublish: WorkspaceEditorMount['onWorkspaceChange'] | undefined;
+    const renderEditor = (mount: WorkspaceEditorMount) => {
+      initialPublish ??= mount.onWorkspaceChange;
+      return <div data-testid="editor-page">{mount.initialWorkspace.activeProjectId}</div>;
+    };
+    render(<WorkspaceBootstrapGate store={store} renderEditor={renderEditor} />);
+    await screen.findByText('initial-project');
+    act(() => initialPublish?.(blockedOpenWork));
+    act(() => store.emitAuthorityLost(recoveryResult(workspaceRecovery({
+      recoveryId: 'retry-retained-open-work',
+      availableExports: [],
+      canRetry: true,
+    }))));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByTestId('editor-page')).toHaveTextContent('retried-project');
+    act(() => store.emitAuthorityLost(recoveryResult(workspaceRecovery({
+      recoveryId: 'retry-retained-open-work-again',
+      availableExports: [],
+    })), 1));
+    fireEvent.click(screen.getByRole('button', { name: 'Download open work' }));
+
+    expect(downloadJson).toHaveBeenCalledWith({
+      format: 'doctect.open-workspace-recovery',
+      version: 1,
+      capturedAt: expect.any(String),
+      workspace: blockedOpenWork,
+    }, 'doctect-open-workspace.json');
+  });
+
+  it('retains blocked open work through recover-as-copies completion', async () => {
+    const initial = workspaceSnapshot({ activeProjectId: 'before-recovery' });
+    const blockedOpenWork = workspaceSnapshot({
+      activeProjectId: 'before-recovery',
+      projects: [{ ...initial.projects[0], name: 'Unsaved before recovery' }],
+    });
+    const recovered = workspaceSnapshot({ activeProjectId: 'recovered-project' });
+    const store = fakeStore({
+      bootstrap: readyResult({ snapshot: initial }),
+      commit: recovered,
+    });
+    let initialPublish: WorkspaceEditorMount['onWorkspaceChange'] | undefined;
+    const renderEditor = (mount: WorkspaceEditorMount) => {
+      initialPublish ??= mount.onWorkspaceChange;
+      return <div data-testid="editor-page">{mount.initialWorkspace.activeProjectId}</div>;
+    };
+    render(<WorkspaceBootstrapGate store={store} renderEditor={renderEditor} />);
+    await screen.findByText('before-recovery');
+    act(() => initialPublish?.(blockedOpenWork));
+    act(() => store.emitAuthorityLost(recoveryResult(splitBrainRecovery({
+      recoveryId: 'retain-through-recovery',
+    }))));
+
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Recover changed projects as copies',
+    }));
+    fireEvent.click(screen.getByRole('button', { name: 'Recover as copies' }));
+    expect(await screen.findByTestId('editor-page')).toHaveTextContent('recovered-project');
+    act(() => store.emitAuthorityLost(unavailableResult({ availableExports: [] })));
+    fireEvent.click(screen.getByRole('button', { name: 'Download open work' }));
+
+    expect(downloadJson).toHaveBeenCalledWith({
+      format: 'doctect.open-workspace-recovery',
+      version: 1,
+      capturedAt: expect.any(String),
+      workspace: blockedOpenWork,
+    }, 'doctect-open-workspace.json');
+  });
+
+  it('retains blocked open work while a Retry receipt finishes', async () => {
+    const initial = workspaceSnapshot({ activeProjectId: 'before-receipt' });
+    const blockedOpenWork = workspaceSnapshot({
+      activeProjectId: 'before-receipt',
+      projects: [{ ...initial.projects[0], name: 'Unsaved before receipt' }],
+    });
+    const retried = workspaceSnapshot({ activeProjectId: 'after-receipt' });
+    const store = fakeStore({
+      bootstrap: [
+        readyResult({ snapshot: initial }),
+        readyResult({
+          snapshot: retried,
+          receipt: migrationReceipt({ id: 'retained-open-work-receipt' }),
+        }),
+      ],
+    });
+    let initialPublish: WorkspaceEditorMount['onWorkspaceChange'] | undefined;
+    const renderEditor = (mount: WorkspaceEditorMount) => {
+      initialPublish ??= mount.onWorkspaceChange;
+      return <div data-testid="editor-page">{mount.initialWorkspace.activeProjectId}</div>;
+    };
+    render(<WorkspaceBootstrapGate store={store} renderEditor={renderEditor} />);
+    await screen.findByText('before-receipt');
+    act(() => initialPublish?.(blockedOpenWork));
+    act(() => store.emitAuthorityLost(recoveryResult(workspaceRecovery({
+      recoveryId: 'receipt-retry',
+      availableExports: [],
+      canRetry: true,
+    }))));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await screen.findByRole('heading', { name: 'Local projects upgraded' });
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to editor' }));
+    expect(await screen.findByTestId('editor-page')).toHaveTextContent('after-receipt');
+    act(() => store.emitAuthorityLost(unavailableResult({ availableExports: [] }), 1));
+    fireEvent.click(screen.getByRole('button', { name: 'Download open work' }));
+
+    expect(downloadJson).toHaveBeenCalledWith({
+      format: 'doctect.open-workspace-recovery',
+      version: 1,
+      capturedAt: expect.any(String),
+      workspace: blockedOpenWork,
+    }, 'doctect-open-workspace.json');
+  });
+
+  it('retains blocked open work while Retry consumes a pending import', async () => {
+    const initial = workspaceSnapshot({ activeProjectId: 'before-import' });
+    const blockedOpenWork = workspaceSnapshot({
+      activeProjectId: 'before-import',
+      projects: [{ ...initial.projects[0], name: 'Unsaved before import' }],
+    });
+    const pending = pendingImport('retained-open-work-import', 'imported-project');
+    const retried = workspaceSnapshot({
+      activeProjectId: 'before-import',
+      pendingImports: [pending],
+    });
+    const consumed = consumedSnapshot(retried, [pending]);
+    const store = fakeStore({
+      bootstrap: [
+        readyResult({ snapshot: initial }),
+        readyResult({ snapshot: retried }),
+      ],
+      commit: consumed,
+    });
+    let initialPublish: WorkspaceEditorMount['onWorkspaceChange'] | undefined;
+    const renderEditor = (mount: WorkspaceEditorMount) => {
+      initialPublish ??= mount.onWorkspaceChange;
+      return <div data-testid="editor-page">{mount.initialWorkspace.activeProjectId}</div>;
+    };
+    render(<WorkspaceBootstrapGate store={store} renderEditor={renderEditor} />);
+    await screen.findByText('before-import');
+    act(() => initialPublish?.(blockedOpenWork));
+    act(() => store.emitAuthorityLost(recoveryResult(workspaceRecovery({
+      recoveryId: 'pending-import-retry',
+      availableExports: [],
+      canRetry: true,
+    }))));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByTestId('editor-page')).toHaveTextContent('imported-project');
+    expect(store.commit).toHaveBeenCalledWith({
+      type: 'consume-import',
+      importId: 'retained-open-work-import',
+    });
+    act(() => store.emitAuthorityLost(unavailableResult({ availableExports: [] }), 1));
+    fireEvent.click(screen.getByRole('button', { name: 'Download open work' }));
+
+    expect(downloadJson).toHaveBeenCalledWith({
+      format: 'doctect.open-workspace-recovery',
+      version: 1,
+      capturedAt: expect.any(String),
+      workspace: blockedOpenWork,
+    }, 'doctect-open-workspace.json');
+  });
+
+  it('rejects a retained prior-mount callback after Retry', async () => {
+    const initial = workspaceSnapshot({ activeProjectId: 'before-stale-callback' });
+    const blockedOpenWork = workspaceSnapshot({
+      activeProjectId: 'before-stale-callback',
+      projects: [{ ...initial.projects[0], name: 'Captured before Retry' }],
+    });
+    const staleWorkspace = workspaceSnapshot({
+      activeProjectId: 'stale-prior-mount',
+      projects: [{ ...initial.projects[0], name: 'Stale callback work' }],
+    });
+    const retried = workspaceSnapshot({ activeProjectId: 'after-retry' });
+    const store = fakeStore({
+      bootstrap: [
+        readyResult({ snapshot: initial }),
+        readyResult({ snapshot: retried }),
+      ],
+    });
+    const renderEditor = vi.fn((mount: WorkspaceEditorMount) => (
+      <div data-testid="editor-page">{mount.initialWorkspace.activeProjectId}</div>
+    ));
+    render(<WorkspaceBootstrapGate store={store} renderEditor={renderEditor} />);
+    await screen.findByText('before-stale-callback');
+    const priorPublish = renderEditor.mock.calls.at(-1)![0].onWorkspaceChange;
+    act(() => priorPublish(blockedOpenWork));
+    act(() => store.emitAuthorityLost(recoveryResult(workspaceRecovery({
+      recoveryId: 'stale-callback-retry',
+      availableExports: [],
+      canRetry: true,
+    }))));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByTestId('editor-page')).toHaveTextContent('after-retry');
+    act(() => priorPublish(staleWorkspace));
+    act(() => store.emitAuthorityLost(unavailableResult({ availableExports: [] }), 1));
+    fireEvent.click(screen.getByRole('button', { name: 'Download open work' }));
+
+    expect(downloadJson).toHaveBeenCalledWith({
+      format: 'doctect.open-workspace-recovery',
+      version: 1,
+      capturedAt: expect.any(String),
+      workspace: blockedOpenWork,
+    }, 'doctect-open-workspace.json');
+  });
+
+  it('replaces retained work when the real write hook publishes a replacement mount', async () => {
+    const initialState = createBlankProject();
+    const initialProject = {
+      ...workspaceSnapshot().projects[0],
+      name: 'Initial durable project',
+      initialState,
+    };
+    const initial = workspaceSnapshot({ projects: [initialProject] });
+    const workingProject = { ...initialProject, name: 'Blocked working project' };
+    const replacementProject = { ...initialProject, name: 'Replacement durable project' };
+    const replacement = workspaceSnapshot({ projects: [replacementProject] });
+    const pendingSave = deferred<WorkspaceSnapshot>();
+    const store = fakeStore({
+      bootstrap: [
+        readyResult({ snapshot: initial }),
+        readyResult({ snapshot: replacement }),
+      ],
+      commit: pendingSave.promise,
+    });
+    const publications = vi.fn();
+    const renderEditor = (mount: WorkspaceEditorMount) => (
+      <WorkspaceWritesProbe
+        mount={{
+          ...mount,
+          onWorkspaceChange(snapshot) {
+            publications(snapshot);
+            mount.onWorkspaceChange(snapshot);
+          },
+        }}
+        workingProject={workingProject}
+      />
+    );
+    render(<WorkspaceBootstrapGate store={store} renderEditor={renderEditor} />);
+    fireEvent.click(await screen.findByTestId('editor-page'));
+    expect(publications).toHaveBeenLastCalledWith(workspaceSnapshot({
+      projects: [workingProject],
+    }));
+    act(() => store.emitAuthorityLost(recoveryResult(workspaceRecovery({
+      recoveryId: 'real-hook-retry',
+      availableExports: [],
+      canRetry: true,
+    }))));
+    publications.mockClear();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await screen.findByTestId('editor-page');
+    await waitFor(() => expect(publications).toHaveBeenCalledWith(replacement));
+    expect(publications).toHaveBeenCalledOnce();
+    act(() => store.emitAuthorityLost(unavailableResult({ availableExports: [] }), 1));
+    fireEvent.click(screen.getByRole('button', { name: 'Download open work' }));
+
+    expect(downloadJson).toHaveBeenCalledWith({
+      format: 'doctect.open-workspace-recovery',
+      version: 1,
+      capturedAt: expect.any(String),
+      workspace: replacement,
     }, 'doctect-open-workspace.json');
   });
 

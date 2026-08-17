@@ -88,6 +88,24 @@ describe('useWorkspaceProjectWrites', () => {
     });
   });
 
+  it('publishes the initial visible workspace once under StrictMode without writing', () => {
+    const initial = snapshot();
+    const store = storeWithCommit(async () => initial);
+    const onWorkspaceChange = vi.fn();
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <StrictMode>{children}</StrictMode>
+    );
+
+    renderHook(
+      () => useWorkspaceProjectWrites(store, initial, onWorkspaceChange),
+      { wrapper },
+    );
+
+    expect(onWorkspaceChange).toHaveBeenCalledOnce();
+    expect(onWorkspaceChange).toHaveBeenCalledWith(initial);
+    expect(store.commit).not.toHaveBeenCalled();
+  });
+
   it('renders initial state as saved without issuing a write, including StrictMode replay', () => {
     const store = storeWithCommit(async () => snapshot());
     const wrapper = ({ children }: { children: React.ReactNode }) => (

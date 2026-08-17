@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   WorkspaceStoreError,
   type LocalWorkspaceStore,
@@ -95,6 +95,7 @@ export function useWorkspaceProjectWrites(
   const nextAuthorityEpochRef = useRef(initialWorkspace.projects.length);
   const structuralQueueRef = useRef<Promise<void> | null>(null);
   const onWorkspaceChangeRef = useRef(onWorkspaceChange);
+  const hasPublishedWorkspaceRef = useRef(false);
   onWorkspaceChangeRef.current = onWorkspaceChange;
   const [workspace, setWorkspace] = useState(initialWorkspace);
   const [authorityEpochs, setAuthorityEpochs] = useState<ReadonlyMap<string, number>>(
@@ -105,9 +106,16 @@ export function useWorkspaceProjectWrites(
   );
 
   const publishWorkspace = useCallback((snapshot: WorkspaceSnapshot) => {
+    hasPublishedWorkspaceRef.current = true;
     onWorkspaceChangeRef.current?.(structuredClone(snapshot));
     setWorkspace(snapshot);
   }, []);
+
+  useEffect(() => {
+    if (hasPublishedWorkspaceRef.current) return;
+    hasPublishedWorkspaceRef.current = true;
+    onWorkspaceChangeRef.current?.(structuredClone(initialWorkspace));
+  }, [initialWorkspace]);
 
   const reconcileSnapshot = useCallback((
     snapshot: WorkspaceSnapshot,
