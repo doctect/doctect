@@ -201,6 +201,14 @@ interface ParsedHtml {
   nodeLocation(node: Node): HtmlNodeLocation | null;
 }
 
+interface ParsedExecutableDocument extends ParsedHtml {
+  xml: boolean;
+}
+
+type ParsedExecutableDocumentResult =
+  | { parsed: ParsedExecutableDocument; failure?: never }
+  | { parsed?: never; failure: ParseFailure };
+
 interface SourcePositionSegment {
   generatedStart: number;
   generatedEnd: number;
@@ -229,7 +237,10 @@ type ReadDirectory = (directory: string) => Dirent[];
 
 const nodeRequire = createRequire(import.meta.url);
 const { JSDOM } = nodeRequire('jsdom') as {
-  JSDOM: new (source: string, options: { includeNodeLocations: true }) => ParsedHtml;
+  JSDOM: new (
+    source: string,
+    options: { includeNodeLocations: true } | { contentType: 'image/svg+xml' },
+  ) => ParsedHtml;
 };
 const DirectSourceTextModule = (nodeRequire('node:vm') as {
   SourceTextModule?: new (source: string, options: { identifier: string }) => object;
@@ -434,6 +445,179 @@ const positionSegments = (offsets: readonly number[]): SourcePositionSegment[] =
   return segments;
 };
 
+interface AuthoredXmlElement {
+  name: string;
+  location: HtmlNodeLocation;
+}
+
+const xmlMarkupEnd = (source: string, start: number, doctype = false): number => {
+  let quote: string | undefined;
+  let subsetDepth = 0;
+  for (let index = start; index < source.length; index += 1) {
+    const character = source[index];
+    if (quote) {
+      if (character === quote) quote = undefined;
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      quote = character;
+    } else if (doctype && character === '[') {
+      subsetDepth += 1;
+    } else if (doctype && character === ']') {
+      subsetDepth -= 1;
+    } else if (character === '>' && subsetDepth === 0) {
+      return index + 1;
+    }
+  }
+  throw new Error('unterminated XML markup');
+};
+
+const authoredXmlLocations = (
+  source: string,
+): { elements: AuthoredXmlElement[]; characters: HtmlNodeLocation[] } => {
+  // JSDOM exposes XML semantics without locations; validate lexical ranges against its DOM order.
+  const elements: AuthoredXmlElement[] = [];
+  const characters: HtmlNodeLocation[] = [];
+  const stack: AuthoredXmlElement[] = [];
+  const appendCharacters = (startOffset: number, endOffset: number): void => {
+    if (stack.length > 0 && endOffset > startOffset) {
+      characters.push({ startOffset, endOffset });
+    }
+  };
+  let cursor = 0;
+  while (cursor < source.length) {
+    const open = source.indexOf('<', cursor);
+    if (open === -1) {
+      appendCharacters(cursor, source.length);
+      break;
+    }
+    appendCharacters(cursor, open);
+    if (source.startsWith('<!--', open)) {
+      const close = source.indexOf('-->', open + 4);
+      if (close === -1) throw new Error('unterminated XML comment');
+      cursor = close + 3;
+      continue;
+    }
+    if (source.startsWith('<![CDATA[', open)) {
+      const close = source.indexOf(']]>', open + 9);
+      if (close === -1) throw new Error('unterminated XML CDATA section');
+      appendCharacters(open, close + 3);
+      cursor = close + 3;
+      continue;
+    }
+    if (source.startsWith('<?', open)) {
+      const close = source.indexOf('?>', open + 2);
+      if (close === -1) throw new Error('unterminated XML processing instruction');
+      cursor = close + 2;
+      continue;
+    }
+    if (source.startsWith('<!DOCTYPE', open)) {
+      cursor = xmlMarkupEnd(source, open + 9, true);
+      continue;
+    }
+    const end = xmlMarkupEnd(source, open + 1);
+    if (source.startsWith('</', open)) {
+      const name = source.slice(open + 2, end - 1).match(/^([^\t\n\r />]+)/)?.[1];
+      const element = stack.pop();
+      if (!name || !element || element.name !== name) throw new Error('XML element mapping mismatch');
+      element.location.endTag = { startOffset: open, endOffset: end };
+      element.location.endOffset = end;
+      cursor = end;
+      continue;
+    }
+    if (source.startsWith('<!', open)) {
+      cursor = end;
+      continue;
+    }
+    const name = source.slice(open + 1, end - 1).match(/^([^\t\n\r />]+)/)?.[1];
+    if (!name) throw new Error('XML element mapping mismatch');
+    let marker = end - 2;
+    while (marker > open && /[\t\n\r ]/.test(source[marker])) marker -= 1;
+    const element: AuthoredXmlElement = {
+      name,
+      location: {
+        startOffset: open,
+        endOffset: end,
+        startTag: { startOffset: open, endOffset: end },
+      },
+    };
+    elements.push(element);
+    if (source[marker] !== '/') stack.push(element);
+    cursor = end;
+  }
+  if (stack.length > 0) throw new Error('XML element mapping mismatch');
+  return { elements, characters };
+};
+
+const standaloneSvgDocument = (source: string): ParsedExecutableDocument => {
+  const dom = new JSDOM(source, { contentType: 'image/svg+xml' });
+  const document = dom.window.document;
+  const authored = authoredXmlLocations(source);
+  const elements = [...document.getElementsByTagName('*')];
+  const characters: Node[] = [];
+  const visitCharacters = (node: Node): void => {
+    for (const child of node.childNodes) {
+      if (child.nodeType === 3 || child.nodeType === 4) characters.push(child);
+      else if (child.nodeType === 1) visitCharacters(child);
+    }
+  };
+  visitCharacters(document.documentElement);
+  if (elements.length !== authored.elements.length || characters.length !== authored.characters.length) {
+    throw new Error('XML source location mapping mismatch');
+  }
+  const locations = new Map<Node, HtmlNodeLocation>();
+  elements.forEach((element, index) => {
+    if (element.tagName !== authored.elements[index].name) {
+      throw new Error('XML source location mapping mismatch');
+    }
+    locations.set(element, authored.elements[index].location);
+  });
+  characters.forEach((node, index) => locations.set(node, authored.characters[index]));
+  return {
+    window: dom.window,
+    xml: true,
+    nodeLocation: node => locations.get(node) ?? null,
+  };
+};
+
+const xmlParseFailure = (source: string, error: unknown): ParseFailure => {
+  if (!(error instanceof Error)) throw error;
+  const location = error.message.match(/:(\d+):(\d+):\s*(.*)$/);
+  return {
+    message: location?.[3] ?? error.message,
+    offset: location
+      ? generatedOffset(source, Number(location[1]), Math.max(Number(location[2]) - 1, 0))
+      : 0,
+  };
+};
+
+const parseExecutableDocument = (input: SourceInput): ParsedExecutableDocumentResult => {
+  if (extname(input.path) === '.svg') {
+    try {
+      return { parsed: standaloneSvgDocument(input.source) };
+    } catch (error) {
+      return { failure: xmlParseFailure(input.source, error) };
+    }
+  }
+  const dom = new JSDOM(input.source, { includeNodeLocations: true });
+  return {
+    parsed: {
+      window: dom.window,
+      xml: false,
+      nodeLocation: node => dom.nodeLocation(node),
+    },
+  };
+};
+
+const executableScriptElements = (document: ParsedExecutableDocument): Element[] => {
+  if (!document.xml) return [...document.window.document.querySelectorAll('script')];
+  return [...document.window.document.getElementsByTagName('*')].filter(element => (
+    element.localName === 'script'
+    && (element.namespaceURI === 'http://www.w3.org/2000/svg'
+      || element.namespaceURI === 'http://www.w3.org/1999/xhtml')
+  ));
+};
+
 const svgTextOffsets = (
   raw: string,
   decoded: string,
@@ -507,7 +691,7 @@ const svgScriptSource = (
   let source = '';
   const offsets: number[] = [];
   const appendText = (node: Node): void => {
-    if (node.nodeType === 3) {
+    if (node.nodeType === 3 || node.nodeType === 4) {
       const location = parsedHtml.nodeLocation(node);
       if (!location) throw new Error('Workspace boundary could not locate SVG script text');
       const text = (node as Text).data;
@@ -591,10 +775,13 @@ const staticDocumentBrowserBase = (
 const externalScriptEdges = (input: SourceInput): ExternalScriptEdge[] => {
   const extension = extname(input.path);
   if (extension !== '.html' && extension !== '.htm' && extension !== '.svg') return [];
-  const document = new JSDOM(input.source, { includeNodeLocations: true });
-  const browserBase = staticDocumentBrowserBase(document.window.document, input.path);
+  const document = parseExecutableDocument(input);
+  if (document.failure) return [];
+  const browserBase = document.parsed.xml
+    ? repositoryBrowserBase(input.path)
+    : staticDocumentBrowserBase(document.parsed.window.document, input.path);
   const edges: ExternalScriptEdge[] = [];
-  for (const script of document.window.document.querySelectorAll('script')) {
+  for (const script of executableScriptElements(document.parsed)) {
     if (!externalScriptCanExecute(script)) continue;
     let specifier: string | null;
     if (script.namespaceURI === 'http://www.w3.org/1999/xhtml') {
@@ -606,7 +793,7 @@ const externalScriptEdges = (input: SourceInput): ExternalScriptEdge[] => {
       continue;
     }
     if (specifier === null) continue;
-    const location = document.nodeLocation(script);
+    const location = document.parsed.nodeLocation(script);
     if (!location?.startTag) throw new Error(`Workspace boundary could not locate script in ${input.path}`);
     edges.push({ specifier, offset: location.startTag.startOffset, browserBase });
   }
@@ -616,20 +803,32 @@ const externalScriptEdges = (input: SourceInput): ExternalScriptEdge[] => {
 const executableInputs = (inputs: readonly SourceInput[]): SourceInput[] => inputs.flatMap(input => {
   const extension = extname(input.path);
   if (extension !== '.html' && extension !== '.htm' && extension !== '.svg') return [input];
+  const document = parseExecutableDocument(input);
+  if (document.failure) {
+    return [{
+      path: `${input.path}.__xml_parse.js`,
+      source: input.source,
+      parseFailure: document.failure,
+      reportPath: input.path,
+      reportSource: input.source,
+    }];
+  }
   const scripts: SourceInput[] = [];
-  const document = new JSDOM(input.source, { includeNodeLocations: true });
-  const browserBase = staticDocumentBrowserBase(document.window.document, input.path);
+  const browserBase = document.parsed.xml
+    ? repositoryBrowserBase(input.path)
+    : staticDocumentBrowserBase(document.parsed.window.document, input.path);
   let index = 0;
-  for (const script of document.window.document.querySelectorAll('script')) {
+  for (const script of executableScriptElements(document.parsed)) {
     const type = executableScriptType(script);
     if (!type) continue;
-    const location = document.nodeLocation(script);
+    const location = document.parsed.nodeLocation(script);
     if (!location?.startTag) throw new Error(`Workspace boundary could not locate script in ${input.path}`);
     const bodyStart = location.startTag.endOffset;
     const bodyEnd = location.endTag?.startOffset ?? location.endOffset;
     const rawSource = input.source.slice(bodyStart, bodyEnd);
-    const prepared = script.namespaceURI === 'http://www.w3.org/2000/svg'
-      ? svgScriptSource(script, input.source, document)
+    const prepared = document.parsed.xml
+      || script.namespaceURI === 'http://www.w3.org/2000/svg'
+      ? svgScriptSource(script, input.source, document.parsed)
       : {
         source: rawSource,
         positionSegments: [{
@@ -1890,7 +2089,12 @@ describe('local workspace static boundary', () => {
     ],
     ['root alias', 'components/excluded.ts', "import value from '@/tests/unit/value';"],
     ['HTML script', 'shell.html', '<script src="./tests/unit/value.js"></script>'],
-    ['SVG script', 'assets/image.svg', '<svg><script href="../tests/unit/value.js"></script></svg>'],
+    [
+      'SVG script',
+      'assets/image.svg',
+      '<svg xmlns="http://www.w3.org/2000/svg"><script '
+        + 'href="../tests/unit/value.js"></script></svg>',
+    ],
     [
       'SVG href over competing src',
       'shell.html',
@@ -1926,7 +2130,12 @@ describe('local workspace static boundary', () => {
     ['query/hash HTML URL', 'shell.html', '<script src="tests/unit/value.js?raw#entry"></script>'],
     ['encoded HTML URL', 'shell.html', '<script src="%74ests/unit/value.js"></script>'],
     ['encoded HTML separator', 'shell.html', '<script src=".%5ctests/unit/value.js"></script>'],
-    ['bare SVG URL', 'assets/icon.svg', '<svg><script href="../tests/unit/value.js"></script></svg>'],
+    [
+      'bare SVG URL',
+      'assets/icon.svg',
+      '<svg xmlns="http://www.w3.org/2000/svg"><script '
+        + 'href="../tests/unit/value.js"></script></svg>',
+    ],
     ['bare direct worker URL', 'components/excluded.ts', "new Worker('tests/unit/worker.ts');"],
     ['dot direct worker URL', 'components/excluded.ts', "new Worker('./tests/unit/worker.ts');"],
     ['root direct worker URL', 'components/excluded.ts', "new Worker('/tests/unit/worker.ts');"],
@@ -1951,8 +2160,8 @@ describe('local workspace static boundary', () => {
     ['embedded HTML newline', 'shell.html', '<script src="te\nsts/unit/value.js"></script>'],
     [
       'embedded SVG carriage return',
-      'assets/icon.svg',
-      '<svg><script href="../te\rsts/unit/value.js"></script></svg>',
+      'shell.html',
+      '<svg><script href="te\rsts/unit/value.js"></script></svg>',
     ],
     ['embedded direct Worker tab', 'components/excluded.ts', "new Worker('te\\tsts/unit/worker.ts');"],
     [
@@ -2135,6 +2344,169 @@ describe('local workspace static boundary', () => {
     ],
   ])('allows production executable edge through %s', (_case, path, source) => {
     expect(analyzeProductionSource(path, source)).toEqual([]);
+  });
+
+  it.each([
+    [
+      'a prefixed SVG script',
+      'assets/prefixed.svg',
+      [
+        '<?xml version="1.0"?>',
+        '<s:svg xmlns:s="http://www.w3.org/2000/svg">',
+        '  <s:script href="../tests/edge.js"/>',
+        '</s:svg>',
+      ].join('\n'),
+      3,
+    ],
+    [
+      'an arbitrary XLink prefix after inert competing attributes',
+      'assets/xlink.svg',
+      [
+        '<svg xmlns="http://www.w3.org/2000/svg"',
+        '  xmlns:load="http://www.w3.org/1999/xlink" xmlns:other="urn:other">',
+        '  <?edge value=">"?>',
+        '  <script src="../app.js" HREF="../app.js" other:href="../app.js"',
+        '    load:href="../tests/edge.js"/>',
+        '</svg>',
+      ].join('\n'),
+      4,
+    ],
+    [
+      'an XHTML script',
+      'assets/xhtml.svg',
+      [
+        '<svg xmlns="http://www.w3.org/2000/svg" xmlns:h="http://www.w3.org/1999/xhtml">',
+        '  <h:script href="../app.js" src="../tests/edge.js"/>',
+        '</svg>',
+      ].join('\n'),
+      2,
+    ],
+  ])('rejects standalone SVG external edge through %s', (_case, path, source, line) => {
+    expect(analyzeProductionSource(path, source)).toEqual(expect.arrayContaining([
+      expect.stringContaining(`${path}:${line}: loads executable code from excluded repository paths`),
+    ]));
+  });
+
+  it.each([
+    [
+      'namespace-free script',
+      '<svg xmlns="http://www.w3.org/2000/svg"><script xmlns="" href="../tests/edge.js"/></svg>',
+    ],
+    [
+      'uppercase SVG element',
+      '<svg xmlns="http://www.w3.org/2000/svg"><SCRIPT href="../tests/edge.js"/></svg>',
+    ],
+    [
+      'uppercase SVG attribute',
+      '<svg xmlns="http://www.w3.org/2000/svg"><script HREF="../tests/edge.js"/></svg>',
+    ],
+    [
+      'other-namespace script',
+      '<svg xmlns="http://www.w3.org/2000/svg" xmlns:o="urn:other">'
+        + '<o:script href="../tests/edge.js"/></svg>',
+    ],
+    [
+      'SVG href before XLink with inert src',
+      '<svg xmlns="http://www.w3.org/2000/svg" xmlns:any="http://www.w3.org/1999/xlink">'
+        + '<script src="../tests/edge.js" href="../app.js" any:href="../tests/edge.js"/></svg>',
+    ],
+    [
+      'XHTML src before inert href',
+      '<svg xmlns="http://www.w3.org/2000/svg" xmlns:h="http://www.w3.org/1999/xhtml">'
+        + '<h:script href="../tests/edge.js" src="../app.js"/></svg>',
+    ],
+  ])('allows standalone SVG external %s', (_case, source) => {
+    expect(analyzeProductionSource('assets/inert.svg', source)).toEqual([]);
+  });
+
+  it.each([
+    [
+      'prefixed SVG CDATA',
+      [
+        '<s:svg xmlns:s="http://www.w3.org/2000/svg">',
+        '  <s:script><![CDATA[',
+        "window.localStorage.getItem('x');",
+        '  ]]></s:script>',
+        '</s:svg>',
+      ].join('\n'),
+      3,
+    ],
+    [
+      'XHTML entity text',
+      [
+        '<svg xmlns="http://www.w3.org/2000/svg" xmlns:h="http://www.w3.org/1999/xhtml">',
+        '  <h:script>',
+        'window.localStorage.getItem(&apos;x&apos;);',
+        '  </h:script>',
+        '</svg>',
+      ].join('\n'),
+      3,
+    ],
+    [
+      'uppercase inert href with inline SVG source',
+      [
+        '<svg xmlns="http://www.w3.org/2000/svg">',
+        '  <script HREF="../tests/edge.js">',
+        "window.localStorage.getItem('x');",
+        '  </script>',
+        '</svg>',
+      ].join('\n'),
+      3,
+    ],
+    [
+      'comments, processing instructions, quoted greater-than, and CDATA',
+      [
+        '<?xml version="1.0"?>',
+        '<svg xmlns="http://www.w3.org/2000/svg" data-note=">">',
+        '  <!-- authored > comment -->',
+        '  <script>',
+        '    <?inside value=">"?>',
+        '    <![CDATA[',
+        "window.localStorage.getItem('x');",
+        '    ]]>',
+        '  </script>',
+        '</svg>',
+      ].join('\n'),
+      7,
+    ],
+  ])('maps standalone SVG inline %s to its authored line', (_case, source, line) => {
+    const path = 'assets/inline.svg';
+    expect(analyzeProductionSource(path, source)).toEqual(expect.arrayContaining([
+      expect.stringContaining(`${path}:${line}: accesses production localStorage`),
+    ]));
+  });
+
+  it.each([
+    [
+      'namespace-free script',
+      '<svg xmlns="http://www.w3.org/2000/svg"><script xmlns="">'
+        + "window.localStorage.getItem('x');</script></svg>",
+    ],
+    [
+      'uppercase SVG element',
+      '<svg xmlns="http://www.w3.org/2000/svg"><SCRIPT>'
+        + "window.localStorage.getItem('x');</SCRIPT></svg>",
+    ],
+    [
+      'other-namespace script',
+      '<svg xmlns="http://www.w3.org/2000/svg" xmlns:o="urn:other"><o:script>'
+        + "window.localStorage.getItem('x');</o:script></svg>",
+    ],
+  ])('skips standalone SVG inline %s', (_case, source) => {
+    expect(analyzeProductionSource('assets/inert-inline.svg', source)).toEqual([]);
+  });
+
+  it('fails closed for malformed standalone SVG XML at the authored line', () => {
+    const path = 'assets/malformed.svg';
+    const source = [
+      '<svg xmlns="http://www.w3.org/2000/svg">',
+      '  <script>',
+      "window.localStorage.getItem('x');",
+      '</svg>',
+    ].join('\n');
+    expect(analyzeProductionSource(path, source)).toEqual(expect.arrayContaining([
+      expect.stringContaining(`${path}:4: could not be parsed`),
+    ]));
   });
 
   it('rejects a production import that launders executable code from tests', () => {
