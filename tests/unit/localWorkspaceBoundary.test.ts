@@ -188,10 +188,14 @@ const javascriptMimeEssences = new Set([
   'text/x-ecmascript',
   'text/x-javascript',
 ]);
+const htmlNamespace = 'http://www.w3.org/1999/xhtml';
+const svgNamespace = 'http://www.w3.org/2000/svg';
+const xlinkNamespace = 'http://www.w3.org/1999/xlink';
 
 interface HtmlNodeLocation {
   startOffset: number;
   endOffset: number;
+  attrs?: Record<string, HtmlNodeLocation>;
   startTag?: HtmlNodeLocation;
   endTag?: HtmlNodeLocation;
 }
@@ -447,12 +451,19 @@ const positionSegments = (offsets: readonly number[]): SourcePositionSegment[] =
 
 interface AuthoredXmlElement {
   name: string;
+  attributes: Array<{ name: string; location: HtmlNodeLocation }>;
   location: HtmlNodeLocation;
 }
 
 class AuthoredXmlParseError extends Error {
   constructor(message: string, readonly offset: number) {
     super(message);
+  }
+}
+
+class ExecutableAttributeMappingError extends Error {
+  constructor(readonly offset: number) {
+    super('executable attribute source mapping mismatch');
   }
 }
 
@@ -497,6 +508,38 @@ const xmlMarkupEnd = (source: string, start: number, doctype = false): number =>
     }
   }
   throw new Error('unterminated XML markup');
+};
+
+const authoredXmlAttributes = (
+  source: string,
+  elementStart: number,
+  elementEnd: number,
+): Array<{ name: string; location: HtmlNodeLocation }> => {
+  const attributes: Array<{ name: string; location: HtmlNodeLocation }> = [];
+  let cursor = elementStart + 1;
+  while (cursor < elementEnd && !/[\t\n\r />]/.test(source[cursor])) cursor += 1;
+  while (cursor < elementEnd) {
+    while (/[\t\n\r ]/.test(source[cursor] ?? '')) cursor += 1;
+    if (source[cursor] === '/' || source[cursor] === '>') break;
+    const startOffset = cursor;
+    while (cursor < elementEnd && !/[\t\n\r =/>]/.test(source[cursor])) cursor += 1;
+    const name = source.slice(startOffset, cursor);
+    while (/[\t\n\r ]/.test(source[cursor] ?? '')) cursor += 1;
+    if (!name || source[cursor] !== '=') throw new Error('XML attribute mapping mismatch');
+    cursor += 1;
+    while (/[\t\n\r ]/.test(source[cursor] ?? '')) cursor += 1;
+    const quote = source[cursor];
+    if (quote !== '"' && quote !== "'") throw new Error('XML attribute mapping mismatch');
+    cursor += 1;
+    const close = source.indexOf(quote, cursor);
+    if (close === -1 || close >= elementEnd) throw new Error('XML attribute mapping mismatch');
+    cursor = close + 1;
+    attributes.push({
+      name,
+      location: { startOffset, endOffset: cursor },
+    });
+  }
+  return attributes;
 };
 
 const authoredXmlLocations = (
@@ -562,6 +605,7 @@ const authoredXmlLocations = (
     while (marker > open && /[\t\n\r ]/.test(source[marker])) marker -= 1;
     const element: AuthoredXmlElement = {
       name,
+      attributes: authoredXmlAttributes(source, open, end),
       location: {
         startOffset: open,
         endOffset: end,
@@ -598,10 +642,19 @@ const standaloneSvgDocument = (source: string): ParsedExecutableDocument => {
   }
   const locations = new Map<Node, HtmlNodeLocation>();
   elements.forEach((element, index) => {
-    if (element.tagName !== authored.elements[index].name) {
+    const authoredElement = authored.elements[index];
+    if (element.tagName !== authoredElement.name
+      || element.attributes.length !== authoredElement.attributes.length) {
       throw new Error('XML source location mapping mismatch');
     }
-    locations.set(element, authored.elements[index].location);
+    locations.set(element, authoredElement.location);
+    [...element.attributes].forEach((attribute, attributeIndex) => {
+      const authoredAttribute = authoredElement.attributes[attributeIndex];
+      if (attribute.name !== authoredAttribute.name) {
+        throw new Error('XML source location mapping mismatch');
+      }
+      locations.set(attribute, authoredAttribute.location);
+    });
   });
   characters.forEach((node, index) => locations.set(node, authored.characters[index]));
   return {
@@ -712,11 +765,280 @@ const svgTextOffsets = (
   return offsets;
 };
 
+const authoredHtmlAttributes = (
+  source: string,
+  startTag: HtmlNodeLocation,
+): HtmlNodeLocation[] => {
+  const attributes: HtmlNodeLocation[] = [];
+  let cursor = startTag.startOffset + 1;
+  while (cursor < startTag.endOffset && !/[\t\n\f\r />]/.test(source[cursor])) cursor += 1;
+  while (cursor < startTag.endOffset) {
+    while (/[\t\n\f\r ]/.test(source[cursor] ?? '')) cursor += 1;
+    if (source[cursor] === '>'
+      || (source[cursor] === '/' && source[cursor + 1] === '>')) break;
+    const startOffset = cursor;
+    while (cursor < startTag.endOffset && !/[\t\n\f\r =>]/.test(source[cursor])) cursor += 1;
+    if (cursor === startOffset) throw new ExecutableAttributeMappingError(cursor);
+    while (/[\t\n\f\r ]/.test(source[cursor] ?? '')) cursor += 1;
+    if (source[cursor] === '=') {
+      cursor += 1;
+      while (/[\t\n\f\r ]/.test(source[cursor] ?? '')) cursor += 1;
+      const quote = source[cursor] === '"' || source[cursor] === "'" ? source[cursor] : undefined;
+      if (quote) {
+        const close = source.indexOf(quote, cursor + 1);
+        if (close === -1 || close >= startTag.endOffset) {
+          throw new ExecutableAttributeMappingError(startOffset);
+        }
+        cursor = close + 1;
+      } else {
+        while (cursor < startTag.endOffset && !/[\t\n\f\r >]/.test(source[cursor])) cursor += 1;
+      }
+    }
+    attributes.push({ startOffset, endOffset: cursor });
+  }
+  return attributes;
+};
+
+const attributeValueOffsets = (
+  raw: string,
+  decoded: string,
+  rawStart: number,
+  decodeEntity: (value: string) => string,
+): number[] => {
+  const offsets = new Array<number>(decoded.length + 1);
+  let rawIndex = 0;
+  let decodedIndex = 0;
+  offsets[0] = rawStart;
+  while (rawIndex < raw.length) {
+    if (raw[rawIndex] === '&') {
+      const entity = raw.slice(rawIndex).match(
+        /^&(?:#[xX][\dA-Fa-f]+;?|#\d+;?|[A-Za-z][\dA-Za-z]+;?)/,
+      )?.[0];
+      if (entity) {
+        const value = decodeEntity(entity);
+        if (value !== entity) {
+          if (!decoded.startsWith(value, decodedIndex)) {
+            throw new ExecutableAttributeMappingError(rawStart + rawIndex);
+          }
+          for (let index = 0; index < value.length; index += 1) {
+            offsets[decodedIndex + index] = rawStart + rawIndex;
+          }
+          decodedIndex += value.length;
+          rawIndex += entity.length;
+          offsets[decodedIndex] = rawStart + rawIndex;
+          continue;
+        }
+      }
+    }
+    const crlf = raw[rawIndex] === '\r' && raw[rawIndex + 1] === '\n';
+    const value = raw[rawIndex] === '\r'
+      ? '\n'
+      : raw[rawIndex] === '\0'
+        ? '\ufffd'
+        : raw[rawIndex];
+    if (!decoded.startsWith(value, decodedIndex)) {
+      throw new ExecutableAttributeMappingError(rawStart + rawIndex);
+    }
+    offsets[decodedIndex] = rawStart + rawIndex;
+    decodedIndex += value.length;
+    rawIndex += crlf ? 2 : 1;
+    offsets[decodedIndex] = rawStart + rawIndex;
+  }
+  if (decodedIndex !== decoded.length) {
+    throw new ExecutableAttributeMappingError(rawStart + raw.length);
+  }
+  offsets[decoded.length] = rawStart + raw.length;
+  return offsets;
+};
+
+const authoredAttributeValue = (
+  document: ParsedExecutableDocument,
+  element: Element,
+  attribute: Attr,
+  source: string,
+): { source: string; offsets: number[] } => {
+  const location = document.nodeLocation(element);
+  if (!document.xml) {
+    const startTag = location?.startTag;
+    const locatedAttributes = Object.values(startTag?.attrs ?? location?.attrs ?? {})
+      .sort((left, right) => left.startOffset - right.startOffset);
+    if (!startTag) throw new ExecutableAttributeMappingError(location?.startOffset ?? 0);
+    const authoredAttributes = authoredHtmlAttributes(source, startTag);
+    if (authoredAttributes.length !== element.attributes.length
+      || locatedAttributes.length !== element.attributes.length
+      || authoredAttributes.some((authoredLocation, index) => (
+        authoredLocation.startOffset !== locatedAttributes[index].startOffset
+        || authoredLocation.endOffset !== locatedAttributes[index].endOffset
+      ))) {
+      throw new ExecutableAttributeMappingError(startTag.startOffset);
+    }
+  }
+  const attributeLocation = document.xml
+    ? document.nodeLocation(attribute)
+    : location?.startTag?.attrs?.[attribute.name] ?? location?.attrs?.[attribute.name];
+  if (!attributeLocation) throw new ExecutableAttributeMappingError(location?.startOffset ?? 0);
+  const authored = source.slice(attributeLocation.startOffset, attributeLocation.endOffset);
+  let cursor = authored.search(/[\t\n\f\r =]/);
+  if (cursor === -1) {
+    if (attribute.value !== '') throw new ExecutableAttributeMappingError(attributeLocation.startOffset);
+    return { source: '', offsets: [attributeLocation.endOffset] };
+  }
+  while (/[\t\n\f\r ]/.test(authored[cursor] ?? '')) cursor += 1;
+  if (authored[cursor] !== '=') {
+    if (attribute.value !== '') throw new ExecutableAttributeMappingError(attributeLocation.startOffset);
+    return { source: '', offsets: [attributeLocation.endOffset] };
+  }
+  cursor += 1;
+  while (/[\t\n\f\r ]/.test(authored[cursor] ?? '')) cursor += 1;
+  const quote = authored[cursor] === '"' || authored[cursor] === "'" ? authored[cursor] : undefined;
+  const valueStart = cursor + (quote ? 1 : 0);
+  const valueEnd = quote ? authored.lastIndexOf(quote) : authored.length;
+  if (valueEnd < valueStart) throw new ExecutableAttributeMappingError(attributeLocation.startOffset);
+  const raw = authored.slice(valueStart, valueEnd);
+  const decoder = document.xml
+    ? document.window.document.createElementNS('http://www.w3.org/2000/svg', 'text')
+    : document.window.document.createElement('span');
+  const decodeEntity = (value: string): string => {
+    decoder.innerHTML = value;
+    return decoder.textContent ?? '';
+  };
+  return {
+    source: attribute.value,
+    offsets: attributeValueOffsets(
+      raw,
+      attribute.value,
+      attributeLocation.startOffset + valueStart,
+      decodeEntity,
+    ),
+  };
+};
+
+const originalOffset = (input: SourceInput, generated: number): number => {
+  if (!input.positionSegments?.length) return generated;
+  for (const segment of input.positionSegments) {
+    if (generated < segment.generatedStart) return segment.originalStart;
+    if (generated <= segment.generatedEnd) {
+      return segment.originalStart + generated - segment.generatedStart;
+    }
+  }
+  const last = input.positionSegments.at(-1)!;
+  return last.originalStart + last.generatedEnd - last.generatedStart;
+};
+
+const composedPositionSegments = (
+  input: SourceInput,
+  offsets: readonly number[],
+): SourcePositionSegment[] => positionSegments(offsets.map(offset => originalOffset(input, offset)));
+
+const functionBodySource = (
+  source: string,
+  offsets: readonly number[],
+): { source: string; offsets: number[] } => {
+  const prefix = 'function __doctectHandler__(event) {\n';
+  const suffix = '\n}';
+  const mapped = new Array<number>(prefix.length + source.length + suffix.length + 1)
+    .fill(offsets.at(-1) ?? 0);
+  mapped.fill(offsets[0] ?? 0, 0, prefix.length);
+  offsets.forEach((offset, index) => { mapped[prefix.length + index] = offset; });
+  return {
+    source: `${prefix}${source}${suffix}`,
+    offsets: mapped,
+  };
+};
+
+const executableJavascriptUrlAttribute = (element: Element): Attr | undefined => {
+  // Keep resource URL attributes inert; Chromium 143 executes only these static navigation sinks.
+  if (element.namespaceURI === htmlNamespace) {
+    if ((element.localName === 'a' || element.localName === 'area')) {
+      return element.getAttributeNode('href') ?? undefined;
+    }
+    if (element.localName === 'iframe') {
+      return element.hasAttribute('srcdoc') ? undefined : element.getAttributeNode('src') ?? undefined;
+    }
+    if (element.localName === 'frame') return element.getAttributeNode('src') ?? undefined;
+    if (element.localName === 'form') return element.getAttributeNode('action') ?? undefined;
+    if (element.localName === 'button' && (element as HTMLButtonElement).type === 'submit') {
+      return element.getAttributeNode('formaction') ?? undefined;
+    }
+    if (element.localName === 'input'
+      && ((element as HTMLInputElement).type === 'submit'
+        || (element as HTMLInputElement).type === 'image')) {
+      return element.getAttributeNode('formaction') ?? undefined;
+    }
+    return undefined;
+  }
+  if (element.namespaceURI !== svgNamespace || element.localName !== 'a') return undefined;
+  return element.getAttributeNode('href')
+    ?? element.getAttributeNodeNS(xlinkNamespace, 'href')
+    ?? undefined;
+};
+
+const percentDecodedSource = (
+  source: string,
+  offsets: readonly number[],
+): { source: string; offsets: number[] } => {
+  let decoded = '';
+  const decodedOffsets: number[] = [];
+  for (let index = 0; index < source.length;) {
+    if (source[index] === '%' && /^[\dA-Fa-f]{2}$/.test(source.slice(index + 1, index + 3))) {
+      const bytes: number[] = [];
+      const start = index;
+      while (source[index] === '%' && /^[\dA-Fa-f]{2}$/.test(source.slice(index + 1, index + 3))) {
+        bytes.push(Number.parseInt(source.slice(index + 1, index + 3), 16));
+        index += 3;
+      }
+      const value = new TextDecoder().decode(Uint8Array.from(bytes));
+      decoded += value;
+      for (let valueIndex = 0; valueIndex < value.length; valueIndex += 1) {
+        decodedOffsets.push(offsets[start]);
+      }
+      continue;
+    }
+    decoded += source[index];
+    decodedOffsets.push(offsets[index]);
+    index += 1;
+  }
+  decodedOffsets.push(offsets.at(-1) ?? 0);
+  return { source: decoded, offsets: decodedOffsets };
+};
+
+const javascriptUrlSource = (
+  source: string,
+  offsets: readonly number[],
+): { source: string; offsets: number[] } | undefined => {
+  let normalized = '';
+  const normalizedOffsets: number[] = [];
+  for (let index = 0; index < source.length; index += 1) {
+    if (source[index] === '\t' || source[index] === '\n' || source[index] === '\r') continue;
+    normalized += source[index];
+    normalizedOffsets.push(offsets[index]);
+  }
+  let start = 0;
+  let end = normalized.length;
+  while (start < end && normalized.charCodeAt(start) <= 0x20) start += 1;
+  while (end > start && normalized.charCodeAt(end - 1) <= 0x20) end -= 1;
+  normalized = normalized.slice(start, end);
+  const mapped = normalizedOffsets.slice(start, end);
+  mapped.push(offsets.at(-1) ?? 0);
+  if (!normalized.toLowerCase().startsWith('javascript:')) return undefined;
+  try {
+    if (new URL(normalized).protocol !== 'javascript:') return undefined;
+  } catch {
+    return undefined;
+  }
+  const schemeEnd = 'javascript:'.length;
+  const decoded = percentDecodedSource(normalized.slice(schemeEnd), mapped.slice(schemeEnd));
+  return {
+    source: decoded.source,
+    offsets: decoded.offsets,
+  };
+};
+
 const svgScriptSource = (
   script: Element,
   htmlSource: string,
   parsedHtml: ParsedHtml,
-): { source: string; positionSegments: SourcePositionSegment[] } => {
+): { source: string; offsets: number[] } => {
   const decoder = parsedHtml.window.document.createElementNS('http://www.w3.org/2000/svg', 'text');
   const decodeEntity = (value: string): string => {
     decoder.innerHTML = value;
@@ -741,7 +1063,7 @@ const svgScriptSource = (
     for (const child of node.childNodes) appendText(child);
   };
   for (const node of script.childNodes) appendText(node);
-  return { source, positionSegments: positionSegments(offsets) };
+  return { source, offsets };
 };
 
 interface ExecutableScriptEligibility {
@@ -787,110 +1109,178 @@ interface ExternalScriptEdge {
 const staticDocumentBrowserBase = (
   document: Document,
   documentPath: string,
+  inherited = repositoryBrowserBase(documentPath),
 ): BrowserUrlBase => {
-  const fallback = repositoryBrowserBase(documentPath);
   const base = [...document.querySelectorAll('base[href]')].find(element => (
     element.namespaceURI === 'http://www.w3.org/1999/xhtml'
   ));
-  if (!base) return fallback;
+  if (!base) return inherited;
   try {
-    return { url: new URL(browserUrlInput(base.getAttribute('href') ?? ''), fallback.url).href };
+    const href = browserUrlInput(base.getAttribute('href') ?? '');
+    return {
+      url: inherited.invalid || !inherited.url
+        ? new URL(href).href
+        : new URL(href, inherited.url).href,
+    };
   } catch {
     return { invalid: true };
   }
 };
 
-const externalScriptEdges = (input: SourceInput): ExternalScriptEdge[] => {
-  const extension = extname(input.path);
-  if (extension !== '.html' && extension !== '.htm' && extension !== '.svg') return [];
-  const document = parseExecutableDocument(input);
-  if (document.failure) return [];
-  const browserBase = document.parsed.xml
-    ? repositoryBrowserBase(input.path)
-    : staticDocumentBrowserBase(document.parsed.window.document, input.path);
-  const edges: ExternalScriptEdge[] = [];
-  for (const script of executableScriptElements(document.parsed)) {
-    const eligibility = executableScriptEligibility(script);
-    if (eligibility?.externalSpecifier === undefined) continue;
-    const location = document.parsed.nodeLocation(script);
-    if (!location?.startTag) throw new Error(`Workspace boundary could not locate script in ${input.path}`);
-    edges.push({
-      specifier: eligibility.externalSpecifier,
-      offset: location.startTag.startOffset,
-      browserBase,
-    });
-  }
-  return edges;
-};
+interface ExecutableDocumentExtraction {
+  inputs: SourceInput[];
+  externalEdges: ExternalScriptEdge[];
+}
 
-const executableInputs = (inputs: readonly SourceInput[]): SourceInput[] => inputs.flatMap(input => {
+const executableDocumentExtraction = (input: SourceInput): ExecutableDocumentExtraction => {
   const extension = extname(input.path);
-  if (extension !== '.html' && extension !== '.htm' && extension !== '.svg') return [input];
+  if (extension !== '.html' && extension !== '.htm' && extension !== '.svg') {
+    return { inputs: [input], externalEdges: [] };
+  }
   const document = parseExecutableDocument(input);
+  const reportPath = input.reportPath ?? input.path;
+  const reportSource = input.reportSource ?? input.source;
   if (document.failure) {
-    return [{
-      path: `${input.path}.__xml_parse.js`,
-      source: input.source,
-      parseFailure: document.failure,
-      reportPath: input.path,
-      reportSource: input.source,
-    }];
+    return {
+      inputs: [{
+        path: `${input.path}.__xml_parse.js`,
+        source: input.source,
+        browserBase: input.browserBase,
+        directStorageBoundary: input.directStorageBoundary,
+        parseFailure: document.failure,
+        positionSegments: input.positionSegments,
+        reportPath,
+        reportSource,
+      }],
+      externalEdges: [],
+    };
   }
-  const scripts: SourceInput[] = [];
-  const browserBase = document.parsed.xml
-    ? repositoryBrowserBase(input.path)
-    : staticDocumentBrowserBase(document.parsed.window.document, input.path);
-  let index = 0;
-  for (const script of executableScriptElements(document.parsed)) {
-    const eligibility = executableScriptEligibility(script);
-    if (!eligibility || eligibility.externalSpecifier !== undefined) continue;
-    const location = document.parsed.nodeLocation(script);
-    if (!location?.startTag) throw new Error(`Workspace boundary could not locate script in ${input.path}`);
-    const bodyStart = location.startTag.endOffset;
-    const bodyEnd = location.endTag?.startOffset ?? location.endOffset;
-    const rawSource = input.source.slice(bodyStart, bodyEnd);
-    const prepared = document.parsed.xml
-      || script.namespaceURI === 'http://www.w3.org/2000/svg'
-      ? svgScriptSource(script, input.source, document.parsed)
-      : {
-        source: rawSource,
-        positionSegments: [{
-          generatedStart: 0,
-          generatedEnd: rawSource.length,
-          originalStart: bodyStart,
-        }],
-      };
-    const onboardingSlot = input.path === 'onboarding/src/shell.html'
-      && /^<!--SLOT:(?:DATA|DIFF|RUNTIME)-->$/.test(rawSource.trim());
-    if (prepared.source.trim().length === 0 || onboardingSlot) continue;
-    scripts.push({
-      path: `${input.path}.__inline_${index}.js`,
-      source: prepared.source,
-      browserBase,
-      directStorageBoundary: input.directStorageBoundary,
-      moduleGoal: eligibility.type === 'module',
-      parseFailure: eligibility.type === 'classic'
-        ? classicScriptParseFailure(prepared.source)
-        : undefined,
-      positionSegments: prepared.positionSegments,
-      reportPath: input.path,
-      reportSource: input.source,
-    });
-    index += 1;
-  }
-  return scripts;
-});
-
-const originalOffset = (input: SourceInput, generated: number): number => {
-  if (!input.positionSegments) return generated;
-  for (const segment of input.positionSegments) {
-    if (generated < segment.generatedStart) return segment.originalStart;
-    if (generated <= segment.generatedEnd) {
-      return segment.originalStart + generated - segment.generatedStart;
+  try {
+    const inheritedBase = input.browserBase ?? repositoryBrowserBase(reportPath);
+    const browserBase = document.parsed.xml
+      ? inheritedBase
+      : staticDocumentBrowserBase(document.parsed.window.document, input.path, inheritedBase);
+    const inputs: SourceInput[] = [];
+    const externalEdges: ExternalScriptEdge[] = [];
+    let index = 0;
+    for (const script of executableScriptElements(document.parsed)) {
+      const eligibility = executableScriptEligibility(script);
+      if (!eligibility) continue;
+      const location = document.parsed.nodeLocation(script);
+      if (!location?.startTag) throw new Error(`Workspace boundary could not locate script in ${input.path}`);
+      if (eligibility.externalSpecifier !== undefined) {
+        externalEdges.push({
+          specifier: eligibility.externalSpecifier,
+          offset: originalOffset(input, location.startTag.startOffset),
+          browserBase,
+        });
+        continue;
+      }
+      const bodyStart = location.startTag.endOffset;
+      const bodyEnd = location.endTag?.startOffset ?? location.endOffset;
+      const rawSource = input.source.slice(bodyStart, bodyEnd);
+      const prepared = document.parsed.xml
+        || script.namespaceURI === 'http://www.w3.org/2000/svg'
+        ? svgScriptSource(script, input.source, document.parsed)
+        : {
+          source: rawSource,
+          offsets: Array.from({ length: rawSource.length + 1 }, (_value, offset) => bodyStart + offset),
+        };
+      const onboardingSlot = input.path === 'onboarding/src/shell.html'
+        && /^<!--SLOT:(?:DATA|DIFF|RUNTIME)-->$/.test(rawSource.trim());
+      if (prepared.source.trim().length === 0 || onboardingSlot) continue;
+      inputs.push({
+        path: `${input.path}.__inline_${index}.js`,
+        source: prepared.source,
+        browserBase,
+        directStorageBoundary: input.directStorageBoundary,
+        moduleGoal: eligibility.type === 'module',
+        parseFailure: eligibility.type === 'classic'
+          ? classicScriptParseFailure(prepared.source)
+          : undefined,
+        positionSegments: composedPositionSegments(input, prepared.offsets),
+        reportPath,
+        reportSource,
+      });
+      index += 1;
     }
+    {
+      const elements = document.parsed.xml
+        ? document.parsed.window.document.getElementsByTagName('*')
+        : document.parsed.window.document.querySelectorAll('*');
+      for (const element of elements) {
+        for (const attribute of element.attributes) {
+          if (attribute.namespaceURI !== null
+            || !attribute.name.startsWith('on')
+            || !(attribute.name in element)) continue;
+          const authored = authoredAttributeValue(document.parsed, element, attribute, input.source);
+          const prepared = functionBodySource(authored.source, authored.offsets);
+          inputs.push({
+            path: `${input.path}.__handler_${index}.js`,
+            source: prepared.source,
+            browserBase,
+            directStorageBoundary: input.directStorageBoundary,
+            parseFailure: classicScriptParseFailure(prepared.source),
+            positionSegments: composedPositionSegments(input, prepared.offsets),
+            reportPath,
+            reportSource,
+          });
+          index += 1;
+        }
+        const urlAttribute = executableJavascriptUrlAttribute(element);
+        if (urlAttribute) {
+          const authored = authoredAttributeValue(document.parsed, element, urlAttribute, input.source);
+          const prepared = javascriptUrlSource(authored.source, authored.offsets);
+          if (prepared && prepared.source.trim().length > 0) {
+            inputs.push({
+              path: `${input.path}.__javascript_url_${index}.js`,
+              source: prepared.source,
+              browserBase,
+              directStorageBoundary: input.directStorageBoundary,
+              parseFailure: classicScriptParseFailure(prepared.source),
+              positionSegments: composedPositionSegments(input, prepared.offsets),
+              reportPath,
+              reportSource,
+            });
+            index += 1;
+          }
+        }
+        const srcdoc = element.namespaceURI === htmlNamespace && element.localName === 'iframe'
+          ? element.getAttributeNode('srcdoc')
+          : null;
+        if (!srcdoc) continue;
+        const authoredSrcdoc = authoredAttributeValue(document.parsed, element, srcdoc, input.source);
+        const nested = executableDocumentExtraction({
+          path: `${input.path}.__srcdoc_${index}.html`,
+          source: authoredSrcdoc.source,
+          browserBase,
+          directStorageBoundary: input.directStorageBoundary,
+          positionSegments: composedPositionSegments(input, authoredSrcdoc.offsets),
+          reportPath,
+          reportSource,
+        });
+        inputs.push(...nested.inputs);
+        externalEdges.push(...nested.externalEdges);
+        index += 1;
+      }
+    }
+    return { inputs, externalEdges };
+  } catch (error) {
+    if (!(error instanceof ExecutableAttributeMappingError)) throw error;
+    return {
+      inputs: [{
+        path: `${input.path}.__attribute_parse.js`,
+        source: input.source,
+        browserBase: input.browserBase,
+        directStorageBoundary: input.directStorageBoundary,
+        parseFailure: { message: error.message, offset: error.offset },
+        positionSegments: input.positionSegments,
+        reportPath,
+        reportSource,
+      }],
+      externalEdges: [],
+    };
   }
-  const last = input.positionSegments.at(-1)!;
-  return last.originalStart + last.generatedEnd - last.generatedStart;
 };
 
 const sourceLine = (source: string, offset: number): number => {
@@ -1493,10 +1883,11 @@ const isLegacyTypesModule = (specifier: string): boolean => {
 const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> => {
   const results = new Map(inputs.map(input => [input.path, [] as string[]]));
   const resultIdentities = new Map(inputs.map(input => [input.path, new Set<string>()]));
+  const extractions = inputs.map(input => executableDocumentExtraction(input));
 
-  for (const input of inputs) {
+  for (const [index, input] of inputs.entries()) {
     if (input.path.startsWith('tests/')) continue;
-    for (const edge of externalScriptEdges(input)) {
+    for (const edge of extractions[index].externalEdges) {
       if (!browserEntersExcludedDirectory(edge.browserBase, edge.specifier)) continue;
       const finding = `${input.path}:${sourceLine(input.source, edge.offset)}: `
         + 'loads executable code from excluded repository paths';
@@ -1519,7 +1910,9 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
     }
   }
 
-  const executable = executableInputs(inputs).filter(input => scriptKinds.has(extname(input.path)));
+  const executable = extractions
+    .flatMap(extraction => extraction.inputs)
+    .filter(input => scriptKinds.has(extname(input.path)));
   const moduleFailures = moduleParseFailures(
     executable.filter(input => input.moduleGoal).map(input => input.source),
   );
@@ -3684,6 +4077,357 @@ ${publicReturn}`);
   ])('analyzes executable %s HTML scripts', (_case, source) => {
     expect(analyzeProductionSource('shell.html', source)).toEqual(expect.arrayContaining([
       expect.stringContaining('accesses production localStorage outside approved persistence modules'),
+    ]));
+  });
+
+  it('analyzes an HTML event handler as a mapped function body', () => {
+    const path = 'handler.html';
+    const source = [
+      '<body',
+      '  onload="return window.localStorage.getItem(&quot;x&quot;)">',
+      '</body>',
+    ].join('\r\n');
+    expect(analyzeProductionSource(path, source)).toEqual(expect.arrayContaining([
+      expect.stringContaining(`${path}:2: accesses production localStorage`),
+    ]));
+  });
+
+  it.each([
+    [
+      'an unquoted HTML click handler',
+      'handler.html',
+      '<button onclick=window.localStorage.clear()>go</button>',
+      1,
+    ],
+    [
+      'an uppercase HTML handler attribute',
+      'handler.html',
+      '<button ONCLICK="window.localStorage.clear()">go</button>',
+      1,
+    ],
+    [
+      'an inline SVG handler in HTML',
+      'handler.html',
+      '<svg onload="window.localStorage.getItem(\'x\')"></svg>',
+      1,
+    ],
+    [
+      'a prefixed standalone SVG handler',
+      'assets/handler.svg',
+      [
+        '<?xml version="1.0"?>',
+        '<s:svg xmlns:s="http://www.w3.org/2000/svg"',
+        '  onload="return window.localStorage.getItem(&apos;x&apos;)"/>',
+      ].join('\r\n'),
+      3,
+    ],
+    [
+      'an arbitrary-prefix XHTML handler',
+      'assets/handler.svg',
+      [
+        '<s:svg xmlns:s="http://www.w3.org/2000/svg" xmlns:web="http://www.w3.org/1999/xhtml">',
+        '  <s:foreignObject><web:button',
+        '    onclick="return window.localStorage.getItem(&apos;x&apos;)">go</web:button></s:foreignObject>',
+        '</s:svg>',
+      ].join('\n'),
+      3,
+    ],
+  ])('analyzes %s at its authored line', (_case, path, source, line) => {
+    expect(analyzeProductionSource(path, source)).toEqual(expect.arrayContaining([
+      expect.stringContaining(`${path}:${line}: accesses production localStorage`),
+    ]));
+  });
+
+  it.each([
+    ['unknown HTML handler', '<body onmadeup="window.localStorage.clear()"></body>'],
+    ['data attribute', '<button data-onclick="window.localStorage.clear()"></button>'],
+    ['valueless HTML handler', '<button onclick></button>'],
+    [
+      'uppercase standalone SVG handler',
+      '<svg xmlns="http://www.w3.org/2000/svg" ONLOAD="window.localStorage.clear()"/>',
+    ],
+    [
+      'namespaced standalone SVG handler',
+      '<svg xmlns="http://www.w3.org/2000/svg" xmlns:any="urn:other" '
+        + 'any:onload="window.localStorage.clear()"/>',
+    ],
+  ])('skips inert %s', (_case, source) => {
+    const path = source.includes('xmlns=') ? 'assets/inert-handler.svg' : 'inert-handler.html';
+    expect(analyzeProductionSource(path, source)).toEqual([]);
+  });
+
+  it.each([
+    ['HTML anchor href', 'url.html', '<a href="javascript:window.localStorage.clear()">go</a>', 1],
+    ['uppercase HTML anchor href', 'url.html', '<a HREF="javascript:localStorage.clear()">go</a>', 1],
+    ['HTML area href', 'url.html', '<map><area href=javascript:localStorage.clear()></map>', 1],
+    ['HTML iframe src', 'url.html', '<iframe src="javascript:localStorage.clear()"></iframe>', 1],
+    ['HTML frame src', 'url.html', '<frameset><frame src="javascript:localStorage.clear()"></frameset>', 1],
+    ['HTML form action', 'url.html', '<form action="javascript:localStorage.clear()"></form>', 1],
+    ['HTML default submit button formaction', 'url.html', '<form><button formaction="javascript:localStorage.clear()">go</button></form>', 1],
+    ['HTML submit input formaction', 'url.html', '<form><input type="submit" formaction="javascript:localStorage.clear()"></form>', 1],
+    ['HTML image input formaction', 'url.html', '<form><input type="image" formaction="javascript:localStorage.clear()"></form>', 1],
+    ['inline SVG anchor href', 'url.html', '<svg><a href="javascript:localStorage.clear()"><text>go</text></a></svg>', 1],
+    [
+      'inline SVG anchor XLink href',
+      'url.html',
+      '<svg xmlns:xlink="http://www.w3.org/1999/xlink"><a '
+        + 'xlink:href="javascript:localStorage.clear()"/></svg>',
+      1,
+    ],
+    [
+      'standalone SVG anchor href',
+      'assets/url.svg',
+      '<svg xmlns="http://www.w3.org/2000/svg"><a href="javascript:localStorage.clear()"/></svg>',
+      1,
+    ],
+    [
+      'standalone SVG arbitrary-prefix XLink href',
+      'assets/url.svg',
+      [
+        '<s:svg xmlns:s="http://www.w3.org/2000/svg" xmlns:link="http://www.w3.org/1999/xlink">',
+        '  <!-- href decoy="javascript:localStorage.clear()" -->',
+        '  <?href value="javascript:localStorage.clear()"?>',
+        '  <s:a link:href="javascript:window.localStorage.clear()"/>',
+        '</s:svg>',
+      ].join('\n'),
+      4,
+    ],
+    [
+      'standalone SVG XHTML anchor and area href',
+      'assets/url.svg',
+      '<svg xmlns="http://www.w3.org/2000/svg" xmlns:web="http://www.w3.org/1999/xhtml">'
+        + '<foreignObject><web:map><web:area href="javascript:localStorage.clear()"/></web:map>'
+        + '<web:a href="javascript:localStorage.clear()">go</web:a></foreignObject></svg>',
+      1,
+    ],
+    [
+      'standalone SVG XHTML iframe src',
+      'assets/url.svg',
+      '<svg xmlns="http://www.w3.org/2000/svg" xmlns:web="http://www.w3.org/1999/xhtml">'
+        + '<foreignObject><web:iframe src="javascript:localStorage.clear()"/></foreignObject></svg>',
+      1,
+    ],
+    [
+      'standalone SVG XHTML frame src',
+      'assets/url.svg',
+      '<svg xmlns="http://www.w3.org/2000/svg" xmlns:web="http://www.w3.org/1999/xhtml">'
+        + '<foreignObject><web:frameset><web:frame src="javascript:localStorage.clear()"/>'
+        + '</web:frameset></foreignObject></svg>',
+      1,
+    ],
+    [
+      'standalone SVG XHTML form action',
+      'assets/url.svg',
+      '<svg xmlns="http://www.w3.org/2000/svg" xmlns:web="http://www.w3.org/1999/xhtml">'
+        + '<foreignObject><web:form action="javascript:localStorage.clear()"/></foreignObject></svg>',
+      1,
+    ],
+    [
+      'standalone SVG XHTML button formaction',
+      'assets/url.svg',
+      '<svg xmlns="http://www.w3.org/2000/svg" xmlns:web="http://www.w3.org/1999/xhtml">'
+        + '<foreignObject><web:form><web:button formaction="javascript:localStorage.clear()"/>'
+        + '</web:form></foreignObject></svg>',
+      1,
+    ],
+    [
+      'standalone SVG XHTML submitter formaction',
+      'assets/url.svg',
+      '<svg xmlns="http://www.w3.org/2000/svg" xmlns:web="http://www.w3.org/1999/xhtml">'
+        + '<foreignObject><web:form><web:input type="submit" '
+        + 'formaction="javascript:localStorage.clear()"/></web:form></foreignObject></svg>',
+      1,
+    ],
+  ])('analyzes static javascript URL through %s', (_case, path, source, line) => {
+    expect(analyzeProductionSource(path, source)).toEqual(expect.arrayContaining([
+      expect.stringContaining(`${path}:${line}: accesses production localStorage`),
+    ]));
+  });
+
+  it.each([
+    [
+      'entity-decoded mixed-case scheme and source',
+      '<a href="JaV&#x61;ScRiPt:window.localStorage.getItem(&quot;x&quot;)">go</a>',
+      1,
+    ],
+    [
+      'URL preprocessing and percent-decoded source',
+      '<a href=" \tjava\r\nscript:%77indow.%6cocalStorage.clear()%3Bvoid%200 ">go</a>',
+      2,
+    ],
+  ])('maps static javascript URL with %s', (_case, source, line) => {
+    expect(analyzeProductionSource('mapped-url.html', source)).toEqual(expect.arrayContaining([
+      expect.stringContaining(`mapped-url.html:${line}: accesses production localStorage`),
+    ]));
+  });
+
+  it.each([
+    ['HTML object data', '<object data="javascript:localStorage.clear()"></object>'],
+    ['HTML embed src', '<embed src="javascript:localStorage.clear()">'],
+    ['HTML script src', '<script src="javascript:localStorage.clear()"></script>'],
+    ['HTML image src', '<img src="javascript:localStorage.clear()">'],
+    ['HTML image input src', '<input type="image" src="javascript:localStorage.clear()">'],
+    ['HTML link href', '<link rel="stylesheet" href="javascript:localStorage.clear()">'],
+    ['HTML non-submit button', '<form><button type="button" formaction="javascript:localStorage.clear()"></button></form>'],
+    ['HTML non-submit input', '<form><input type="text" formaction="javascript:localStorage.clear()"></form>'],
+    ['HTML data attribute', '<a data-href="javascript:localStorage.clear()">go</a>'],
+    ['HTML valueless href', '<a href>go</a>'],
+    ['HTML base href', '<base href="javascript:localStorage.clear()">'],
+    ['CSS URL', '<div style="background:url(javascript:localStorage.clear())"></div>'],
+    ['non-javascript URL', '<a href="https://example.test/javascript:localStorage.clear()">go</a>'],
+    [
+      'iframe src overridden by srcdoc',
+      '<iframe src="javascript:localStorage.clear()" srcdoc="<p>safe</p>"></iframe>',
+    ],
+    ['inline SVG image href', '<svg><image href="javascript:localStorage.clear()"/></svg>'],
+    ['inline SVG script href', '<svg><script href="javascript:localStorage.clear()"/></svg>'],
+    ['inline SVG use href', '<svg><use href="javascript:localStorage.clear()"/></svg>'],
+    [
+      'inline SVG shadowed XLink href',
+      '<svg xmlns:x="http://www.w3.org/1999/xlink"><a href="/safe" '
+        + 'x:href="javascript:localStorage.clear()"/></svg>',
+    ],
+  ])('skips inert static javascript URL through %s', (_case, source) => {
+    expect(analyzeProductionSource('inert-url.html', source)).toEqual([]);
+  });
+
+  it.each([
+    [
+      'uppercase SVG href',
+      '<svg xmlns="http://www.w3.org/2000/svg"><a HREF="javascript:localStorage.clear()"/></svg>',
+    ],
+    [
+      'other-namespace SVG href',
+      '<svg xmlns="http://www.w3.org/2000/svg" xmlns:any="urn:other">'
+        + '<a any:href="javascript:localStorage.clear()"/></svg>',
+    ],
+    [
+      'standalone SVG image href',
+      '<svg xmlns="http://www.w3.org/2000/svg"><image href="javascript:localStorage.clear()"/></svg>',
+    ],
+    [
+      'uppercase XHTML href',
+      '<svg xmlns="http://www.w3.org/2000/svg" xmlns:web="http://www.w3.org/1999/xhtml">'
+        + '<foreignObject><web:a HREF="javascript:localStorage.clear()"/></foreignObject></svg>',
+    ],
+  ])('skips inert standalone %s', (_case, source) => {
+    expect(analyzeProductionSource('assets/inert-url.svg', source)).toEqual([]);
+  });
+
+  it.each([
+    [
+      'an inline script',
+      'srcdoc.html',
+      [
+        '<iframe',
+        '  srcdoc="&lt;script&gt;',
+        'window.localStorage.getItem(&quot;x&quot;);',
+        '&lt;/script&gt;">',
+        '</iframe>',
+      ].join('\r\n'),
+      3,
+    ],
+    [
+      'an event handler',
+      'srcdoc.html',
+      '<iframe srcdoc="&lt;button onclick=&quot;return window.localStorage.clear()&quot;&gt;go&lt;/button&gt;">'
+        + '</iframe>',
+      1,
+    ],
+    [
+      'an uppercase HTML srcdoc attribute',
+      'srcdoc.html',
+      '<iframe SRCDOC="&lt;script&gt;window.localStorage.clear()&lt;/script&gt;"></iframe>',
+      1,
+    ],
+    [
+      'a javascript URL',
+      'srcdoc.html',
+      '<iframe srcdoc="&lt;a href=&quot;javascript:window.localStorage.clear()&quot;&gt;go&lt;/a&gt;">'
+        + '</iframe>',
+      1,
+    ],
+    [
+      'a recursively nested srcdoc',
+      'srcdoc.html',
+      [
+        '<iframe srcdoc="&lt;iframe',
+        '  srcdoc=&quot;&amp;lt;script&amp;gt;',
+        'window.localStorage.clear();',
+        '&amp;lt;/script&amp;gt;&quot;&gt;&lt;/iframe&gt;">',
+        '</iframe>',
+      ].join('\n'),
+      3,
+    ],
+    [
+      'an XHTML iframe in standalone SVG',
+      'assets/srcdoc.svg',
+      [
+        '<s:svg xmlns:s="http://www.w3.org/2000/svg" xmlns:web="http://www.w3.org/1999/xhtml">',
+        '  <!-- srcdoc decoy="&lt;script&gt;localStorage.clear()&lt;/script&gt;" -->',
+        '  <s:foreignObject><web:iframe',
+        '    srcdoc="&lt;script&gt;window.localStorage.clear()&lt;/script&gt;"/>',
+        '  </s:foreignObject>',
+        '</s:svg>',
+      ].join('\n'),
+      4,
+    ],
+  ])('analyzes static srcdoc through %s', (_case, path, source, line) => {
+    expect(analyzeProductionSource(path, source)).toEqual(expect.arrayContaining([
+      expect.stringContaining(`${path}:${line}: accesses production localStorage`),
+    ]));
+  });
+
+  it('rejects an excluded external script nested in srcdoc', () => {
+    const path = 'pages/srcdoc.html';
+    const source = [
+      '<iframe srcdoc="&lt;script',
+      '  src=&quot;../tests/edge.js&quot;&gt;',
+      '&lt;/script&gt;"></iframe>',
+    ].join('\n');
+    expect(analyzeProductionSource(path, source)).toEqual(expect.arrayContaining([
+      expect.stringContaining(`${path}:1: loads executable code from excluded repository paths`),
+    ]));
+  });
+
+  it.each([
+    ['safe nested document', '<iframe srcdoc="&lt;p&gt;safe&lt;/p&gt;"></iframe>'],
+    ['valueless nested document', '<iframe srcdoc></iframe>'],
+    ['non-iframe srcdoc', '<object srcdoc="&lt;script&gt;localStorage.clear()&lt;/script&gt;"></object>'],
+    [
+      'uppercase XHTML srcdoc',
+      '<svg xmlns="http://www.w3.org/2000/svg" xmlns:web="http://www.w3.org/1999/xhtml">'
+        + '<foreignObject><web:iframe SRCDOC="&lt;script&gt;localStorage.clear()&lt;/script&gt;"/>'
+        + '</foreignObject></svg>',
+    ],
+  ])('skips inert %s', (_case, source) => {
+    const path = source.includes('xmlns=') ? 'assets/inert-srcdoc.svg' : 'inert-srcdoc.html';
+    expect(analyzeProductionSource(path, source)).toEqual([]);
+  });
+
+  it.each([
+    [
+      'duplicate event attributes',
+      '<button onclick="void 0" onclick="window.localStorage.clear()"></button>',
+    ],
+    [
+      'duplicate srcdoc attributes',
+      '<iframe srcdoc="&lt;p&gt;safe&lt;/p&gt;" '
+        + 'srcdoc="&lt;script&gt;window.localStorage.clear()&lt;/script&gt;"></iframe>',
+    ],
+  ])('fails closed for HTML DOM/source cardinality through %s', (_case, source) => {
+    expect(analyzeProductionSource('attribute-mismatch.html', source)).toEqual([
+      expect.stringContaining('could not be parsed: executable attribute source mapping mismatch'),
+    ]);
+  });
+
+  it.each([
+    ['event handler', '<button onclick="return ("></button>'],
+    ['javascript URL', '<a href="javascript:if (">go</a>'],
+    ['srcdoc script', '<iframe srcdoc="&lt;script&gt;if (&lt;/script&gt;"></iframe>'],
+  ])('fails closed for malformed static %s syntax', (_case, source) => {
+    expect(analyzeProductionSource('malformed-context.html', source)).toEqual(expect.arrayContaining([
+      expect.stringContaining('malformed-context.html:1: could not be parsed'),
     ]));
   });
 
