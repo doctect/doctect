@@ -7,6 +7,85 @@ import { REPO_ROOT, buildBrowserPreferencesBundle, buildRuntimeBundle,
     from '../../../onboarding/build.mjs';
 import { highlightCode } from '../../../onboarding/src/render/codeWin.mjs';
 
+const inspectPreferenceBundle = bundle => new Function('window', `
+    ${bundle}
+    const operations = [
+        ['readBrowserPreference', readBrowserPreference],
+        ['writeBrowserPreference', writeBrowserPreference],
+        ['wasMigrationReceiptSeen', wasMigrationReceiptSeen],
+        ['markMigrationReceiptSeen', markMigrationReceiptSeen],
+    ];
+    return {
+        readBrowserPreference: typeof readBrowserPreference,
+        writeBrowserPreference: typeof writeBrowserPreference,
+        wasMigrationReceiptSeen: typeof wasMigrationReceiptSeen,
+        markMigrationReceiptSeen: typeof markMigrationReceiptSeen,
+        fixedBrowserPreferenceKeys: typeof fixedBrowserPreferenceKeys,
+        readRuntimeBrowserPreference: typeof readRuntimeBrowserPreference,
+        writeRuntimeBrowserPreference: typeof writeRuntimeBrowserPreference,
+        publicProperties: operations.flatMap(([operationName, operation]) =>
+            Reflect.ownKeys(operation).map(key => {
+                const descriptor = Object.getOwnPropertyDescriptor(operation, key);
+                return {
+                    name: operationName + '.' + String(key),
+                    propertyName: String(key),
+                    descriptorKeys: Reflect.ownKeys(descriptor).map(String).sort(),
+                    configurable: descriptor.configurable,
+                    enumerable: descriptor.enumerable,
+                    writable: descriptor.writable,
+                    valueType: typeof descriptor.value,
+                    primitiveValue: ['string', 'number', 'boolean'].includes(typeof descriptor.value)
+                        ? descriptor.value
+                        : undefined,
+                    getterType: typeof descriptor.get,
+                    setterType: typeof descriptor.set,
+                    rawStorage: descriptor.value === window.localStorage,
+                };
+            })),
+    };
+`);
+
+const assertPreferenceBundleSurfaceClosed = (bundle, windowValue = {}) => {
+    const inspection = inspectPreferenceBundle(bundle)(windowValue);
+    const expectedFunctions = new Map([
+        ['readBrowserPreference', 1],
+        ['writeBrowserPreference', 2],
+        ['wasMigrationReceiptSeen', 1],
+        ['markMigrationReceiptSeen', 1],
+    ]);
+    const approvedNames = new Set([...expectedFunctions.keys()].flatMap(name => [
+        `${name}.length`,
+        `${name}.name`,
+    ]));
+    const unexpected = inspection.publicProperties.filter(property => !approvedNames.has(property.name));
+    if (unexpected.length > 0) {
+        throw new Error(unexpected.map(property => property.name).join(', '));
+    }
+    for (const [functionName, length] of expectedFunctions) {
+        for (const [propertyName, primitiveValue] of [['length', length], ['name', functionName]]) {
+            const property = inspection.publicProperties.find(candidate =>
+                candidate.name === `${functionName}.${propertyName}`);
+            const expected = {
+                name: `${functionName}.${propertyName}`,
+                propertyName,
+                descriptorKeys: ['configurable', 'enumerable', 'value', 'writable'],
+                configurable: true,
+                enumerable: false,
+                writable: false,
+                valueType: typeof primitiveValue,
+                primitiveValue,
+                getterType: 'undefined',
+                setterType: 'undefined',
+                rawStorage: false,
+            };
+            if (JSON.stringify(property) !== JSON.stringify(expected)) {
+                throw new Error(`${functionName}.${propertyName} descriptor changed`);
+            }
+        }
+    }
+    return { ...inspection, publicProperties: [] };
+};
+
 describe('router helpers', () => {
     it('parses window + parts, defaults to intro', () => {
         expect(parseHash('#/tours/publish/3')).toEqual({ win: 'tours', parts: ['publish', '3'] });
@@ -121,26 +200,7 @@ describe('assembly', () => {
         expect(preferenceUse).toBeGreaterThan(preferenceDefinition);
     });
     it('exposes only public preference operations to the onboarding runtime', () => {
-        const inspectBundle = new Function('window', `
-            ${buildBrowserPreferencesBundle(REPO_ROOT)}
-            return {
-                readBrowserPreference: typeof readBrowserPreference,
-                writeBrowserPreference: typeof writeBrowserPreference,
-                wasMigrationReceiptSeen: typeof wasMigrationReceiptSeen,
-                markMigrationReceiptSeen: typeof markMigrationReceiptSeen,
-                fixedBrowserPreferenceKeys: typeof fixedBrowserPreferenceKeys,
-                readRuntimeBrowserPreference: typeof readRuntimeBrowserPreference,
-                writeRuntimeBrowserPreference: typeof writeRuntimeBrowserPreference,
-                publicProperties: [
-                    readBrowserPreference,
-                    writeBrowserPreference,
-                    wasMigrationReceiptSeen,
-                    markMigrationReceiptSeen,
-                ].flatMap(operation => Object.keys(operation)),
-            };
-        `);
-
-        expect(inspectBundle({})).toEqual({
+        expect(assertPreferenceBundleSurfaceClosed(buildBrowserPreferencesBundle(REPO_ROOT))).toEqual({
             readBrowserPreference: 'function',
             writeBrowserPreference: 'function',
             wasMigrationReceiptSeen: 'function',
@@ -150,6 +210,23 @@ describe('assembly', () => {
             writeRuntimeBrowserPreference: 'undefined',
             publicProperties: [],
         });
+    });
+    it('rejects non-enumerable private-operation and raw-storage properties', () => {
+        const publicReturn = 'return { readBrowserPreference, writeBrowserPreference, '
+            + 'wasMigrationReceiptSeen, markMigrationReceiptSeen };';
+        const original = buildBrowserPreferencesBundle(REPO_ROOT);
+        const malicious = original.replace(publicReturn, `
+Object.defineProperty(readBrowserPreference, 'leakedWrite', {
+    value: writeRuntimeBrowserPreference,
+});
+Object.defineProperty(writeBrowserPreference, Symbol('rawStorage'), {
+    value: window.localStorage,
+});
+${publicReturn}`);
+        expect(malicious).not.toBe(original);
+
+        expect(() => assertPreferenceBundleSurfaceClosed(malicious, { localStorage: {} }))
+            .toThrow('readBrowserPreference.leakedWrite, writeBrowserPreference.Symbol(rawStorage)');
     });
     it('buildData and buildContent produce JSON-serializable payloads', async () => {
         const data = buildData(REPO_ROOT);

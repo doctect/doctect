@@ -102,7 +102,13 @@ export const OverlayTextEditor: React.FC<OverlayTextEditorProps> = ({ element, o
         };
 
         window.addEventListener('scroll', onScrollCapture, { capture: true, passive: false });
-        return () => window.removeEventListener('scroll', onScrollCapture, { capture: true });
+        return () => {
+            window.removeEventListener('scroll', onScrollCapture, { capture: true });
+            if (lockBufferRef.current) clearTimeout(lockBufferRef.current);
+            lockBufferRef.current = null;
+            lockedScrollsRef.current.clear();
+            lockedWindowScrollRef.current = null;
+        };
     }, []);
 
     const captureScrolls = () => {
@@ -152,6 +158,7 @@ export const OverlayTextEditor: React.FC<OverlayTextEditorProps> = ({ element, o
         lockBufferRef.current = setTimeout(() => {
             lockedScrollsRef.current.clear();
             lockedWindowScrollRef.current = null;
+            lockBufferRef.current = null;
         }, 150); // Lock for 150ms
 
         const val = e.currentTarget.innerText;

@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { Buffer } from 'node:buffer';
 import { createHash } from 'node:crypto';
 import {
   type Dirent,
@@ -49,16 +50,19 @@ const excludedDirectories = new Set([
   'scratch',
   'test-results',
 ]);
-const decodedSpecifier = (specifier: string): string => {
-  const pathOnly = specifier.split(/[?#]/, 1)[0].replace(/\\/g, '/');
+const decodedSpecifier = (specifier: string, trimWhitespace = false): string => {
+  const value = trimWhitespace
+    ? specifier.replace(/^[\t\n\f\r ]+|[\t\n\f\r ]+$/g, '')
+    : specifier;
+  const pathOnly = value.split(/[?#]/, 1)[0];
   try {
-    return decodeURIComponent(pathOnly);
+    return decodeURIComponent(pathOnly).replace(/\\/g, '/');
   } catch {
-    return pathOnly;
+    return pathOnly.replace(/\\/g, '/');
   }
 };
 
-const resolvedRepositoryEdge = (sourcePath: string, specifier: string): string | undefined => {
+const resolvedModuleEdge = (sourcePath: string, specifier: string): string | undefined => {
   const decoded = decodedSpecifier(specifier);
   if (/^(?:[a-z][a-z\d+.-]*:|\/\/)/i.test(decoded)) return undefined;
   if (decoded.startsWith('@/')) return posix.normalize(decoded.slice(2));
@@ -67,15 +71,31 @@ const resolvedRepositoryEdge = (sourcePath: string, specifier: string): string |
   return posix.normalize(posix.join(posix.dirname(sourcePath), decoded));
 };
 
+const resolvedBrowserEdge = (documentPath: string, specifier: string): string | undefined => {
+  const decoded = decodedSpecifier(specifier, true);
+  if (/^(?:[a-z][a-z\d+.-]*:|\/\/)/i.test(decoded)) return undefined;
+  if (decoded.startsWith('/')) return posix.normalize(decoded.slice(1));
+  return posix.normalize(posix.join(posix.dirname(documentPath), decoded));
+};
+
 const excludedDirectorySegment = (segment: string, index: number): boolean => (
   excludedDirectories.has(segment) && (segment !== 'docs' || index === 0)
 );
 
-const entersExcludedDirectory = (sourcePath: string, specifier: string): boolean => {
-  const resolved = resolvedRepositoryEdge(sourcePath, specifier);
+const resolvedEntersExcludedDirectory = (resolved: string | undefined): boolean => {
   if (!resolved || resolved === '..' || resolved.startsWith('../')) return false;
   const segments = resolved.split('/');
   return segments[0] === 'tests' || segments.some(excludedDirectorySegment);
+};
+
+const moduleEntersExcludedDirectory = (sourcePath: string, specifier: string): boolean =>
+  resolvedEntersExcludedDirectory(resolvedModuleEdge(sourcePath, specifier));
+
+const browserEntersExcludedDirectory = (documentPath: string, specifier: string): boolean => {
+  const resolved = resolvedBrowserEdge(documentPath, specifier);
+  return resolved === '..'
+    || resolved?.startsWith('../') === true
+    || resolvedEntersExcludedDirectory(resolved);
 };
 const legacyKeys = [
   ['hype', 'projects'].join('_'),
@@ -642,11 +662,50 @@ const syntaxFingerprint = (source: string): string => {
   return createHash('sha256').update(tokens.join('\n')).digest('hex');
 };
 
+const lineSensitiveSyntaxFingerprint = (source: string): string =>
+  createHash('sha256').update(source.replace(/\r\n?/g, '\n')).digest('hex');
+
 // Any syntax change at a privileged seam requires an explicit policy update.
 const approvedBrowserPreferenceSyntax = '7af5f5c562faed881be020c3c7ee2ad624b46ab771178c0ce1a85a0dc2e50f4c';
-const approvedGeneratorEvaluatorSyntax = 'c68678c299155d78b853a00d03163e0605e019047dab8622fcb04692bc7055ed';
-const approvedRestoreIndexedDbSyntax = '71ada21f3d1e644cedc6f4ea4dc45c690b3f684a0b3a5e3ce47b2680089ede0b';
-const approvedOpenWithFactorySyntax = '49a89d50a2c4a45c7dd2572688f2b57dd7ec813f2059dcc884e640f4f5e90af7';
+const approvedGeneratorEvaluatorSyntax = 'dbe902dcb1f1ae81ed1fe600b84e88837c703ddbb68e382a01dd02845ddeda42';
+const approvedRestoreIndexedDbSyntax = 'b374e90adbabba0e5f5feb7792d155a60ff238d93a68754b611aacbc245ac0ca';
+const approvedOpenWithFactorySyntax = 'caf87c7f6d3ff1817db584990469483e9ec871a6788fd3cfcce59d96880f6bad';
+const browserPreferencesBundleStart = '/* doctect-browser-preferences:start */';
+const browserPreferencesBundleEnd = '/* doctect-browser-preferences:end */';
+const approvedBrowserPreferencesBundleBytes = 2279;
+const approvedBrowserPreferencesBundleHash = 'e109a96e4e6eff1c1b1394606dfd79cdd569f35846928d21a9eeb785d90c9fe1';
+const approvedBrowserPreferencesBuilderSyntax = '76ab1bab13d122e17ec40ea821f77ff23f9349ceb19fefe6e68ee07c57b6734d';
+
+const exactOccurrenceCount = (source: string, value: string): number =>
+  source.split(value).length - 1;
+
+const exactBrowserPreferencesBundle = (
+  source: string,
+): { source: string; start: number; end: number } | undefined => {
+  if (exactOccurrenceCount(source, browserPreferencesBundleStart) !== 1
+    || exactOccurrenceCount(source, browserPreferencesBundleEnd) !== 1) return undefined;
+  const start = source.indexOf(browserPreferencesBundleStart);
+  const end = source.indexOf(browserPreferencesBundleEnd) + browserPreferencesBundleEnd.length;
+  if (start < 0 || end <= start) return undefined;
+  const bundle = source.slice(start, end);
+  return Buffer.byteLength(bundle, 'utf8') === approvedBrowserPreferencesBundleBytes
+    && createHash('sha256').update(bundle).digest('hex') === approvedBrowserPreferencesBundleHash
+    ? { source: bundle, start, end }
+    : undefined;
+};
+
+const browserPreferencesBundleStatementSyntax = (bundle: string): string | undefined => {
+  const sourceFile = ts.createSourceFile(
+    'approved-browser-preferences.js',
+    bundle,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.JS,
+  );
+  return sourceFile.statements.length === 1 && ts.isVariableStatement(sourceFile.statements[0])
+    ? lineSensitiveSyntaxFingerprint(sourceFile.statements[0].getText(sourceFile))
+    : undefined;
+};
 
 const bindingIdentifiers = (name: ts.BindingName): ts.Identifier[] => {
   if (ts.isIdentifier(name)) return [name];
@@ -679,11 +738,106 @@ const sourceValueBindings = (sourceFile: ts.SourceFile, name: string): ts.Identi
       add(node.name);
     } else if (ts.isImportEqualsDeclaration(node)) {
       add(node.name);
+    } else if (ts.isModuleDeclaration(node) && ts.isIdentifier(node.name)) {
+      add(node.name);
     }
     ts.forEachChild(node, visit);
   };
   visit(sourceFile);
   return [...bindings.values()];
+};
+
+const assignmentOperators = new Set<ts.SyntaxKind>([
+  ts.SyntaxKind.EqualsToken,
+  ts.SyntaxKind.PlusEqualsToken,
+  ts.SyntaxKind.MinusEqualsToken,
+  ts.SyntaxKind.AsteriskEqualsToken,
+  ts.SyntaxKind.AsteriskAsteriskEqualsToken,
+  ts.SyntaxKind.SlashEqualsToken,
+  ts.SyntaxKind.PercentEqualsToken,
+  ts.SyntaxKind.LessThanLessThanEqualsToken,
+  ts.SyntaxKind.GreaterThanGreaterThanEqualsToken,
+  ts.SyntaxKind.GreaterThanGreaterThanGreaterThanEqualsToken,
+  ts.SyntaxKind.AmpersandEqualsToken,
+  ts.SyntaxKind.BarEqualsToken,
+  ts.SyntaxKind.CaretEqualsToken,
+  ts.SyntaxKind.BarBarEqualsToken,
+  ts.SyntaxKind.AmpersandAmpersandEqualsToken,
+  ts.SyntaxKind.QuestionQuestionEqualsToken,
+]);
+
+const directStaticMember = (
+  expression: ts.Expression,
+): { root: string; member: string | undefined } | undefined => {
+  const candidate = unwrap(expression);
+  if (ts.isPropertyAccessExpression(candidate) && ts.isIdentifier(unwrap(candidate.expression))) {
+    return { root: (unwrap(candidate.expression) as ts.Identifier).text, member: candidate.name.text };
+  }
+  if (ts.isElementAccessExpression(candidate) && ts.isIdentifier(unwrap(candidate.expression))) {
+    return {
+      root: (unwrap(candidate.expression) as ts.Identifier).text,
+      member: directStringLiteral(candidate.argumentExpression),
+    };
+  }
+  return undefined;
+};
+
+const sourceHasRuntimeWrite = (
+  sourceFile: ts.SourceFile,
+  rootName: string,
+  memberName?: string,
+): boolean => {
+  let found = false;
+  const matchesTarget = (expression: ts.Expression): boolean => {
+    const candidate = unwrap(expression);
+    if (memberName === undefined) return ts.isIdentifier(candidate) && candidate.text === rootName;
+    const member = directStaticMember(candidate);
+    return member?.root === rootName && (member.member === undefined || member.member === memberName);
+  };
+  const reflectiveWrite = (call: ts.CallExpression): boolean => {
+    const operation = directStaticMember(call.expression);
+    if (!operation || call.arguments.length < 2) return false;
+    const target = unwrap(call.arguments[0]);
+    const targetMatches = memberName === undefined
+      ? ts.isIdentifier(target) && browserGlobalNames.has(target.text)
+      : ts.isIdentifier(target) && target.text === rootName;
+    if (!targetMatches) return false;
+    if (operation.root === 'Object'
+      && (operation.member === 'assign' || operation.member === 'defineProperties')) return true;
+    if (!((operation.root === 'Object' && operation.member === 'defineProperty')
+      || (operation.root === 'Reflect'
+        && ['defineProperty', 'deleteProperty', 'set'].includes(operation.member ?? '')))) return false;
+    const key = directStringLiteral(call.arguments[1]);
+    return key === (memberName ?? rootName);
+  };
+  const visit = (node: ts.Node): void => {
+    if (found) return;
+    if (ts.isBinaryExpression(node)
+      && assignmentOperators.has(node.operatorToken.kind)
+      && matchesTarget(node.left)) {
+      found = true;
+      return;
+    }
+    if (((ts.isPrefixUnaryExpression(node)
+        && (node.operator === ts.SyntaxKind.PlusPlusToken
+          || node.operator === ts.SyntaxKind.MinusMinusToken))
+      || ts.isPostfixUnaryExpression(node))
+      && matchesTarget(node.operand)) {
+      found = true;
+      return;
+    }
+    if (ts.isDeleteExpression(node) && matchesTarget(node.expression)) {
+      found = true;
+      return;
+    }
+    if (ts.isCallExpression(node) && reflectiveWrite(node)) {
+      found = true;
+      return;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return found;
 };
 
 const uniqueConstInitializer = (sourceFile: ts.SourceFile, name: string): ts.Expression | undefined => {
@@ -1022,29 +1176,11 @@ const isLegacyTypesModule = (specifier: string): boolean => {
 const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> => {
   const results = new Map(inputs.map(input => [input.path, [] as string[]]));
   const resultIdentities = new Map(inputs.map(input => [input.path, new Set<string>()]));
-  const approvedBrowserPreferencesBundle = inputs.some(input => (
-    input.directStorageBoundary === true && input.path === 'onboarding/index.html'
-  )) ? buildBrowserPreferencesBundle(root) : undefined;
-  const approvedBundleStatementSyntax = approvedBrowserPreferencesBundle
-    ? (() => {
-      const bundleSource = ts.createSourceFile(
-        'approved-browser-preferences.js',
-        approvedBrowserPreferencesBundle,
-        ts.ScriptTarget.Latest,
-        true,
-        ts.ScriptKind.JS,
-      );
-      if (bundleSource.statements.length !== 1) {
-        throw new Error('Approved browser preference bundle must contain one statement');
-      }
-      return syntaxFingerprint(bundleSource.statements[0].getText(bundleSource));
-    })()
-    : undefined;
 
   for (const input of inputs) {
     if (input.path.startsWith('tests/')) continue;
     for (const edge of externalScriptEdges(input)) {
-      if (!entersExcludedDirectory(input.path, edge.specifier)) continue;
+      if (!browserEntersExcludedDirectory(input.path, edge.specifier)) continue;
       const finding = `${input.path}:${sourceLine(input.source, edge.offset)}: `
         + 'loads executable code from excluded repository paths';
       if (resultIdentities.get(input.path)!.has(finding)) continue;
@@ -1115,11 +1251,17 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
     const localWorkspaceSource = policyPath.startsWith('services/localWorkspace/');
     const productionSource = !policyPath.startsWith('tests/');
     const enforceDirectStorageBoundary = input.directStorageBoundary === true && productionSource;
+    const approvedBrowserPreferencesBundle = policyPath === 'onboarding/index.html'
+      ? exactBrowserPreferencesBundle(input.source)
+      : undefined;
+    const approvedBundleStatementSyntax = approvedBrowserPreferencesBundle
+      ? browserPreferencesBundleStatementSyntax(approvedBrowserPreferencesBundle.source)
+      : undefined;
     const bundleStatements: ts.VariableStatement[] = [];
     if (policyPath === 'onboarding/index.html' && approvedBundleStatementSyntax) {
       const collectBundleStatements = (node: ts.Node): void => {
         if (ts.isVariableStatement(node)
-          && syntaxFingerprint(node.getText(sourceFile)) === approvedBundleStatementSyntax) {
+          && lineSensitiveSyntaxFingerprint(node.getText(sourceFile)) === approvedBundleStatementSyntax) {
           bundleStatements.push(node);
         }
         ts.forEachChild(node, collectBundleStatements);
@@ -1144,10 +1286,7 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
         && ts.isExpressionStatement(call.parent)
         && call.parent.parent === sourceFile;
     };
-    const exactBundleByteCount = approvedBrowserPreferencesBundle
-      ? input.source.split(approvedBrowserPreferencesBundle).length - 1
-      : 0;
-    const approvedBundleStatement = exactBundleByteCount === 1
+    const approvedBundleStatement = approvedBrowserPreferencesBundle !== undefined
       && bundleStatements.length === 1
       && approvedBundlePlacement(bundleStatements[0])
       ? bundleStatements[0]
@@ -1178,25 +1317,40 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
     const inspectModuleSpecifier = (node: ts.Node, expression: ts.Expression | undefined): void => {
       const specifier = directStringLiteral(expression);
       if (!specifier) return;
-      if (productionSource && entersExcludedDirectory(policyPath, specifier)) {
+      if (productionSource && moduleEntersExcludedDirectory(policyPath, specifier)) {
         report(node, 'loads executable code from excluded repository paths');
       }
       if (!importsAllowed && isLegacyTypesModule(specifier)) {
         report(node, 'imports local-workspace migration internals');
       }
     };
-    const workerEntrySpecifier = (node: ts.NewExpression): string | undefined => {
+    const importMetaUrl = (expression: ts.Expression | undefined): boolean => {
+      const url = expression && unwrap(expression);
+      return Boolean(url
+        && ts.isPropertyAccessExpression(url)
+        && url.name.text === 'url'
+        && ts.isMetaProperty(url.expression)
+        && url.expression.keywordToken === ts.SyntaxKind.ImportKeyword
+        && url.expression.name.text === 'meta');
+    };
+    const workerEntry = (
+      node: ts.NewExpression,
+    ): { specifier: string; context: 'browser' | 'module' } | undefined => {
       const constructor = unwrap(node.expression);
       if (!ts.isIdentifier(constructor)
         || (constructor.text !== 'Worker' && constructor.text !== 'SharedWorker')) return undefined;
       const entrypoint = node.arguments?.[0];
       const direct = directStringLiteral(entrypoint);
-      if (direct !== undefined) return direct;
+      if (direct !== undefined) return { specifier: direct, context: 'browser' };
       const url = entrypoint && unwrap(entrypoint);
       if (!url || !ts.isNewExpression(url)) return undefined;
       const urlConstructor = unwrap(url.expression);
-      return ts.isIdentifier(urlConstructor) && urlConstructor.text === 'URL'
-        ? directStringLiteral(url.arguments?.[0])
+      const specifier = directStringLiteral(url.arguments?.[0]);
+      return ts.isIdentifier(urlConstructor)
+        && urlConstructor.text === 'URL'
+        && specifier !== undefined
+        && importMetaUrl(url.arguments?.[1])
+        ? { specifier, context: 'module' }
         : undefined;
     };
     const transparentExpression = (node: ts.Identifier): ts.Expression => {
@@ -1252,7 +1406,7 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
       declaration: ts.FunctionLikeDeclaration | undefined,
       approvedSyntax: string,
     ): boolean => declaration !== undefined
-      && syntaxFingerprint(declaration.getText(sourceFile)) === approvedSyntax;
+      && lineSensitiveSyntaxFingerprint(declaration.getText(sourceFile)) === approvedSyntax;
     const exactGeneratorEvaluator = exactDeclarationSyntax(
       generatorEvaluator,
       approvedGeneratorEvaluatorSyntax,
@@ -1265,7 +1419,17 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
       openWithFactory,
       approvedOpenWithFactorySyntax,
     );
-    const unshadowedBuiltIn = (name: string): boolean => sourceValueBindings(sourceFile, name).length === 0;
+    const runtimeWriteCache = new Map<string, boolean>();
+    const hasRuntimeWrite = (rootName: string, memberName?: string): boolean => {
+      const key = memberName === undefined ? rootName : `${rootName}.${memberName}`;
+      if (!runtimeWriteCache.has(key)) {
+        runtimeWriteCache.set(key, sourceHasRuntimeWrite(sourceFile, rootName, memberName));
+      }
+      return runtimeWriteCache.get(key)!;
+    };
+    const unshadowedBuiltIn = (name: string): boolean => (
+      sourceValueBindings(sourceFile, name).length === 0 && !hasRuntimeWrite(name)
+    );
     const exactBuiltInMember = (
       expression: ts.Expression,
       rootName: string,
@@ -1277,7 +1441,8 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
         && ts.isIdentifier(member.expression)
         && member.expression.text === rootName
         && member.name.text === memberName
-        && unshadowedBuiltIn(rootName);
+        && unshadowedBuiltIn(rootName)
+        && !hasRuntimeWrite(rootName, memberName);
     };
     const exactTrustedAlias = (
       expression: ts.Expression,
@@ -1288,7 +1453,8 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
       const alias = unwrap(expression);
       if (!ts.isIdentifier(alias)
         || alias.text !== aliasName
-        || sourceValueBindings(sourceFile, aliasName).length !== 1) return false;
+        || sourceValueBindings(sourceFile, aliasName).length !== 1
+        || hasRuntimeWrite(aliasName)) return false;
       const initializer = uniqueConstInitializer(sourceFile, aliasName);
       return initializer !== undefined && exactBuiltInMember(initializer, rootName, memberName);
     };
@@ -1449,8 +1615,16 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
         }
       }
       if (productionSource && ts.isNewExpression(node)) {
-        const specifier = workerEntrySpecifier(node);
-        if (specifier && entersExcludedDirectory(policyPath, specifier)) {
+        const edge = workerEntry(node);
+        const browserDocument = ['.htm', '.html', '.svg'].includes(extname(policyPath))
+          ? policyPath
+          : 'index.html';
+        const excluded = edge?.context === 'module'
+          ? moduleEntersExcludedDirectory(policyPath, edge.specifier)
+          : edge?.context === 'browser'
+            ? browserEntersExcludedDirectory(browserDocument, edge.specifier)
+            : false;
+        if (excluded) {
           report(node, 'loads executable code from excluded repository paths');
         }
       }
@@ -1464,7 +1638,8 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
     }
     if (enforceDirectStorageBoundary
       && policyPath === 'onboarding/index.html'
-      && input.source.includes('doctect-browser-preferences:start')
+      && (input.source.includes(browserPreferencesBundleStart)
+        || input.source.includes(browserPreferencesBundleEnd))
       && approvedBundleStatement === undefined) {
       report(sourceFile, 'generated browser preference code does not match the approved exact syntax');
     }
@@ -1606,12 +1781,47 @@ describe('local workspace static boundary', () => {
   });
 
   it.each([
+    ['bare HTML URL', 'shell.html', '<script src="tests/unit/value.js"></script>'],
+    ['root HTML URL', 'shell.html', '<script src="/tests/unit/value.js"></script>'],
+    ['whitespace-padded HTML URL', 'shell.html', '<script src="  tests/unit/value.js  "></script>'],
+    ['query/hash HTML URL', 'shell.html', '<script src="tests/unit/value.js?raw#entry"></script>'],
+    ['encoded HTML URL', 'shell.html', '<script src="%74ests/unit/value.js"></script>'],
+    ['encoded HTML separator', 'shell.html', '<script src=".%5ctests/unit/value.js"></script>'],
+    ['bare SVG URL', 'assets/icon.svg', '<svg><script href="../tests/unit/value.js"></script></svg>'],
+    ['bare direct worker URL', 'components/excluded.ts', "new Worker('tests/unit/worker.ts');"],
+    ['dot direct worker URL', 'components/excluded.ts', "new Worker('./tests/unit/worker.ts');"],
+    ['root direct worker URL', 'components/excluded.ts', "new Worker('/tests/unit/worker.ts');"],
+    [
+      'encoded direct worker separator',
+      'components/excluded.ts',
+      "new Worker('.%5ctests/unit/worker.ts');",
+    ],
+    [
+      'encoded source-relative module worker URL',
+      'components/excluded.ts',
+      "new Worker(new URL('..%5ctests/unit/worker.ts', import.meta.url));",
+    ],
+  ])('rejects excluded browser URL through %s', (_case, path, source) => {
+    expect(analyzeProductionSource(path, source)).toEqual(expect.arrayContaining([
+      expect.stringContaining('loads executable code from excluded repository paths'),
+    ]));
+  });
+
+  it.each([
     ['source import', 'components/allowed.ts', "import value from '../services/browserPreferences';"],
+    ['bare package import', 'components/allowed.ts', "import value from 'tests/unit/value';"],
+    ['scoped package import', 'components/allowed.ts', "import value from '@scope/tests';"],
     ['nested docs source', 'components/allowed.ts', "import value from './feature/docs/value';"],
     [
       'Blob worker',
       'components/allowed.ts',
       'const workerUrl = URL.createObjectURL(new Blob([])); new Worker(workerUrl);',
+    ],
+    ['direct app worker', 'components/allowed.ts', "new Worker('workers/entry.js');"],
+    [
+      'source-local module worker',
+      'components/allowed.ts',
+      "new Worker(new URL('./worker.ts', import.meta.url));",
     ],
     ['root HTML script', 'shell.html', '<script type="module" src="/index.tsx"></script>'],
     ['remote HTML script', 'shell.html', '<script src="https://cdn.example/app.js"></script>'],
@@ -1817,6 +2027,52 @@ describe('local workspace static boundary', () => {
       (source: string) => `${source}\nfunction Reflect() {}\n`,
     ],
   ])('revokes browser-root exceptions when %s is shadowed', (_case, path, mutate) => {
+    const original = readFileSync(join(root, path), 'utf8');
+    const source = mutate(original);
+    expect(source).not.toBe(original);
+    expect(analyzeProductionSource(path, source)).toEqual(expect.arrayContaining([
+      expect.stringContaining('passes a browser global outside approved static access'),
+    ]));
+  });
+
+  it.each([
+    ['value namespace', 'namespace Object { export const defineProperty = suppliedMethod; }'],
+    ['Object reassignment', 'Object = suppliedObject;'],
+    ['Reflect reassignment', 'Reflect = suppliedReflect;'],
+    ['computed method assignment', "Object['defineProperty'] = suppliedMethod;"],
+    ['method update', 'Object.defineProperty++;'],
+    ['method deletion', 'delete Reflect.deleteProperty;'],
+    ['Reflect.set method write', "Reflect.set(Object, 'defineProperty', suppliedMethod);"],
+    [
+      'Object.defineProperty method write',
+      "Object.defineProperty(Reflect, 'deleteProperty', { value: suppliedMethod });",
+    ],
+  ])('revokes reflection exceptions after %s', (_case, mutation) => {
+    const path = 'services/localWorkspace/indexedDbAdapter.ts';
+    const original = readFileSync(join(root, path), 'utf8');
+    const source = `${original}\n${mutation}\n`;
+    expect(analyzeProductionSource(path, source)).toEqual(expect.arrayContaining([
+      expect.stringContaining('passes a browser global outside approved static access'),
+    ]));
+  });
+
+  it.each([
+    [
+      'ASI changes a return into a separate call',
+      (source: string) => source.replace(
+        '    return operation();\n  } finally {',
+        '    return\n      operation();\n  } finally {',
+      ),
+    ],
+    [
+      'same tokens are regrouped onto another line',
+      (source: string) => source.replace(
+        "  if (descriptor) Object.defineProperty(globalThis, 'indexedDB', descriptor);",
+        "  if (descriptor)\n    Object.defineProperty(globalThis, 'indexedDB', descriptor);",
+      ),
+    ],
+  ])('revokes exact reflection declaration approval when %s', (_case, mutate) => {
+    const path = 'services/localWorkspace/indexedDbAdapter.ts';
     const original = readFileSync(join(root, path), 'utf8');
     const source = mutate(original);
     expect(source).not.toBe(original);
@@ -2078,8 +2334,36 @@ describe('local workspace static boundary', () => {
     expect(workspace).toMatch(/createLocalWorkspaceStore\(\{/);
   });
 
-  it('allows only byte-exact compiled preference code in generated onboarding HTML', () => {
+  it('pins builder source, output, and committed preference region independently', () => {
     const bundle = buildBrowserPreferencesBundle(root);
+    const committed = readFileSync(join(root, 'onboarding/index.html'), 'utf8');
+    const builderSource = readFileSync(join(root, 'onboarding/build.mjs'), 'utf8');
+    const builderSourceFile = ts.createSourceFile(
+      'onboarding/build.mjs',
+      builderSource,
+      ts.ScriptTarget.Latest,
+      true,
+      ts.ScriptKind.JS,
+    );
+    const builderDeclaration = uniqueTopLevelFunction(
+      builderSourceFile,
+      'buildBrowserPreferencesBundle',
+    );
+    const builtRegion = exactBrowserPreferencesBundle(bundle);
+    const committedRegion = exactBrowserPreferencesBundle(committed);
+
+    expect(exactOccurrenceCount(bundle, browserPreferencesBundleStart)).toBe(1);
+    expect(exactOccurrenceCount(bundle, browserPreferencesBundleEnd)).toBe(1);
+    expect(exactOccurrenceCount(committed, browserPreferencesBundleStart)).toBe(1);
+    expect(exactOccurrenceCount(committed, browserPreferencesBundleEnd)).toBe(1);
+    expect(Buffer.byteLength(bundle, 'utf8')).toBe(approvedBrowserPreferencesBundleBytes);
+    expect(createHash('sha256').update(bundle).digest('hex')).toBe(approvedBrowserPreferencesBundleHash);
+    expect(builderDeclaration).toBeDefined();
+    expect(lineSensitiveSyntaxFingerprint(builderDeclaration!.getText(builderSourceFile)))
+      .toBe(approvedBrowserPreferencesBuilderSyntax);
+    expect(browserPreferencesBundleStatementSyntax(bundle)).toBeDefined();
+    expect(builtRegion?.source).toBe(bundle);
+    expect(committedRegion?.source).toBe(bundle);
     expect(analyzeProductionSource('onboarding/index.html', `<script>${bundle}</script>`)).toEqual([]);
     expect(analyzeProductionSource(
       'onboarding/index.html',
@@ -2087,6 +2371,50 @@ describe('local workspace static boundary', () => {
     )).toEqual(expect.arrayContaining([
       expect.stringContaining('accesses production localStorage outside approved persistence modules'),
     ]));
+  });
+
+  it('rejects exact-marker preference capability mutations', () => {
+    const publicReturn = 'return { readBrowserPreference, writeBrowserPreference, '
+      + 'wasMigrationReceiptSeen, markMigrationReceiptSeen };';
+    const original = buildBrowserPreferencesBundle(root);
+    const malicious = original.replace(publicReturn, `
+Object.defineProperty(readBrowserPreference, 'leakedWrite', {
+  value: writeRuntimeBrowserPreference,
+});
+Object.defineProperty(writeBrowserPreference, Symbol('rawStorage'), {
+  value: window.localStorage,
+});
+${publicReturn}`);
+    expect(malicious).not.toBe(original);
+    expect(exactBrowserPreferencesBundle(malicious)).toBeUndefined();
+    expect(analyzeProductionSource('onboarding/index.html', `<script>${malicious}</script>`)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('generated browser preference code does not match the approved exact syntax'),
+      ]),
+    );
+  });
+
+  it.each([
+    ['duplicate start marker', (bundle: string) => `${browserPreferencesBundleStart}\n${bundle}`],
+    ['duplicate end marker', (bundle: string) => `${bundle}\n${browserPreferencesBundleEnd}`],
+    ['missing start marker', (bundle: string) => bundle.replace(browserPreferencesBundleStart, '')],
+    ['missing end marker', (bundle: string) => bundle.replace(browserPreferencesBundleEnd, '')],
+  ])('rejects generated preference code with %s', (_case, mutate) => {
+    const bundle = mutate(buildBrowserPreferencesBundle(root));
+    expect(analyzeProductionSource('onboarding/index.html', `<script>${bundle}</script>`)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('generated browser preference code does not match the approved exact syntax'),
+      ]),
+    );
+  });
+
+  it('keeps onboarding approval independent from the mutable bundle builder', () => {
+    const policySource = readFileSync(join(root, 'tests/unit/localWorkspaceBoundary.test.ts'), 'utf8');
+    const analyzer = policySource.slice(
+      policySource.indexOf('const analyzeSources ='),
+      policySource.indexOf('const analyzeSource ='),
+    );
+    expect(analyzer).not.toContain('buildBrowserPreferencesBundle(');
   });
 
   it('rejects a control-flow wrapper around the generated preference bundle', () => {
