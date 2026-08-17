@@ -2,7 +2,15 @@ import React from 'react';
 import 'fake-indexeddb/auto';
 import { webcrypto } from 'node:crypto';
 import { IDBFactory } from 'fake-indexeddb';
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import {
+  act,
+  fireEvent,
+  render,
+  renderHook,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AppState } from '../../types';
@@ -15,6 +23,7 @@ import {
 import { createIndexedDbAdapter } from '../../services/localWorkspace/indexedDbAdapter';
 import { inheritInstalledProjectAuthority } from '../../services/localWorkspace/projectAuthority';
 import { createBlankProject } from '../../services/presets';
+import { useWorkspaceProjectWrites } from '../../hooks/useWorkspaceProjectWrites';
 import {
   LEGACY_KEYS,
   memoryStorage,
@@ -521,4 +530,157 @@ describe('EditorPage project authority lineage', () => {
     expect(screen.getByTitle('Undo (Ctrl+Z)')).not.toBe(undoBeforeSave);
     expect(screen.getByTitle('Undo (Ctrl+Z)')).toBeDisabled();
   }, 10_000);
+});
+
+describe('useWorkspaceProjectWrites real-store lineage handoff', () => {
+  it('retries latest bytes after a local predecessor succeeds and its follow-up hits quota', async () => {
+    const source = project('project-a', 'Original', markedState('Original', 'original'));
+    const firstHold = transactionCompletionHold(['projects', 'migrationLedger']);
+    const indexedDB = new IDBFactory();
+    instrumentFactory(indexedDB, firstHold.hook);
+    let failNextMutation = false;
+    const environment: LocalWorkspaceEnvironment = {
+      indexedDB,
+      legacyStorage: memoryStorage(validLegacyValues({
+        [LEGACY_KEYS.projects]: JSON.stringify([source]),
+        [LEGACY_KEYS.activeProject]: source.id,
+      })),
+      addStorageListener: () => () => {},
+      crypto: webcrypto as unknown as Crypto,
+      now: () => '2026-08-16T21:00:00.000Z',
+      randomUUID: () => 'surviving-lineage-retry',
+      createBlankProject,
+      fault(point) {
+        if (point !== 'mutation.before-complete' || !failNextMutation) return;
+        failNextMutation = false;
+        throw new DOMException('Injected quota failure.', 'QuotaExceededError');
+      },
+    };
+    const store = createLocalWorkspaceStore(environment);
+    const initial = await store.bootstrap();
+    expect(initial.status).toBe('ready');
+    if (initial.status !== 'ready') return;
+    const commit = vi.spyOn(store, 'commit');
+    const { result } = renderHook(() => useWorkspaceProjectWrites(store, initial.snapshot));
+    let firstSave!: Promise<boolean>;
+    let secondSave!: Promise<boolean>;
+    firstHold.arm();
+
+    act(() => {
+      firstSave = result.current.updateProject(source.id, current => ({
+        ...current,
+        name: 'First',
+      }));
+    });
+    await firstHold.started;
+    await firstHold.committed;
+    act(() => {
+      secondSave = result.current.updateProject(source.id, current => ({
+        ...current,
+        name: 'Latest',
+      }));
+    });
+    failNextMutation = true;
+
+    await act(async () => {
+      firstHold.release();
+      expect(await firstSave).toBe(true);
+      expect(await secondSave).toBe(false);
+    });
+    expect(result.current.workspace.projects[0].name).toBe('Latest');
+    expect(result.current.saveStates.get(source.id)?.status).toBe('failed');
+
+    act(() => result.current.retryProject(source.id));
+    const retryCommit = commit.mock.results[2]?.value as Promise<WorkspaceSnapshot>;
+    await act(async () => {
+      await retryCommit;
+      await Promise.resolve();
+    });
+
+    expect(result.current.saveStates.get(source.id)?.status).toBe('saved');
+    const inspector = createIndexedDbAdapter({ indexedDB, now: environment.now });
+    await inspector.open();
+    const durable = (await inspector.inspect()).projects.find(item => item.id === source.id);
+    inspector.close();
+    expect(durable).toMatchObject({
+      project: { name: 'Latest' },
+      storageRevision: 2,
+    });
+  }, 20_000);
+
+  it('admits a third edit while the exact I:1 follow-up is active', async () => {
+    const source = project('project-a', 'Original', markedState('Original', 'original'));
+    const firstHold = transactionCompletionHold(['projects', 'migrationLedger']);
+    const secondHold = transactionCompletionHold(['projects', 'migrationLedger']);
+    const indexedDB = new IDBFactory();
+    instrumentFactory(indexedDB, (stores, mode, transaction) => {
+      firstHold.hook(stores, mode, transaction);
+      secondHold.hook(stores, mode, transaction);
+    });
+    const environment: LocalWorkspaceEnvironment = {
+      indexedDB,
+      legacyStorage: memoryStorage(validLegacyValues({
+        [LEGACY_KEYS.projects]: JSON.stringify([source]),
+        [LEGACY_KEYS.activeProject]: source.id,
+      })),
+      addStorageListener: () => () => {},
+      crypto: webcrypto as unknown as Crypto,
+      now: () => '2026-08-16T21:05:00.000Z',
+      randomUUID: () => 'surviving-lineage-third-edit',
+      createBlankProject,
+    };
+    const store = createLocalWorkspaceStore(environment);
+    const initial = await store.bootstrap();
+    expect(initial.status).toBe('ready');
+    if (initial.status !== 'ready') return;
+    const { result } = renderHook(() => useWorkspaceProjectWrites(store, initial.snapshot));
+    let firstSave!: Promise<boolean>;
+    let secondSave!: Promise<boolean>;
+    let thirdSave!: Promise<boolean>;
+    firstHold.arm();
+
+    act(() => {
+      firstSave = result.current.updateProject(source.id, current => ({
+        ...current,
+        name: 'First',
+      }));
+    });
+    await firstHold.started;
+    await firstHold.committed;
+    act(() => {
+      secondSave = result.current.updateProject(source.id, current => ({
+        ...current,
+        name: 'Second',
+      }));
+    });
+    secondHold.arm();
+    await act(async () => {
+      firstHold.release();
+      expect(await firstSave).toBe(true);
+    });
+    await secondHold.started;
+    await secondHold.committed;
+
+    act(() => {
+      thirdSave = result.current.updateProject(source.id, current => ({
+        ...current,
+        name: 'Third',
+      }));
+    });
+    await act(async () => {
+      secondHold.release();
+      expect(await secondSave).toBe(true);
+      expect(await thirdSave).toBe(true);
+    });
+
+    expect(result.current.saveStates.get(source.id)?.status).toBe('saved');
+    const inspector = createIndexedDbAdapter({ indexedDB, now: environment.now });
+    await inspector.open();
+    const durable = (await inspector.inspect()).projects.find(item => item.id === source.id);
+    inspector.close();
+    expect(durable).toMatchObject({
+      project: { name: 'Third' },
+      storageRevision: 3,
+    });
+  }, 20_000);
 });

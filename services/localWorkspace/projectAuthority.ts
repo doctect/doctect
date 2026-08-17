@@ -1,5 +1,9 @@
 import type { WorkspaceProject, WorkspaceSnapshot } from './contracts';
-import type { ProjectLineage } from './schema';
+import {
+  nextProjectLineage,
+  sameProjectLineage,
+  type ProjectLineage,
+} from './schema';
 
 interface InstalledProjectAuthority {
   token: object;
@@ -38,6 +42,21 @@ export const inheritInstalledProjectAuthority = (
 ): void => {
   const authority = getInstalledProjectAuthority(source);
   if (authority) registerInstalledProjectAuthority(target, authority.lineage, authority.token);
+};
+
+export const advanceInstalledProjectAuthorityFromSave = (
+  survivingProject: WorkspaceProject,
+  submittedProject: WorkspaceProject,
+  returnedProject: WorkspaceProject,
+): void => {
+  const surviving = getInstalledProjectAuthority(survivingProject);
+  const submitted = getInstalledProjectAuthority(submittedProject);
+  const returned = getInstalledProjectAuthority(returnedProject);
+  if (!surviving || !submitted || !returned) return;
+  if (surviving.token !== submitted.token || returned.token !== submitted.token) return;
+  if (!sameProjectLineage(surviving.lineage, submitted.lineage)) return;
+  if (!sameProjectLineage(returned.lineage, nextProjectLineage(submitted.lineage))) return;
+  registerInstalledProjectAuthority(survivingProject, returned.lineage, returned.token);
 };
 
 export const cloneWorkspaceSnapshotWithProjectAuthority = (

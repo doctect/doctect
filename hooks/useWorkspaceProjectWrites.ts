@@ -7,6 +7,7 @@ import {
   type WorkspaceSnapshot,
 } from '../services/localWorkspace/index';
 import {
+  advanceInstalledProjectAuthorityFromSave,
   getInstalledProjectAuthorityToken,
   inheritInstalledProjectAuthority,
 } from '../services/localWorkspace/projectAuthority';
@@ -188,6 +189,17 @@ export function useWorkspaceProjectWrites(
       const currentCopy = workingCopiesRef.current.get(project.id);
       const currentGeneration = generationsRef.current.get(project.id) === generation
         && currentCopy?.generation === generation;
+      const newerGenerationSurvives = currentCopy !== undefined
+        && currentCopy.generation > generation
+        && generationsRef.current.get(project.id) === currentCopy.generation;
+      const returnedProject = snapshot.projects.find(item => item.id === project.id);
+      if (newerGenerationSurvives && returnedProject) {
+        advanceInstalledProjectAuthorityFromSave(
+          currentCopy.project,
+          project,
+          returnedProject,
+        );
+      }
       if (currentGeneration) workingCopiesRef.current.delete(project.id);
       reconcileSnapshot(snapshot, currentGeneration ? project.id : undefined);
       if (!currentGeneration) return true;

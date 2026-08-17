@@ -8,6 +8,11 @@ import {
   type WorkspaceProject,
   type WorkspaceSnapshot,
 } from '../../services/localWorkspace/index';
+import {
+  getInstalledProjectAuthorityLineage,
+  registerInstalledProjectAuthority,
+} from '../../services/localWorkspace/projectAuthority';
+import type { ProjectLineage } from '../../services/localWorkspace/schema';
 import { createBlankProject } from '../../services/presets';
 
 interface Deferred<T> {
@@ -37,6 +42,16 @@ const projectWithId = (id: string, name: string, scale = 1): WorkspaceProject =>
   name,
   initialState: { ...createBlankProject(), scale },
 });
+
+const projectWithAuthority = (
+  name: string,
+  lineage: ProjectLineage,
+  token: object,
+): WorkspaceProject => {
+  const value = project(name);
+  registerInstalledProjectAuthority(value, lineage, token);
+  return value;
+};
 
 const snapshot = (currentProject = project('Original')): WorkspaceSnapshot => ({
   projects: [currentProject],
@@ -296,6 +311,212 @@ describe('useWorkspaceProjectWrites', () => {
     expect(result.current.saveStates.get('project-1')).toEqual({ status: 'saved' });
     expect(result.current.hasUnsavedWork).toBe(false);
     expect(result.current.authorityEpochs.get('project-1')).toBe(initialEpoch);
+  });
+
+  it.each([
+    ['foreign incarnation', { incarnation: 'foreign', revision: 1 }, true],
+    ['jumped revision', { incarnation: 'local', revision: 2 }, true],
+    ['stale unrelated completion', { incarnation: 'local', revision: 1 }, false],
+  ] as const)(
+    'does not retag a surviving copy from a %s readback',
+    async (_, returnedLineage, preserveToken) => {
+      const token = {};
+      const initial = projectWithAuthority('Original', { incarnation: 'local', revision: 0 }, token);
+      const first = deferred<WorkspaceSnapshot>();
+      const pending = new Promise<WorkspaceSnapshot>(() => {});
+      const store = storeWithCommit(vi.fn()
+        .mockReturnValueOnce(first.promise)
+        .mockReturnValue(pending));
+      const { result } = renderHook(() => useWorkspaceProjectWrites(store, snapshot(initial)));
+      let firstSave!: Promise<boolean>;
+
+      act(() => {
+        firstSave = result.current.updateProject('project-1', current => ({
+          ...current,
+          name: 'First',
+        }));
+      });
+      act(() => {
+        void result.current.updateProject('project-1', current => ({
+          ...current,
+          name: 'Second',
+        }));
+      });
+      const returned = projectWithAuthority('Returned', returnedLineage, preserveToken ? token : {});
+      await act(async () => {
+        first.resolve(snapshot(returned));
+        await firstSave;
+      });
+      act(() => {
+        void result.current.updateProject('project-1', current => ({
+          ...current,
+          name: 'Third',
+        }));
+      });
+
+      const thirdCommand = store.commit.mock.calls[2][0];
+      expect(thirdCommand.type).toBe('save-project');
+      if (thirdCommand.type !== 'save-project') return;
+      expect(getInstalledProjectAuthorityLineage(thirdCommand.project)).toEqual({
+        incarnation: 'local',
+        revision: 0,
+      });
+    },
+  );
+
+  it('does not retag a surviving copy when its local predecessor fails', async () => {
+    const token = {};
+    const initial = projectWithAuthority('Original', { incarnation: 'local', revision: 0 }, token);
+    const first = deferred<WorkspaceSnapshot>();
+    const pending = new Promise<WorkspaceSnapshot>(() => {});
+    const store = storeWithCommit(vi.fn()
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValue(pending));
+    const { result } = renderHook(() => useWorkspaceProjectWrites(store, snapshot(initial)));
+    let firstSave!: Promise<boolean>;
+
+    act(() => {
+      firstSave = result.current.updateProject('project-1', current => ({
+        ...current,
+        name: 'First',
+      }));
+    });
+    act(() => {
+      void result.current.updateProject('project-1', current => ({
+        ...current,
+        name: 'Second',
+      }));
+    });
+    await act(async () => {
+      first.reject(new WorkspaceStoreError('First failed.', 'io'));
+      await firstSave;
+    });
+    act(() => {
+      void result.current.updateProject('project-1', current => ({
+        ...current,
+        name: 'Third',
+      }));
+    });
+
+    const thirdCommand = store.commit.mock.calls[2][0];
+    expect(thirdCommand.type).toBe('save-project');
+    if (thirdCommand.type !== 'save-project') return;
+    expect(getInstalledProjectAuthorityLineage(thirdCommand.project)).toEqual({
+      incarnation: 'local',
+      revision: 0,
+    });
+  });
+
+  it('does not synthesize authority for a tokenless surviving copy', async () => {
+    const first = deferred<WorkspaceSnapshot>();
+    const pending = new Promise<WorkspaceSnapshot>(() => {});
+    const store = storeWithCommit(vi.fn()
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValue(pending));
+    const { result } = renderHook(() => useWorkspaceProjectWrites(store, snapshot()));
+    let firstSave!: Promise<boolean>;
+
+    act(() => {
+      firstSave = result.current.updateProject('project-1', current => ({
+        ...current,
+        name: 'First',
+      }));
+    });
+    act(() => {
+      void result.current.updateProject('project-1', current => ({
+        ...current,
+        name: 'Second',
+      }));
+    });
+    const returned = projectWithAuthority(
+      'Returned',
+      { incarnation: 'local', revision: 1 },
+      {},
+    );
+    await act(async () => {
+      first.resolve(snapshot(returned));
+      await firstSave;
+    });
+    act(() => {
+      void result.current.updateProject('project-1', current => ({
+        ...current,
+        name: 'Third',
+      }));
+    });
+
+    const thirdCommand = store.commit.mock.calls[2][0];
+    expect(thirdCommand.type).toBe('save-project');
+    if (thirdCommand.type !== 'save-project') return;
+    expect(getInstalledProjectAuthorityLineage(thirdCommand.project)).toBeUndefined();
+  });
+
+  it('does not retag a same-id replacement from an old-incarnation completion', async () => {
+    const oldToken = {};
+    const replacementToken = {};
+    const initial = projectWithAuthority('Original', { incarnation: 'old', revision: 0 }, oldToken);
+    const replacement = projectWithAuthority(
+      'Replacement',
+      { incarnation: 'replacement', revision: 0 },
+      replacementToken,
+    );
+    const first = deferred<WorkspaceSnapshot>();
+    const replacementSave = new Promise<WorkspaceSnapshot>(() => {});
+    let saveCalls = 0;
+    const store = storeWithCommit(command => {
+      if (command.type === 'save-project') {
+        saveCalls += 1;
+        return saveCalls === 1 ? first.promise : replacementSave;
+      }
+      if (command.type === 'close-project') {
+        return Promise.resolve({ ...snapshot(initial), projects: [], activeProjectId: '' });
+      }
+      return Promise.resolve(snapshot(replacement));
+    });
+    const { result } = renderHook(() => useWorkspaceProjectWrites(store, snapshot(initial)));
+    let oldSave!: Promise<boolean>;
+
+    act(() => {
+      oldSave = result.current.updateProject('project-1', current => ({
+        ...current,
+        name: 'Old edit',
+      }));
+    });
+    await act(async () => {
+      await result.current.commitStructural({ type: 'close-project', projectId: 'project-1' });
+      await result.current.commitStructural({
+        type: 'create-and-activate-project',
+        project: replacement,
+      });
+    });
+    act(() => {
+      void result.current.updateProject('project-1', current => ({
+        ...current,
+        name: 'Replacement edit',
+      }));
+    });
+    const oldReturned = projectWithAuthority(
+      'Old returned',
+      { incarnation: 'old', revision: 1 },
+      oldToken,
+    );
+    await act(async () => {
+      first.resolve(snapshot(oldReturned));
+      await oldSave;
+    });
+    act(() => {
+      void result.current.updateProject('project-1', current => ({
+        ...current,
+        name: 'Replacement latest',
+      }));
+    });
+
+    const latestCommand = store.commit.mock.calls[4][0];
+    expect(latestCommand.type).toBe('save-project');
+    if (latestCommand.type !== 'save-project') return;
+    expect(getInstalledProjectAuthorityLineage(latestCommand.project)).toEqual({
+      incarnation: 'replacement',
+      revision: 0,
+    });
   });
 
   it('keeps a coalesced physical snapshot when callers settle out of order', async () => {
