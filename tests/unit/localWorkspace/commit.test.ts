@@ -712,6 +712,63 @@ describe('project save queues', () => {
       });
   });
 
+  it('restores installed replacement lineage after a terminally conflicted pin releases', async () => {
+    const hold = transactionCompletionHold(['projects', 'migrationLedger']);
+    const { store: storeA, harness, snapshot } = await readyStore({
+      values: twoProjectValues(),
+      hook: hold.hook,
+    });
+    const replacementStore = createLocalWorkspaceStore(harness.environment);
+    await expect(replacementStore.bootstrap()).resolves.toMatchObject({ status: 'ready' });
+    useQueueTimers();
+    hold.arm();
+
+    const heldB = storeA.commit({
+      type: 'save-project',
+      project: trustedProjectNamed(
+        snapshot.projects.find(project => project.id === 'project-b')!,
+        'Held B',
+      ),
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    await hold.started;
+    await hold.committed;
+    const pinnedA = storeA.commit({
+      type: 'save-project',
+      project: trustedProjectNamed(
+        snapshot.projects.find(project => project.id === 'project-a')!,
+        'Pinned old A',
+      ),
+    });
+    const pinnedAssertion = expect(pinnedA).rejects.toMatchObject({ code: 'conflict' });
+    await vi.advanceTimersByTimeAsync(1_000);
+    await replacementStore.commit({ type: 'close-project', projectId: 'project-a' });
+    harness.environment.randomUUID = () => 'failed-pin-replacement-incarnation';
+    await replacementStore.commit({
+      type: 'create-and-activate-project',
+      project: projectNamed('Replacement A'),
+    });
+    hold.release();
+
+    await expect(heldB).resolves.toMatchObject({
+      projects: expect.arrayContaining([
+        expect.objectContaining({ id: 'project-a', name: 'Replacement A' }),
+      ]),
+    });
+    await pinnedAssertion;
+    await expect(storeA.commit({
+      type: 'close-project',
+      projectId: 'project-a',
+    })).resolves.toMatchObject({
+      projects: [expect.objectContaining({ id: 'project-b' })],
+    });
+    await expect(storeA.commit({
+      type: 'close-project',
+      projectId: 'project-a',
+    })).rejects.toMatchObject({ code: 'validation' });
+    expect((await inspect(harness)).projects.map(record => record.id)).toEqual(['project-b']);
+  });
+
   it('pins a follow-up behind an in-flight save to that local write lineage', async () => {
     const hold = transactionCompletionHold(['projects', 'migrationLedger']);
     const { store: storeA, harness, snapshot } = await readyStore({ hook: hold.hook });

@@ -21,7 +21,10 @@ import {
   type WorkspaceSnapshot,
 } from '../../services/localWorkspace/index';
 import { createIndexedDbAdapter } from '../../services/localWorkspace/indexedDbAdapter';
-import { inheritInstalledProjectAuthority } from '../../services/localWorkspace/projectAuthority';
+import {
+  getInstalledProjectAuthorityToken,
+  inheritInstalledProjectAuthority,
+} from '../../services/localWorkspace/projectAuthority';
 import { createBlankProject } from '../../services/presets';
 import { useWorkspaceProjectWrites } from '../../hooks/useWorkspaceProjectWrites';
 import {
@@ -848,5 +851,105 @@ describe('useWorkspaceProjectWrites real-store lineage handoff', () => {
       project: { name: 'Replacement A' },
       storageRevision: 0,
     });
+  }, 20_000);
+
+  it('closes installed replacement after its pinned old save terminally conflicts', async () => {
+    const originalA = project('project-a', 'Original A', markedState('Original A', 'original-a'));
+    const projectB = project('project-b', 'Project B', markedState('Project B', 'project-b'));
+    const replacementA = project(
+      'project-a',
+      'Replacement A',
+      markedState('Replacement A', 'replacement-a'),
+    );
+    const bHold = transactionCompletionHold(['projects', 'migrationLedger']);
+    const indexedDB = new IDBFactory();
+    instrumentFactory(indexedDB, bHold.hook);
+    let nextUuid = 0;
+    const environment: LocalWorkspaceEnvironment = {
+      indexedDB,
+      legacyStorage: memoryStorage(validLegacyValues({
+        [LEGACY_KEYS.projects]: JSON.stringify([originalA, projectB]),
+        [LEGACY_KEYS.activeProject]: projectB.id,
+      })),
+      addStorageListener: () => () => {},
+      crypto: webcrypto as unknown as Crypto,
+      now: () => '2026-08-16T21:20:00.000Z',
+      randomUUID: () => `pin-release-${nextUuid++}`,
+      createBlankProject,
+    };
+    const store = createLocalWorkspaceStore(environment);
+    const initial = await store.bootstrap();
+    expect(initial.status).toBe('ready');
+    if (initial.status !== 'ready') return;
+    const replacementStore = createLocalWorkspaceStore(environment);
+    await expect(replacementStore.bootstrap()).resolves.toMatchObject({ status: 'ready' });
+    const commit = vi.spyOn(store, 'commit');
+    const { result } = renderHook(() => useWorkspaceProjectWrites(store, initial.snapshot));
+    const staleEpoch = result.current.authorityEpochs.get(originalA.id);
+    const staleToken = getInstalledProjectAuthorityToken(
+      initial.snapshot.projects.find(item => item.id === originalA.id)!,
+    );
+    let bSave!: Promise<boolean>;
+    let pinnedASave!: Promise<boolean>;
+    bHold.arm();
+
+    act(() => {
+      bSave = result.current.updateProject(projectB.id, current => ({
+        ...current,
+        name: 'Held B',
+      }));
+    });
+    await bHold.started;
+    await bHold.committed;
+    act(() => {
+      pinnedASave = result.current.updateProject(originalA.id, current => ({
+        ...current,
+        name: 'Pinned local A',
+      }));
+    });
+    await replacementStore.commit({ type: 'close-project', projectId: originalA.id });
+    await replacementStore.commit({
+      type: 'create-and-activate-project',
+      project: replacementA,
+    });
+
+    await act(async () => {
+      bHold.release();
+      expect(await bSave).toBe(true);
+      expect(await pinnedASave).toBe(false);
+    });
+    const currentEpoch = result.current.authorityEpochs.get(originalA.id);
+    const visibleA = result.current.workspace.projects.find(item => item.id === originalA.id);
+    expect(currentEpoch).toBeGreaterThan(staleEpoch ?? -1);
+    expect(visibleA?.name).toBe('Pinned local A');
+    expect(getInstalledProjectAuthorityToken(visibleA!)).toBe(staleToken);
+    expect(result.current.saveStates.get(originalA.id)?.status).toBe('conflict');
+
+    await act(async () => {
+      await expect(result.current.commitStructural(
+        { type: 'close-project', projectId: originalA.id },
+        staleEpoch,
+      )).rejects.toMatchObject({ code: 'conflict' });
+    });
+    expect(commit).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      await expect(result.current.commitStructural(
+        { type: 'close-project', projectId: originalA.id },
+        currentEpoch,
+      )).resolves.toMatchObject({
+        projects: [expect.objectContaining({ id: projectB.id })],
+      });
+    });
+
+    expect(result.current.workspace.projects.map(item => item.id)).toEqual([projectB.id]);
+    expect(commit).toHaveBeenCalledTimes(3);
+    expect(commit.mock.calls[2][0]).toEqual({
+      type: 'close-project',
+      projectId: originalA.id,
+    });
+    const inspector = createIndexedDbAdapter({ indexedDB, now: environment.now });
+    await inspector.open();
+    expect((await inspector.inspect()).projects.some(item => item.id === originalA.id)).toBe(false);
+    inspector.close();
   }, 20_000);
 });

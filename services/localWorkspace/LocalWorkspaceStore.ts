@@ -1798,6 +1798,12 @@ const createLocalWorkspaceStoreAtVersion = (
   const createCommandQueue = (): MutationQueue => createMutationQueue({
     saveProject: executeProjectSave,
     runExclusive: executeExclusiveCommand,
+    onFailedProjectLineageUnpinned(projectId) {
+      const installedLineage = installedProjectLineages.get(projectId);
+      if (installedLineage) {
+        expectedProjectLineages.set(projectId, { ...installedLineage });
+      }
+    },
   });
   resetCommandQueue = () => {
     mutationQueue = createCommandQueue();

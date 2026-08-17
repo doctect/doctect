@@ -37,6 +37,7 @@ interface MutationOperations {
     expectedLineage: ProjectLineage,
   ): Promise<WorkspaceSnapshot>;
   runExclusive(admission: ExclusiveAdmission): Promise<WorkspaceSnapshot>;
+  onFailedProjectLineageUnpinned?(projectId: string): void;
 }
 
 interface Waiter {
@@ -159,6 +160,37 @@ export const createMutationQueue = (
           ? operations.runExclusive(entry.admission)
           : Promise.reject(lineageError(entry.admission.command.projectId))
         : operations.runExclusive(entry.admission);
+    let cleaned = false;
+    const cleanEntry = (failed: boolean): void => {
+      cleaned = true;
+      if (entry.kind === 'save') {
+        activeSave = undefined;
+        if (!entries.some(candidate =>
+          (candidate.kind === 'save' && candidate.project.id === entry.project.id)
+          || (candidate.kind === 'exclusive'
+            && candidate.admission.kind === 'close'
+            && candidate.admission.command.projectId === entry.project.id))) {
+          projectLineages.delete(entry.project.id);
+          if (failed) {
+            operations.onFailedProjectLineageUnpinned?.(entry.project.id);
+          }
+        }
+      } else if (entry.admission.kind === 'close') {
+        const projectId = entry.admission.command.projectId;
+        projectLineages.delete(projectId);
+        if (failed && !entries.some(candidate =>
+          (candidate.kind === 'save' && candidate.project.id === projectId)
+          || (candidate.kind === 'exclusive'
+            && candidate.admission.kind === 'close'
+            && candidate.admission.command.projectId === projectId))) {
+          operations.onFailedProjectLineageUnpinned?.(projectId);
+        }
+      }
+    };
+    const resume = (): void => {
+      running = false;
+      pump();
+    };
     void operation.then(snapshot => {
       if (entry.kind === 'save') {
         projectLineages.set(entry.project.id, nextProjectLineage(entry.expectedLineage));
@@ -168,25 +200,17 @@ export const createMutationQueue = (
         settleSuccess(entry.canceledSaveWaiters, snapshot);
       }
     }, error => {
+      // Restore installed authority before a rejected waiter can admit fresh work.
+      cleanEntry(true);
       settleFailure(entry.waiters, error);
       if (entry.kind === 'exclusive') {
         settleFailure(entry.canceledSaveWaiters, error);
       }
+      resume();
     }).finally(() => {
-      if (entry.kind === 'save') {
-        activeSave = undefined;
-        if (!entries.some(candidate =>
-          (candidate.kind === 'save' && candidate.project.id === entry.project.id)
-          || (candidate.kind === 'exclusive'
-            && candidate.admission.kind === 'close'
-            && candidate.admission.command.projectId === entry.project.id))) {
-          projectLineages.delete(entry.project.id);
-        }
-      } else if (entry.admission.kind === 'close') {
-        projectLineages.delete(entry.admission.command.projectId);
-      }
-      running = false;
-      pump();
+      if (cleaned) return;
+      cleanEntry(false);
+      resume();
     });
   };
 
