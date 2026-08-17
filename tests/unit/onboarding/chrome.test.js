@@ -131,6 +131,12 @@ describe('assembly', () => {
                 fixedBrowserPreferenceKeys: typeof fixedBrowserPreferenceKeys,
                 readRuntimeBrowserPreference: typeof readRuntimeBrowserPreference,
                 writeRuntimeBrowserPreference: typeof writeRuntimeBrowserPreference,
+                publicProperties: [
+                    readBrowserPreference,
+                    writeBrowserPreference,
+                    wasMigrationReceiptSeen,
+                    markMigrationReceiptSeen,
+                ].flatMap(operation => Object.keys(operation)),
             };
         `);
 
@@ -142,6 +148,7 @@ describe('assembly', () => {
             fixedBrowserPreferenceKeys: 'undefined',
             readRuntimeBrowserPreference: 'undefined',
             writeRuntimeBrowserPreference: 'undefined',
+            publicProperties: [],
         });
     });
     it('buildData and buildContent produce JSON-serializable payloads', async () => {

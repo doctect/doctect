@@ -151,6 +151,7 @@ export const OverlayTextEditor: React.FC<OverlayTextEditorProps> = ({ element, o
         if (lockBufferRef.current) clearTimeout(lockBufferRef.current);
         lockBufferRef.current = setTimeout(() => {
             lockedScrollsRef.current.clear();
+            lockedWindowScrollRef.current = null;
         }, 150); // Lock for 150ms
 
         const val = e.currentTarget.innerText;

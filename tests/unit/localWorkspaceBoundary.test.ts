@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
   type Dirent,
   mkdirSync,
@@ -11,7 +12,7 @@ import {
 } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
-import { extname, join, relative, sep } from 'node:path';
+import { extname, join, posix, relative, sep } from 'node:path';
 import { Script } from 'node:vm';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
@@ -21,6 +22,7 @@ const root = process.cwd();
 const executableExtensions = new Set([
   '.cjs',
   '.cts',
+  '.htm',
   '.html',
   '.js',
   '.jsx',
@@ -28,6 +30,7 @@ const executableExtensions = new Set([
   '.mts',
   '.ts',
   '.tsx',
+  '.svg',
 ]);
 const excludedDirectories = new Set([
   '.claude',
@@ -46,6 +49,34 @@ const excludedDirectories = new Set([
   'scratch',
   'test-results',
 ]);
+const decodedSpecifier = (specifier: string): string => {
+  const pathOnly = specifier.split(/[?#]/, 1)[0].replace(/\\/g, '/');
+  try {
+    return decodeURIComponent(pathOnly);
+  } catch {
+    return pathOnly;
+  }
+};
+
+const resolvedRepositoryEdge = (sourcePath: string, specifier: string): string | undefined => {
+  const decoded = decodedSpecifier(specifier);
+  if (/^(?:[a-z][a-z\d+.-]*:|\/\/)/i.test(decoded)) return undefined;
+  if (decoded.startsWith('@/')) return posix.normalize(decoded.slice(2));
+  if (decoded.startsWith('/')) return posix.normalize(decoded.slice(1));
+  if (!decoded.startsWith('./') && !decoded.startsWith('../')) return undefined;
+  return posix.normalize(posix.join(posix.dirname(sourcePath), decoded));
+};
+
+const excludedDirectorySegment = (segment: string, index: number): boolean => (
+  excludedDirectories.has(segment) && (segment !== 'docs' || index === 0)
+);
+
+const entersExcludedDirectory = (sourcePath: string, specifier: string): boolean => {
+  const resolved = resolvedRepositoryEdge(sourcePath, specifier);
+  if (!resolved || resolved === '..' || resolved.startsWith('../')) return false;
+  const segments = resolved.split('/');
+  return segments[0] === 'tests' || segments.some(excludedDirectorySegment);
+};
 const legacyKeys = [
   ['hype', 'projects'].join('_'),
   ['hype', 'active', 'project'].join('_'),
@@ -67,17 +98,6 @@ const scriptKinds = new Map<string, ts.ScriptKind>([
   ['.tsx', ts.ScriptKind.TSX],
 ]);
 const storageMutators = new Set(['setItem', 'removeItem', 'clear']);
-const reflectiveLocalStorageMethods = new Map([
-  ['Object', new Set(['defineProperty', 'getOwnPropertyDescriptor', 'hasOwn'])],
-  ['Reflect', new Set([
-    'defineProperty',
-    'deleteProperty',
-    'get',
-    'getOwnPropertyDescriptor',
-    'has',
-    'set',
-  ])],
-]);
 const browserGlobalNames = new Set(['window', 'globalThis', 'self']);
 const approvedBrowserRootProperties = new Set([
   'DOCTECT',
@@ -197,7 +217,8 @@ const sourceFiles = (
       );
     }
     if (entry.isDirectory()) {
-      return excludedDirectories.has(entry.name) ? [] : sourceFiles(path, repositoryRoot, readEntries);
+      const segments = relative(repositoryRoot, path).split(sep);
+      return segments.some(excludedDirectorySegment) ? [] : sourceFiles(path, repositoryRoot, readEntries);
     }
     return entry.isFile() && executableExtensions.has(extname(entry.name)) ? [path] : [];
   });
@@ -489,8 +510,43 @@ const executableScriptType = (script: Element): 'classic' | 'module' | undefined
   return normalized === 'module' ? 'module' : undefined;
 };
 
+interface ExternalScriptEdge {
+  specifier: string;
+  offset: number;
+}
+
+const externalScriptCanExecute = (script: Element): boolean => {
+  const typeAttribute = script.getAttribute('type');
+  if (typeAttribute === null || typeAttribute === '') {
+    const language = script.getAttribute('language');
+    if (language === null || language === '') return true;
+    return javascriptMimeEssences.has(`text/${trimAsciiWhitespace(language).toLowerCase()}`);
+  }
+  const type = trimAsciiWhitespace(typeAttribute).toLowerCase();
+  return type === 'module' || javascriptMimeEssences.has(type);
+};
+
+const externalScriptEdges = (input: SourceInput): ExternalScriptEdge[] => {
+  const extension = extname(input.path);
+  if (extension !== '.html' && extension !== '.htm' && extension !== '.svg') return [];
+  const document = new JSDOM(input.source, { includeNodeLocations: true });
+  const edges: ExternalScriptEdge[] = [];
+  for (const script of document.window.document.querySelectorAll('script')) {
+    if (!externalScriptCanExecute(script)) continue;
+    const specifier = script.getAttribute('src')
+      ?? script.getAttribute('href')
+      ?? script.getAttributeNS('http://www.w3.org/1999/xlink', 'href');
+    if (specifier === null) continue;
+    const location = document.nodeLocation(script);
+    if (!location?.startTag) throw new Error(`Workspace boundary could not locate script in ${input.path}`);
+    edges.push({ specifier, offset: location.startTag.startOffset });
+  }
+  return edges;
+};
+
 const executableInputs = (inputs: readonly SourceInput[]): SourceInput[] => inputs.flatMap(input => {
-  if (extname(input.path) !== '.html') return [input];
+  const extension = extname(input.path);
+  if (extension !== '.html' && extension !== '.htm' && extension !== '.svg') return [input];
   const scripts: SourceInput[] = [];
   const document = new JSDOM(input.source, { includeNodeLocations: true });
   let index = 0;
@@ -570,6 +626,113 @@ const directPropertyName = (name: ts.PropertyName): string | undefined => {
     return name.text;
   }
   return ts.isComputedPropertyName(name) ? directStringLiteral(name.expression) : undefined;
+};
+
+const syntaxFingerprint = (source: string): string => {
+  const scanner = ts.createScanner(
+    ts.ScriptTarget.Latest,
+    true,
+    ts.LanguageVariant.Standard,
+    source,
+  );
+  const tokens: string[] = [];
+  for (let token = scanner.scan(); token !== ts.SyntaxKind.EndOfFileToken; token = scanner.scan()) {
+    tokens.push(`${token}:${scanner.getTokenText()}`);
+  }
+  return createHash('sha256').update(tokens.join('\n')).digest('hex');
+};
+
+// Any syntax change at a privileged seam requires an explicit policy update.
+const approvedBrowserPreferenceSyntax = '7af5f5c562faed881be020c3c7ee2ad624b46ab771178c0ce1a85a0dc2e50f4c';
+const approvedGeneratorEvaluatorSyntax = 'c68678c299155d78b853a00d03163e0605e019047dab8622fcb04692bc7055ed';
+const approvedRestoreIndexedDbSyntax = '71ada21f3d1e644cedc6f4ea4dc45c690b3f684a0b3a5e3ce47b2680089ede0b';
+const approvedOpenWithFactorySyntax = '49a89d50a2c4a45c7dd2572688f2b57dd7ec813f2059dcc884e640f4f5e90af7';
+
+const bindingIdentifiers = (name: ts.BindingName): ts.Identifier[] => {
+  if (ts.isIdentifier(name)) return [name];
+  return name.elements.flatMap(element => ts.isOmittedExpression(element)
+    ? []
+    : bindingIdentifiers(element.name));
+};
+
+const sourceValueBindings = (sourceFile: ts.SourceFile, name: string): ts.Identifier[] => {
+  const bindings = new Map<number, ts.Identifier>();
+  const add = (identifier: ts.Identifier | undefined): void => {
+    if (identifier?.text === name) bindings.set(identifier.getStart(sourceFile), identifier);
+  };
+  const addBindingName = (bindingName: ts.BindingName | undefined): void => {
+    if (!bindingName) return;
+    for (const identifier of bindingIdentifiers(bindingName)) add(identifier);
+  };
+  const visit = (node: ts.Node): void => {
+    if (ts.isVariableDeclaration(node) || ts.isParameter(node) || ts.isBindingElement(node)) {
+      addBindingName(node.name);
+    } else if (ts.isFunctionDeclaration(node)
+      || ts.isFunctionExpression(node)
+      || ts.isClassDeclaration(node)
+      || ts.isClassExpression(node)
+      || ts.isEnumDeclaration(node)) {
+      add(node.name);
+    } else if (ts.isImportClause(node)) {
+      add(node.name);
+    } else if (ts.isImportSpecifier(node) || ts.isNamespaceImport(node)) {
+      add(node.name);
+    } else if (ts.isImportEqualsDeclaration(node)) {
+      add(node.name);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return [...bindings.values()];
+};
+
+const uniqueConstInitializer = (sourceFile: ts.SourceFile, name: string): ts.Expression | undefined => {
+  const declarations: ts.VariableDeclaration[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isVariableDeclaration(node)
+      && ts.isIdentifier(node.name)
+      && node.name.text === name
+      && ts.isVariableDeclarationList(node.parent)
+      && (node.parent.flags & ts.NodeFlags.Const) !== 0) {
+      declarations.push(node);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return declarations.length === 1 ? declarations[0].initializer : undefined;
+};
+
+const uniqueTopLevelFunction = (
+  sourceFile: ts.SourceFile,
+  name: string,
+): ts.FunctionLikeDeclaration | undefined => {
+  const declarations: ts.FunctionLikeDeclaration[] = [];
+  for (const statement of sourceFile.statements) {
+    if (ts.isFunctionDeclaration(statement) && statement.name?.text === name) {
+      declarations.push(statement);
+      continue;
+    }
+    if (!ts.isVariableStatement(statement)) continue;
+    for (const declaration of statement.declarationList.declarations) {
+      if (!ts.isIdentifier(declaration.name) || declaration.name.text !== name || !declaration.initializer) {
+        continue;
+      }
+      const initializer = unwrap(declaration.initializer);
+      if (ts.isArrowFunction(initializer) || ts.isFunctionExpression(initializer)) {
+        declarations.push(initializer);
+      }
+    }
+  }
+  return declarations.length === 1 ? declarations[0] : undefined;
+};
+
+const enclosingFunction = (node: ts.Node): ts.FunctionLikeDeclaration | undefined => {
+  let current: ts.Node | undefined = node.parent;
+  while (current) {
+    if (ts.isFunctionLike(current)) return current as ts.FunctionLikeDeclaration;
+    current = current.parent;
+  }
+  return undefined;
 };
 
 const hasModifier = (node: ts.Node, kind: ts.SyntaxKind): boolean => (
@@ -653,14 +816,18 @@ const exactStorageCall = (
 ): ts.CallExpression | undefined => {
   const call = unwrap(expression);
   if (!ts.isCallExpression(call)
+    || call.questionDotToken !== undefined
     || call.arguments.length !== argumentNames.length
     || call.arguments.some((argument, index) => (
       !ts.isIdentifier(argument) || argument.text !== argumentNames[index]
     ))) return undefined;
   const member = unwrap(call.expression);
-  if (!ts.isPropertyAccessExpression(member) || member.name.text !== method) return undefined;
+  if (!ts.isPropertyAccessExpression(member)
+    || member.questionDotToken !== undefined
+    || member.name.text !== method) return undefined;
   const storage = unwrap(member.expression);
   return ts.isPropertyAccessExpression(storage)
+    && storage.questionDotToken === undefined
     && ts.isIdentifier(storage.expression)
     && storage.expression.text === 'window'
     && storage.name.text === 'localStorage'
@@ -858,6 +1025,33 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
   const approvedBrowserPreferencesBundle = inputs.some(input => (
     input.directStorageBoundary === true && input.path === 'onboarding/index.html'
   )) ? buildBrowserPreferencesBundle(root) : undefined;
+  const approvedBundleStatementSyntax = approvedBrowserPreferencesBundle
+    ? (() => {
+      const bundleSource = ts.createSourceFile(
+        'approved-browser-preferences.js',
+        approvedBrowserPreferencesBundle,
+        ts.ScriptTarget.Latest,
+        true,
+        ts.ScriptKind.JS,
+      );
+      if (bundleSource.statements.length !== 1) {
+        throw new Error('Approved browser preference bundle must contain one statement');
+      }
+      return syntaxFingerprint(bundleSource.statements[0].getText(bundleSource));
+    })()
+    : undefined;
+
+  for (const input of inputs) {
+    if (input.path.startsWith('tests/')) continue;
+    for (const edge of externalScriptEdges(input)) {
+      if (!entersExcludedDirectory(input.path, edge.specifier)) continue;
+      const finding = `${input.path}:${sourceLine(input.source, edge.offset)}: `
+        + 'loads executable code from excluded repository paths';
+      if (resultIdentities.get(input.path)!.has(finding)) continue;
+      resultIdentities.get(input.path)!.add(finding);
+      results.get(input.path)!.push(finding);
+    }
+  }
 
   for (const input of inputs) {
     if (exactLegacyKeyAllowed.has(input.path)) continue;
@@ -921,13 +1115,43 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
     const localWorkspaceSource = policyPath.startsWith('services/localWorkspace/');
     const productionSource = !policyPath.startsWith('tests/');
     const enforceDirectStorageBoundary = input.directStorageBoundary === true && productionSource;
-    const bundledPreferenceStart = policyPath === 'onboarding/index.html'
-      && approvedBrowserPreferencesBundle
-      ? input.source.indexOf(approvedBrowserPreferencesBundle)
-      : -1;
-    const bundledPreferenceEnd = bundledPreferenceStart === -1
-      ? -1
-      : bundledPreferenceStart + approvedBrowserPreferencesBundle!.length;
+    const bundleStatements: ts.VariableStatement[] = [];
+    if (policyPath === 'onboarding/index.html' && approvedBundleStatementSyntax) {
+      const collectBundleStatements = (node: ts.Node): void => {
+        if (ts.isVariableStatement(node)
+          && syntaxFingerprint(node.getText(sourceFile)) === approvedBundleStatementSyntax) {
+          bundleStatements.push(node);
+        }
+        ts.forEachChild(node, collectBundleStatements);
+      };
+      collectBundleStatements(sourceFile);
+    }
+    const approvedBundlePlacement = (statement: ts.VariableStatement): boolean => {
+      if (statement.parent === sourceFile) return true;
+      const block = statement.parent;
+      if (!ts.isBlock(block)
+        || block.statements[0] !== statement
+        || block.statements.length < 2
+        || (!ts.isArrowFunction(block.parent) && !ts.isFunctionExpression(block.parent))
+        || block.parent.parameters.length !== 0) return false;
+      const parenthesized = block.parent.parent;
+      if (!ts.isParenthesizedExpression(parenthesized) || parenthesized.expression !== block.parent) return false;
+      const call = parenthesized.parent;
+      return ts.isCallExpression(call)
+        && call.questionDotToken === undefined
+        && call.expression === parenthesized
+        && call.arguments.length === 0
+        && ts.isExpressionStatement(call.parent)
+        && call.parent.parent === sourceFile;
+    };
+    const exactBundleByteCount = approvedBrowserPreferencesBundle
+      ? input.source.split(approvedBrowserPreferencesBundle).length - 1
+      : 0;
+    const approvedBundleStatement = exactBundleByteCount === 1
+      && bundleStatements.length === 1
+      && approvedBundlePlacement(bundleStatements[0])
+      ? bundleStatements[0]
+      : undefined;
     const exactStorageApprovals = policyPath === 'services/browserPreferences.ts'
       ? browserPreferenceStorageApprovals(sourceFile)
       : policyPath === 'services/localWorkspace/index.ts'
@@ -937,9 +1161,9 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
       exactStorageApprovals.some(approval => (
         node.getStart(sourceFile) >= approval.getStart(sourceFile) && node.end <= approval.end
       ))
-      || (bundledPreferenceStart !== -1
-        && node.getStart(sourceFile) >= bundledPreferenceStart
-        && node.end <= bundledPreferenceEnd)
+      || (approvedBundleStatement !== undefined
+        && node.getStart(sourceFile) >= approvedBundleStatement.getStart(sourceFile)
+        && node.end <= approvedBundleStatement.end)
     );
     const report = (node: ts.Node, message: string): void => {
       reportOffset(node.getStart(sourceFile), message);
@@ -952,11 +1176,28 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
       report(node, 'accesses production localStorage outside approved persistence modules');
     };
     const inspectModuleSpecifier = (node: ts.Node, expression: ts.Expression | undefined): void => {
-      if (importsAllowed) return;
       const specifier = directStringLiteral(expression);
-      if (specifier && isLegacyTypesModule(specifier)) {
+      if (!specifier) return;
+      if (productionSource && entersExcludedDirectory(policyPath, specifier)) {
+        report(node, 'loads executable code from excluded repository paths');
+      }
+      if (!importsAllowed && isLegacyTypesModule(specifier)) {
         report(node, 'imports local-workspace migration internals');
       }
+    };
+    const workerEntrySpecifier = (node: ts.NewExpression): string | undefined => {
+      const constructor = unwrap(node.expression);
+      if (!ts.isIdentifier(constructor)
+        || (constructor.text !== 'Worker' && constructor.text !== 'SharedWorker')) return undefined;
+      const entrypoint = node.arguments?.[0];
+      const direct = directStringLiteral(entrypoint);
+      if (direct !== undefined) return direct;
+      const url = entrypoint && unwrap(entrypoint);
+      if (!url || !ts.isNewExpression(url)) return undefined;
+      const urlConstructor = unwrap(url.expression);
+      return ts.isIdentifier(urlConstructor) && urlConstructor.text === 'URL'
+        ? directStringLiteral(url.arguments?.[0])
+        : undefined;
     };
     const transparentExpression = (node: ts.Identifier): ts.Expression => {
       let expression: ts.Expression = node;
@@ -988,32 +1229,107 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
         && values.get('configurable')?.kind === ts.SyntaxKind.FalseKeyword
         && values.get('writable')?.kind === ts.SyntaxKind.FalseKeyword;
     };
+    const exactIndexedDbPatchDescriptor = (expression: ts.Expression | undefined): boolean => {
+      const descriptor = expression && unwrap(expression);
+      if (!descriptor || !ts.isObjectLiteralExpression(descriptor)) return false;
+      const values = new Map<string, ts.Expression>();
+      for (const property of descriptor.properties) {
+        if (!ts.isPropertyAssignment(property)) return false;
+        const name = directPropertyName(property.name);
+        if (!name || values.has(name)) return false;
+        values.set(name, property.initializer);
+      }
+      return values.size === 3
+        && values.get('configurable')?.kind === ts.SyntaxKind.TrueKeyword
+        && values.get('writable')?.kind === ts.SyntaxKind.TrueKeyword
+        && ts.isIdentifier(values.get('value')!)
+        && (values.get('value') as ts.Identifier).text === 'indexedDB';
+    };
+    const generatorEvaluator = uniqueTopLevelFunction(sourceFile, 'generatorEvaluatorMain');
+    const restoreGlobalIndexedDB = uniqueTopLevelFunction(sourceFile, 'restoreGlobalIndexedDB');
+    const openWithFactory = uniqueTopLevelFunction(sourceFile, 'openWithFactory');
+    const exactDeclarationSyntax = (
+      declaration: ts.FunctionLikeDeclaration | undefined,
+      approvedSyntax: string,
+    ): boolean => declaration !== undefined
+      && syntaxFingerprint(declaration.getText(sourceFile)) === approvedSyntax;
+    const exactGeneratorEvaluator = exactDeclarationSyntax(
+      generatorEvaluator,
+      approvedGeneratorEvaluatorSyntax,
+    );
+    const exactRestoreGlobalIndexedDB = exactDeclarationSyntax(
+      restoreGlobalIndexedDB,
+      approvedRestoreIndexedDbSyntax,
+    );
+    const exactOpenWithFactory = exactDeclarationSyntax(
+      openWithFactory,
+      approvedOpenWithFactorySyntax,
+    );
+    const unshadowedBuiltIn = (name: string): boolean => sourceValueBindings(sourceFile, name).length === 0;
+    const exactBuiltInMember = (
+      expression: ts.Expression,
+      rootName: string,
+      memberName: string,
+    ): boolean => {
+      const member = unwrap(expression);
+      return ts.isPropertyAccessExpression(member)
+        && member.questionDotToken === undefined
+        && ts.isIdentifier(member.expression)
+        && member.expression.text === rootName
+        && member.name.text === memberName
+        && unshadowedBuiltIn(rootName);
+    };
+    const exactTrustedAlias = (
+      expression: ts.Expression,
+      aliasName: string,
+      rootName: string,
+      memberName: string,
+    ): boolean => {
+      const alias = unwrap(expression);
+      if (!ts.isIdentifier(alias)
+        || alias.text !== aliasName
+        || sourceValueBindings(sourceFile, aliasName).length !== 1) return false;
+      const initializer = uniqueConstInitializer(sourceFile, aliasName);
+      return initializer !== undefined && exactBuiltInMember(initializer, rootName, memberName);
+    };
     const approvedRootReflection = (expression: ts.Expression): boolean => {
       const call = expression.parent;
-      if (!ts.isCallExpression(call) || call.arguments[0] !== expression) return false;
-      const callee = unwrap(call.expression);
+      if (!ts.isCallExpression(call)
+        || call.questionDotToken !== undefined
+        || call.arguments[0] !== expression) return false;
       const key = directStringLiteral(call.arguments[1]);
-      if (policyPath === 'services/localWorkspace/indexedDbAdapter.ts'
-        && key === 'indexedDB'
-        && ts.isPropertyAccessExpression(callee)
-        && ts.isIdentifier(callee.expression)) {
-        return (callee.expression.text === 'Object'
-          && (callee.name.text === 'defineProperty'
-            || callee.name.text === 'getOwnPropertyDescriptor'))
-          || (callee.expression.text === 'Reflect' && callee.name.text === 'deleteProperty');
+      if (policyPath === 'services/localWorkspace/indexedDbAdapter.ts' && key === 'indexedDB') {
+        const declaration = enclosingFunction(call);
+        if (declaration === restoreGlobalIndexedDB && exactRestoreGlobalIndexedDB) {
+          return (call.arguments.length === 3
+            && ts.isIdentifier(call.arguments[2])
+            && call.arguments[2].text === 'descriptor'
+            && exactBuiltInMember(call.expression, 'Object', 'defineProperty'))
+            || (call.arguments.length === 2
+              && exactBuiltInMember(call.expression, 'Reflect', 'deleteProperty'));
+        }
+        if (declaration === openWithFactory && exactOpenWithFactory) {
+          return (call.arguments.length === 2
+            && exactBuiltInMember(call.expression, 'Object', 'getOwnPropertyDescriptor'))
+            || (call.arguments.length === 3
+              && exactIndexedDbPatchDescriptor(call.arguments[2])
+              && exactBuiltInMember(call.expression, 'Object', 'defineProperty'));
+        }
+        return false;
       }
       if (policyPath !== 'services/generatorSandbox.ts'
         || !ts.isIdentifier(expression)
-        || expression.text !== 'self') return false;
-      if (ts.isPropertyAccessExpression(callee)
-        && ts.isIdentifier(callee.expression)
-        && callee.expression.text === 'Object'
-        && callee.name.text === 'defineProperty'
+        || expression.text !== 'self'
+        || enclosingFunction(call) !== generatorEvaluator
+        || !exactGeneratorEvaluator) return false;
+      if (call.arguments.length === 3
+        && exactBuiltInMember(call.expression, 'Object', 'defineProperty')
         && ts.isIdentifier(call.arguments[1])
         && call.arguments[1].text === 'name') {
         return exactWorkerBlockDescriptor(call.arguments[2]);
       }
-      if (!ts.isIdentifier(callee) || callee.text !== 'trustedObjectAssign') return false;
+      if (call.arguments.length !== 2
+        || !exactTrustedAlias(call.expression, 'trustedObjectAssign', 'Object', 'assign')) return false;
       const patch = call.arguments[1] && unwrap(call.arguments[1]);
       return Boolean(patch
         && ts.isObjectLiteralExpression(patch)
@@ -1055,43 +1371,34 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
         || ts.isEnumMember(node.parent))
         && node.parent.name === node)
     );
-    const reflectiveLocalStorageKey = (node: ts.Node): boolean => {
-      if (ts.isBindingElement(node)) {
-        return node.propertyName !== undefined
-          && directPropertyName(node.propertyName) === 'localStorage';
-      }
-      if (!ts.isStringLiteralLike(node) || node.text !== 'localStorage') return false;
-      const reflectiveMember = (input: ts.Expression): boolean => {
-        const member = unwrap(input);
-        return ts.isPropertyAccessExpression(member)
-          && ts.isIdentifier(member.expression)
-          && (reflectiveLocalStorageMethods.get(member.expression.text)?.has(member.name.text) ?? false);
-      };
-      if (ts.isCallExpression(node.parent) && node.parent.arguments[1] === node) {
-        return reflectiveMember(node.parent.expression);
-      }
+    const generatorBlockedGlobals = [
+      'fetch', 'XMLHttpRequest', 'WebSocket', 'localStorage', 'sessionStorage',
+      'cookieStore', 'indexedDB', 'caches', 'importScripts',
+      'Worker', 'SharedWorker', 'BroadcastChannel', 'MessageChannel', 'postMessage',
+    ];
+    const approvedInertLocalStorageData = (node: ts.Node): boolean => {
+      if (policyPath !== 'services/generatorSandbox.ts'
+        || !ts.isStringLiteralLike(node)
+        || node.text !== 'localStorage'
+        || enclosingFunction(node) !== generatorEvaluator) return false;
       const array = node.parent;
-      if (!ts.isArrayLiteralExpression(array) || array.elements[1] !== node) return false;
-      const call = array.parent;
-      if (!ts.isCallExpression(call) || call.arguments[2] !== array) return false;
-      const callee = unwrap(call.expression);
-      return ts.isPropertyAccessExpression(callee)
-        && ts.isIdentifier(callee.expression)
-        && callee.expression.text === 'Reflect'
-        && callee.name.text === 'apply'
-        && call.arguments[0] !== undefined
-        && reflectiveMember(call.arguments[0]);
+      if (!ts.isArrayLiteralExpression(array)
+        || array.elements.length !== generatorBlockedGlobals.length
+        || array.elements.some((element, index) => (
+          !ts.isStringLiteralLike(element) || element.text !== generatorBlockedGlobals[index]
+        ))) return false;
+      const declaration = array.parent;
+      return ts.isVariableDeclaration(declaration)
+        && ts.isIdentifier(declaration.name)
+        && declaration.name.text === 'blockedGlobals'
+        && uniqueConstInitializer(sourceFile, 'blockedGlobals') === array
+        && sourceValueBindings(sourceFile, 'blockedGlobals').length === 1;
     };
-    const localStorageSyntax = (node: ts.Node): boolean => {
-      if (ts.isPropertyAccessExpression(node)) return node.name.text === 'localStorage';
-      if (ts.isElementAccessExpression(node)) {
-        return directStringLiteral(node.argumentExpression) === 'localStorage';
-      }
-      if (reflectiveLocalStorageKey(node)) return true;
-      return ts.isIdentifier(node)
-        && node.text === 'localStorage'
-        && !propertyAccessName(node);
-    };
+    const localStorageSyntax = (node: ts.Node): boolean => (
+      (ts.isIdentifier(node) || ts.isStringLiteralLike(node))
+      && node.text === 'localStorage'
+      && !approvedInertLocalStorageData(node)
+    );
     const directSyntaxMemberName = (node: ts.Node): string | undefined => {
       if (ts.isPropertyAccessExpression(node)) return node.name.text;
       if (ts.isElementAccessExpression(node)) return directStringLiteral(node.argumentExpression);
@@ -1141,9 +1448,26 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
           inspectModuleSpecifier(node, node.arguments[0]);
         }
       }
+      if (productionSource && ts.isNewExpression(node)) {
+        const specifier = workerEntrySpecifier(node);
+        if (specifier && entersExcludedDirectory(policyPath, specifier)) {
+          report(node, 'loads executable code from excluded repository paths');
+        }
+      }
       ts.forEachChild(node, inspectNode);
     };
 
+    if (enforceDirectStorageBoundary
+      && policyPath === 'services/browserPreferences.ts'
+      && syntaxFingerprint(input.source) !== approvedBrowserPreferenceSyntax) {
+      report(sourceFile, 'browser preference module does not match the approved exact syntax');
+    }
+    if (enforceDirectStorageBoundary
+      && policyPath === 'onboarding/index.html'
+      && input.source.includes('doctect-browser-preferences:start')
+      && approvedBundleStatement === undefined) {
+      report(sourceFile, 'generated browser preference code does not match the approved exact syntax');
+    }
     if (enforceDirectStorageBoundary
       && policyPath === 'services/browserPreferences.ts'
       && !hasExactBrowserPreferenceExports(sourceFile)) {
@@ -1183,6 +1507,7 @@ describe('local workspace static boundary', () => {
     'shared/validateAppState.js',
     'constants/editor.ts',
     'components/workspace/WorkspaceBootstrapGate.tsx',
+    'pages/docs/DocsSection.tsx',
     'server/index.js',
     'onboarding/build.mjs',
     'scripts/run-lighthouse.js',
@@ -1247,6 +1572,78 @@ describe('local workspace static boundary', () => {
   });
 
   it.each([
+    ['static import', 'components/excluded.ts', "import value from '../tests/unit/value';"],
+    ['named import', 'components/excluded.ts', "import { value } from '../tests/unit/value';"],
+    ['default import', 'components/excluded.ts', "import value from '../tests/unit/value';"],
+    ['namespace import', 'components/excluded.ts', "import * as value from '../tests/unit/value';"],
+    ['re-export', 'components/excluded.ts', "export { value } from '../tests/unit/value';"],
+    ['star re-export', 'components/excluded.ts', "export * from '../docs/value';"],
+    ['dynamic import', 'components/excluded.ts', "void import('../tests/unit/value');"],
+    ['require', 'components/excluded.cjs', "require('../scratch/value.cjs');"],
+    [
+      'worker URL',
+      'components/excluded.ts',
+      "new Worker(new URL('../tests/unit/worker.ts', import.meta.url));",
+    ],
+    ['direct worker', 'components/excluded.ts', "new Worker('../tests/unit/worker.ts');"],
+    [
+      'shared worker URL',
+      'components/excluded.ts',
+      "new SharedWorker(new URL('../tests/unit/worker.ts', import.meta.url));",
+    ],
+    [
+      'normalized traversal',
+      'components/excluded.ts',
+      "import value from '../components/../tests/unit/value';",
+    ],
+    ['root alias', 'components/excluded.ts', "import value from '@/tests/unit/value';"],
+    ['HTML script', 'shell.html', '<script src="./tests/unit/value.js"></script>'],
+    ['SVG script', 'assets/image.svg', '<svg><script src="../tests/unit/value.js"></script></svg>'],
+  ])('rejects production executable edges into excluded paths through %s', (_case, path, source) => {
+    expect(analyzeProductionSource(path, source)).toEqual(expect.arrayContaining([
+      expect.stringContaining('loads executable code from excluded repository paths'),
+    ]));
+  });
+
+  it.each([
+    ['source import', 'components/allowed.ts', "import value from '../services/browserPreferences';"],
+    ['nested docs source', 'components/allowed.ts', "import value from './feature/docs/value';"],
+    [
+      'Blob worker',
+      'components/allowed.ts',
+      'const workerUrl = URL.createObjectURL(new Blob([])); new Worker(workerUrl);',
+    ],
+    ['root HTML script', 'shell.html', '<script type="module" src="/index.tsx"></script>'],
+    ['remote HTML script', 'shell.html', '<script src="https://cdn.example/app.js"></script>'],
+    [
+      'inert external data',
+      'shell.html',
+      '<script type="application/json" src="./tests/unit/data.json"></script>',
+    ],
+  ])('allows production executable edge through %s', (_case, path, source) => {
+    expect(analyzeProductionSource(path, source)).toEqual([]);
+  });
+
+  it('rejects a production import that launders executable code from tests', () => {
+    const consumerPath = 'components/TestProviderConsumer.ts';
+    const findings = analyzeSources([
+      {
+        path: 'tests/helpers/provider.ts',
+        source: "export const read = () => window.localStorage.getItem('x');",
+        directStorageBoundary: true,
+      },
+      {
+        path: consumerPath,
+        source: "import { read } from '../tests/helpers/provider'; void read();",
+        directStorageBoundary: true,
+      },
+    ] as DirectStorageBoundaryInput[]).get(consumerPath) ?? [];
+    expect(findings).toEqual(expect.arrayContaining([
+      expect.stringContaining('loads executable code from excluded repository paths'),
+    ]));
+  });
+
+  it.each([
     ['services/localWorkspace/write.ts', "cache.setItem('preference', '1');"],
     ['services/localWorkspace/remove.ts', "cache['removeItem']('preference');"],
     ['services/localWorkspace/clear.ts', 'cache.clear();'],
@@ -1306,6 +1703,48 @@ describe('local workspace static boundary', () => {
   });
 
   it.each([
+    ['identifier declaration', 'const localStorage = {};'],
+    ['string data', "const key = 'localStorage';"],
+    ['template data', 'const key = `localStorage`;'],
+    ['computed Reflect', "Reflect['get'](supplied, 'localStorage');"],
+    ['aliased Reflect.get', "const get = Reflect.get; get(supplied, 'localStorage');"],
+    ['qualified Reflect', "globalThis.Reflect.get(supplied, 'localStorage');"],
+    [
+      'aliased Reflect.apply',
+      "const apply = Reflect.apply; apply(Reflect.get, Reflect, [supplied, 'localStorage']);",
+    ],
+    [
+      'computed destructuring alias',
+      "const key = 'localStorage'; const { [key]: storage } = supplied; void storage;",
+    ],
+    ['object property', 'const value = { localStorage: true };'],
+    ['class property', 'class Value { localStorage = true; }'],
+    ['shorthand property', 'const localStorage = true; const value = { localStorage };'],
+  ])('reserves exact executable localStorage syntax in %s', (_case, source) => {
+    expect(analyzeProductionSource('components/ReservedStorage.ts', source)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('accesses production localStorage outside approved persistence modules'),
+      ]),
+    );
+  });
+
+  it('allows only the current inert generatorSandbox blocked-global entry', () => {
+    expect(analyzeProductionSource(
+      'services/generatorSandbox.ts',
+      readFileSync(join(root, 'services/generatorSandbox.ts'), 'utf8'),
+    )).toEqual([]);
+  });
+
+  it.each([
+    ['classic', "<script>const key = 'localStorage';</script>"],
+    ['module', "<script type=\"module\">const key = `localStorage`;</script>"],
+  ])('reserves exact localStorage data syntax in %s HTML', (_case, source) => {
+    expect(analyzeProductionSource('shell.html', source)).toEqual(expect.arrayContaining([
+      expect.stringContaining('accesses production localStorage outside approved persistence modules'),
+    ]));
+  });
+
+  it.each([
     ['a function argument', 'consume(window);'],
     ['an array', 'const roots = [self];'],
     ['array destructuring', 'const [root] = [window]; void root.localStorage;'],
@@ -1341,6 +1780,49 @@ describe('local workspace static boundary', () => {
     "void suppliedObject[suppliedProperty];",
   ])('allows closed static or non-global access: %s', source => {
     expect(analyzeProductionSource('components/SafeBrowserSyntax.ts', source)).toEqual([]);
+  });
+
+  it.each([
+    [
+      'generatorSandbox trustedObjectAssign',
+      'services/generatorSandbox.ts',
+      (source: string) => source.replace(
+        'const trustedObjectAssign = Object.assign;',
+        'const trustedObjectAssign = (root: unknown): unknown => root;',
+      ),
+    ],
+    [
+      'generatorSandbox Object parameter',
+      'services/generatorSandbox.ts',
+      (source: string) => source.replace(
+        'function generatorEvaluatorMain(maxOutputBytes: number) {',
+        'function generatorEvaluatorMain(maxOutputBytes: number, Object: { defineProperty: (...args: unknown[]) => unknown }) {',
+      ),
+    ],
+    [
+      'indexedDbAdapter Object',
+      'services/localWorkspace/indexedDbAdapter.ts',
+      (source: string) => source.replace(
+        'const openWithFactory = <T>(indexedDB: IDBFactory, operation: () => T): T => {',
+        `const openWithFactory = <T>(indexedDB: IDBFactory, operation: () => T): T => {
+  const Object = {
+    defineProperty: (..._args: unknown[]) => undefined,
+    getOwnPropertyDescriptor: (..._args: unknown[]) => undefined,
+  };`,
+      ),
+    ],
+    [
+      'indexedDbAdapter Reflect',
+      'services/localWorkspace/indexedDbAdapter.ts',
+      (source: string) => `${source}\nfunction Reflect() {}\n`,
+    ],
+  ])('revokes browser-root exceptions when %s is shadowed', (_case, path, mutate) => {
+    const original = readFileSync(join(root, path), 'utf8');
+    const source = mutate(original);
+    expect(source).not.toBe(original);
+    expect(analyzeProductionSource(path, source)).toEqual(expect.arrayContaining([
+      expect.stringContaining('passes a browser global outside approved static access'),
+    ]));
   });
 
   it('reports Reflect.get on a browser root without a false localStorage claim', () => {
@@ -1432,6 +1914,105 @@ describe('local workspace static boundary', () => {
     );
   });
 
+  it.each([
+    [
+      'an any annotation',
+      (source: string) => source.replace(
+        'export const readBrowserPreference =',
+        'export const readBrowserPreference: any =',
+      ),
+    ],
+    [
+      'an any assertion',
+      (source: string) => source.replace(
+        `export const writeBrowserPreference = (
+  key: BrowserPreferenceKey,
+  value: string,
+): boolean => (
+  isBrowserPreferenceKey(key) && writeRuntimeBrowserPreference(key, value)
+);`,
+        `export const writeBrowserPreference = (
+  key: BrowserPreferenceKey,
+  value: string,
+): boolean => (
+  isBrowserPreferenceKey(key) && writeRuntimeBrowserPreference(key, value)
+) as any;`,
+      ),
+    ],
+    [
+      'an added fixed key',
+      (source: string) => source.replace(
+        "  'doctect-onboarding',",
+        "  'doctect-onboarding',\n  'extra-preference',",
+      ),
+    ],
+    [
+      'an always-true runtime guard',
+      (source: string) => source.replace(
+        `const isRuntimeBrowserPreferenceKey = (key: unknown): key is RuntimeBrowserPreferenceKey => (
+  isBrowserPreferenceKey(key)
+  || (typeof key === 'string' && key.startsWith(migrationReceiptPrefix))
+);`,
+        'const isRuntimeBrowserPreferenceKey = (_key: unknown): _key is RuntimeBrowserPreferenceKey => true;',
+      ),
+    ],
+    [
+      'an optional read call',
+      (source: string) => source.replace(
+        'window.localStorage.getItem(key)',
+        'window.localStorage.getItem?.(key)',
+      ),
+    ],
+    [
+      'an optional write call',
+      (source: string) => source.replace(
+        'window.localStorage.setItem(key, value)',
+        'window.localStorage.setItem?.(key, value)',
+      ),
+    ],
+    [
+      'a private operation property leak',
+      (source: string) => `${source}\nObject.assign(readBrowserPreference, { leakedWrite: writeRuntimeBrowserPreference });\n`,
+    ],
+    [
+      'a raw key use',
+      (source: string) => source.replace(
+        '  try {\n    if (typeof window',
+        '  void key;\n  try {\n    if (typeof window',
+      ),
+    ],
+    [
+      'a decorated receipt prefix',
+      (source: string) => source.replace(
+        '`${migrationReceiptPrefix}${receiptId}`',
+        '`${migrationReceiptPrefix}x${receiptId}`',
+      ),
+    ],
+    [
+      'a tautological public guard',
+      (source: string) => source.replace(
+        'isBrowserPreferenceKey(key) ? readRuntimeBrowserPreference(key) : null',
+        '(isBrowserPreferenceKey(key) || true) ? readRuntimeBrowserPreference(key) : null',
+      ),
+    ],
+    [
+      'a wrapped public read',
+      (source: string) => source.replace(
+        'readRuntimeBrowserPreference(key) : null',
+        '(readRuntimeBrowserPreference(key)) : null',
+      ),
+    ],
+  ])('rejects non-exact browserPreferences syntax through %s', (_case, mutate) => {
+    const original = readFileSync(join(root, 'services/browserPreferences.ts'), 'utf8');
+    const source = mutate(original);
+    expect(source).not.toBe(original);
+    expect(analyzeProductionSource('services/browserPreferences.ts', source)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('does not match the approved exact syntax'),
+      ]),
+    );
+  });
+
   it('requires localWorkspace legacy adapter key flow', () => {
     const source = readFileSync(join(root, 'services/localWorkspace/index.ts'), 'utf8')
       .replace('window.localStorage.getItem(key)', 'window.localStorage.getItem(suppliedKey)');
@@ -1505,6 +2086,16 @@ describe('local workspace static boundary', () => {
       `<script>${bundle}\nwindow.localStorage.getItem('x');</script>`,
     )).toEqual(expect.arrayContaining([
       expect.stringContaining('accesses production localStorage outside approved persistence modules'),
+    ]));
+  });
+
+  it('rejects a control-flow wrapper around the generated preference bundle', () => {
+    const bundle = buildBrowserPreferencesBundle(root);
+    expect(analyzeProductionSource(
+      'onboarding/index.html',
+      `<script>if (true) {\n${bundle}\n}</script>`,
+    )).toEqual(expect.arrayContaining([
+      expect.stringContaining('does not match the approved exact syntax'),
     ]));
   });
 

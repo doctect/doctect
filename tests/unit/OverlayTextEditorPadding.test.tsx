@@ -55,11 +55,12 @@ describe('OverlayTextEditor padding', () => {
 });
 
 describe('OverlayTextEditor scroll lock', () => {
-  it('restores captured window scroll when the scroll event targets window', () => {
+  it('restores captured window scroll only while the input lock is active', () => {
     const originalX = Object.getOwnPropertyDescriptor(window, 'scrollX');
     const originalY = Object.getOwnPropertyDescriptor(window, 'scrollY');
     let x = 10;
     let y = 20;
+    vi.useFakeTimers();
     Object.defineProperty(window, 'scrollX', { configurable: true, get: () => x });
     Object.defineProperty(window, 'scrollY', { configurable: true, get: () => y });
     const scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation((left, top) => {
@@ -75,8 +76,18 @@ describe('OverlayTextEditor scroll lock', () => {
       window.dispatchEvent(new Event('scroll', { cancelable: true }));
 
       expect(scrollTo).toHaveBeenCalledWith(10, 20);
+
+      scrollTo.mockClear();
+      vi.advanceTimersByTime(151);
+      x = 30;
+      y = 40;
+      window.dispatchEvent(new Event('scroll', { cancelable: true }));
+
+      expect(scrollTo).not.toHaveBeenCalled();
+      expect([x, y]).toEqual([30, 40]);
     } finally {
       scrollTo.mockRestore();
+      vi.useRealTimers();
       if (originalX) Object.defineProperty(window, 'scrollX', originalX);
       else delete (window as unknown as { scrollX?: number }).scrollX;
       if (originalY) Object.defineProperty(window, 'scrollY', originalY);
