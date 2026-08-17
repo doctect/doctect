@@ -13,6 +13,7 @@ import { ZERO_TEXT_PADDING } from '../services/textPadding';
 import { SelectUnderMenu } from './canvas/SelectUnderMenu';
 import { useCanvasTextLayoutSession } from './canvas/useCanvasTextLayoutSession';
 import type { CanvasTextLayoutSession } from '../services/canvasTextLayout';
+import { readBrowserPreference } from '../services/browserPreferences';
 
 interface CanvasProps {
     template: PageTemplate;
@@ -1328,7 +1329,7 @@ export const Canvas: React.FC<CanvasProps> = ({
                 if (tool === 'text') {
                     onInteractionStart();
                     const layerId = resolveActiveLayerId(template, activeLayerId);
-                    const fontSize = parseInt(localStorage.getItem('doctect_last_fontSize') || '16');
+                    const fontSize = parseInt(readBrowserPreference('doctect_last_fontSize') || '16');
                     const newEl: TemplateElement = {
                         id: Math.random().toString(36).substr(2, 9),
                         type: 'text',
@@ -1350,13 +1351,13 @@ export const Canvas: React.FC<CanvasProps> = ({
                         textOverflow: 'clip',
                         textWrap: true,
                         textPadding: { ...ZERO_TEXT_PADDING },
-                        fontSize: parseInt(localStorage.getItem('doctect_last_fontSize') || '16'),
-                        fontFamily: localStorage.getItem('doctect_last_fontFamily') || 'helvetica',
-                        fontWeight: (localStorage.getItem('doctect_last_fontWeight') as 'normal' | 'bold') || 'normal',
-                        fontStyle: (localStorage.getItem('doctect_last_fontStyle') as 'normal' | 'italic') || 'normal',
-                        textDecoration: (localStorage.getItem('doctect_last_textDecoration') as 'none' | 'underline') || 'none',
-                        textColor: localStorage.getItem('doctect_last_textColor') || '#000000',
-                        align: (localStorage.getItem('doctect_last_align') as 'left' | 'center' | 'right') || 'center',
+                        fontSize: parseInt(readBrowserPreference('doctect_last_fontSize') || '16'),
+                        fontFamily: readBrowserPreference('doctect_last_fontFamily') || 'helvetica',
+                        fontWeight: (readBrowserPreference('doctect_last_fontWeight') as 'normal' | 'bold') || 'normal',
+                        fontStyle: (readBrowserPreference('doctect_last_fontStyle') as 'normal' | 'italic') || 'normal',
+                        textDecoration: (readBrowserPreference('doctect_last_textDecoration') as 'none' | 'underline') || 'none',
+                        textColor: readBrowserPreference('doctect_last_textColor') || '#000000',
+                        align: (readBrowserPreference('doctect_last_align') as 'left' | 'center' | 'right') || 'center',
                     };
                     onUpdateElements([...elements, newEl], false);
                     onSelectElements([newEl.id]);
@@ -1421,13 +1422,13 @@ export const Canvas: React.FC<CanvasProps> = ({
                     ? { textOverflow: 'clip' as const, textWrap: tool === 'text' }
                     : {}),
                 ...(tool === 'text' ? { textPadding: { ...ZERO_TEXT_PADDING } } : {}),
-                fontSize: parseInt(localStorage.getItem('doctect_last_fontSize') || '16'),
-                fontFamily: localStorage.getItem('doctect_last_fontFamily') || 'helvetica',
-                fontWeight: (localStorage.getItem('doctect_last_fontWeight') as 'normal' | 'bold') || 'normal',
-                fontStyle: (localStorage.getItem('doctect_last_fontStyle') as 'normal' | 'italic') || 'normal',
-                textDecoration: (localStorage.getItem('doctect_last_textDecoration') as 'none' | 'underline') || 'none',
-                textColor: localStorage.getItem('doctect_last_textColor') || '#000000',
-                align: (localStorage.getItem('doctect_last_align') as 'left' | 'center' | 'right') || 'center',
+                fontSize: parseInt(readBrowserPreference('doctect_last_fontSize') || '16'),
+                fontFamily: readBrowserPreference('doctect_last_fontFamily') || 'helvetica',
+                fontWeight: (readBrowserPreference('doctect_last_fontWeight') as 'normal' | 'bold') || 'normal',
+                fontStyle: (readBrowserPreference('doctect_last_fontStyle') as 'normal' | 'italic') || 'normal',
+                textDecoration: (readBrowserPreference('doctect_last_textDecoration') as 'none' | 'underline') || 'none',
+                textColor: readBrowserPreference('doctect_last_textColor') || '#000000',
+                align: (readBrowserPreference('doctect_last_align') as 'left' | 'center' | 'right') || 'center',
                 ...(tool === 'grid' ? { gridConfig: gridConfig as any } : {}),
                 flip: flip
             };

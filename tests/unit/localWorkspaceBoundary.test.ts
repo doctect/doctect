@@ -15,6 +15,7 @@ import { extname, join, relative, sep } from 'node:path';
 import { Script } from 'node:vm';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
+import { buildBrowserPreferencesBundle } from '../../onboarding/build.mjs';
 
 const root = process.cwd();
 const executableExtensions = new Set([
@@ -54,6 +55,10 @@ const legacyKeys = [
 const allowed = new Set([
   'services/localWorkspace/legacyTypes.ts',
   'tests/e2e/fixtures/localWorkspaceMigration.js',
+]);
+const directLocalStorageAllowed = new Set([
+  'services/browserPreferences.ts',
+  'services/localWorkspace/index.ts',
 ]);
 const scriptKinds = new Map<string, ts.ScriptKind>([
   ['.cjs', ts.ScriptKind.JS],
@@ -173,6 +178,7 @@ interface SourceInput {
   classicLinked?: boolean;
   classicVarAssignments?: ReadonlyMap<string, readonly number[]>;
   compilerPath?: string;
+  directStorageBoundary?: boolean;
   findingGroup?: string;
   moduleGoal?: boolean;
   moduleStart?: number;
@@ -181,6 +187,8 @@ interface SourceInput {
   reportSource?: string;
   positionSegments?: readonly SourcePositionSegment[];
 }
+
+type DirectStorageBoundaryInput = SourceInput & { directStorageBoundary: true };
 
 type OriginValue = {
   kind: 'expression';
@@ -214,6 +222,7 @@ interface PositionedExpression {
 interface CallableMember {
   method: string;
   localStorage: boolean;
+  reflect: boolean;
   boundArguments: PositionedExpression[];
 }
 
@@ -1035,6 +1044,7 @@ const executableInputs = (inputs: readonly SourceInput[]): SourceInput[] => inpu
       const authoredScript: SourceInput = {
         path: `${input.path}.__inline_${script.index}.js`,
         compilerPath: `\0doctect-inline/${input.path}/authored-${script.index}.js`,
+        directStorageBoundary: input.directStorageBoundary,
         reportPath: input.path,
         reportSource: input.source,
         positionSegments: script.positionSegments,
@@ -1104,6 +1114,7 @@ const executableInputs = (inputs: readonly SourceInput[]): SourceInput[] => inpu
         classicLinked: true,
         classicVarAssignments: new Map(classicVarAssignments),
         compilerPath: `\0doctect-inline/${input.path}/classic-${script.index}.js`,
+        directStorageBoundary: input.directStorageBoundary,
         reportPath: input.path,
         reportSource: input.source,
         positionSegments: [...positionSegments],
@@ -1125,6 +1136,7 @@ const executableInputs = (inputs: readonly SourceInput[]): SourceInput[] => inpu
     const authoredScript: SourceInput = {
       path: `${input.path}.__inline_${script.index}.js`,
       compilerPath: `\0doctect-inline/${input.path}/authored-module-${script.index}.js`,
+      directStorageBoundary: input.directStorageBoundary,
       moduleGoal: true,
       reportPath: input.path,
       reportSource: input.source,
@@ -1153,6 +1165,7 @@ const executableInputs = (inputs: readonly SourceInput[]): SourceInput[] => inpu
         classicLinked: true,
         classicVarAssignments: pageGlobals.classicVarAssignments,
         compilerPath: `\0doctect-inline/${input.path}/${script.index}-${pageGlobals.afterIndex}.js`,
+        directStorageBoundary: input.directStorageBoundary,
         findingGroup: script.async ? authoredScript.path : undefined,
         moduleStart,
         reportPath: input.path,
@@ -1203,6 +1216,9 @@ const reportLine = (input: SourceInput, generatedOffset: number): number =>
 
 const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> => {
   const results = new Map(inputs.map(input => [input.path, [] as string[]]));
+  const approvedBrowserPreferencesBundle = inputs.some(input => (
+    input.directStorageBoundary === true && input.path === 'onboarding/index.html'
+  )) ? buildBrowserPreferencesBundle(root) : undefined;
   for (const input of inputs) {
     if (allowed.has(input.path)) continue;
     for (const [index, line] of input.source.split(/\r\n|[\r\n\u2028\u2029]/).entries()) {
@@ -1592,7 +1608,8 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
     if (declarationInput?.classicVarAssignments?.get(identifier.text)
       ?.some(assignment => assignment <= position)) return false;
     return !symbol?.declarations?.some(declaration => (
-      scriptsByFile.has(declaration.getSourceFile().fileName)
+      declaration.getSourceFile() === identifier.getSourceFile()
+      && scriptsByFile.has(declaration.getSourceFile().fileName)
       && !isClassicGlobalVar(declaration, identifier)
     ));
   };
@@ -1905,12 +1922,56 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
     )).length > 0;
   };
 
+  const isReflectObject = (
+    input: ts.Expression,
+    atPosition: number,
+    trail: ResolutionTrail = new Map(),
+  ): boolean => {
+    const expression = unwrap(input);
+    if (!ts.isIdentifier(expression)) return false;
+    const symbol = identifierSymbol(expression);
+    if (isUnshadowedGlobal(expression, symbol, new Set(['Reflect']))) return true;
+    return withIdentifierOrigins(expression, symbol, atPosition, trail, (origin, nextTrail) => (
+      origin.value.kind === 'expression'
+        && isReflectObject(origin.value.expression, origin.position, nextTrail)
+        ? [true]
+        : []
+    )).length > 0;
+  };
+
   const isLocalStorage = (
     input: ts.Expression,
     atPosition: number,
     trail: ResolutionTrail = new Map(),
   ): boolean => {
     const expression = unwrap(input);
+    if (ts.isCallExpression(expression)) {
+      return invokedMembers(expression).some(invoked => {
+        if (!invoked.reflect || !matchesStaticCandidate(invoked.method, 'get')) return false;
+        const argumentPosition = expression.expression.getStart(expression.getSourceFile());
+        const invocationArguments = invoked.invocation === 'apply'
+          ? (() => {
+            const argumentArray = expression.arguments[1];
+            const unwrappedArray = argumentArray ? unwrap(argumentArray) : undefined;
+            return unwrappedArray && ts.isArrayLiteralExpression(unwrappedArray)
+              ? unwrappedArray.elements.filter(ts.isExpression).map(argument => ({
+                expression: argument,
+                position: argumentPosition,
+              }))
+              : [];
+          })()
+          : expression.arguments
+            .slice(invoked.invocation === 'call' ? 1 : 0)
+            .map(argument => ({ expression: argument, position: argumentPosition }));
+        const args = [...invoked.boundArguments, ...invocationArguments];
+        const target = args[0];
+        const key = args[1];
+        return Boolean(target && key
+          && isGlobalObject(target.expression, target.position, trail)
+          && [...staticStrings(key.expression, key.position, trail)]
+            .some(candidate => matchesStaticCandidate(candidate, 'localStorage')));
+      });
+    }
     if (ts.isIdentifier(expression)) {
       const symbol = identifierSymbol(expression);
       if (isUnshadowedGlobal(expression, symbol, new Set(['localStorage']))) return true;
@@ -1947,6 +2008,7 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
         return [...propertyNames(memberOrigin.propertyName, origin.position, nextTrail)].map(method => ({
           method,
           localStorage: isLocalStorage(memberOrigin.receiver, origin.position, nextTrail),
+          reflect: isReflectObject(memberOrigin.receiver, origin.position, nextTrail),
           boundArguments: [],
         }));
       });
@@ -1967,6 +2029,7 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
     return memberCandidates(expression, atPosition, trail).map(member => ({
       method: member.name,
       localStorage: isLocalStorage(member.receiver, atPosition, trail),
+      reflect: isReflectObject(member.receiver, atPosition, trail),
       boundArguments: [],
     }));
   };
@@ -2083,6 +2146,24 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
       || policyPath === 'tests/helpers/localWorkspaceFixtures.ts';
     const localWorkspaceSource = policyPath.startsWith('services/localWorkspace/');
     const productionSource = !policyPath.startsWith('tests/');
+    const enforceDirectStorageBoundary = input.directStorageBoundary === true
+      && productionSource;
+    const bundledPreferenceStart = policyPath === 'onboarding/index.html'
+      && approvedBrowserPreferencesBundle
+      ? input.source.indexOf(approvedBrowserPreferencesBundle)
+      : -1;
+    const bundledPreferenceEnd = bundledPreferenceStart === -1
+      ? -1
+      : bundledPreferenceStart + approvedBrowserPreferencesBundle!.length;
+    const directStorageApprovedAt = (node: ts.Node): boolean => (
+      directLocalStorageAllowed.has(policyPath)
+      || (
+        bundledPreferenceStart !== -1
+        && node.getStart(sourceFile) >= bundledPreferenceStart
+        && node.end <= bundledPreferenceEnd
+      )
+    );
+    const directStorageLines = new Set<number>();
     const appendFinding = (finding: string, identity: string): void => {
       if (input.findingGroup) {
         const groupedIdentity = `${input.findingGroup}\0${identity}`;
@@ -2097,6 +2178,12 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
         `${policyPath}:${reportLine(input, start)}: ${message}`,
         `${start - (input.moduleStart ?? 0)}:${message}`,
       );
+    };
+    const reportDirectStorage = (node: ts.Node): void => {
+      const line = reportLine(input, node.getStart(sourceFile));
+      if (directStorageLines.has(line)) return;
+      directStorageLines.add(line);
+      report(node, 'accesses production localStorage outside approved persistence modules');
     };
     const authoredScripts = input.authoredScripts ?? [input];
     let authoredParseFailed = false;
@@ -2163,6 +2250,11 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
         }
 
         const invoked = invokedMembers(node);
+        if (enforceDirectStorageBoundary
+          && !directStorageApprovedAt(node)
+          && invoked.some(member => member.localStorage)) {
+          reportDirectStorage(node);
+        }
         let expansionReported = false;
         const reportExpansion = (): void => {
           if (expansionReported) return;
@@ -2198,6 +2290,23 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
             report(node, 'accesses legacy document key through localStorage');
           }
         }
+      } else if (enforceDirectStorageBoundary
+        && !directStorageApprovedAt(node)
+        && (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node))
+        && (
+          isLocalStorage(node, node.getStart(sourceFile))
+          || isLocalStorage(node.expression, node.getStart(sourceFile))
+        )) {
+        reportDirectStorage(node);
+      } else if (enforceDirectStorageBoundary
+        && !directStorageApprovedAt(node)
+        && ts.isIdentifier(node)
+        && !(
+          (ts.isPropertyAccessExpression(node.parent) && node.parent.name === node)
+          || (ts.isQualifiedName(node.parent) && node.parent.right === node)
+        )
+        && isLocalStorage(node, node.getStart(sourceFile))) {
+        reportDirectStorage(node);
       }
       if (inAnalysisSegment) ts.forEachChild(node, inspectNode);
     };
@@ -2210,10 +2319,18 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
 const analyzeSource = (path: string, source: string): string[] =>
   analyzeSources([{ path, source }]).get(path) ?? [];
 
+const analyzeProductionSource = (path: string, source: string): string[] =>
+  analyzeSources([{ path, source, directStorageBoundary: true } as DirectStorageBoundaryInput])
+    .get(path) ?? [];
+
 describe('local workspace static boundary', () => {
   it('confines legacy document storage and keeps IndexedDB schema index-free', { timeout: 30_000 }, () => {
     const inputs = repositorySourcePaths()
-      .map(path => ({ path, source: readFileSync(join(root, path), 'utf8') }));
+      .map(path => ({
+        path,
+        source: readFileSync(join(root, path), 'utf8'),
+        directStorageBoundary: true,
+      } as DirectStorageBoundaryInput));
     const violations = [...analyzeSources(inputs).values()].flat();
 
     expect(violations, `Workspace boundary violations:\n${violations.join('\n')}`).toEqual([]);
@@ -2228,6 +2345,7 @@ describe('local workspace static boundary', () => {
     'lib/auth-client.ts',
     'shared/validateAppState.js',
     'constants/editor.ts',
+    'components/workspace/WorkspaceBootstrapGate.tsx',
     'server/index.js',
     'onboarding/build.mjs',
     'scripts/run-lighthouse.js',
@@ -2330,6 +2448,132 @@ describe('local workspace static boundary', () => {
     expect(analyzeSource(path, source)).toEqual(expect.arrayContaining([
       expect.stringContaining('clears all production local storage'),
     ]));
+  });
+
+  it.each([
+    [
+      'a direct safe preference read',
+      'components/DirectPreferenceRead.ts',
+      "localStorage.getItem('doctect_last_fontSize');",
+    ],
+    [
+      'a direct preference write',
+      'components/DirectPreferenceWrite.ts',
+      "globalThis.localStorage.setItem('doctect_last_fontSize', '16');",
+    ],
+    [
+      'a window-qualified preference read',
+      'components/WindowPreferenceRead.ts',
+      "window.localStorage.getItem('doctect_last_fontSize');",
+    ],
+    [
+      'a joined safe preference key',
+      'components/JoinedPreferenceRead.ts',
+      "localStorage.getItem(['doctect', 'last', 'fontSize'].join('_'));",
+    ],
+    [
+      'a mutated array key',
+      'components/MutatedJoinedRead.ts',
+      "const parts = ['safe']; parts.splice(0, 1, 'hype', 'projects'); localStorage.getItem(parts.join('_'));",
+    ],
+    [
+      'an overridden join method',
+      'components/OverriddenJoinRead.ts',
+      "const parts = ['safe']; parts.join = () => 'hype_' + 'projects'; localStorage.getItem(parts.join('_'));",
+    ],
+    [
+      'extra join arguments',
+      'components/ExtraJoinArgumentsRead.ts',
+      "localStorage.getItem(['hype', 'projects'].join('_', 'ignored'));",
+    ],
+    [
+      'a singleton array with a dynamic separator',
+      'components/SingletonDynamicSeparatorRead.ts',
+      "localStorage.getItem(['hype_' + 'projects'].join(suppliedSeparator));",
+    ],
+    [
+      'aliased storage with a computed member',
+      'components/AliasedComputedPreferenceRead.ts',
+      "const storage = window['local' + 'Storage']; const read = storage['get' + 'Item']; read('doctect_last_fontSize');",
+    ],
+    [
+      'an extracted member without invocation',
+      'components/ExtractedPreferenceRead.ts',
+      'const read = localStorage.getItem; void read;',
+    ],
+    [
+      'a bare storage escape',
+      'components/BareStorageEscape.ts',
+      'consume(localStorage);',
+    ],
+    [
+      'reflective storage access',
+      'components/ReflectivePreferenceRead.ts',
+      "Reflect.get(window, 'localStorage').getItem('doctect_last_fontSize');",
+    ],
+    [
+      'aliased reflective storage access',
+      'components/AliasedReflectivePreferenceRead.ts',
+      "const get = Reflect.get; get(window, 'localStorage').getItem('doctect_last_fontSize');",
+    ],
+    [
+      'an executable inline HTML preference read',
+      'future-shell.html',
+      "<script>localStorage.getItem('doctect_last_fontSize');</script>",
+    ],
+  ])('rejects production localStorage access through %s', (_case, path, source) => {
+    expect(analyzeProductionSource(path, source)).toEqual(expect.arrayContaining([
+      expect.stringContaining('accesses production localStorage outside approved persistence modules'),
+    ]));
+  });
+
+  it('keeps unrelated classic HTML globals from masking module storage access', () => {
+    const modulePath = 'components/WindowPreferenceRead.ts';
+    const violations = analyzeSources([
+      {
+        path: 'generated-shell.html',
+        source: '<script>window.generatedData = {};</script>',
+        directStorageBoundary: true,
+      },
+      {
+        path: modulePath,
+        source: "window.localStorage.getItem('doctect_last_fontSize');",
+        directStorageBoundary: true,
+      },
+    ] as DirectStorageBoundaryInput[]).get(modulePath) ?? [];
+
+    expect(violations).toEqual(expect.arrayContaining([
+      expect.stringContaining('accesses production localStorage outside approved persistence modules'),
+    ]));
+  });
+
+  it.each([
+    [
+      'services/browserPreferences.ts',
+      "window.localStorage.getItem('doctect_last_fontSize');",
+    ],
+    [
+      'services/localWorkspace/index.ts',
+      'window.localStorage.getItem(key);',
+    ],
+  ])('allows direct localStorage only in approved module %s', (path, source) => {
+    expect(analyzeProductionSource(path, source)).toEqual([]);
+  });
+
+  it('retains exact legacy-key defense inside the preference module', () => {
+    const exactLegacyKey = ['hype', 'projects'].join('_');
+    expect(analyzeProductionSource(
+      'services/browserPreferences.ts',
+      `window.localStorage.getItem('${exactLegacyKey}');`,
+    )).toEqual(expect.arrayContaining([
+      expect.stringContaining(`exact legacy document key ${exactLegacyKey}`),
+    ]));
+  });
+
+  it('allows only the byte-exact compiled preference module inside generated onboarding HTML', () => {
+    const source = `<script>${buildBrowserPreferencesBundle(root)}</script>`;
+
+    expect(analyzeProductionSource('onboarding/index.html', source)).toEqual([]);
   });
 
   it.each([
@@ -4719,7 +4963,7 @@ describe('local workspace static boundary', () => {
     ]));
   });
 
-  it('allows targeted production preference writes', () => {
+  it('does not classify approved preference keys as legacy document keys', () => {
     const source = `
       const storage = window['local' + 'Storage'];
       const setPreference = storage['set' + 'Item'];
@@ -4727,6 +4971,6 @@ describe('local workspace static boundary', () => {
       storage.removeItem('gallery-explainer-dismissed');
     `;
 
-    expect(analyzeSource('components/Preferences.tsx', source)).toEqual([]);
+    expect(analyzeSource('services/browserPreferences.ts', source)).toEqual([]);
   });
 });

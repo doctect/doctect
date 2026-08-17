@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { parseHash, buildHash, formatBytes, filterTree, findNode, nearestAnnotated,
          rankFor, scoreProfile, levelUnlocked, defaultProfile, loadProfile, saveProfile,
          WINDOWS, escapeHtml } from '../../../onboarding/src/app-logic.mjs';
-import { REPO_ROOT, buildRuntimeBundle, assemblePage, buildData, buildContent }
+import { REPO_ROOT, buildBrowserPreferencesBundle, buildRuntimeBundle,
+         assemblePage, buildData, buildContent }
     from '../../../onboarding/build.mjs';
 import { highlightCode } from '../../../onboarding/src/render/codeWin.mjs';
 
@@ -114,6 +115,34 @@ describe('assembly', () => {
         expect(bundle).not.toMatch(/^import /m);
         expect(bundle).not.toMatch(/^export /m);
         expect(bundle).toContain('parseHash');
+        const preferenceDefinition = bundle.indexOf('const readBrowserPreference =');
+        const preferenceUse = bundle.indexOf('const raw = readBrowserPreference(STORE_KEY);');
+        expect(preferenceDefinition).toBeGreaterThanOrEqual(0);
+        expect(preferenceUse).toBeGreaterThan(preferenceDefinition);
+    });
+    it('exposes only public preference operations to the onboarding runtime', () => {
+        const inspectBundle = new Function('window', `
+            ${buildBrowserPreferencesBundle(REPO_ROOT)}
+            return {
+                readBrowserPreference: typeof readBrowserPreference,
+                writeBrowserPreference: typeof writeBrowserPreference,
+                wasMigrationReceiptSeen: typeof wasMigrationReceiptSeen,
+                markMigrationReceiptSeen: typeof markMigrationReceiptSeen,
+                fixedBrowserPreferenceKeys: typeof fixedBrowserPreferenceKeys,
+                readRuntimeBrowserPreference: typeof readRuntimeBrowserPreference,
+                writeRuntimeBrowserPreference: typeof writeRuntimeBrowserPreference,
+            };
+        `);
+
+        expect(inspectBundle({})).toEqual({
+            readBrowserPreference: 'function',
+            writeBrowserPreference: 'function',
+            wasMigrationReceiptSeen: 'function',
+            markMigrationReceiptSeen: 'function',
+            fixedBrowserPreferenceKeys: 'undefined',
+            readRuntimeBrowserPreference: 'undefined',
+            writeRuntimeBrowserPreference: 'undefined',
+        });
     });
     it('buildData and buildContent produce JSON-serializable payloads', async () => {
         const data = buildData(REPO_ROOT);

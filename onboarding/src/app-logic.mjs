@@ -1,5 +1,7 @@
 // Pure helpers for the onboarding playground. No DOM access here — everything
 // in this file is unit-tested; DOM glue lives in app.js.
+import { readBrowserPreference, writeBrowserPreference } from '../../services/browserPreferences.ts';
+
 export const WINDOWS = [
     { id: 'intro', label: 'intro' },
     { id: 'tours', label: 'tours' },
@@ -90,7 +92,7 @@ const STORE_KEY = 'doctect-onboarding';
 
 export const loadProfile = () => {
     try {
-        const raw = localStorage.getItem(STORE_KEY);
+        const raw = readBrowserPreference(STORE_KEY);
         const parsed = raw ? JSON.parse(raw) : null;
         if (parsed && parsed.v === 1) return { ...defaultProfile(), ...parsed };
     } catch { /* fresh profile below */ }
@@ -98,5 +100,5 @@ export const loadProfile = () => {
 };
 
 export const saveProfile = (profile) => {
-    try { localStorage.setItem(STORE_KEY, JSON.stringify(profile)); } catch { /* full/blocked: ignore */ }
+    writeBrowserPreference(STORE_KEY, JSON.stringify(profile));
 };

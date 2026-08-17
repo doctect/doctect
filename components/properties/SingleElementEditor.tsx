@@ -13,6 +13,7 @@ import { DEFAULT_TEXT_FONT_SIZE, resolveTextFontSize } from '../../services/text
 import { CollapsibleSection } from '../CollapsibleSection';
 import { resolveTextPadding, type TextPaddingSide } from '../../services/textPadding';
 import { TextPaddingControls, type TextPaddingSelection } from './TextPaddingControls';
+import { writeBrowserPreference } from '../../services/browserPreferences';
 
 // Font family mapping for CSS (used for font dropdown preview)
 const getFontFamily = (fontValue: string): string => {
@@ -1221,7 +1222,7 @@ export const SingleElementEditor: React.FC<SingleElementEditorProps> = ({
                                                     )}
                                                     style={{ fontFamily: getFontFamily(f.value) }}
                                                     onClick={() => {
-                                                        localStorage.setItem('doctect_last_fontFamily', f.value);
+                                                        writeBrowserPreference('doctect_last_fontFamily', f.value);
                                                         onUpdate({ fontFamily: f.value });
                                                         setShowFontPicker(false);
                                                         setFontSearch('');
@@ -1235,18 +1236,18 @@ export const SingleElementEditor: React.FC<SingleElementEditorProps> = ({
                             )}
                         </div>
                         <div className="flex items-center gap-1 border rounded px-1">
-                            <input type="number" className="w-full border-none text-xs focus:ring-0" value={element.fontSize || 12} onChange={e => { localStorage.setItem('doctect_last_fontSize', e.target.value); onUpdate({ fontSize: parseInt(e.target.value) }); }} />
+                            <input type="number" className="w-full border-none text-xs focus:ring-0" value={element.fontSize || 12} onChange={e => { writeBrowserPreference('doctect_last_fontSize', e.target.value); onUpdate({ fontSize: parseInt(e.target.value) }); }} />
                             <span className="text-[10px] text-slate-400">px</span>
                         </div>
-                        <input type="color" className="w-full h-7 p-0 border rounded" value={element.textColor || '#000000'} onChange={e => { localStorage.setItem('doctect_last_textColor', e.target.value); onUpdate({ textColor: e.target.value }); }} />
+                        <input type="color" className="w-full h-7 p-0 border rounded" value={element.textColor || '#000000'} onChange={e => { writeBrowserPreference('doctect_last_textColor', e.target.value); onUpdate({ textColor: e.target.value }); }} />
                     </div>
 
                     <div className="flex flex-col gap-2">
                         <div className="flex bg-slate-100 rounded p-1 gap-1 justify-between">
                             <div className="flex gap-1">
-                                <button onClick={() => { const newWeight = element.fontWeight === 'bold' ? 'normal' : 'bold'; localStorage.setItem('doctect_last_fontWeight', newWeight); onUpdate({ fontWeight: newWeight }); }} className={clsx("p-1 rounded", element.fontWeight === 'bold' && "bg-white shadow-sm text-blue-600")}><Bold size={12} /></button>
-                                <button onClick={() => { const newStyle = element.fontStyle === 'italic' ? 'normal' : 'italic'; localStorage.setItem('doctect_last_fontStyle', newStyle); onUpdate({ fontStyle: newStyle }); }} className={clsx("p-1 rounded", element.fontStyle === 'italic' && "bg-white shadow-sm text-blue-600")}><Italic size={12} /></button>
-                                <button onClick={() => { const newDeco = element.textDecoration === 'underline' ? 'none' : 'underline'; localStorage.setItem('doctect_last_textDecoration', newDeco); onUpdate({ textDecoration: newDeco }); }} className={clsx("p-1 rounded", element.textDecoration === 'underline' && "bg-white shadow-sm text-blue-600")}><Underline size={12} /></button>
+                                <button onClick={() => { const newWeight = element.fontWeight === 'bold' ? 'normal' : 'bold'; writeBrowserPreference('doctect_last_fontWeight', newWeight); onUpdate({ fontWeight: newWeight }); }} className={clsx("p-1 rounded", element.fontWeight === 'bold' && "bg-white shadow-sm text-blue-600")}><Bold size={12} /></button>
+                                <button onClick={() => { const newStyle = element.fontStyle === 'italic' ? 'normal' : 'italic'; writeBrowserPreference('doctect_last_fontStyle', newStyle); onUpdate({ fontStyle: newStyle }); }} className={clsx("p-1 rounded", element.fontStyle === 'italic' && "bg-white shadow-sm text-blue-600")}><Italic size={12} /></button>
+                                <button onClick={() => { const newDeco = element.textDecoration === 'underline' ? 'none' : 'underline'; writeBrowserPreference('doctect_last_textDecoration', newDeco); onUpdate({ textDecoration: newDeco }); }} className={clsx("p-1 rounded", element.textDecoration === 'underline' && "bg-white shadow-sm text-blue-600")}><Underline size={12} /></button>
                             </div>
                         </div>
                         {textOverflowSettings && (
@@ -1295,9 +1296,9 @@ export const SingleElementEditor: React.FC<SingleElementEditorProps> = ({
                         )}
                         <div className="flex bg-slate-100 rounded p-1 gap-1 justify-between">
                             <div className="flex gap-1">
-                                <button onClick={() => { localStorage.setItem('doctect_last_align', 'left'); onUpdate({ align: 'left' }); }} className={clsx("p-1 rounded", element.align === 'left' && "bg-white shadow-sm text-blue-600")} title="Align Left"><AlignLeft size={12} /></button>
-                                <button onClick={() => { localStorage.setItem('doctect_last_align', 'center'); onUpdate({ align: 'center' }); }} className={clsx("p-1 rounded", (element.align === 'center' || !element.align) && "bg-white shadow-sm text-blue-600")} title="Align Center"><AlignCenter size={12} /></button>
-                                <button onClick={() => { localStorage.setItem('doctect_last_align', 'right'); onUpdate({ align: 'right' }); }} className={clsx("p-1 rounded", element.align === 'right' && "bg-white shadow-sm text-blue-600")} title="Align Right"><AlignRight size={12} /></button>
+                                <button onClick={() => { writeBrowserPreference('doctect_last_align', 'left'); onUpdate({ align: 'left' }); }} className={clsx("p-1 rounded", element.align === 'left' && "bg-white shadow-sm text-blue-600")} title="Align Left"><AlignLeft size={12} /></button>
+                                <button onClick={() => { writeBrowserPreference('doctect_last_align', 'center'); onUpdate({ align: 'center' }); }} className={clsx("p-1 rounded", (element.align === 'center' || !element.align) && "bg-white shadow-sm text-blue-600")} title="Align Center"><AlignCenter size={12} /></button>
+                                <button onClick={() => { writeBrowserPreference('doctect_last_align', 'right'); onUpdate({ align: 'right' }); }} className={clsx("p-1 rounded", element.align === 'right' && "bg-white shadow-sm text-blue-600")} title="Align Right"><AlignRight size={12} /></button>
                             </div>
                             <div className="w-px bg-slate-300 mx-1"></div>
                             <div className="flex gap-1">

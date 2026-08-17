@@ -5,6 +5,7 @@ import fs from 'fs';
 import path from 'path';
 import { execSync } from 'child_process';
 import { fileURLToPath, pathToFileURL } from 'url';
+import ts from 'typescript';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = path.resolve(HERE, '..');
@@ -119,6 +120,41 @@ export const stripModuleSyntax = (source) => source
     .replace(/^import[^\n]*;[ \t]*$/gm, '')
     .replace(/^export (const|function|class|let) /gm, '$1 ');
 
+export const BROWSER_PREFERENCES_BUNDLE_START = '/* doctect-browser-preferences:start */';
+export const BROWSER_PREFERENCES_BUNDLE_END = '/* doctect-browser-preferences:end */';
+
+export const buildBrowserPreferencesBundle = (rootDir) => {
+    const source = fs.readFileSync(path.join(rootDir, 'services/browserPreferences.ts'), 'utf8');
+    const result = ts.transpileModule(source, {
+        compilerOptions: {
+            module: ts.ModuleKind.ESNext,
+            target: ts.ScriptTarget.ES2022,
+        },
+        fileName: 'services/browserPreferences.ts',
+        reportDiagnostics: true,
+    });
+    const errors = (result.diagnostics || []).filter(diagnostic =>
+        diagnostic.category === ts.DiagnosticCategory.Error);
+    if (errors.length) {
+        throw new Error(ts.formatDiagnostics(errors, {
+            getCanonicalFileName: fileName => fileName,
+            getCurrentDirectory: () => rootDir,
+            getNewLine: () => '\n',
+        }));
+    }
+    const runtime = stripModuleSyntax(result.outputText).trim();
+    const publicNames = [
+        'readBrowserPreference',
+        'writeBrowserPreference',
+        'wasMigrationReceiptSeen',
+        'markMigrationReceiptSeen',
+    ].join(', ');
+    return `${BROWSER_PREFERENCES_BUNDLE_START}\n` +
+        `const { ${publicNames} } = (() => {\n${runtime}\n` +
+        `return { ${publicNames} };\n})();\n` +
+        BROWSER_PREFERENCES_BUNDLE_END;
+};
+
 export const bundleDiffEngine = (rootDir) => {
     const meta = fs.readFileSync(path.join(rootDir, 'shared/generatorMetadata.js'), 'utf8');
     const diff = fs.readFileSync(path.join(rootDir, 'shared/diff.js'), 'utf8');
@@ -156,9 +192,11 @@ export const RUNTIME_MODULES = [
     'src/app.js',
 ];
 
-export const buildRuntimeBundle = (rootDir) => RUNTIME_MODULES
-    .map(rel => stripModuleSyntax(fs.readFileSync(path.join(rootDir, 'onboarding', rel), 'utf8')))
-    .join('\n');
+export const buildRuntimeBundle = (rootDir) => [
+    buildBrowserPreferencesBundle(rootDir),
+    ...RUNTIME_MODULES
+        .map(rel => stripModuleSyntax(fs.readFileSync(path.join(rootDir, 'onboarding', rel), 'utf8'))),
+].join('\n');
 
 export const assemblePage = ({ style, runtime, dataJson, contentJson, diffBundle, footerHtml }) => {
     const shell = fs.readFileSync(path.join(HERE, 'src/shell.html'), 'utf8');

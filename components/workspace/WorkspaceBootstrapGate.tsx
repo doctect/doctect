@@ -1,9 +1,12 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { downloadBlob, downloadJson } from '../../services/browserDownload';
 import { trackEvent } from '../../services/analytics';
+import {
+  markMigrationReceiptSeen,
+  wasMigrationReceiptSeen,
+} from '../../services/browserPreferences';
 import type {
   LocalWorkspaceStore,
-  MigrationReceipt,
   RecoverySource,
   WorkspaceBootstrapPhase,
   WorkspaceBootstrapResult,
@@ -137,8 +140,6 @@ const unacknowledgedWarnings = (store: LocalWorkspaceStore) => {
   return { warningImportIds, initialWarnings };
 };
 
-const RECEIPT_PREFERENCE_PREFIX = 'doctect_workspace_migration_receipt_seen:';
-
 const DOWNLOAD_FILENAMES: Record<RecoverySource, string> = {
   'legacy-current': 'doctect-current-browser-copy.json',
   'legacy-original': 'doctect-original-browser-backup.json',
@@ -172,17 +173,6 @@ const rejectedImportConsumptionResult = (): WorkspaceBlockingResult => ({
     canRecoverLegacyAsCopies: false,
   },
 });
-
-const receiptPreferenceKey = (receipt: MigrationReceipt): string =>
-  `${RECEIPT_PREFERENCE_PREFIX}${receipt.id}`;
-
-const receiptWasSeen = (receipt: MigrationReceipt): boolean => {
-  try {
-    return window.localStorage.getItem(receiptPreferenceKey(receipt)) === '1';
-  } catch {
-    return false;
-  }
-};
 
 export function WorkspaceBootstrapGate({
   store,
@@ -270,7 +260,7 @@ export function WorkspaceBootstrapGate({
         kind: 'ready',
         store: resultStore,
         result,
-        showReceipt: Boolean(result.receipt && !receiptWasSeen(result.receipt)),
+        showReceipt: Boolean(result.receipt && !wasMigrationReceiptSeen(result.receipt.id)),
         importsReady: importState.unresolved.length === 0,
         editorMountGeneration,
         ...warnings,
@@ -528,11 +518,7 @@ export function WorkspaceBootstrapGate({
     if (state.kind !== 'ready'
       || !state.result.receipt
       || state.store !== committedStoreRef.current) return;
-    try {
-      window.localStorage.setItem(receiptPreferenceKey(state.result.receipt), '1');
-    } catch {
-      // Preference failure must not block verified workspace data.
-    }
+    markMigrationReceiptSeen(state.result.receipt.id);
     actionRef.current += 1;
     setActiveExport(null);
     setActionError(null);
