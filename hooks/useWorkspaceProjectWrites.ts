@@ -62,6 +62,19 @@ const saveFailure = (error: unknown): ProjectSaveState => {
     : { status: 'failed', message };
 };
 
+const closeAuthorityError = (
+  command: StructuralWorkspaceCommand,
+  expectedAuthorityEpoch: number | undefined,
+  authorityEpochs: ReadonlyMap<string, number>,
+): WorkspaceStoreError | undefined => command.type === 'close-project'
+  && expectedAuthorityEpoch !== undefined
+  && authorityEpochs.get(command.projectId) !== expectedAuthorityEpoch
+  ? new WorkspaceStoreError(
+      `Project ${command.projectId} authority changed before close.`,
+      'conflict',
+    )
+  : undefined;
+
 export function useWorkspaceProjectWrites(
   store: LocalWorkspaceStore,
   initialWorkspace: WorkspaceSnapshot,
@@ -118,7 +131,7 @@ export function useWorkspaceProjectWrites(
         && installedToken === undefined;
       const authorityChanged = previousIdentity !== undefined
         && previousIdentity !== identity
-        && !workingCopiesRef.current.has(project.id)
+        && (installedToken !== undefined || !workingCopiesRef.current.has(project.id))
         && !unmanagedOwnReadback;
       const previousEpoch = previousEpochs.get(project.id);
       const epoch = previousEpoch === undefined || authorityChanged
@@ -157,15 +170,19 @@ export function useWorkspaceProjectWrites(
     command: StructuralWorkspaceCommand,
     expectedAuthorityEpoch?: number,
   ): Promise<WorkspaceSnapshot> => {
-    if (command.type === 'close-project'
-      && expectedAuthorityEpoch !== undefined
-      && authorityEpochsRef.current.get(command.projectId) !== expectedAuthorityEpoch) {
-      return Promise.reject(new WorkspaceStoreError(
-        `Project ${command.projectId} authority changed before close.`,
-        'conflict',
-      ));
-    }
+    const admissionError = closeAuthorityError(
+      command,
+      expectedAuthorityEpoch,
+      authorityEpochsRef.current,
+    );
+    if (admissionError) return Promise.reject(admissionError);
     const execute = async (): Promise<WorkspaceSnapshot> => {
+      const executionError = closeAuthorityError(
+        command,
+        expectedAuthorityEpoch,
+        authorityEpochsRef.current,
+      );
+      if (executionError) throw executionError;
       const snapshot = await store.commit(command);
       return reconcileSnapshot(snapshot);
     };

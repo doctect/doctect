@@ -634,6 +634,7 @@ describe('useWorkspaceProjectWrites real-store lineage handoff', () => {
     expect(initial.status).toBe('ready');
     if (initial.status !== 'ready') return;
     const { result } = renderHook(() => useWorkspaceProjectWrites(store, initial.snapshot));
+    const initialEpoch = result.current.authorityEpochs.get(source.id);
     let firstSave!: Promise<boolean>;
     let secondSave!: Promise<boolean>;
     let thirdSave!: Promise<boolean>;
@@ -658,6 +659,7 @@ describe('useWorkspaceProjectWrites real-store lineage handoff', () => {
       firstHold.release();
       expect(await firstSave).toBe(true);
     });
+    expect(result.current.authorityEpochs.get(source.id)).toBe(initialEpoch);
     await secondHold.started;
     await secondHold.committed;
 
@@ -681,6 +683,170 @@ describe('useWorkspaceProjectWrites real-store lineage handoff', () => {
     expect(durable).toMatchObject({
       project: { name: 'Third' },
       storageRevision: 3,
+    });
+  }, 20_000);
+
+  it('revalidates a close epoch after a preceding activation adopts replacement authority', async () => {
+    const originalA = project('project-a', 'Original A', markedState('Original A', 'original-a'));
+    const projectB = project('project-b', 'Project B', markedState('Project B', 'project-b'));
+    const replacementA = project(
+      'project-a',
+      'Replacement A',
+      markedState('Replacement A', 'replacement-a'),
+    );
+    const activationHold = transactionCompletionHold([
+      'projects',
+      'workspace',
+      'migrationLedger',
+    ]);
+    const indexedDB = new IDBFactory();
+    instrumentFactory(indexedDB, activationHold.hook);
+    let nextUuid = 0;
+    const environment: LocalWorkspaceEnvironment = {
+      indexedDB,
+      legacyStorage: memoryStorage(validLegacyValues({
+        [LEGACY_KEYS.projects]: JSON.stringify([originalA, projectB]),
+        [LEGACY_KEYS.activeProject]: originalA.id,
+      })),
+      addStorageListener: () => () => {},
+      crypto: webcrypto as unknown as Crypto,
+      now: () => '2026-08-16T21:10:00.000Z',
+      randomUUID: () => `delayed-close-${nextUuid++}`,
+      createBlankProject,
+    };
+    const store = createLocalWorkspaceStore(environment);
+    const initial = await store.bootstrap();
+    expect(initial.status).toBe('ready');
+    if (initial.status !== 'ready') return;
+    const commit = vi.spyOn(store, 'commit');
+    const { result } = renderHook(() => useWorkspaceProjectWrites(store, initial.snapshot));
+    const staleEpoch = result.current.authorityEpochs.get(originalA.id);
+    let activation!: Promise<WorkspaceSnapshot>;
+    let delayedClose!: Promise<WorkspaceSnapshot>;
+    activationHold.arm();
+
+    act(() => {
+      activation = result.current.commitStructural({
+        type: 'activate-project',
+        projectId: projectB.id,
+      });
+    });
+    await activationHold.started;
+    await activationHold.committed;
+    act(() => {
+      delayedClose = result.current.commitStructural(
+        { type: 'close-project', projectId: originalA.id },
+        staleEpoch,
+      );
+    });
+    const replacementStore = createLocalWorkspaceStore(environment);
+    const replacementBootstrap = await replacementStore.bootstrap();
+    expect(replacementBootstrap.status).toBe('ready');
+    await replacementStore.commit({ type: 'close-project', projectId: originalA.id });
+    await replacementStore.commit({
+      type: 'create-and-activate-project',
+      project: replacementA,
+    });
+
+    await act(async () => {
+      activationHold.release();
+      await activation;
+      await expect(delayedClose).rejects.toMatchObject({ code: 'conflict' });
+    });
+
+    expect(commit).toHaveBeenCalledOnce();
+    expect(commit.mock.calls[0][0]).toEqual({
+      type: 'activate-project',
+      projectId: projectB.id,
+    });
+    const inspector = createIndexedDbAdapter({ indexedDB, now: environment.now });
+    await inspector.open();
+    const durableA = (await inspector.inspect()).projects.find(item => item.id === originalA.id);
+    inspector.close();
+    expect(durableA).toMatchObject({
+      project: { name: 'Replacement A' },
+      storageRevision: 0,
+    });
+  }, 20_000);
+
+  it('rotates foreign authority beneath a failed working copy before stale close admission', async () => {
+    const originalA = project('project-a', 'Original A', markedState('Original A', 'original-a'));
+    const projectB = project('project-b', 'Project B', markedState('Project B', 'project-b'));
+    const replacementA = project(
+      'project-a',
+      'Replacement A',
+      markedState('Replacement A', 'replacement-a'),
+    );
+    const indexedDB = new IDBFactory();
+    let nextUuid = 0;
+    let failNextMutation = false;
+    const environment: LocalWorkspaceEnvironment = {
+      indexedDB,
+      legacyStorage: memoryStorage(validLegacyValues({
+        [LEGACY_KEYS.projects]: JSON.stringify([originalA, projectB]),
+        [LEGACY_KEYS.activeProject]: projectB.id,
+      })),
+      addStorageListener: () => () => {},
+      crypto: webcrypto as unknown as Crypto,
+      now: () => '2026-08-16T21:15:00.000Z',
+      randomUUID: () => `failed-copy-close-${nextUuid++}`,
+      createBlankProject,
+      fault(point) {
+        if (point !== 'mutation.before-complete' || !failNextMutation) return;
+        failNextMutation = false;
+        throw new DOMException('Injected quota failure.', 'QuotaExceededError');
+      },
+    };
+    const store = createLocalWorkspaceStore(environment);
+    const initial = await store.bootstrap();
+    expect(initial.status).toBe('ready');
+    if (initial.status !== 'ready') return;
+    const commit = vi.spyOn(store, 'commit');
+    const { result } = renderHook(() => useWorkspaceProjectWrites(store, initial.snapshot));
+    const staleEpoch = result.current.authorityEpochs.get(originalA.id);
+    failNextMutation = true;
+
+    await act(async () => {
+      expect(await result.current.updateProject(originalA.id, current => ({
+        ...current,
+        name: 'Failed local A',
+      }))).toBe(false);
+    });
+    expect(result.current.saveStates.get(originalA.id)?.status).toBe('failed');
+    const replacementStore = createLocalWorkspaceStore(environment);
+    const replacementBootstrap = await replacementStore.bootstrap();
+    expect(replacementBootstrap.status).toBe('ready');
+    await replacementStore.commit({ type: 'close-project', projectId: originalA.id });
+    await replacementStore.commit({
+      type: 'create-and-activate-project',
+      project: replacementA,
+    });
+    await act(async () => {
+      expect(await result.current.updateProject(projectB.id, current => ({
+        ...current,
+        name: 'B readback',
+      }))).toBe(true);
+    });
+
+    expect(result.current.workspace.projects.find(item => item.id === originalA.id)?.name)
+      .toBe('Failed local A');
+    expect(result.current.saveStates.get(originalA.id)?.status).toBe('failed');
+    expect(result.current.authorityEpochs.get(originalA.id)).toBeGreaterThan(staleEpoch ?? -1);
+    await act(async () => {
+      await expect(result.current.commitStructural(
+        { type: 'close-project', projectId: originalA.id },
+        staleEpoch,
+      )).rejects.toMatchObject({ code: 'conflict' });
+    });
+
+    expect(commit).toHaveBeenCalledTimes(2);
+    const inspector = createIndexedDbAdapter({ indexedDB, now: environment.now });
+    await inspector.open();
+    const durableA = (await inspector.inspect()).projects.find(item => item.id === originalA.id);
+    inspector.close();
+    expect(durableA).toMatchObject({
+      project: { name: 'Replacement A' },
+      storageRevision: 0,
     });
   }, 20_000);
 });
