@@ -95,6 +95,26 @@ function WorkspaceWritesProbe({
   );
 }
 
+function AuthorityLossOnLayoutProbe({
+  mount,
+  onAuthorityLost,
+}: {
+  mount: WorkspaceEditorMount;
+  onAuthorityLost: () => void;
+}) {
+  useWorkspaceProjectWrites(
+    mount.store,
+    mount.initialWorkspace,
+    mount.onWorkspaceChange,
+  );
+
+  useLayoutEffect(() => {
+    onAuthorityLost();
+  }, [onAuthorityLost]);
+
+  return <div data-testid="editor-page" />;
+}
+
 function ReplacementActionProbe({
   store,
   downloadDuringLayout,
@@ -705,6 +725,98 @@ describe('WorkspaceBootstrapGate', () => {
     await screen.findByTestId('editor-page');
 
     act(() => store.emitAuthorityLost(recoveryResult(splitBrainRecovery())));
+    fireEvent.click(screen.getByRole('button', { name: 'Download open work' }));
+
+    expect(downloadJson).toHaveBeenCalledWith({
+      format: 'doctect.open-workspace-recovery',
+      version: 1,
+      capturedAt: expect.any(String),
+      workspace: initial,
+    }, 'doctect-open-workspace.json');
+  });
+
+  it('refreshes a provisional import capture before the editor mount effect publishes', async () => {
+    const pending = pendingImport('layout-loss-import', 'layout-loss-project');
+    const initial = workspaceSnapshot({ pendingImports: [pending] });
+    const consumed = consumedSnapshot(initial, [pending]);
+    const store = fakeStore({
+      bootstrap: readyResult({ snapshot: initial }),
+      commit: consumed,
+    });
+    const renderEditor = (mount: WorkspaceEditorMount) => (
+      <AuthorityLossOnLayoutProbe
+        mount={mount}
+        onAuthorityLost={() => store.emitAuthorityLost(unavailableResult({
+          availableExports: [],
+        }))}
+      />
+    );
+    render(<WorkspaceBootstrapGate store={store} renderEditor={renderEditor} />);
+
+    expect(await screen.findByRole('heading', {
+      name: 'Local project storage is unavailable',
+    })).toBeVisible();
+    expect(screen.queryByTestId('editor-page')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Download open work' }));
+
+    expect(downloadJson).toHaveBeenCalledWith({
+      format: 'doctect.open-workspace-recovery',
+      version: 1,
+      capturedAt: expect.any(String),
+      workspace: consumed,
+    }, 'doctect-open-workspace.json');
+  });
+
+  it('refreshes a provisional capture after each import before a later import fails', async () => {
+    const first = pendingImport('partial-first-import', 'partial-first-project');
+    const second = pendingImport('partial-second-import', 'partial-second-project');
+    const initial = workspaceSnapshot({ pendingImports: [first, second] });
+    const afterFirst = consumedSnapshot(initial, [first], [second]);
+    const store = fakeReadyStore({ snapshot: initial });
+    store.commit
+      .mockResolvedValueOnce(afterFirst)
+      .mockRejectedValueOnce(new Error('second import failed'));
+    render(<WorkspaceBootstrapGate store={store} renderEditor={fakeEditorRenderer} />);
+
+    const download = await screen.findByRole('button', { name: 'Download open work' });
+    expect(store.commit).toHaveBeenCalledTimes(2);
+    expect(screen.queryByTestId('editor-page')).not.toBeInTheDocument();
+    fireEvent.click(download);
+
+    expect(downloadJson).toHaveBeenCalledWith({
+      format: 'doctect.open-workspace-recovery',
+      version: 1,
+      capturedAt: expect.any(String),
+      workspace: afterFirst,
+    }, 'doctect-open-workspace.json');
+  });
+
+  it('protects a provisional seed once blocked before Retry imports finish', async () => {
+    const initial = workspaceSnapshot({ activeProjectId: 'provisional-before-block' });
+    const pending = pendingImport('blocked-provisional-import', 'blocked-import-project');
+    const retried = workspaceSnapshot({
+      activeProjectId: 'provisional-before-block',
+      pendingImports: [pending],
+    });
+    const consumed = consumedSnapshot(retried, [pending]);
+    const store = fakeStore({
+      bootstrap: [
+        readyResult({ snapshot: initial }),
+        readyResult({ snapshot: retried }),
+      ],
+      commit: consumed,
+    });
+    render(<WorkspaceBootstrapGate store={store} renderEditor={fakeEditorRenderer} />);
+    await screen.findByTestId('editor-page');
+    act(() => store.emitAuthorityLost(recoveryResult(workspaceRecovery({
+      recoveryId: 'protect-provisional-on-block',
+      availableExports: [],
+      canRetry: true,
+    }))));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByTestId('editor-page')).toHaveTextContent('blocked-import-project');
+    act(() => store.emitAuthorityLost(unavailableResult({ availableExports: [] }), 1));
     fireEvent.click(screen.getByRole('button', { name: 'Download open work' }));
 
     expect(downloadJson).toHaveBeenCalledWith({

@@ -68,6 +68,7 @@ interface StoreImportState {
 interface OpenWorkspaceCapture {
   store: LocalWorkspaceStore;
   workspace: WorkspaceSnapshot;
+  provenance: 'provisional' | 'protected';
 }
 
 const storeImportStates = new WeakMap<LocalWorkspaceStore, StoreImportState>();
@@ -228,6 +229,7 @@ export function WorkspaceBootstrapGate({
     result: WorkspaceBlockingResult,
   ): GateState => {
     const capture = openWorkspaceRef.current;
+    if (capture?.store === resultStore) capture.provenance = 'protected';
     return {
       kind: 'blocked',
       store: resultStore,
@@ -259,6 +261,7 @@ export function WorkspaceBootstrapGate({
         openWorkspaceRef.current = {
           store: resultStore,
           workspace: structuredClone(result.snapshot),
+          provenance: 'provisional',
         };
       }
       const importState = prepareImportQueue(resultStore, result.snapshot);
@@ -368,6 +371,13 @@ export function WorkspaceBootstrapGate({
         recordConsumeDelivery(actionStore, pending);
         reconcileConsumeResult(importState, snapshot);
         if (!isCurrent()) return;
+        const capture = openWorkspaceRef.current;
+        if (capture?.store === actionStore && capture.provenance === 'provisional') {
+          openWorkspaceRef.current = {
+            ...capture,
+            workspace: structuredClone(snapshot),
+          };
+        }
       }
 
       if (!isCurrent()) return;
@@ -592,6 +602,7 @@ export function WorkspaceBootstrapGate({
       openWorkspaceRef.current = {
         store: state.store,
         workspace: structuredClone(snapshot),
+        provenance: 'protected',
       };
     },
   });
