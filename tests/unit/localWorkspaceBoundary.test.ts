@@ -154,7 +154,6 @@ interface SourcePositionSegment {
 interface AnnexBFunctionEnvironment {
   assignments: ReadonlyMap<string, readonly number[]>;
   end: number;
-  functionStart: number;
   names: ReadonlySet<string>;
   start: number;
 }
@@ -745,7 +744,6 @@ const classicGlobalDeclarations = (source: string): ClassicGlobalDeclarations =>
       annexBFunctionEnvironments.push({
         assignments,
         end: body.end,
-        functionStart: declaration.getStart(sourceFile),
         names,
         start: body.getStart(sourceFile),
       });
@@ -1073,7 +1071,6 @@ const executableInputs = (inputs: readonly SourceInput[]): SourceInput[] => inpu
             positions.map(position => generatedStart + position),
           ])),
           end: generatedStart + environment.end,
-          functionStart: generatedStart + environment.functionStart,
           names: environment.names,
           start: generatedStart + environment.start,
         });
@@ -1627,8 +1624,7 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
     if (ts.isStringLiteralLike(expression)) return new Set([expression.text]);
     if (ts.isIdentifier(expression)) {
       const symbol = identifierSymbol(expression);
-      if (!symbol) return new Set();
-      return new Set(withSymbolOrigins(symbol, atPosition, trail, (origin, nextTrail) => (
+      return new Set(withIdentifierOrigins(expression, symbol, atPosition, trail, (origin, nextTrail) => (
         origin.value.kind === 'expression'
           ? [...staticStrings(origin.value.expression, origin.position, nextTrail)]
           : []
@@ -1750,8 +1746,7 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
     const expression = unwrap(input);
     if (ts.isIdentifier(expression)) {
       const symbol = identifierSymbol(expression);
-      if (!symbol) return [];
-      return withSymbolOrigins(symbol, atPosition, trail, (origin, nextTrail) => {
+      return withIdentifierOrigins(expression, symbol, atPosition, trail, (origin, nextTrail) => {
         if (origin.value.kind === 'expression') {
           return callableMembers(origin.value.expression, origin.position, nextTrail);
         }
@@ -1808,8 +1803,7 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
     if (!ts.isIdentifier(expression)) return false;
     const symbol = identifierSymbol(expression);
     if (isUnshadowedGlobal(expression, symbol, new Set(['require']))) return true;
-    if (!symbol) return false;
-    return withSymbolOrigins(symbol, atPosition, trail, (origin, nextTrail) => (
+    return withIdentifierOrigins(expression, symbol, atPosition, trail, (origin, nextTrail) => (
       origin.value.kind === 'expression'
         && resolvesToRequire(origin.value.expression, origin.position, nextTrail)
         ? [true]
@@ -1831,8 +1825,7 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
     }
     if (ts.isIdentifier(expression)) {
       const symbol = identifierSymbol(expression);
-      if (!symbol) return [];
-      return withSymbolOrigins(symbol, atPosition, trail, (origin, nextTrail) => (
+      return withIdentifierOrigins(expression, symbol, atPosition, trail, (origin, nextTrail) => (
         origin.value.kind === 'expression'
           ? firstArrayElements(origin.value.expression, origin.position, nextTrail)
           : []
@@ -3491,6 +3484,138 @@ describe('local workspace static boundary', () => {
       + "localStorage = window.localStorage; const key = 'hype_' + 'projects'; "
       + 'localStorage.getItem(key); } inner();</script>';
     expect(analyzeSource('annex-b-origin-retaint.html', source)).toEqual([
+      expect.stringContaining('accesses legacy document key'),
+    ]);
+  });
+
+  it.each([
+    [
+      'reconstructed key',
+      "{ function key() {} } key = 'hype_' + 'projects'; localStorage.getItem(key);",
+      'accesses legacy document key',
+    ],
+    [
+      'direct callable',
+      "{ function read() {} } read = localStorage.getItem; read('hype_' + 'projects');",
+      'accesses legacy document key',
+    ],
+    [
+      'bound callable',
+      "{ function read() {} } read = localStorage.getItem.bind(localStorage, 'hype_' + 'projects'); read();",
+      'accesses legacy document key',
+    ],
+    [
+      'call wrapper',
+      "{ function read() {} } read = localStorage.getItem; read.call(localStorage, 'hype_' + 'projects');",
+      'accesses legacy document key',
+    ],
+    [
+      'apply wrapper and array alias',
+      "{ function read() {} function args() {} } read = localStorage.getItem; args = ['hype_' + 'projects']; "
+        + 'read.apply(localStorage, args);',
+      'accesses legacy document key',
+    ],
+    [
+      'require alias',
+      "{ function load() {} } load = require; load('../services/localWorkspace/legacyTypes');",
+      'imports local-workspace migration internals',
+    ],
+  ])('generic Annex B origin resolver follows later same-binding %s re-taint', (_case, body, finding) => {
+    expect(analyzeSource('annex-b-generic-retaint.html', `<script>function inner() { ${body} } inner();</script>`))
+      .toEqual([expect.stringContaining(finding)]);
+  });
+
+  it.each([
+    [
+      'key',
+      "var key = 'hype_' + 'projects';",
+      'localStorage.getItem(key); { function key() {} }',
+    ],
+    [
+      'callable',
+      'var read = localStorage.getItem.bind(localStorage);',
+      "read('hype_' + 'projects'); { function read() {} }",
+    ],
+    [
+      'apply-array',
+      "var args = ['hype_' + 'projects'];",
+      'localStorage.getItem.apply(localStorage, args); { function args() {} }',
+    ],
+    [
+      'require',
+      'var load = require;',
+      "load('../services/localWorkspace/legacyTypes'); { function load() {} }",
+    ],
+  ])('generic Annex B origin resolver cuts off an outer %s origin', (_case, origin, body) => {
+    const source = `<script>function outer() { ${origin} function inner() { ${body} } inner(); } outer();</script>`;
+    expect(analyzeSource('annex-b-generic-outer.html', source)).toEqual([]);
+  });
+
+  it.each([
+    [
+      'key parameter',
+      "function inner(key = 'hype_' + 'projects') { localStorage.getItem(key); { function key() {} } } inner();",
+      'accesses legacy document key',
+    ],
+    [
+      'callable var',
+      "function inner() { var read = localStorage.getItem; read('hype_' + 'projects'); { function read() {} } } inner();",
+      'accesses legacy document key',
+    ],
+    [
+      'array var',
+      "function inner() { var args = ['hype_' + 'projects']; localStorage.getItem.apply(localStorage, args); "
+        + '{ function args() {} } } inner();',
+      'accesses legacy document key',
+    ],
+    [
+      'require var',
+      "function inner() { var load = require; load('../services/localWorkspace/legacyTypes'); "
+        + '{ function load() {} } } inner();',
+      'imports local-workspace migration internals',
+    ],
+  ])('generic Annex B origin resolver preserves same-function %s before assignment', (_case, body, finding) => {
+    expect(analyzeSource('annex-b-generic-before.html', `<script>${body}</script>`)).toEqual([
+      expect.stringContaining(finding),
+    ]);
+  });
+
+  it.each([
+    [
+      'key',
+      "var key = 'hype_' + 'projects'; { function key() {} } localStorage.getItem(key);",
+    ],
+    [
+      'callable',
+      "var read = localStorage.getItem; { function read() {} } read('hype_' + 'projects');",
+    ],
+    [
+      'array',
+      "var args = ['hype_' + 'projects']; { function args() {} } "
+        + 'localStorage.getItem.apply(localStorage, args);',
+    ],
+    [
+      'require',
+      "var load = require; { function load() {} } load('../services/localWorkspace/legacyTypes');",
+    ],
+  ])('generic Annex B origin resolver applies the reached %s assignment cutoff', (_case, body) => {
+    expect(analyzeSource('annex-b-generic-after.html', `<script>function inner() { ${body} } inner();</script>`))
+      .toEqual([]);
+  });
+
+  it.each([
+    [
+      'nested closure',
+      "function inner() { { function key() {} } key = 'hype_' + 'projects'; "
+        + 'const read = () => localStorage.getItem(key); read(); } inner();',
+    ],
+    [
+      'containing parameter initializer',
+      "const key = 'hype_' + 'projects'; function inner(value = localStorage.getItem(key)) { "
+        + '{ function key() {} } return value; } inner();',
+    ],
+  ])('generic Annex B origin resolver supports %s scope', (_case, body) => {
+    expect(analyzeSource('annex-b-generic-scope.html', `<script>${body}</script>`)).toEqual([
       expect.stringContaining('accesses legacy document key'),
     ]);
   });
