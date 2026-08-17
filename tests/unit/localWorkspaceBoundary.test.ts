@@ -56,10 +56,6 @@ const allowed = new Set([
   'services/localWorkspace/legacyTypes.ts',
   'tests/e2e/fixtures/localWorkspaceMigration.js',
 ]);
-const directLocalStorageAllowed = new Set([
-  'services/browserPreferences.ts',
-  'services/localWorkspace/index.ts',
-]);
 const scriptKinds = new Map<string, ts.ScriptKind>([
   ['.cjs', ts.ScriptKind.JS],
   ['.cts', ts.ScriptKind.TS],
@@ -1945,33 +1941,6 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
     trail: ResolutionTrail = new Map(),
   ): boolean => {
     const expression = unwrap(input);
-    if (ts.isCallExpression(expression)) {
-      return invokedMembers(expression).some(invoked => {
-        if (!invoked.reflect || !matchesStaticCandidate(invoked.method, 'get')) return false;
-        const argumentPosition = expression.expression.getStart(expression.getSourceFile());
-        const invocationArguments = invoked.invocation === 'apply'
-          ? (() => {
-            const argumentArray = expression.arguments[1];
-            const unwrappedArray = argumentArray ? unwrap(argumentArray) : undefined;
-            return unwrappedArray && ts.isArrayLiteralExpression(unwrappedArray)
-              ? unwrappedArray.elements.filter(ts.isExpression).map(argument => ({
-                expression: argument,
-                position: argumentPosition,
-              }))
-              : [];
-          })()
-          : expression.arguments
-            .slice(invoked.invocation === 'call' ? 1 : 0)
-            .map(argument => ({ expression: argument, position: argumentPosition }));
-        const args = [...invoked.boundArguments, ...invocationArguments];
-        const target = args[0];
-        const key = args[1];
-        return Boolean(target && key
-          && isGlobalObject(target.expression, target.position, trail)
-          && [...staticStrings(key.expression, key.position, trail)]
-            .some(candidate => matchesStaticCandidate(candidate, 'localStorage')));
-      });
-    }
     if (ts.isIdentifier(expression)) {
       const symbol = identifierSymbol(expression);
       if (isUnshadowedGlobal(expression, symbol, new Set(['localStorage']))) return true;
@@ -2131,6 +2100,128 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
       : new Set();
   };
 
+  const firstInvocationArguments = (
+    call: ts.CallExpression,
+    invoked: InvokedMember,
+  ): PositionedExpression[] => {
+    if (invoked.boundArguments.length > 0) return [invoked.boundArguments[0]];
+    const atPosition = call.expression.getStart(call.getSourceFile());
+    if (invoked.invocation === 'apply') {
+      const argumentArray = call.arguments[1];
+      return argumentArray ? firstArrayElements(argumentArray, atPosition) : [];
+    }
+    const argument = call.arguments[invoked.invocation === 'call' ? 1 : 0];
+    return argument ? [{ expression: argument, position: atPosition }] : [];
+  };
+
+  const privateConstInitializer = (
+    sourceFile: ts.SourceFile,
+    name: string,
+  ): ts.Expression | undefined => {
+    const exported = sourceFile.statements.some(statement => {
+      if (ts.isExportAssignment(statement)) {
+        return ts.isIdentifier(statement.expression) && statement.expression.text === name;
+      }
+      if (!ts.isExportDeclaration(statement)
+        || !statement.exportClause
+        || !ts.isNamedExports(statement.exportClause)) return false;
+      return statement.exportClause.elements.some(element => (
+        (element.propertyName ?? element.name).text === name
+      ));
+    });
+    if (exported) return undefined;
+    const matches = sourceFile.statements.flatMap(statement => {
+      if (!ts.isVariableStatement(statement)
+        || statement.modifiers?.some(modifier => modifier.kind === ts.SyntaxKind.ExportKeyword)
+        || (statement.declarationList.flags & ts.NodeFlags.Const) === 0) return [];
+      return statement.declarationList.declarations.filter(declaration => (
+        ts.isIdentifier(declaration.name) && declaration.name.text === name
+      ));
+    });
+    return matches.length === 1 ? matches[0].initializer : undefined;
+  };
+
+  const browserPreferenceStorageApproval = (
+    sourceFile: ts.SourceFile,
+  ): ts.PropertyAccessExpression | undefined => {
+    const initializer = privateConstInitializer(sourceFile, 'storageFor');
+    if (!initializer || !ts.isArrowFunction(initializer) || !ts.isBlock(initializer.body)) {
+      return undefined;
+    }
+    const tryStatements = initializer.body.statements.filter(ts.isTryStatement);
+    if (tryStatements.length !== 1 || tryStatements[0].tryBlock.statements.length !== 1) {
+      return undefined;
+    }
+    const returnStatement = tryStatements[0].tryBlock.statements[0];
+    if (!ts.isReturnStatement(returnStatement) || !returnStatement.expression) return undefined;
+    const conditional = unwrap(returnStatement.expression);
+    if (!ts.isConditionalExpression(conditional)
+      || conditional.whenTrue.kind !== ts.SyntaxKind.NullKeyword) return undefined;
+    const condition = unwrap(conditional.condition);
+    if (!ts.isBinaryExpression(condition)
+      || condition.operatorToken.kind !== ts.SyntaxKind.EqualsEqualsEqualsToken
+      || !ts.isTypeOfExpression(condition.left)
+      || !ts.isIdentifier(condition.left.expression)
+      || condition.left.expression.text !== 'window'
+      || !ts.isStringLiteralLike(condition.right)
+      || condition.right.text !== 'undefined') return undefined;
+    const fallback = unwrap(conditional.whenFalse);
+    if (!ts.isBinaryExpression(fallback)
+      || fallback.operatorToken.kind !== ts.SyntaxKind.QuestionQuestionToken
+      || fallback.right.kind !== ts.SyntaxKind.NullKeyword) return undefined;
+    const storage = unwrap(fallback.left);
+    return ts.isPropertyAccessExpression(storage)
+      && ts.isIdentifier(storage.expression)
+      && storage.expression.text === 'window'
+      && storage.name.text === 'localStorage'
+      ? storage
+      : undefined;
+  };
+
+  const localWorkspaceStorageApproval = (
+    sourceFile: ts.SourceFile,
+  ): ts.CallExpression | undefined => {
+    const initializer = privateConstInitializer(sourceFile, 'browserEnvironment');
+    if (!initializer || !ts.isObjectLiteralExpression(initializer)) return undefined;
+    const legacyStorage = initializer.properties.filter(property => (
+      ts.isPropertyAssignment(property)
+      && ts.isIdentifier(property.name)
+      && property.name.text === 'legacyStorage'
+      && ts.isObjectLiteralExpression(property.initializer)
+    ));
+    if (legacyStorage.length !== 1 || !ts.isPropertyAssignment(legacyStorage[0])) return undefined;
+    const legacyObject = legacyStorage[0].initializer;
+    if (!ts.isObjectLiteralExpression(legacyObject)) return undefined;
+    const getItems = legacyObject.properties.filter(property => (
+      ts.isMethodDeclaration(property)
+      && ts.isIdentifier(property.name)
+      && property.name.text === 'getItem'
+    ));
+    if (getItems.length !== 1 || !ts.isMethodDeclaration(getItems[0])) return undefined;
+    const getItem = getItems[0];
+    if (!getItem.body || getItem.body.statements.length !== 1
+      || getItem.parameters.length !== 1
+      || !ts.isIdentifier(getItem.parameters[0].name)
+      || getItem.parameters[0].name.text !== 'key') return undefined;
+    const returnStatement = getItem.body.statements[0];
+    if (!ts.isReturnStatement(returnStatement)
+      || !returnStatement.expression
+      || !ts.isCallExpression(returnStatement.expression)) return undefined;
+    const call = returnStatement.expression;
+    if (call.arguments.length !== 1
+      || !ts.isIdentifier(call.arguments[0])
+      || call.arguments[0].text !== 'key'
+      || !ts.isPropertyAccessExpression(call.expression)
+      || call.expression.name.text !== 'getItem') return undefined;
+    const storage = call.expression.expression;
+    return ts.isPropertyAccessExpression(storage)
+      && ts.isIdentifier(storage.expression)
+      && storage.expression.text === 'window'
+      && storage.name.text === 'localStorage'
+      ? call
+      : undefined;
+  };
+
   const isLegacyTypesModule = (specifier: string): boolean => {
     const normalized = specifier.split(/[?#]/, 1)[0].replaceAll('\\', '/');
     const basename = normalized.slice(normalized.lastIndexOf('/') + 1);
@@ -2155,8 +2246,17 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
     const bundledPreferenceEnd = bundledPreferenceStart === -1
       ? -1
       : bundledPreferenceStart + approvedBrowserPreferencesBundle!.length;
+    const exactStorageApproval = policyPath === 'services/browserPreferences.ts'
+      ? browserPreferenceStorageApproval(sourceFile)
+      : policyPath === 'services/localWorkspace/index.ts'
+        ? localWorkspaceStorageApproval(sourceFile)
+        : undefined;
     const directStorageApprovedAt = (node: ts.Node): boolean => (
-      directLocalStorageAllowed.has(policyPath)
+      (
+        exactStorageApproval !== undefined
+        && node.getStart(sourceFile) >= exactStorageApproval.getStart(sourceFile)
+        && node.end <= exactStorageApproval.end
+      )
       || (
         bundledPreferenceStart !== -1
         && node.getStart(sourceFile) >= bundledPreferenceStart
@@ -2234,6 +2334,7 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
     };
 
     const inspectNode = (node: ts.Node): void => {
+      if (ts.isTypeNode(node)) return;
       const inAnalysisSegment = node.getStart(sourceFile) >= (input.analysisStart ?? 0);
       if (!inAnalysisSegment) {
         ts.forEachChild(node, inspectNode);
@@ -2252,7 +2353,16 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
         const invoked = invokedMembers(node);
         if (enforceDirectStorageBoundary
           && !directStorageApprovedAt(node)
-          && invoked.some(member => member.localStorage)) {
+          && (
+            invoked.some(member => member.localStorage)
+            || invoked.some(member => (
+              member.reflect
+              && matchesStaticCandidate(member.method, 'get')
+              && firstInvocationArguments(node, member).some(argument => (
+                isGlobalObject(argument.expression, argument.position)
+              ))
+            ))
+          )) {
           reportDirectStorage(node);
         }
         let expansionReported = false;
@@ -2294,6 +2404,9 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
         && !directStorageApprovedAt(node)
         && (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node))
         && (
+          (ts.isElementAccessExpression(node)
+            && isGlobalObject(node.expression, node.getStart(sourceFile)))
+          ||
           isLocalStorage(node, node.getStart(sourceFile))
           || isLocalStorage(node.expression, node.getStart(sourceFile))
         )) {
@@ -2527,6 +2640,130 @@ describe('local workspace static boundary', () => {
     ]));
   });
 
+  it.each([
+    [
+      'a mutated computed receiver key',
+      'components/MutatedStorageReceiver.ts',
+      "const parts = ['safe']; parts.splice(0, 1, 'local', 'Storage'); window[parts.join('')].getItem('x');",
+    ],
+    [
+      'an overridden computed receiver join',
+      'components/OverriddenStorageReceiver.ts',
+      "const parts = ['safe']; parts.join = () => 'localStorage'; self[parts.join('')].getItem('x');",
+    ],
+    [
+      'an extra-argument computed receiver join',
+      'components/ExtraArgumentStorageReceiver.ts',
+      "globalThis[['local', 'Storage'].join('', ignored)].getItem('x');",
+    ],
+    [
+      'a coercing computed receiver key',
+      'components/CoercingStorageReceiver.ts',
+      "window[{ toString() { return 'localStorage'; } }].getItem('x');",
+    ],
+    [
+      'an unknown computed browser-global key',
+      'components/DynamicGlobalReceiver.ts',
+      'void self[suppliedProperty];',
+    ],
+    [
+      'an inline mutated computed receiver key',
+      'computed-shell.html',
+      "<script>const parts = ['safe']; parts.splice(0, 1, 'local', 'Storage'); window[parts.join('')].getItem('x');</script>",
+    ],
+  ])('rejects %s without reconstructing its property key', (_case, path, source) => {
+    expect(analyzeProductionSource(path, source)).toEqual(expect.arrayContaining([
+      expect.stringContaining('accesses production localStorage outside approved persistence modules'),
+    ]));
+  });
+
+  it.each([
+    [
+      'a direct mutated Reflect.get key',
+      'components/MutatedReflectReceiver.ts',
+      "const parts = ['safe']; parts.splice(0, 1, 'local', 'Storage'); Reflect.get(window, parts.join('')).getItem('x');",
+    ],
+    [
+      'a direct overridden Reflect.get key',
+      'components/OverriddenReflectReceiver.ts',
+      "const parts = ['safe']; parts.join = () => 'localStorage'; Reflect.get(self, parts.join('')).getItem('x');",
+    ],
+    [
+      'a direct extra-argument Reflect.get key',
+      'components/ExtraArgumentReflectReceiver.ts',
+      "Reflect.get(globalThis, ['local', 'Storage'].join('', ignored), suppliedReceiver).getItem('x');",
+    ],
+    [
+      'a direct coercing Reflect.get key',
+      'components/CoercingReflectReceiver.ts',
+      "Reflect.get(window, { toString() { return 'localStorage'; } }).getItem('x');",
+    ],
+    [
+      'an aliased mutated Reflect.get key',
+      'components/AliasedMutatedReflectReceiver.ts',
+      "const get = Reflect.get; const parts = ['safe']; parts.splice(0, 1, 'local', 'Storage'); get(window, parts.join('')).getItem('x');",
+    ],
+    [
+      'an aliased overridden Reflect.get key',
+      'components/AliasedOverriddenReflectReceiver.ts',
+      "const get = Reflect.get; const parts = ['safe']; parts.join = () => 'localStorage'; get(self, parts.join('')).getItem('x');",
+    ],
+    [
+      'an aliased extra-argument Reflect.get key',
+      'components/AliasedExtraArgumentReflectReceiver.ts',
+      "const get = Reflect.get; get(globalThis, ['local', 'Storage'].join('', ignored), suppliedReceiver).getItem('x');",
+    ],
+    [
+      'an aliased coercing Reflect.get key',
+      'components/AliasedCoercingReflectReceiver.ts',
+      "const get = Reflect.get; get(window, { toString() { return 'localStorage'; } }).getItem('x');",
+    ],
+    [
+      'a direct unknown Reflect.get key',
+      'components/DynamicReflectReceiver.ts',
+      'void Reflect.get(window, suppliedProperty, suppliedReceiver);',
+    ],
+    [
+      'an aliased unknown Reflect.get key',
+      'components/AliasedDynamicReflectReceiver.ts',
+      'const get = Reflect.get; void get(window, suppliedProperty, suppliedReceiver);',
+    ],
+    [
+      'an inline aliased coercing Reflect.get key',
+      'reflect-shell.html',
+      "<script>const get = Reflect.get; get(window, { toString() { return 'localStorage'; } }).getItem('x');</script>",
+    ],
+  ])('rejects %s from its browser-global target alone', (_case, path, source) => {
+    expect(analyzeProductionSource(path, source)).toEqual(expect.arrayContaining([
+      expect.stringContaining('accesses production localStorage outside approved persistence modules'),
+    ]));
+  });
+
+  it.each([
+    ['components/ReflectOwnKeys.ts', 'Reflect.ownKeys(globalThis);'],
+    ['components/ReflectErrorName.ts', "Reflect.get(error, 'name');"],
+    ['components/AliasedReflectErrorName.ts', "const get = Reflect.get; get(error, suppliedProperty);"],
+    ['components/ComputedObject.ts', 'void suppliedObject[suppliedProperty];'],
+  ])('preserves unrelated reflection and non-global computation in %s', (path, source) => {
+    expect(analyzeProductionSource(path, source)).toEqual([]);
+  });
+
+  it('skips type-only localStorage references', () => {
+    expect(analyzeProductionSource(
+      'components/StorageTypes.ts',
+      'type BrowserStorage = typeof localStorage;',
+    )).toEqual([]);
+  });
+
+  it('rejects emitted runtime typeof localStorage expressions', () => {
+    expect(analyzeProductionSource(
+      'components/RuntimeStorageType.ts',
+      'const browserStorageType = typeof localStorage;',
+    )).toEqual(expect.arrayContaining([
+      expect.stringContaining('accesses production localStorage outside approved persistence modules'),
+    ]));
+  });
+
   it('keeps unrelated classic HTML globals from masking module storage access', () => {
     const modulePath = 'components/WindowPreferenceRead.ts';
     const violations = analyzeSources([
@@ -2548,16 +2785,63 @@ describe('local workspace static boundary', () => {
   });
 
   it.each([
+    'services/browserPreferences.ts',
+    'services/localWorkspace/index.ts',
+  ])('allows only the existing exact storage implementation in %s', path => {
+    const source = readFileSync(join(root, path), 'utf8');
+    expect(analyzeProductionSource(path, source)).toEqual([]);
+  });
+
+  it.each([
     [
       'services/browserPreferences.ts',
-      "window.localStorage.getItem('doctect_last_fontSize');",
+      "window.localStorage.setItem(suppliedKey, suppliedValue);",
     ],
     [
       'services/localWorkspace/index.ts',
-      'window.localStorage.getItem(key);',
+      'export const leakedStorageValue = window.localStorage.getItem(suppliedKey);',
     ],
-  ])('allows direct localStorage only in approved module %s', (path, source) => {
-    expect(analyzeProductionSource(path, source)).toEqual([]);
+  ])('rejects additional direct storage access in %s', (path, appendedSource) => {
+    const source = `${readFileSync(join(root, path), 'utf8')}\n${appendedSource}\n`;
+    expect(analyzeProductionSource(path, source)).toEqual(expect.arrayContaining([
+      expect.stringContaining('accesses production localStorage outside approved persistence modules'),
+    ]));
+  });
+
+  it.each([
+    ['an export modifier', (source: string) => source.replace('const storageFor =', 'export const storageFor =')],
+    ['a named export', (source: string) => `${source}\nexport { storageFor };\n`],
+    ['a default export', (source: string) => `${source}\nexport default storageFor;\n`],
+  ])('requires the preference storage acquisition to remain private from %s', (_case, mutate) => {
+    const source = mutate(readFileSync(join(root, 'services/browserPreferences.ts'), 'utf8'));
+
+    expect(analyzeProductionSource('services/browserPreferences.ts', source)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('accesses production localStorage outside approved persistence modules'),
+      ]),
+    );
+  });
+
+  it('requires the exact preference storage availability guard', () => {
+    const source = readFileSync(join(root, 'services/browserPreferences.ts'), 'utf8')
+      .replace("typeof window === 'undefined'", 'false');
+
+    expect(analyzeProductionSource('services/browserPreferences.ts', source)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('accesses production localStorage outside approved persistence modules'),
+      ]),
+    );
+  });
+
+  it('requires the legacy adapter to call getItem with its key parameter', () => {
+    const source = readFileSync(join(root, 'services/localWorkspace/index.ts'), 'utf8')
+      .replace('window.localStorage.getItem(key)', 'window.localStorage.getItem(suppliedKey)');
+
+    expect(analyzeProductionSource('services/localWorkspace/index.ts', source)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('accesses production localStorage outside approved persistence modules'),
+      ]),
+    );
   });
 
   it('retains exact legacy-key defense inside the preference module', () => {
@@ -2574,6 +2858,16 @@ describe('local workspace static boundary', () => {
     const source = `<script>${buildBrowserPreferencesBundle(root)}</script>`;
 
     expect(analyzeProductionSource('onboarding/index.html', source)).toEqual([]);
+  });
+
+  it('rejects direct storage appended to the generated onboarding preference segment', () => {
+    const source = `<script>${buildBrowserPreferencesBundle(root)}\nwindow.localStorage.getItem('x');</script>`;
+
+    expect(analyzeProductionSource('onboarding/index.html', source)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('accesses production localStorage outside approved persistence modules'),
+      ]),
+    );
   });
 
   it.each([

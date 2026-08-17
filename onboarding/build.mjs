@@ -70,7 +70,7 @@ const walkFiles = (node, out = []) => {
 
 export const flattenTreePaths = (tree) => walkFiles(tree).map(f => f.path);
 
-export const collectVitals = (rootDir, tree) => {
+export const collectVitals = (rootDir, tree, metadata = {}) => {
     const read = (rel) => fs.readFileSync(path.join(rootDir, rel), 'utf8');
     const files = walkFiles(tree);
 
@@ -98,11 +98,13 @@ export const collectVitals = (rootDir, tree) => {
 
     const specs = fs.readdirSync(path.join(rootDir, 'docs/superpowers/specs')).filter(f => f.endsWith('.md')).sort();
 
-    let gitSha = 'unknown';
-    try { gitSha = execSync('git rev-parse --short HEAD', { cwd: rootDir }).toString().trim(); } catch { /* fine */ }
+    let gitSha = metadata.gitSha ?? 'unknown';
+    if (metadata.gitSha === undefined) {
+        try { gitSha = execSync('git rev-parse --short HEAD', { cwd: rootDir }).toString().trim(); } catch { /* fine */ }
+    }
 
     return {
-        generatedAt: new Date().toISOString(), gitSha, testFileCount,
+        generatedAt: metadata.generatedAt ?? new Date().toISOString(), gitSha, testFileCount,
         migrations: { count: ids.length, last: ids[ids.length - 1], ids },
         routes, schemaVersion,
         deps: { runtime: Object.keys(pkg.dependencies).length, dev: Object.keys(pkg.devDependencies).length },
@@ -216,9 +218,9 @@ export const buildContent = async () => {
     return { intro: INTRO, tours: TOURS, codeMap: CODE_MAP, playground: PLAYGROUND };
 };
 
-export const buildData = (rootDir, anchors = []) => {
+export const buildData = (rootDir, anchors = [], metadata = {}) => {
     const tree = scanTree(rootDir);
-    return { tree, vitals: collectVitals(rootDir, tree), excerpts: extractExcerpts(rootDir, anchors) };
+    return { tree, vitals: collectVitals(rootDir, tree, metadata), excerpts: extractExcerpts(rootDir, anchors) };
 };
 
 export const buildRefs = (rootDir) => {

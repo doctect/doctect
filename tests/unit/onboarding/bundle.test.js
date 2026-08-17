@@ -3,7 +3,8 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
-import { REPO_ROOT, stripModuleSyntax, bundleDiffEngine, extractExcerpts, AnchorError }
+import { REPO_ROOT, stripModuleSyntax, bundleDiffEngine, extractExcerpts, AnchorError,
+         assemblePage, buildContent, buildData, buildRuntimeBundle }
     from '../../../onboarding/build.mjs';
 import * as realDiff from '../../../shared/diff.js';
 import { DIFF_SCENARIOS } from './fixtures/diffScenarios.js';
@@ -58,6 +59,35 @@ describe('built page', () => {
         // The declaration, not just the selector: `#boot[hidden] { display: block }`
         // would satisfy a bare selector match and still paint over the whole page.
         expect(html).toMatch(/#boot\[hidden\]\s*\{\s*display:\s*none\s*;?\s*\}/);
+    });
+
+    it('matches a fresh build under normalized timestamp and SHA metadata', async () => {
+        const metadata = {
+            generatedAt: '2000-01-01T00:00:00.000Z',
+            gitSha: 'normalized-sha',
+        };
+        const normalizeMetadata = html => html
+            .replace(
+                /"generatedAt":"[^"]+","gitSha":"[^"]+"/,
+                `"generatedAt":"${metadata.generatedAt}","gitSha":"${metadata.gitSha}"`,
+            )
+            .replace(
+                /<div id="buildinfo">generated [^<]+ @ [^<]+<\/div>/,
+                `<div id="buildinfo">generated ${metadata.generatedAt} @ ${metadata.gitSha}</div>`,
+            );
+        const content = await buildContent();
+        const data = buildData(REPO_ROOT, content.codeMap.anchors, metadata);
+        const rebuilt = assemblePage({
+            style: fs.readFileSync(path.join(REPO_ROOT, 'onboarding/src/style.css'), 'utf8'),
+            runtime: buildRuntimeBundle(REPO_ROOT),
+            dataJson: JSON.stringify(data).replace(/</g, '\\u003c'),
+            contentJson: JSON.stringify(content).replace(/</g, '\\u003c'),
+            diffBundle: bundleDiffEngine(REPO_ROOT),
+            footerHtml: `generated ${data.vitals.generatedAt} @ ${data.vitals.gitSha}`,
+        });
+        const committed = fs.readFileSync(path.join(REPO_ROOT, 'onboarding/index.html'), 'utf8');
+
+        expect(normalizeMetadata(committed)).toBe(rebuilt);
     });
 });
 

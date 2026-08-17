@@ -114,6 +114,7 @@ function generatorEvaluatorMain(maxOutputBytes: number) {
     const trustedArraySort = Array.prototype.sort.call.bind(Array.prototype.sort);
     const trustedNumberIsFinite = Number.isFinite;
     const trustedNumberToString = Number.prototype.toString.call.bind(Number.prototype.toString);
+    const trustedObjectAssign = Object.assign;
     const trustedObjectCreate = Object.create;
     const trustedObjectEntries = Object.entries;
     const trustedObjectFreeze = Object.freeze;
@@ -148,7 +149,7 @@ function generatorEvaluatorMain(maxOutputBytes: number) {
         try {
             Object.defineProperty(workerScope, name, { value: undefined, configurable: false, writable: false });
         } catch {
-            try { workerScope[name] = undefined; } catch { /* CSP remains the network backstop. */ }
+            try { trustedObjectAssign(workerScope, { [name]: undefined }); } catch { /* CSP remains the network backstop. */ }
         }
     }
 
