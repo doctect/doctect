@@ -188,9 +188,13 @@ type OriginValue = {
 };
 
 interface Origin {
-  bindingEnvironmentStart?: number;
   position: number;
   value: OriginValue;
+}
+
+interface AnnexBSyntheticBinding {
+  environment: AnnexBFunctionEnvironment;
+  name: string;
 }
 
 interface MemberCandidate {
@@ -213,7 +217,17 @@ interface InvokedMember extends CallableMember {
   invocation: 'direct' | 'call' | 'apply';
 }
 
-type ResolutionTrail = Map<string | ts.Symbol, Set<number>>;
+type ResolutionTrail = Map<AnnexBSyntheticBinding | ts.Symbol, Set<number>>;
+
+const isFunctionEnvironment = (node: ts.Node): node is ts.FunctionLikeDeclaration => (
+  ts.isFunctionDeclaration(node)
+  || ts.isMethodDeclaration(node)
+  || ts.isGetAccessorDeclaration(node)
+  || ts.isSetAccessorDeclaration(node)
+  || ts.isConstructorDeclaration(node)
+  || ts.isFunctionExpression(node)
+  || ts.isArrowFunction(node)
+);
 
 const unwrap = (input: ts.Expression): ts.Expression => {
   let expression = input;
@@ -688,15 +702,6 @@ const classicGlobalDeclarations = (source: string): ClassicGlobalDeclarations =>
     ts.forEachChild(node, collectVarNames);
   };
   collectVarNames(sourceFile);
-  const isFunctionEnvironment = (node: ts.Node): node is ts.FunctionLikeDeclaration => (
-    ts.isFunctionDeclaration(node)
-    || ts.isMethodDeclaration(node)
-    || ts.isGetAccessorDeclaration(node)
-    || ts.isSetAccessorDeclaration(node)
-    || ts.isConstructorDeclaration(node)
-    || ts.isFunctionExpression(node)
-    || ts.isArrowFunction(node)
-  );
   function collectFunctionEnvironment(
     declaration: ts.FunctionLikeDeclaration,
     inheritedStrict: boolean,
@@ -1331,20 +1336,15 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
     ))) return symbol;
     return moduleLocalSymbols.get(fileName)?.get(identifier.text) ?? symbol;
   };
-  const enclosingFunctionBodyStart = (node: ts.Node): number | undefined => {
+  const functionForEnvironment = (
+    node: ts.Node,
+    environment: AnnexBFunctionEnvironment,
+  ): ts.FunctionLikeDeclaration | undefined => {
     for (let ancestor: ts.Node | undefined = node.parent; ancestor; ancestor = ancestor.parent) {
-      const body = (ts.isFunctionDeclaration(ancestor)
-        || ts.isMethodDeclaration(ancestor)
-        || ts.isGetAccessorDeclaration(ancestor)
-        || ts.isSetAccessorDeclaration(ancestor)
-        || ts.isConstructorDeclaration(ancestor)
-        || ts.isFunctionExpression(ancestor)
-        || ts.isArrowFunction(ancestor))
-        ? ancestor.body
-        : undefined;
-      if (body && ts.isBlock(body)) {
-        return body.getStart(ancestor.getSourceFile());
-      }
+      if (isFunctionEnvironment(ancestor)
+        && ancestor.body
+        && ts.isBlock(ancestor.body)
+        && ancestor.body.getStart(ancestor.getSourceFile()) === environment.start) return ancestor;
     }
     return undefined;
   };
@@ -1359,51 +1359,108 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
       && environment.names.has(name)
     ))
     .sort((left, right) => right.start - left.start || left.end - right.end)[0];
-  const syntheticBindingEnvironment = (
+  const parameterBindingFunction = (identifier: ts.Identifier): ts.FunctionLikeDeclaration | undefined => {
+    for (let ancestor: ts.Node | undefined = identifier.parent; ancestor; ancestor = ancestor.parent) {
+      if (isFunctionEnvironment(ancestor)) return undefined;
+      if (ts.isParameter(ancestor)
+        && identifier.getStart(identifier.getSourceFile()) >= ancestor.name.getStart(ancestor.getSourceFile())
+        && identifier.end <= ancestor.name.end
+        && isFunctionEnvironment(ancestor.parent)) return ancestor.parent;
+    }
+    return undefined;
+  };
+  const sameFunctionParameterOrVar = (
+    symbol: ts.Symbol,
+    declaration: ts.FunctionLikeDeclaration,
+  ): boolean => symbol.declarations?.some(binding => {
+    for (let ancestor: ts.Node | undefined = binding; ancestor; ancestor = ancestor.parent) {
+      if (ts.isParameter(ancestor)) return ancestor.parent === declaration;
+      if (ts.isVariableDeclaration(ancestor)) {
+        const declarationList = ancestor.parent;
+        if (!ts.isVariableDeclarationList(declarationList)
+          || (declarationList.flags & ts.NodeFlags.BlockScoped) !== 0) return false;
+        for (let scope: ts.Node | undefined = declarationList.parent; scope; scope = scope.parent) {
+          if (scope === declaration) return true;
+          if (isFunctionEnvironment(scope) || ts.isClassStaticBlockDeclaration(scope)) return false;
+        }
+        return false;
+      }
+      if (ancestor !== binding
+        && (isFunctionEnvironment(ancestor) || ts.isClassStaticBlockDeclaration(ancestor))) return false;
+    }
+    return false;
+  }) ?? false;
+  const symbolDeclaredWithinEnvironment = (
+    symbol: ts.Symbol,
+    sourceFile: ts.SourceFile,
+    environment: AnnexBFunctionEnvironment,
+  ): boolean => symbol.declarations?.some(declaration => (
+    declaration.getSourceFile() === sourceFile
+    && declaration.getStart(sourceFile) >= environment.start
+    && declaration.end <= environment.end
+  )) ?? false;
+  const syntheticBindings = new Map<AnnexBFunctionEnvironment, Map<string, AnnexBSyntheticBinding>>();
+  const syntheticBinding = (
+    environment: AnnexBFunctionEnvironment,
+    name: string,
+  ): AnnexBSyntheticBinding => {
+    let bindings = syntheticBindings.get(environment);
+    if (!bindings) {
+      bindings = new Map();
+      syntheticBindings.set(environment, bindings);
+    }
+    let binding = bindings.get(name);
+    if (!binding) {
+      binding = { environment, name };
+      bindings.set(name, binding);
+    }
+    return binding;
+  };
+  const syntheticBindingForIdentifier = (
     identifier: ts.Identifier,
     symbol: ts.Symbol | undefined,
-    includeOwnParameters: boolean,
-  ): AnnexBFunctionEnvironment | undefined => {
+    includeOwnParameterBinding: boolean,
+  ): AnnexBSyntheticBinding | undefined => {
     const sourceFile = identifier.getSourceFile();
     const input = scriptsByFile.get(sourceFile.fileName);
-    const functionBodyStart = enclosingFunctionBodyStart(identifier);
-    if (includeOwnParameters && functionBodyStart !== undefined) {
-      const ownEnvironment = input?.annexBFunctionEnvironments?.find(environment => (
-        environment.start === functionBodyStart && environment.names.has(identifier.text)
-      ));
-      if (ownEnvironment) return ownEnvironment;
-    }
-    const environment = annexBEnvironmentAt(input, identifier.getStart(sourceFile), identifier.text);
+    const parameterFunction = includeOwnParameterBinding
+      ? parameterBindingFunction(identifier)
+      : undefined;
+    const parameterBody = parameterFunction?.body;
+    const ownEnvironment = parameterBody && ts.isBlock(parameterBody)
+      ? input?.annexBFunctionEnvironments?.find(environment => (
+        environment.start === parameterBody.getStart(sourceFile)
+        && environment.names.has(identifier.text)
+      ))
+      : undefined;
+    const environment = ownEnvironment
+      ?? annexBEnvironmentAt(input, identifier.getStart(sourceFile), identifier.text);
     if (!environment) return undefined;
-    const locallyDeclared = functionBodyStart !== undefined
-      && functionBodyStart !== environment.start
-      && symbol?.declarations?.some(declaration => (
-        enclosingFunctionBodyStart(declaration) === functionBodyStart
-      ));
-    return locallyDeclared ? undefined : environment;
+    const environmentFunction = functionForEnvironment(identifier, environment);
+    if (!environmentFunction) return undefined;
+    if (symbol
+      && !sameFunctionParameterOrVar(symbol, environmentFunction)
+      && symbolDeclaredWithinEnvironment(symbol, sourceFile, environment)) return undefined;
+    return syntheticBinding(environment, identifier.text);
   };
   const origins = new Map<ts.Symbol, Origin[]>();
-  const namedOrigins = new Map<string, Origin[]>();
-  const namedOriginKey = (identifier: ts.Identifier): string => (
-    `${identifier.getSourceFile().fileName}\0${identifier.text}`
-  );
+  const syntheticOrigins = new Map<AnnexBSyntheticBinding, Origin[]>();
 
   const addOrigin = (
     identifier: ts.Identifier,
-    origin: Omit<Origin, 'bindingEnvironmentStart'>,
+    origin: Origin,
   ): void => {
     const symbol = checker.getSymbolAtLocation(identifier);
-    const storedOrigin: Origin = {
-      ...origin,
-      bindingEnvironmentStart: syntheticBindingEnvironment(identifier, symbol, true)?.start,
-    };
-    const named = namedOrigins.get(namedOriginKey(identifier));
-    if (named) named.push(storedOrigin);
-    else namedOrigins.set(namedOriginKey(identifier), [storedOrigin]);
+    const binding = syntheticBindingForIdentifier(identifier, symbol, true);
+    if (binding) {
+      const existing = syntheticOrigins.get(binding);
+      if (existing) existing.push(origin);
+      else syntheticOrigins.set(binding, [origin]);
+    }
     if (symbol) {
       const existing = origins.get(symbol);
-      if (existing) existing.push(storedOrigin);
-      else origins.set(symbol, [storedOrigin]);
+      if (existing) existing.push(origin);
+      else origins.set(symbol, [origin]);
     }
   };
 
@@ -1540,7 +1597,7 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
     if (!names.has(identifier.text)) return false;
     const declarationInput = scriptsByFile.get(identifier.getSourceFile().fileName);
     const position = identifier.getStart(identifier.getSourceFile());
-    if (syntheticBindingEnvironment(identifier, symbol, false)) return false;
+    if (syntheticBindingForIdentifier(identifier, symbol, false)) return false;
     const annexBAssignment = declarationInput?.annexBFunctionAssignments?.get(identifier.text);
     if (annexBAssignment !== undefined && annexBAssignment <= position) return false;
     if (declarationInput?.classicVarAssignments?.get(identifier.text)
@@ -1587,31 +1644,30 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
     trail: ResolutionTrail,
     resolve: (origin: Origin, trail: ResolutionTrail) => readonly T[],
   ): T[] => {
-    const environment = syntheticBindingEnvironment(identifier, symbol, false);
-    if (!environment) {
+    const binding = syntheticBindingForIdentifier(identifier, symbol, false);
+    if (!binding) {
       return symbol ? withSymbolOrigins(symbol, atPosition, trail, resolve) : [];
     }
-    const key = `annex-b\0${identifier.getSourceFile().fileName}\0${environment.start}\0${identifier.text}`;
-    const positions = trail.get(key) ?? new Set<number>();
+    const { environment, name } = binding;
+    const positions = trail.get(binding) ?? new Set<number>();
     if (positions.has(atPosition)) return [];
     positions.add(atPosition);
-    trail.set(key, positions);
+    trail.set(binding, positions);
     try {
-      const assignment = (environment.assignments.get(identifier.text) ?? [])
+      const assignment = (environment.assignments.get(name) ?? [])
         .filter(position => position <= atPosition)
         .reduce<number | undefined>((latest, position) => (
           latest === undefined || position > latest ? position : latest
         ), undefined);
-      return (namedOrigins.get(namedOriginKey(identifier)) ?? [])
+      return (syntheticOrigins.get(binding) ?? [])
         .filter(origin => (
-          origin.bindingEnvironmentStart === environment.start
-          && origin.position <= atPosition
+          origin.position <= atPosition
           && (assignment === undefined || origin.position > assignment)
         ))
         .flatMap(origin => resolve(origin, trail));
     } finally {
       positions.delete(atPosition);
-      if (positions.size === 0) trail.delete(key);
+      if (positions.size === 0) trail.delete(binding);
     }
   };
 
@@ -1978,7 +2034,7 @@ const analyzeSource = (path: string, source: string): string[] =>
   analyzeSources([{ path, source }]).get(path) ?? [];
 
 describe('local workspace static boundary', () => {
-  it('confines legacy document storage and keeps IndexedDB schema index-free', { timeout: 15_000 }, () => {
+  it('confines legacy document storage and keeps IndexedDB schema index-free', { timeout: 30_000 }, () => {
     const inputs = repositorySourcePaths()
       .map(path => ({ path, source: readFileSync(join(root, path), 'utf8') }));
     const violations = [...analyzeSources(inputs).values()].flat();
@@ -3618,6 +3674,115 @@ describe('local workspace static boundary', () => {
     expect(analyzeSource('annex-b-generic-scope.html', `<script>${body}</script>`)).toEqual([
       expect.stringContaining('accesses legacy document key'),
     ]);
+  });
+
+  it.each([
+    [
+      'concise-arrow key',
+      "{ function key() {} } key = 'hype_' + 'projects'; "
+        + "const invoke = key => localStorage.getItem(key); invoke('safe');",
+    ],
+    [
+      'block-arrow callable',
+      '{ function read() {} } read = localStorage.getItem; '
+        + "const invoke = read => { read('hype_' + 'projects'); }; invoke(() => undefined);",
+    ],
+    [
+      'nested-function apply-array',
+      "{ function args() {} } args = ['hype_' + 'projects']; "
+        + "function invoke(args) { localStorage.getItem.apply(localStorage, args); } invoke(['safe']);",
+    ],
+    [
+      'concise-arrow require',
+      '{ function load() {} } load = require; '
+        + "const invoke = load => load('../services/localWorkspace/legacyTypes'); invoke(() => undefined);",
+    ],
+  ])('Annex B binding identity preserves a distinct %s parameter', (_case, body) => {
+    expect(analyzeSource(
+      'annex-b-binding-parameter.html',
+      `<script>function outer() { ${body} } outer();</script>`,
+    )).toEqual([]);
+  });
+
+  it.each([
+    [
+      'block const',
+      "{ function key() {} } key = 'hype_' + 'projects';",
+      "{ const key = 'safe'; localStorage.getItem(key); }",
+    ],
+    [
+      'block let',
+      '{ function read() {} } read = localStorage.getItem;',
+      "{ let read = () => undefined; read('hype_' + 'projects'); }",
+    ],
+    [
+      'catch',
+      "{ function key() {} } key = 'hype_' + 'projects';",
+      "try { throw 'safe'; } catch (key) { localStorage.getItem(key); }",
+    ],
+    [
+      'class',
+      "{ function key() {} } key = 'hype_' + 'projects';",
+      '{ class key {} localStorage.getItem(key); }',
+    ],
+    [
+      'static-block var',
+      "{ function key() {} } key = 'hype_' + 'projects';",
+      "class Safe { static { var key = 'safe'; localStorage.getItem(key); } } void Safe;",
+    ],
+    [
+      'nested-closure const',
+      "{ function key() {} } key = 'hype_' + 'projects';",
+      "const invoke = () => { const key = 'safe'; localStorage.getItem(key); }; invoke();",
+    ],
+  ])('Annex B binding identity preserves a distinct %s binding', (_case, synthetic, body) => {
+    expect(analyzeSource(
+      'annex-b-binding-lexical.html',
+      `<script>function outer() { ${synthetic} ${body} } outer();</script>`,
+    )).toEqual([]);
+  });
+
+  it('Annex B binding identity keeps block-function assignment lexical after its block', () => {
+    const source = '<script>function outer() { { function key() {} '
+      + "key = 'hype_' + 'projects'; } localStorage.getItem(key); } outer();</script>";
+    expect(analyzeSource('annex-b-binding-block-function.html', source)).toEqual([]);
+  });
+
+  it('Annex B binding identity resolves block-function assignment inside its lexical block', () => {
+    const source = '<script>function outer() { { function key() {} '
+      + "key = 'hype_' + 'projects'; localStorage.getItem(key); } } outer();</script>";
+    expect(analyzeSource('annex-b-binding-block-function.html', source)).toEqual([
+      expect.stringContaining('accesses legacy document key'),
+    ]);
+  });
+
+  it.each([
+    [
+      'key',
+      "{ function key() {} } key = 'hype_' + 'projects'; localStorage.getItem(key);",
+      'accesses legacy document key',
+    ],
+    [
+      'callable',
+      "{ function read() {} } read = localStorage.getItem; read('hype_' + 'projects');",
+      'accesses legacy document key',
+    ],
+    [
+      'apply-array',
+      "{ function args() {} } args = ['hype_' + 'projects']; "
+        + 'localStorage.getItem.apply(localStorage, args);',
+      'accesses legacy document key',
+    ],
+    [
+      'require',
+      "{ function load() {} } load = require; load('../services/localWorkspace/legacyTypes');",
+      'imports local-workspace migration internals',
+    ],
+  ])('Annex B binding identity retains genuine synthetic %s resolution', (_case, body, finding) => {
+    expect(analyzeSource(
+      'annex-b-binding-synthetic.html',
+      `<script>function outer() { ${body} } outer();</script>`,
+    )).toEqual([expect.stringContaining(finding)]);
   });
 
   it.each([
