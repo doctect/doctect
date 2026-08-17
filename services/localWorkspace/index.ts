@@ -1,10 +1,7 @@
 import { createBlankProject } from '../presets';
-import {
-  createLocalWorkspaceStore,
-  type LocalWorkspaceEnvironment,
-} from './LocalWorkspaceStore';
+import { createLocalWorkspaceStore } from './LocalWorkspaceStore';
 
-const browserEnvironment: LocalWorkspaceEnvironment = {
+export const localWorkspaceStore = createLocalWorkspaceStore({
   get indexedDB() {
     return window.indexedDB;
   },
@@ -23,10 +20,8 @@ const browserEnvironment: LocalWorkspaceEnvironment = {
   now: () => new Date().toISOString(),
   randomUUID: () => globalThis.crypto.randomUUID(),
   createBlankProject,
-};
+});
 
 export { createLocalWorkspaceStore } from './LocalWorkspaceStore';
 export type { LocalWorkspaceEnvironment } from './LocalWorkspaceStore';
 export * from './contracts';
-
-export const localWorkspaceStore = createLocalWorkspaceStore(browserEnvironment);

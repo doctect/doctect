@@ -51,6 +51,23 @@ describe('bundleDiffEngine parity', () => {
 });
 
 describe('built page', () => {
+    const metadata = {
+        generatedAt: '2000-01-01T00:00:00.000Z',
+        gitSha: 'normalized-sha',
+    };
+    const buildPage = async rootDir => {
+        const content = await buildContent();
+        const data = buildData(rootDir, content.codeMap.anchors, metadata);
+        return assemblePage({
+            style: fs.readFileSync(path.join(rootDir, 'onboarding/src/style.css'), 'utf8'),
+            runtime: buildRuntimeBundle(rootDir),
+            dataJson: JSON.stringify(data).replace(/</g, '\\u003c'),
+            contentJson: JSON.stringify(content).replace(/</g, '\\u003c'),
+            diffBundle: bundleDiffEngine(rootDir),
+            footerHtml: `generated ${data.vitals.generatedAt} @ ${data.vitals.gitSha}`,
+        });
+    };
+
     // A `display` rule on #boot beats the UA sheet's `[hidden] { display: none }`
     // on cascade origin, so hiding the overlay in JS is not enough: without this
     // rule the finished page ships a full-screen overlay over everything.
@@ -62,10 +79,6 @@ describe('built page', () => {
     });
 
     it('matches a fresh build under normalized timestamp and SHA metadata', async () => {
-        const metadata = {
-            generatedAt: '2000-01-01T00:00:00.000Z',
-            gitSha: 'normalized-sha',
-        };
         const normalizeMetadata = html => html
             .replace(
                 /"generatedAt":"[^"]+","gitSha":"[^"]+"/,
@@ -75,19 +88,17 @@ describe('built page', () => {
                 /<div id="buildinfo">generated [^<]+ @ [^<]+<\/div>/,
                 `<div id="buildinfo">generated ${metadata.generatedAt} @ ${metadata.gitSha}</div>`,
             );
-        const content = await buildContent();
-        const data = buildData(REPO_ROOT, content.codeMap.anchors, metadata);
-        const rebuilt = assemblePage({
-            style: fs.readFileSync(path.join(REPO_ROOT, 'onboarding/src/style.css'), 'utf8'),
-            runtime: buildRuntimeBundle(REPO_ROOT),
-            dataJson: JSON.stringify(data).replace(/</g, '\\u003c'),
-            contentJson: JSON.stringify(content).replace(/</g, '\\u003c'),
-            diffBundle: bundleDiffEngine(REPO_ROOT),
-            footerHtml: `generated ${data.vitals.generatedAt} @ ${data.vitals.gitSha}`,
-        });
+        const rebuilt = await buildPage(REPO_ROOT);
         const committed = fs.readFileSync(path.join(REPO_ROOT, 'onboarding/index.html'), 'utf8');
 
         expect(normalizeMetadata(committed)).toBe(rebuilt);
+    });
+
+    it('builds byte-identically through an alternate checkout root name', async () => {
+        const alternateRoot = '/proc/self/cwd';
+        expect(fs.realpathSync(alternateRoot)).toBe(fs.realpathSync(REPO_ROOT));
+
+        expect(await buildPage(alternateRoot)).toBe(await buildPage(REPO_ROOT));
     });
 });
 

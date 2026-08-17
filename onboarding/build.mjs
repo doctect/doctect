@@ -9,6 +9,7 @@ import ts from 'typescript';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = path.resolve(HERE, '..');
+export const REPOSITORY_DISPLAY_NAME = 'doctect';
 
 // Basenames excluded anywhere; paths (with '/') excluded at that exact repo-relative path.
 export const SCAN_EXCLUDES = [
@@ -42,7 +43,7 @@ const skipIfGone = (fn) => {
 
 export const scanTree = (rootDir, relPath = '') => {
     const abs = path.join(rootDir, relPath);
-    const name = relPath === '' ? path.basename(rootDir) : path.basename(relPath);
+    const name = relPath === '' ? REPOSITORY_DISPLAY_NAME : path.basename(relPath);
     const stat = skipIfGone(() => fs.statSync(abs));
     if (stat === GONE) return null;
     if (stat.isDirectory()) {

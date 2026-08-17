@@ -68,6 +68,14 @@ const scriptKinds = new Map<string, ts.ScriptKind>([
 ]);
 const storageMutators = new Set(['setItem', 'removeItem', 'clear']);
 const keyedStorageMethods = new Set(['getItem', 'setItem', 'removeItem']);
+const browserGlobalNames = new Set(['window', 'globalThis', 'self']);
+const knownNonStorageBrowserGlobalProperties = new Set([
+  'Reflect',
+  'globalThis',
+  'location',
+  'self',
+  'window',
+]);
 const staticStringCandidateLimit = 256;
 const staticStringOverflow = '\0doctect-static-string-overflow';
 const staticStringListOverflow = Symbol('static-string-list-overflow');
@@ -1897,25 +1905,61 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
     return [];
   };
 
+  const directMemberName = (input: ts.Expression): string | undefined => {
+    const expression = unwrap(input);
+    if (ts.isPropertyAccessExpression(expression)) return expression.name.text;
+    if (!ts.isElementAccessExpression(expression) || !expression.argumentExpression) {
+      return undefined;
+    }
+    const argument = unwrap(expression.argumentExpression);
+    return ts.isStringLiteralLike(argument) ? argument.text : undefined;
+  };
+
+  const directMemberReceiver = (input: ts.Expression): ts.Expression | undefined => {
+    const expression = unwrap(input);
+    return ts.isPropertyAccessExpression(expression) || ts.isElementAccessExpression(expression)
+      ? expression.expression
+      : undefined;
+  };
+
+  const directStringLiteral = (input: ts.Expression | undefined): string | undefined => {
+    if (!input) return undefined;
+    const expression = unwrap(input);
+    return ts.isStringLiteralLike(expression) ? expression.text : undefined;
+  };
+
+  const directPropertyName = (name: ts.PropertyName): string | undefined => {
+    if (ts.isIdentifier(name) || ts.isStringLiteralLike(name)) return name.text;
+    return ts.isComputedPropertyName(name)
+      ? directStringLiteral(name.expression)
+      : undefined;
+  };
+
   const isGlobalObject = (
     input: ts.Expression,
     atPosition: number,
     trail: ResolutionTrail = new Map(),
   ): boolean => {
     const expression = unwrap(input);
-    if (!ts.isIdentifier(expression)) return false;
-    const symbol = identifierSymbol(expression);
-    if (isUnshadowedGlobal(
-      expression,
-      symbol,
-      new Set(['window', 'globalThis', 'self']),
-    )) return true;
-    return withIdentifierOrigins(expression, symbol, atPosition, trail, (origin, nextTrail) => (
-      origin.value.kind === 'expression'
-        && isGlobalObject(origin.value.expression, origin.position, nextTrail)
-        ? [true]
-        : []
-    )).length > 0;
+    if (ts.isIdentifier(expression)) {
+      const symbol = identifierSymbol(expression);
+      if (isUnshadowedGlobal(expression, symbol, browserGlobalNames)) return true;
+      return withIdentifierOrigins(expression, symbol, atPosition, trail, (origin, nextTrail) => {
+        if (origin.value.kind === 'expression') {
+          return isGlobalObject(origin.value.expression, origin.position, nextTrail) ? [true] : [];
+        }
+        const name = directPropertyName(origin.value.propertyName);
+        return name && browserGlobalNames.has(name)
+          && isGlobalObject(origin.value.receiver, origin.position, nextTrail)
+          ? [true]
+          : [];
+      }).length > 0;
+    }
+    const name = directMemberName(expression);
+    const receiver = directMemberReceiver(expression);
+    return Boolean(name && receiver
+      && browserGlobalNames.has(name)
+      && isGlobalObject(receiver, atPosition, trail));
   };
 
   const isReflectObject = (
@@ -1924,15 +1968,23 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
     trail: ResolutionTrail = new Map(),
   ): boolean => {
     const expression = unwrap(input);
-    if (!ts.isIdentifier(expression)) return false;
-    const symbol = identifierSymbol(expression);
-    if (isUnshadowedGlobal(expression, symbol, new Set(['Reflect']))) return true;
-    return withIdentifierOrigins(expression, symbol, atPosition, trail, (origin, nextTrail) => (
-      origin.value.kind === 'expression'
-        && isReflectObject(origin.value.expression, origin.position, nextTrail)
-        ? [true]
-        : []
-    )).length > 0;
+    if (ts.isIdentifier(expression)) {
+      const symbol = identifierSymbol(expression);
+      if (isUnshadowedGlobal(expression, symbol, new Set(['Reflect']))) return true;
+      return withIdentifierOrigins(expression, symbol, atPosition, trail, (origin, nextTrail) => {
+        if (origin.value.kind === 'expression') {
+          return isReflectObject(origin.value.expression, origin.position, nextTrail) ? [true] : [];
+        }
+        return directPropertyName(origin.value.propertyName) === 'Reflect'
+          && isGlobalObject(origin.value.receiver, origin.position, nextTrail)
+          ? [true]
+          : [];
+      }).length > 0;
+    }
+    const receiver = directMemberReceiver(expression);
+    return directMemberName(expression) === 'Reflect'
+      && receiver !== undefined
+      && isGlobalObject(receiver, atPosition, trail);
   };
 
   const isLocalStorage = (
@@ -2114,13 +2166,40 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
     return argument ? [{ expression: argument, position: atPosition }] : [];
   };
 
+  const invocationPropertyArgument = (
+    call: ts.CallExpression,
+    invoked: InvokedMember,
+  ): ts.Expression | undefined => {
+    if (invoked.boundArguments.length > 1) return invoked.boundArguments[1].expression;
+    if (invoked.invocation === 'apply') {
+      const argumentArray = call.arguments[1];
+      const unwrappedArray = argumentArray ? unwrap(argumentArray) : undefined;
+      return unwrappedArray && ts.isArrayLiteralExpression(unwrappedArray)
+        ? unwrappedArray.elements[1] && ts.isExpression(unwrappedArray.elements[1])
+          ? unwrappedArray.elements[1]
+          : undefined
+        : undefined;
+    }
+    const actualOffset = invoked.invocation === 'call' ? 1 : 0;
+    const propertyOffset = invoked.boundArguments.length === 1 ? 0 : 1;
+    return call.arguments[actualOffset + propertyOffset];
+  };
+
   const privateConstInitializer = (
     sourceFile: ts.SourceFile,
     name: string,
   ): ts.Expression | undefined => {
+    const containsIdentifier = (node: ts.Node): boolean => {
+      if (ts.isIdentifier(node) && node.text === name) return true;
+      let found = false;
+      ts.forEachChild(node, child => {
+        if (!found && containsIdentifier(child)) found = true;
+      });
+      return found;
+    };
     const exported = sourceFile.statements.some(statement => {
       if (ts.isExportAssignment(statement)) {
-        return ts.isIdentifier(statement.expression) && statement.expression.text === name;
+        return containsIdentifier(statement.expression);
       }
       if (!ts.isExportDeclaration(statement)
         || !statement.exportClause
@@ -2141,85 +2220,191 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
     return matches.length === 1 ? matches[0].initializer : undefined;
   };
 
-  const browserPreferenceStorageApproval = (
+  type FallbackKind = 'null' | 'false';
+
+  const isFallbackExpression = (expression: ts.Expression, fallback: FallbackKind): boolean => (
+    expression.kind === (fallback === 'null'
+      ? ts.SyntaxKind.NullKeyword
+      : ts.SyntaxKind.FalseKeyword)
+  );
+
+  const isFallbackReturn = (statement: ts.Statement, fallback: FallbackKind): boolean => (
+    ts.isReturnStatement(statement)
+    && statement.expression !== undefined
+    && isFallbackExpression(statement.expression, fallback)
+  );
+
+  const privateArrowBody = (
     sourceFile: ts.SourceFile,
-  ): ts.PropertyAccessExpression | undefined => {
-    const initializer = privateConstInitializer(sourceFile, 'storageFor');
-    if (!initializer || !ts.isArrowFunction(initializer) || !ts.isBlock(initializer.body)) {
-      return undefined;
-    }
-    const tryStatements = initializer.body.statements.filter(ts.isTryStatement);
-    if (tryStatements.length !== 1 || tryStatements[0].tryBlock.statements.length !== 1) {
-      return undefined;
-    }
-    const returnStatement = tryStatements[0].tryBlock.statements[0];
-    if (!ts.isReturnStatement(returnStatement) || !returnStatement.expression) return undefined;
-    const conditional = unwrap(returnStatement.expression);
-    if (!ts.isConditionalExpression(conditional)
-      || conditional.whenTrue.kind !== ts.SyntaxKind.NullKeyword) return undefined;
-    const condition = unwrap(conditional.condition);
-    if (!ts.isBinaryExpression(condition)
-      || condition.operatorToken.kind !== ts.SyntaxKind.EqualsEqualsEqualsToken
-      || !ts.isTypeOfExpression(condition.left)
-      || !ts.isIdentifier(condition.left.expression)
-      || condition.left.expression.text !== 'window'
-      || !ts.isStringLiteralLike(condition.right)
-      || condition.right.text !== 'undefined') return undefined;
-    const fallback = unwrap(conditional.whenFalse);
-    if (!ts.isBinaryExpression(fallback)
-      || fallback.operatorToken.kind !== ts.SyntaxKind.QuestionQuestionToken
-      || fallback.right.kind !== ts.SyntaxKind.NullKeyword) return undefined;
-    const storage = unwrap(fallback.left);
-    return ts.isPropertyAccessExpression(storage)
-      && ts.isIdentifier(storage.expression)
-      && storage.expression.text === 'window'
-      && storage.name.text === 'localStorage'
-      ? storage
-      : undefined;
+    name: string,
+    parameters: readonly string[],
+  ): ts.Block | undefined => {
+    const initializer = privateConstInitializer(sourceFile, name);
+    if (!initializer
+      || !ts.isArrowFunction(initializer)
+      || !ts.isBlock(initializer.body)
+      || initializer.parameters.length !== parameters.length
+      || initializer.parameters.some((parameter, index) => (
+        !ts.isIdentifier(parameter.name)
+        || parameter.name.text !== parameters[index]
+        || parameter.initializer !== undefined
+        || parameter.dotDotDotToken !== undefined
+      ))) return undefined;
+    return initializer.body;
   };
 
-  const localWorkspaceStorageApproval = (
-    sourceFile: ts.SourceFile,
+  const isRuntimeKeyGuard = (
+    statement: ts.Statement,
+    fallback: FallbackKind,
+  ): boolean => {
+    if (!ts.isIfStatement(statement)
+      || statement.elseStatement !== undefined
+      || !isFallbackReturn(statement.thenStatement, fallback)) return false;
+    const condition = unwrap(statement.expression);
+    if (!ts.isPrefixUnaryExpression(condition)
+      || condition.operator !== ts.SyntaxKind.ExclamationToken) return false;
+    const call = unwrap(condition.operand);
+    return ts.isCallExpression(call)
+      && ts.isIdentifier(call.expression)
+      && call.expression.text === 'isRuntimeBrowserPreferenceKey'
+      && call.arguments.length === 1
+      && ts.isIdentifier(call.arguments[0])
+      && call.arguments[0].text === 'key';
+  };
+
+  const isWindowGuard = (
+    statement: ts.Statement,
+    fallback: FallbackKind,
+  ): boolean => {
+    if (!ts.isIfStatement(statement)
+      || statement.elseStatement !== undefined
+      || !isFallbackReturn(statement.thenStatement, fallback)) return false;
+    const condition = unwrap(statement.expression);
+    return ts.isBinaryExpression(condition)
+      && condition.operatorToken.kind === ts.SyntaxKind.EqualsEqualsEqualsToken
+      && ts.isTypeOfExpression(condition.left)
+      && ts.isIdentifier(condition.left.expression)
+      && condition.left.expression.text === 'window'
+      && ts.isStringLiteralLike(condition.right)
+      && condition.right.text === 'undefined';
+  };
+
+  const exactStorageCall = (
+    expression: ts.Expression,
+    method: string,
+    argumentNames: readonly string[],
   ): ts.CallExpression | undefined => {
-    const initializer = privateConstInitializer(sourceFile, 'browserEnvironment');
-    if (!initializer || !ts.isObjectLiteralExpression(initializer)) return undefined;
-    const legacyStorage = initializer.properties.filter(property => (
-      ts.isPropertyAssignment(property)
-      && ts.isIdentifier(property.name)
-      && property.name.text === 'legacyStorage'
-      && ts.isObjectLiteralExpression(property.initializer)
-    ));
-    if (legacyStorage.length !== 1 || !ts.isPropertyAssignment(legacyStorage[0])) return undefined;
-    const legacyObject = legacyStorage[0].initializer;
-    if (!ts.isObjectLiteralExpression(legacyObject)) return undefined;
-    const getItems = legacyObject.properties.filter(property => (
-      ts.isMethodDeclaration(property)
-      && ts.isIdentifier(property.name)
-      && property.name.text === 'getItem'
-    ));
-    if (getItems.length !== 1 || !ts.isMethodDeclaration(getItems[0])) return undefined;
-    const getItem = getItems[0];
-    if (!getItem.body || getItem.body.statements.length !== 1
-      || getItem.parameters.length !== 1
-      || !ts.isIdentifier(getItem.parameters[0].name)
-      || getItem.parameters[0].name.text !== 'key') return undefined;
-    const returnStatement = getItem.body.statements[0];
-    if (!ts.isReturnStatement(returnStatement)
-      || !returnStatement.expression
-      || !ts.isCallExpression(returnStatement.expression)) return undefined;
-    const call = returnStatement.expression;
-    if (call.arguments.length !== 1
-      || !ts.isIdentifier(call.arguments[0])
-      || call.arguments[0].text !== 'key'
-      || !ts.isPropertyAccessExpression(call.expression)
-      || call.expression.name.text !== 'getItem') return undefined;
-    const storage = call.expression.expression;
+    const call = unwrap(expression);
+    if (!ts.isCallExpression(call)
+      || call.arguments.length !== argumentNames.length
+      || call.arguments.some((argument, index) => (
+        !ts.isIdentifier(argument) || argument.text !== argumentNames[index]
+      ))) return undefined;
+    const member = unwrap(call.expression);
+    if (!ts.isPropertyAccessExpression(member) || member.name.text !== method) return undefined;
+    const storage = unwrap(member.expression);
     return ts.isPropertyAccessExpression(storage)
       && ts.isIdentifier(storage.expression)
       && storage.expression.text === 'window'
       && storage.name.text === 'localStorage'
       ? call
       : undefined;
+  };
+
+  const hasExactCatch = (statement: ts.TryStatement, fallback: FallbackKind): boolean => (
+    statement.finallyBlock === undefined
+    && statement.catchClause !== undefined
+    && statement.catchClause.variableDeclaration === undefined
+    && statement.catchClause.block.statements.length === 1
+    && isFallbackReturn(statement.catchClause.block.statements[0], fallback)
+  );
+
+  const browserPreferenceStorageApprovals = (
+    sourceFile: ts.SourceFile,
+  ): ts.CallExpression[] => {
+    const readBody = privateArrowBody(sourceFile, 'readRuntimeBrowserPreference', ['key']);
+    const writeBody = privateArrowBody(sourceFile, 'writeRuntimeBrowserPreference', ['key', 'value']);
+    if (!readBody || !writeBody
+      || readBody.statements.length !== 2
+      || writeBody.statements.length !== 2
+      || !isRuntimeKeyGuard(readBody.statements[0], 'null')
+      || !isRuntimeKeyGuard(writeBody.statements[0], 'false')) return [];
+
+    const readTry = readBody.statements[1];
+    const writeTry = writeBody.statements[1];
+    if (!ts.isTryStatement(readTry)
+      || !ts.isTryStatement(writeTry)
+      || !hasExactCatch(readTry, 'null')
+      || !hasExactCatch(writeTry, 'false')
+      || readTry.tryBlock.statements.length !== 2
+      || writeTry.tryBlock.statements.length !== 3
+      || !isWindowGuard(readTry.tryBlock.statements[0], 'null')
+      || !isWindowGuard(writeTry.tryBlock.statements[0], 'false')) return [];
+
+    const readReturn = readTry.tryBlock.statements[1];
+    const writeExpression = writeTry.tryBlock.statements[1];
+    const writeReturn = writeTry.tryBlock.statements[2];
+    if (!ts.isReturnStatement(readReturn)
+      || !readReturn.expression
+      || !ts.isExpressionStatement(writeExpression)
+      || !ts.isReturnStatement(writeReturn)
+      || writeReturn.expression?.kind !== ts.SyntaxKind.TrueKeyword) return [];
+    const readCall = exactStorageCall(readReturn.expression, 'getItem', ['key']);
+    const writeCall = exactStorageCall(writeExpression.expression, 'setItem', ['key', 'value']);
+    return readCall && writeCall ? [readCall, writeCall] : [];
+  };
+
+  const exportedConstInitializer = (
+    sourceFile: ts.SourceFile,
+    name: string,
+  ): ts.Expression | undefined => {
+    const matches = sourceFile.statements.flatMap(statement => {
+      if (!ts.isVariableStatement(statement)
+        || !statement.modifiers?.some(modifier => modifier.kind === ts.SyntaxKind.ExportKeyword)
+        || (statement.declarationList.flags & ts.NodeFlags.Const) === 0) return [];
+      return statement.declarationList.declarations.filter(declaration => (
+        ts.isIdentifier(declaration.name) && declaration.name.text === name
+      ));
+    });
+    return matches.length === 1 ? matches[0].initializer : undefined;
+  };
+
+  const localWorkspaceStorageApprovals = (
+    sourceFile: ts.SourceFile,
+  ): ts.CallExpression[] => {
+    const initializer = exportedConstInitializer(sourceFile, 'localWorkspaceStore');
+    const storeCall = initializer ? unwrap(initializer) : undefined;
+    if (!storeCall
+      || !ts.isCallExpression(storeCall)
+      || !ts.isIdentifier(storeCall.expression)
+      || storeCall.expression.text !== 'createLocalWorkspaceStore'
+      || storeCall.arguments.length !== 1) return [];
+    const environment = unwrap(storeCall.arguments[0]);
+    if (!ts.isObjectLiteralExpression(environment)) return [];
+    const legacyStorage = environment.properties.filter(property => (
+      ts.isPropertyAssignment(property)
+      && ts.isIdentifier(property.name)
+      && property.name.text === 'legacyStorage'
+      && ts.isObjectLiteralExpression(property.initializer)
+    ));
+    if (legacyStorage.length !== 1 || !ts.isPropertyAssignment(legacyStorage[0])) return [];
+    const legacyObject = legacyStorage[0].initializer;
+    if (!ts.isObjectLiteralExpression(legacyObject)) return [];
+    const getItems = legacyObject.properties.filter(property => (
+      ts.isMethodDeclaration(property)
+      && ts.isIdentifier(property.name)
+      && property.name.text === 'getItem'
+    ));
+    if (getItems.length !== 1 || !ts.isMethodDeclaration(getItems[0])) return [];
+    const getItem = getItems[0];
+    if (!getItem.body || getItem.body.statements.length !== 1
+      || getItem.parameters.length !== 1
+      || !ts.isIdentifier(getItem.parameters[0].name)
+      || getItem.parameters[0].name.text !== 'key') return [];
+    const returnStatement = getItem.body.statements[0];
+    if (!ts.isReturnStatement(returnStatement) || !returnStatement.expression) return [];
+    const call = exactStorageCall(returnStatement.expression, 'getItem', ['key']);
+    return call ? [call] : [];
   };
 
   const isLegacyTypesModule = (specifier: string): boolean => {
@@ -2246,16 +2431,17 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
     const bundledPreferenceEnd = bundledPreferenceStart === -1
       ? -1
       : bundledPreferenceStart + approvedBrowserPreferencesBundle!.length;
-    const exactStorageApproval = policyPath === 'services/browserPreferences.ts'
-      ? browserPreferenceStorageApproval(sourceFile)
+    const exactStorageApprovals = policyPath === 'services/browserPreferences.ts'
+      ? browserPreferenceStorageApprovals(sourceFile)
       : policyPath === 'services/localWorkspace/index.ts'
-        ? localWorkspaceStorageApproval(sourceFile)
-        : undefined;
+        ? localWorkspaceStorageApprovals(sourceFile)
+        : [];
     const directStorageApprovedAt = (node: ts.Node): boolean => (
       (
-        exactStorageApproval !== undefined
-        && node.getStart(sourceFile) >= exactStorageApproval.getStart(sourceFile)
-        && node.end <= exactStorageApproval.end
+        exactStorageApprovals.some(approval => (
+          node.getStart(sourceFile) >= approval.getStart(sourceFile)
+          && node.end <= approval.end
+        ))
       )
       || (
         bundledPreferenceStart !== -1
@@ -2334,6 +2520,13 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
     };
 
     const inspectNode = (node: ts.Node): void => {
+      if (ts.isExpressionWithTypeArguments(node)
+        && ts.isHeritageClause(node.parent)
+        && node.parent.token === ts.SyntaxKind.ExtendsKeyword
+        && (ts.isClassDeclaration(node.parent.parent) || ts.isClassExpression(node.parent.parent))) {
+        inspectNode(node.expression);
+        return;
+      }
       if (ts.isTypeNode(node)) return;
       const inAnalysisSegment = node.getStart(sourceFile) >= (input.analysisStart ?? 0);
       if (!inAnalysisSegment) {
@@ -2351,19 +2544,22 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
         }
 
         const invoked = invokedMembers(node);
-        if (enforceDirectStorageBoundary
-          && !directStorageApprovedAt(node)
-          && (
-            invoked.some(member => member.localStorage)
-            || invoked.some(member => (
-              member.reflect
-              && matchesStaticCandidate(member.method, 'get')
-              && firstInvocationArguments(node, member).some(argument => (
-                isGlobalObject(argument.expression, argument.position)
-              ))
+        if (enforceDirectStorageBoundary && !directStorageApprovedAt(node)) {
+          const reflectGlobalGets = invoked.filter(member => (
+            member.reflect
+            && matchesStaticCandidate(member.method, 'get')
+            && firstInvocationArguments(node, member).some(argument => (
+              isGlobalObject(argument.expression, argument.position)
             ))
-          )) {
-          reportDirectStorage(node);
+          ));
+          if (invoked.some(member => member.localStorage)
+            || reflectGlobalGets.some(member => (
+              directStringLiteral(invocationPropertyArgument(node, member)) === 'localStorage'
+            ))) {
+            reportDirectStorage(node);
+          } else if (reflectGlobalGets.length > 0) {
+            report(node, 'uses Reflect.get on a browser global outside approved persistence modules');
+          }
         }
         let expansionReported = false;
         const reportExpansion = (): void => {
@@ -2402,11 +2598,24 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
         }
       } else if (enforceDirectStorageBoundary
         && !directStorageApprovedAt(node)
+        && ts.isElementAccessExpression(node)
+        && isReflectObject(node.expression, node.getStart(sourceFile))) {
+        report(node, 'uses computed Reflect member access outside approved persistence modules');
+      } else if (enforceDirectStorageBoundary
+        && !directStorageApprovedAt(node)
+        && ts.isElementAccessExpression(node)
+        && isGlobalObject(node.expression, node.getStart(sourceFile))) {
+        const property = directStringLiteral(node.argumentExpression);
+        if (property === 'localStorage') {
+          reportDirectStorage(node);
+        } else if (property === undefined
+          || !knownNonStorageBrowserGlobalProperties.has(property)) {
+          report(node, 'uses dynamic browser-global property access outside approved persistence modules');
+        }
+      } else if (enforceDirectStorageBoundary
+        && !directStorageApprovedAt(node)
         && (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node))
         && (
-          (ts.isElementAccessExpression(node)
-            && isGlobalObject(node.expression, node.getStart(sourceFile)))
-          ||
           isLocalStorage(node, node.getStart(sourceFile))
           || isLocalStorage(node.expression, node.getStart(sourceFile))
         )) {
@@ -2673,7 +2882,82 @@ describe('local workspace static boundary', () => {
     ],
   ])('rejects %s without reconstructing its property key', (_case, path, source) => {
     expect(analyzeProductionSource(path, source)).toEqual(expect.arrayContaining([
-      expect.stringContaining('accesses production localStorage outside approved persistence modules'),
+      expect.stringContaining('uses dynamic browser-global property access outside approved persistence modules'),
+    ]));
+  });
+
+  it.each([
+    [
+      'a window.window alias',
+      'components/QualifiedWindowAlias.ts',
+      'const browser = window.window; void browser[suppliedProperty];',
+      'uses dynamic browser-global property access outside approved persistence modules',
+    ],
+    [
+      'a globalThis.self alias',
+      'components/QualifiedSelfAlias.ts',
+      'const browser = globalThis.self; void browser[suppliedProperty];',
+      'uses dynamic browser-global property access outside approved persistence modules',
+    ],
+    [
+      'a destructured qualified window alias',
+      'components/DestructuredQualifiedWindowAlias.ts',
+      'const { window: browser } = globalThis; void browser[suppliedProperty];',
+      'uses dynamic browser-global property access outside approved persistence modules',
+    ],
+    [
+      'a globalThis.Reflect alias',
+      'components/QualifiedReflectAlias.ts',
+      'const reflection = globalThis.Reflect; reflection.get(window, suppliedProperty);',
+      'uses Reflect.get on a browser global outside approved persistence modules',
+    ],
+    [
+      'a destructured qualified Reflect alias',
+      'components/DestructuredQualifiedReflectAlias.ts',
+      'const { Reflect: reflection } = window; reflection.get(globalThis, suppliedProperty);',
+      'uses Reflect.get on a browser global outside approved persistence modules',
+    ],
+    [
+      'an aliased window.Reflect.get and qualified target',
+      'components/QualifiedReflectGetAlias.ts',
+      'const reflection = window.Reflect; const get = reflection.get; get(globalThis.self, suppliedProperty);',
+      'uses Reflect.get on a browser global outside approved persistence modules',
+    ],
+  ])('rejects dynamic browser access through %s', (_case, path, source, message) => {
+    expect(analyzeProductionSource(path, source)).toEqual(expect.arrayContaining([
+      expect.stringContaining(message),
+    ]));
+  });
+
+  it.each([
+    [
+      'a mutated Reflect method key',
+      'components/MutatedReflectMethod.ts',
+      "const method = ['safe']; method.join = () => 'get'; Reflect[method.join('')](window, suppliedProperty);",
+    ],
+    [
+      'a coercing Reflect method key',
+      'components/CoercingReflectMethod.ts',
+      "Reflect[{ toString() { return 'get'; } }](window, suppliedProperty);",
+    ],
+    [
+      'an unknown qualified Reflect method',
+      'components/QualifiedComputedReflect.ts',
+      'globalThis.Reflect[suppliedMethod](window, suppliedProperty);',
+    ],
+    [
+      'an aliased qualified Reflect method',
+      'components/AliasedComputedReflect.ts',
+      'const reflection = window.Reflect; reflection[suppliedMethod](window, suppliedProperty);',
+    ],
+    [
+      'a known computed Reflect method',
+      'components/KnownComputedReflect.ts',
+      "const ownKeys = Reflect['ownKeys']; void ownKeys;",
+    ],
+  ])('rejects computed member acquisition through %s', (_case, path, source) => {
+    expect(analyzeProductionSource(path, source)).toEqual(expect.arrayContaining([
+      expect.stringContaining('uses computed Reflect member access outside approved persistence modules'),
     ]));
   });
 
@@ -2735,7 +3019,7 @@ describe('local workspace static boundary', () => {
     ],
   ])('rejects %s from its browser-global target alone', (_case, path, source) => {
     expect(analyzeProductionSource(path, source)).toEqual(expect.arrayContaining([
-      expect.stringContaining('accesses production localStorage outside approved persistence modules'),
+      expect.stringContaining('uses Reflect.get on a browser global outside approved persistence modules'),
     ]));
   });
 
@@ -2743,9 +3027,24 @@ describe('local workspace static boundary', () => {
     ['components/ReflectOwnKeys.ts', 'Reflect.ownKeys(globalThis);'],
     ['components/ReflectErrorName.ts', "Reflect.get(error, 'name');"],
     ['components/AliasedReflectErrorName.ts', "const get = Reflect.get; get(error, suppliedProperty);"],
+    ['components/QualifiedReflectErrorName.ts', "const reflection = globalThis.Reflect; reflection.get(error, 'name');"],
     ['components/ComputedObject.ts', 'void suppliedObject[suppliedProperty];'],
+    ['components/KnownGlobalLocation.ts', "void window['location'];"],
+    ['components/QualifiedGlobalLocation.ts', 'const browser = window.window; void browser.location;'],
   ])('preserves unrelated reflection and non-global computation in %s', (path, source) => {
     expect(analyzeProductionSource(path, source)).toEqual([]);
+  });
+
+  it('reports known literal Reflect.get without falsely claiming localStorage access', () => {
+    const violations = analyzeProductionSource(
+      'components/ReflectLocation.ts',
+      "void Reflect.get(window, 'location');",
+    );
+
+    expect(violations).toEqual(expect.arrayContaining([
+      expect.stringContaining('uses Reflect.get on a browser global outside approved persistence modules'),
+    ]));
+    expect(violations.join('\n')).not.toContain('accesses production localStorage');
   });
 
   it('skips type-only localStorage references', () => {
@@ -2762,6 +3061,23 @@ describe('local workspace static boundary', () => {
     )).toEqual(expect.arrayContaining([
       expect.stringContaining('accesses production localStorage outside approved persistence modules'),
     ]));
+  });
+
+  it('rejects storage access in an emitted class extends expression', () => {
+    expect(analyzeProductionSource(
+      'components/RuntimeStorageHeritage.ts',
+      'class RuntimeStorageHeritage extends (consume(localStorage), Object) {}',
+    )).toEqual(expect.arrayContaining([
+      expect.stringContaining('accesses production localStorage outside approved persistence modules'),
+    ]));
+  });
+
+  it.each([
+    ['an interface extends clause', 'interface StorageShape extends localStorage {}'],
+    ['a class implements clause', 'class StorageImplementation implements localStorage {}'],
+    ['a runtime call type argument', 'consume<typeof localStorage>(value);'],
+  ])('skips localStorage in %s because it emits no reference', (_case, source) => {
+    expect(analyzeProductionSource('components/StorageTypeRegions.ts', source)).toEqual([]);
   });
 
   it('keeps unrelated classic HTML globals from masking module storage access', () => {
@@ -2808,11 +3124,57 @@ describe('local workspace static boundary', () => {
     ]));
   });
 
+  it('contains no reusable raw preference Storage capability', () => {
+    const source = readFileSync(join(root, 'services/browserPreferences.ts'), 'utf8');
+
+    expect(source).not.toContain('storageFor');
+    expect(source).not.toMatch(/:\s*Storage\s*\|\s*null/);
+  });
+
   it.each([
-    ['an export modifier', (source: string) => source.replace('const storageFor =', 'export const storageFor =')],
-    ['a named export', (source: string) => `${source}\nexport { storageFor };\n`],
-    ['a default export', (source: string) => `${source}\nexport default storageFor;\n`],
-  ])('requires the preference storage acquisition to remain private from %s', (_case, mutate) => {
+    [
+      'an arbitrary capability read',
+      "export const unsafeRead = (key: string) => storageFor('doctect_last_fontSize')?.getItem(key);",
+    ],
+    ['an object capability export', 'export default { storageFor };'],
+  ])('rejects historical raw preference capability through %s', (_case, appendedSource) => {
+    const source = `
+const isRuntimeBrowserPreferenceKey = (_key: unknown): boolean => true;
+const storageFor = (key: unknown): Storage | null => {
+  if (!isRuntimeBrowserPreferenceKey(key)) return null;
+  try {
+    return typeof window === 'undefined' ? null : window.localStorage ?? null;
+  } catch {
+    return null;
+  }
+};
+${appendedSource}
+`;
+
+    expect(analyzeProductionSource('services/browserPreferences.ts', source)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('accesses production localStorage outside approved persistence modules'),
+      ]),
+    );
+  });
+
+  it.each([
+    [
+      'a read export modifier',
+      (source: string) => source.replace(
+        'const readRuntimeBrowserPreference =',
+        'export const readRuntimeBrowserPreference =',
+      ),
+    ],
+    [
+      'a named write export',
+      (source: string) => `${source}\nexport { writeRuntimeBrowserPreference };\n`,
+    ],
+    [
+      'an object helper export',
+      (source: string) => `${source}\nexport default { readRuntimeBrowserPreference, writeRuntimeBrowserPreference };\n`,
+    ],
+  ])('requires guarded preference operations to remain private from %s', (_case, mutate) => {
     const source = mutate(readFileSync(join(root, 'services/browserPreferences.ts'), 'utf8'));
 
     expect(analyzeProductionSource('services/browserPreferences.ts', source)).toEqual(
@@ -2822,11 +3184,99 @@ describe('local workspace static boundary', () => {
     );
   });
 
-  it('requires the exact preference storage availability guard', () => {
-    const source = readFileSync(join(root, 'services/browserPreferences.ts'), 'utf8')
-      .replace("typeof window === 'undefined'", 'false');
+  it.each([
+    ['read', 'return null'],
+    ['write', 'return false'],
+  ])('requires the exact runtime-key guard for the %s operation', (_operation, fallback) => {
+    const original = readFileSync(join(root, 'services/browserPreferences.ts'), 'utf8');
+    const source = original.replace(
+      `if (!isRuntimeBrowserPreferenceKey(key)) ${fallback};`,
+      `if (false) ${fallback};`,
+    );
+
+    expect(source).not.toBe(original);
 
     expect(analyzeProductionSource('services/browserPreferences.ts', source)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('accesses production localStorage outside approved persistence modules'),
+      ]),
+    );
+  });
+
+  it.each([
+    ['read', 'return null'],
+    ['write', 'return false'],
+  ])('requires the exact window guard for the %s operation', (_operation, fallback) => {
+    const original = readFileSync(join(root, 'services/browserPreferences.ts'), 'utf8');
+    const source = original.replace(
+      `if (typeof window === 'undefined') ${fallback};`,
+      `if (false) ${fallback};`,
+    );
+
+    expect(source).not.toBe(original);
+    expect(analyzeProductionSource('services/browserPreferences.ts', source)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('accesses production localStorage outside approved persistence modules'),
+      ]),
+    );
+  });
+
+  it.each([
+    ['read', 'window.localStorage.getItem(key)', 'window.localStorage.getItem(suppliedKey)'],
+    ['write', 'window.localStorage.setItem(key, value)', 'window.localStorage.setItem(suppliedKey, value)'],
+  ])('requires exact key flow for the guarded %s operation', (_operation, expected, replacement) => {
+    const original = readFileSync(join(root, 'services/browserPreferences.ts'), 'utf8');
+    const source = original.replace(expected, replacement);
+
+    expect(source).not.toBe(original);
+    expect(analyzeProductionSource('services/browserPreferences.ts', source)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('accesses production localStorage outside approved persistence modules'),
+      ]),
+    );
+  });
+
+  it('rejects changing the guarded read into a raw Storage return', () => {
+    const original = readFileSync(join(root, 'services/browserPreferences.ts'), 'utf8');
+    const source = original.replace(
+      'return window.localStorage.getItem(key);',
+      'return window.localStorage;',
+    );
+
+    expect(source).not.toBe(original);
+    expect(analyzeProductionSource('services/browserPreferences.ts', source)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('accesses production localStorage outside approved persistence modules'),
+      ]),
+    );
+  });
+
+  it('contains no named reusable local-workspace environment capability', () => {
+    const source = readFileSync(join(root, 'services/localWorkspace/index.ts'), 'utf8');
+
+    expect(source).not.toMatch(/\bconst browserEnvironment\b/);
+    expect(source).toMatch(/createLocalWorkspaceStore\(\{/);
+  });
+
+  it.each([
+    [
+      'an arbitrary legacy read',
+      'export const unsafeRead = (key: string) => browserEnvironment.legacyStorage.getItem(key);',
+    ],
+    ['an object environment export', 'export default { browserEnvironment };'],
+  ])('rejects historical local-workspace capability through %s', (_case, appendedSource) => {
+    const source = `
+const browserEnvironment = {
+  legacyStorage: {
+    getItem(key: string) {
+      return window.localStorage.getItem(key);
+    },
+  },
+};
+${appendedSource}
+`;
+
+    expect(analyzeProductionSource('services/localWorkspace/index.ts', source)).toEqual(
       expect.arrayContaining([
         expect.stringContaining('accesses production localStorage outside approved persistence modules'),
       ]),

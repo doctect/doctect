@@ -31,33 +31,24 @@ const isRuntimeBrowserPreferenceKey = (key: unknown): key is RuntimeBrowserPrefe
   || (typeof key === 'string' && key.startsWith(migrationReceiptPrefix))
 );
 
-const storageFor = (key: unknown): Storage | null => {
+const readRuntimeBrowserPreference = (key: unknown): string | null => {
   if (!isRuntimeBrowserPreferenceKey(key)) return null;
   try {
-    return typeof window === 'undefined' ? null : window.localStorage ?? null;
-  } catch {
-    return null;
-  }
-};
-
-const readRuntimeBrowserPreference = (key: RuntimeBrowserPreferenceKey): string | null => {
-  const storage = storageFor(key);
-  if (!storage) return null;
-  try {
-    return storage.getItem(key);
+    if (typeof window === 'undefined') return null;
+    return window.localStorage.getItem(key);
   } catch {
     return null;
   }
 };
 
 const writeRuntimeBrowserPreference = (
-  key: RuntimeBrowserPreferenceKey,
+  key: unknown,
   value: string,
 ): boolean => {
-  const storage = storageFor(key);
-  if (!storage) return false;
+  if (!isRuntimeBrowserPreferenceKey(key)) return false;
   try {
-    storage.setItem(key, value);
+    if (typeof window === 'undefined') return false;
+    window.localStorage.setItem(key, value);
     return true;
   } catch {
     return false;
