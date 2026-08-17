@@ -32,7 +32,11 @@ const executableExtensions = new Set([
   '.ts',
   '.tsx',
   '.svg',
+  '.xht',
+  '.xhtml',
 ]);
+const xhtmlExtensions = new Set(['.xht', '.xhtml']);
+const executableDocumentExtensions = new Set(['.htm', '.html', '.svg', ...xhtmlExtensions]);
 const excludedDirectories = new Set([
   '.claude',
   '.git',
@@ -243,7 +247,9 @@ const nodeRequire = createRequire(import.meta.url);
 const { JSDOM } = nodeRequire('jsdom') as {
   JSDOM: new (
     source: string,
-    options: { includeNodeLocations: true } | { contentType: 'image/svg+xml' },
+    options: { includeNodeLocations: true } | {
+      contentType: 'application/xhtml+xml' | 'image/svg+xml';
+    },
   ) => ParsedHtml;
 };
 const DirectSourceTextModule = (nodeRequire('node:vm') as {
@@ -620,12 +626,16 @@ const authoredXmlLocations = (
   return { elements, characters };
 };
 
-const standaloneSvgDocument = (source: string): ParsedExecutableDocument => {
-  const dom = new JSDOM(source, { contentType: 'image/svg+xml' });
+const standaloneXmlDocument = (
+  source: string,
+  contentType: 'application/xhtml+xml' | 'image/svg+xml',
+  label: 'SVG' | 'XHTML',
+): ParsedExecutableDocument => {
+  const dom = new JSDOM(source, { contentType });
   const document = dom.window.document;
   if (document.doctype) {
     const offset = authoredXmlDoctypeOffset(source) ?? 0;
-    throw new AuthoredXmlParseError('standalone SVG DTD syntax is not supported', offset);
+    throw new AuthoredXmlParseError(`standalone ${label} DTD syntax is not supported`, offset);
   }
   const authored = authoredXmlLocations(source);
   const elements = [...document.getElementsByTagName('*')];
@@ -679,9 +689,16 @@ const xmlParseFailure = (source: string, error: unknown): ParseFailure => {
 };
 
 const parseExecutableDocument = (input: SourceInput): ParsedExecutableDocumentResult => {
-  if (extname(input.path) === '.svg') {
+  const extension = extname(input.path);
+  if (extension === '.svg' || xhtmlExtensions.has(extension)) {
     try {
-      return { parsed: standaloneSvgDocument(input.source) };
+      return {
+        parsed: standaloneXmlDocument(
+          input.source,
+          extension === '.svg' ? 'image/svg+xml' : 'application/xhtml+xml',
+          extension === '.svg' ? 'SVG' : 'XHTML',
+        ),
+      };
     } catch (error) {
       return { failure: xmlParseFailure(input.source, error) };
     }
@@ -705,7 +722,7 @@ const executableScriptElements = (document: ParsedExecutableDocument): Element[]
   ));
 };
 
-const svgTextOffsets = (
+const xmlTextOffsets = (
   raw: string,
   decoded: string,
   rawStart: number,
@@ -1034,7 +1051,7 @@ const javascriptUrlSource = (
   };
 };
 
-const svgScriptSource = (
+const xmlScriptSource = (
   script: Element,
   htmlSource: string,
   parsedHtml: ParsedHtml,
@@ -1049,10 +1066,10 @@ const svgScriptSource = (
   const appendText = (node: Node): void => {
     if (node.nodeType === 3 || node.nodeType === 4) {
       const location = parsedHtml.nodeLocation(node);
-      if (!location) throw new Error('Workspace boundary could not locate SVG script text');
+      if (!location) throw new Error('Workspace boundary could not locate XML script text');
       const text = (node as Text).data;
       const raw = htmlSource.slice(location.startOffset, location.endOffset);
-      const nodeOffsets = svgTextOffsets(raw, text, location.startOffset, decodeEntity);
+      const nodeOffsets = xmlTextOffsets(raw, text, location.startOffset, decodeEntity);
       const generatedStart = source.length;
       source += text;
       for (let index = 0; index < nodeOffsets.length; index += 1) {
@@ -1134,7 +1151,7 @@ interface ExecutableDocumentExtraction {
 
 const executableDocumentExtraction = (input: SourceInput): ExecutableDocumentExtraction => {
   const extension = extname(input.path);
-  if (extension !== '.html' && extension !== '.htm' && extension !== '.svg') {
+  if (!executableDocumentExtensions.has(extension)) {
     return { inputs: [input], externalEdges: [] };
   }
   const document = parseExecutableDocument(input);
@@ -1157,7 +1174,7 @@ const executableDocumentExtraction = (input: SourceInput): ExecutableDocumentExt
   }
   try {
     const inheritedBase = input.browserBase ?? repositoryBrowserBase(reportPath);
-    const browserBase = document.parsed.xml
+    const browserBase = document.parsed.xml && !xhtmlExtensions.has(extension)
       ? inheritedBase
       : staticDocumentBrowserBase(document.parsed.window.document, input.path, inheritedBase);
     const inputs: SourceInput[] = [];
@@ -1181,7 +1198,7 @@ const executableDocumentExtraction = (input: SourceInput): ExecutableDocumentExt
       const rawSource = input.source.slice(bodyStart, bodyEnd);
       const prepared = document.parsed.xml
         || script.namespaceURI === 'http://www.w3.org/2000/svg'
-        ? svgScriptSource(script, input.source, document.parsed)
+        ? xmlScriptSource(script, input.source, document.parsed)
         : {
           source: rawSource,
           offsets: Array.from({ length: rawSource.length + 1 }, (_value, offset) => bodyStart + offset),
@@ -2415,9 +2432,15 @@ describe('local workspace static boundary', () => {
     try {
       mkdirSync(join(temporaryRoot, 'future-feature'));
       writeFileSync(join(temporaryRoot, 'future-feature', 'entry.ts'), 'export const ready = true;');
+      writeFileSync(join(temporaryRoot, 'future-feature', 'shell.xhtml'), '<html/>');
+      writeFileSync(join(temporaryRoot, 'future-feature', 'view.xht'), '<html/>');
       mkdirSync(join(temporaryRoot, 'docs'));
       writeFileSync(join(temporaryRoot, 'docs', 'example.ts'), 'localStorage.clear();');
-      expect(repositorySourcePaths(temporaryRoot)).toEqual(['future-feature/entry.ts']);
+      expect(repositorySourcePaths(temporaryRoot)).toEqual([
+        'future-feature/entry.ts',
+        'future-feature/shell.xhtml',
+        'future-feature/view.xht',
+      ]);
     } finally {
       rmSync(temporaryRoot, { recursive: true, force: true });
     }
@@ -4078,6 +4101,175 @@ ${publicReturn}`);
     expect(analyzeProductionSource('shell.html', source)).toEqual(expect.arrayContaining([
       expect.stringContaining('accesses production localStorage outside approved persistence modules'),
     ]));
+  });
+
+  it.each(['xhtml', 'xht'])('analyzes standalone XHTML .%s inline script at its authored line', extension => {
+    const path = `pages/inline.${extension}`;
+    const source = [
+      '<?xml version="1.0"?>',
+      '<html xmlns="http://www.w3.org/1999/xhtml">',
+      '  <head/>',
+      '  <body>',
+      '    <script>',
+      "window.localStorage.getItem('x');",
+      '    </script>',
+      '  </body>',
+      '</html>',
+    ].join('\n');
+    expect(analyzeProductionSource(path, source)).toEqual(expect.arrayContaining([
+      expect.stringContaining(`${path}:6: accesses production localStorage`),
+    ]));
+  });
+
+  it.each(['xhtml', 'xht'])('rejects standalone XHTML .%s external script edge', extension => {
+    const path = `pages/external.${extension}`;
+    const source = [
+      '<html xmlns="http://www.w3.org/1999/xhtml">',
+      '  <head/>',
+      '  <body>',
+      '    <script src="../tests/edge.js"></script>',
+      '  </body>',
+      '</html>',
+    ].join('\n');
+    expect(analyzeProductionSource(path, source)).toEqual(expect.arrayContaining([
+      expect.stringContaining(`${path}:4: loads executable code from excluded repository paths`),
+    ]));
+  });
+
+  it.each(['xhtml', 'xht'])('applies standalone XHTML .%s document base to external scripts', extension => {
+    const path = `pages/base.${extension}`;
+    const source = [
+      '<html xmlns="http://www.w3.org/1999/xhtml">',
+      '  <head><base href="/"/></head>',
+      '  <body>',
+      '    <script src="tests/edge.js"></script>',
+      '  </body>',
+      '</html>',
+    ].join('\n');
+    expect(analyzeProductionSource(path, source)).toEqual(expect.arrayContaining([
+      expect.stringContaining(`${path}:4: loads executable code from excluded repository paths`),
+    ]));
+  });
+
+  it.each(['xhtml', 'xht'])('analyzes standalone XHTML .%s handler at its authored line', extension => {
+    const path = `pages/handler.${extension}`;
+    const source = [
+      '<html xmlns="http://www.w3.org/1999/xhtml">',
+      '  <head/>',
+      '  <body',
+      '    onload="return window.localStorage.getItem(&apos;x&apos;)">',
+      '  </body>',
+      '</html>',
+    ].join('\r\n');
+    expect(analyzeProductionSource(path, source)).toEqual(expect.arrayContaining([
+      expect.stringContaining(`${path}:4: accesses production localStorage`),
+    ]));
+  });
+
+  it.each(['xhtml', 'xht'])('analyzes standalone XHTML .%s javascript URL at its authored line', extension => {
+    const path = `pages/url.${extension}`;
+    const source = [
+      '<html xmlns="http://www.w3.org/1999/xhtml">',
+      '  <head/>',
+      '  <body>',
+      '    <a',
+      '      href="javascript:window.localStorage.clear()">go</a>',
+      '  </body>',
+      '</html>',
+    ].join('\n');
+    expect(analyzeProductionSource(path, source)).toEqual(expect.arrayContaining([
+      expect.stringContaining(`${path}:5: accesses production localStorage`),
+    ]));
+  });
+
+  it.each(['xhtml', 'xht'])('maps recursively nested standalone XHTML .%s srcdoc', extension => {
+    const path = `pages/srcdoc.${extension}`;
+    const source = [
+      '<html xmlns="http://www.w3.org/1999/xhtml">',
+      '  <head><base href="/"/></head>',
+      '  <body>',
+      '    <iframe',
+      '      srcdoc="&lt;script src=&quot;tests/edge.js&quot;&gt;&lt;/script&gt;&lt;iframe srcdoc=&quot;&amp;lt;script&amp;gt;window.localStorage.clear();&amp;lt;/script&amp;gt;&quot;&gt;&lt;/iframe&gt;">',
+      '    </iframe>',
+      '  </body>',
+      '</html>',
+    ].join('\n');
+    expect(analyzeProductionSource(path, source)).toEqual(expect.arrayContaining([
+      expect.stringContaining(`${path}:5: loads executable code from excluded repository paths`),
+      expect.stringContaining(`${path}:5: accesses production localStorage`),
+    ]));
+  });
+
+  it.each([
+    [
+      'uppercase element and attributes',
+      '<html xmlns="http://www.w3.org/1999/xhtml"><body ONLOAD="localStorage.clear()">'
+        + '<SCRIPT>localStorage.clear()</SCRIPT><a HREF="javascript:localStorage.clear()">go</a>'
+        + '<iframe SRCDOC="&lt;script&gt;localStorage.clear()&lt;/script&gt;"></iframe></body></html>',
+    ],
+    [
+      'foreign namespace execution lookalikes',
+      '<html xmlns="http://www.w3.org/1999/xhtml" xmlns:f="urn:foreign"><body>'
+        + '<f:script>localStorage.clear()</f:script>'
+        + '<f:a href="javascript:localStorage.clear()">go</f:a>'
+        + '<f:button onclick="localStorage.clear()">go</f:button>'
+        + '<f:iframe srcdoc="&lt;script&gt;localStorage.clear()&lt;/script&gt;"/>'
+        + '</body></html>',
+    ],
+    [
+      'no-namespace execution lookalikes',
+      '<html xmlns="http://www.w3.org/1999/xhtml"><body><section xmlns="">'
+        + '<script>localStorage.clear()</script>'
+        + '<a href="javascript:localStorage.clear()">go</a>'
+        + '<button onclick="localStorage.clear()">go</button>'
+        + '<iframe srcdoc="&lt;script&gt;localStorage.clear()&lt;/script&gt;"/>'
+        + '</section></body></html>',
+    ],
+  ])('keeps standalone XHTML %s inert for both file extensions', (_case, source) => {
+    for (const extension of ['xhtml', 'xht']) {
+      expect(analyzeProductionSource(`pages/inert.${extension}`, source)).toEqual([]);
+    }
+  });
+
+  it.each([
+    ['uppercase XHTML element', '<BASE href="/"/>'],
+    ['uppercase XHTML attribute', '<base HREF="/"/>'],
+    ['foreign-namespace element', '<f:base xmlns:f="urn:foreign" href="/"/>'],
+    ['no-namespace element', '<base xmlns="" href="/"/>'],
+  ])('ignores %s when resolving standalone XHTML bases', (_case, base) => {
+    for (const extension of ['xhtml', 'xht']) {
+      const path = `pages/inert-base.${extension}`;
+      const source = '<html xmlns="http://www.w3.org/1999/xhtml"><head>'
+        + `${base}</head><body><script src="tests/edge.js"></script></body></html>`;
+      expect(analyzeProductionSource(path, source)).toEqual([]);
+    }
+  });
+
+  it.each(['xhtml', 'xht'])('fails closed for malformed standalone XHTML .%s XML', extension => {
+    const path = `pages/malformed.${extension}`;
+    const source = [
+      '<html xmlns="http://www.w3.org/1999/xhtml">',
+      '  <body>',
+      '    <script>window.localStorage.clear();',
+      '  </body>',
+      '</html>',
+    ].join('\n');
+    expect(analyzeProductionSource(path, source)).toEqual(expect.arrayContaining([
+      expect.stringContaining(`${path}:4: could not be parsed`),
+    ]));
+  });
+
+  it.each(['xhtml', 'xht'])('rejects standalone XHTML .%s DTD at its authored line', extension => {
+    const path = `pages/doctype.${extension}`;
+    const source = [
+      '<?xml version="1.0"?>',
+      '<!-- <!DOCTYPE decoy> -->',
+      '<!DOCTYPE html>',
+      '<html xmlns="http://www.w3.org/1999/xhtml"/>',
+    ].join('\r\n');
+    expect(analyzeProductionSource(path, source)).toEqual([
+      `${path}:3: could not be parsed: standalone XHTML DTD syntax is not supported`,
+    ]);
   });
 
   it('analyzes an HTML event handler as a mapped function body', () => {
