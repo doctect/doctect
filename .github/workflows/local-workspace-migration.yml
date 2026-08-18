@@ -27,6 +27,18 @@ jobs:
           --project=webkit
           --project=workspace-large-chromium
           --project=workspace-large-firefox
+      - name: Built Chromium Worker save proof
+        env:
+          E2E_BUILT_BUNDLE: '1'
+          E2E_BUILT_WORKER_COMPLETION_MARKER: ${{ runner.temp }}/built-worker-proof-complete.json
+        run: |
+          rm -f "$E2E_BUILT_WORKER_COMPLETION_MARKER"
+          npx playwright test tests/e2e/local_workspace_migration.spec.js \
+            --project=chromium \
+            --grep="coalesces near-limit built-editor interactions before one module-Worker save$" \
+            --workers=1 \
+            --retries=0
+          test -s "$E2E_BUILT_WORKER_COMPLETION_MARKER"
       - name: Upload Playwright evidence
         if: failure()
         uses: actions/upload-artifact@v4

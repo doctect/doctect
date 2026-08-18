@@ -1,3 +1,4 @@
+import { writeFile } from 'node:fs/promises';
 import { test, expect } from '@playwright/test';
 import {
     readBootstrapResult,
@@ -614,7 +615,7 @@ test.describe('local workspace migration release gate', () => {
             responses: globalThis.__workspaceProjectPreparationWorkers.responses,
             transactions: globalThis.__workspaceProjectPreparationWorkers.transactions,
         }));
-        console.log('[built-worker-proof]', JSON.stringify({
+        const proofMetrics = {
             nearLimitStateBytes: large.nearLimitStateBytes,
             cloneP90Ms: measurement.cloneP90Ms,
             interactionP90Ms: measurement.interactionP90Ms,
@@ -622,7 +623,8 @@ test.describe('local workspace migration release gate', () => {
             workers: saveCapture.workers.length,
             requests: saveCapture.requests,
             responses: saveCapture.responses,
-        }));
+        };
+        console.log('[built-worker-proof]', JSON.stringify(proofMetrics));
         const workspaceTransactions = saveCapture.transactions.filter(transaction =>
             transaction.database === 'doctect-local-workspace');
         expect(saveCapture.workers).toHaveLength(1);
@@ -662,5 +664,10 @@ test.describe('local workspace migration release gate', () => {
         expect(editorBundle.workspace.projects.find(project => project.id === nearLimitProject.id))
             .toMatchObject({ initialState: { showGrid: true } });
         await oldPage.close();
+
+        const completionMarker = process.env.E2E_BUILT_WORKER_COMPLETION_MARKER;
+        if (completionMarker) {
+            await writeFile(completionMarker, `${JSON.stringify(proofMetrics)}\n`, 'utf8');
+        }
     });
 });
