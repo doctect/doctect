@@ -333,6 +333,21 @@ export function createIndexedDbRecoveryBundle(
   return new Blob([JSON.stringify(bundle)], { type: RECOVERY_MIME });
 }
 
+export function createProtectedIndexedDbRecoveryBundle(
+  workspace: WorkspaceSnapshot,
+  capturedAt: string,
+): Blob {
+  validateTimestamp(capturedAt);
+  const workspaceBytes = canonicalStringify(workspace);
+  return new Blob([
+    '{"format":"doctect.indexeddb-workspace-recovery","version":1,"capturedAt":',
+    JSON.stringify(capturedAt),
+    ',"workspace":',
+    workspaceBytes,
+    '}',
+  ], { type: RECOVERY_MIME });
+}
+
 export async function validateLegacyRecoveryPreparationSources(
   currentSource: LegacySnapshot,
   acceptedSource: LegacySnapshot,

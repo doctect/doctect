@@ -114,6 +114,12 @@ export function validateWorkspaceProject(
   raw: unknown,
   options: ProjectPreparationOptions = DEFAULT_PREPARATION_OPTIONS,
 ): WorkspaceProject {
+  const project = validateWorkspaceProjectRecord(raw);
+  const prepared = prepareProjectState(project.initialState, options);
+  return { ...project, initialState: prepared.state } as WorkspaceProject;
+}
+
+const validateWorkspaceProjectRecord = (raw: unknown): Record<string, unknown> => {
   const project = cloneJsonObject(raw, 'Workspace project');
   requireNonEmptyString(project.id, 'Workspace project id');
   if (typeof project.name !== 'string') throw new Error('Workspace project name must be a string.');
@@ -122,8 +128,15 @@ export function validateWorkspaceProject(
     && (!Number.isInteger(project.revision) || (project.revision as number) < 0)) {
     throw new Error('Workspace project revision must be a non-negative integer.');
   }
-  const prepared = prepareProjectState(project.initialState, options);
-  return { ...project, initialState: prepared.state } as WorkspaceProject;
+  return project;
+};
+
+export function validatePreparedWorkspaceProject(raw: unknown): WorkspaceProject {
+  const project = validateWorkspaceProjectRecord(raw);
+  return {
+    ...project,
+    initialState: validateMigratedState(project.initialState),
+  } as WorkspaceProject;
 }
 
 export function validateCustomPreset(

@@ -57,6 +57,7 @@ import { prepareProjectInModuleWorker } from './projectPreparationClient';
 import {
   createIndexedDbRecoveryBundle,
   createLegacyRecoveryBundle,
+  createProtectedIndexedDbRecoveryBundle,
   prepareLegacyRecovery,
   validateLegacyRecoveryPreparationSources,
 } from './recovery';
@@ -457,6 +458,7 @@ const createLocalWorkspaceStoreAtVersion = (
   let startReadyLegacyRevalidation: (() => void) | undefined;
   let resetCommandQueue: (() => void) | undefined;
   let retryableCopiedLedger: MigrationLedger | undefined;
+  let protectedIndexedDbRecoveryBundle: Blob | undefined;
 
   const registerObserver = (observer?: WorkspaceBootstrapObserver): void => {
     if (observer && !observer.signal?.aborted) observers.add(observer);
@@ -487,7 +489,9 @@ const createLocalWorkspaceStoreAtVersion = (
     invalidateDurableAuthority();
     authority = error.code === 'authority-lost' ? 'frozen' : 'unavailable';
     lifecycleGeneration += 1;
-    lifecycleResult = unavailable();
+    lifecycleResult = unavailable(protectedIndexedDbRecoveryBundle
+      ? ['legacy-current', 'indexeddb-workspace']
+      : undefined);
     notifyAuthorityLost(lifecycleResult);
   };
 
@@ -1925,6 +1929,17 @@ const createLocalWorkspaceStoreAtVersion = (
         expectedProjectLineages.set(projectId, { ...installedLineage });
       }
     },
+    onPostCommitPublicationFailure(snapshot, error) {
+      try {
+        protectedIndexedDbRecoveryBundle = createProtectedIndexedDbRecoveryBundle(
+          snapshot,
+          environment.now(),
+        );
+      } catch {
+        protectedIndexedDbRecoveryBundle = undefined;
+      }
+      handleAuthorityLost(error);
+    },
   });
   resetCommandQueue = () => {
     mutationQueue = createCommandQueue();
@@ -1970,6 +1985,7 @@ const createLocalWorkspaceStoreAtVersion = (
             authority = 'ready';
             cachedReady = effectiveResult;
             lifecycleResult = undefined;
+            protectedIndexedDbRecoveryBundle = undefined;
             resetCommandQueue?.();
           } else {
             mutationQueue?.freeze();
@@ -2134,6 +2150,13 @@ const createLocalWorkspaceStoreAtVersion = (
       }
 
       if (source === 'indexeddb-workspace') {
+        if (protectedIndexedDbRecoveryBundle) {
+          return protectedIndexedDbRecoveryBundle.slice(
+            0,
+            protectedIndexedDbRecoveryBundle.size,
+            protectedIndexedDbRecoveryBundle.type,
+          );
+        }
         try {
           const snapshot = reconstructWorkspace(await getAdapter().readWorkspaceRecords());
           return createIndexedDbRecoveryBundle(snapshot, environment.now());

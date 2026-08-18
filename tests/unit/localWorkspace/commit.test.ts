@@ -868,6 +868,93 @@ describe('project save queues', () => {
     expect(await inspect(harness)).toEqual(before);
   });
 
+  it.each([
+    ['invalid current state', () => ({
+      prepared: { id: 'project-a', name: 'Invalid state', initialState: {} },
+    })],
+    ['cyclic state', () => {
+      const initialState = currentState() as unknown as Record<string, unknown>;
+      initialState.cycle = initialState;
+      return { prepared: { id: 'project-a', name: 'Cyclic state', initialState } };
+    }],
+    ['nested custom prototype', () => {
+      const initialState = currentState();
+      initialState.nodes.root.data = Object.assign(
+        Object.create(null),
+        initialState.nodes.root.data,
+      );
+      return { prepared: { id: 'project-a', name: 'Custom prototype', initialState } };
+    }],
+    ['nested accessor', () => {
+      const initialState = currentState();
+      const getter = vi.fn(() => { throw new Error('hostile nested getter ran'); });
+      Object.defineProperty(initialState.nodes.root.data, 'hostile', {
+        enumerable: true,
+        get: getter,
+      });
+      return {
+        prepared: { id: 'project-a', name: 'Nested accessor', initialState },
+        getter,
+      };
+    }],
+  ] as const)('rejects a deeply malformed Worker project before storage: %s', async (
+    _label,
+    create,
+  ) => {
+    const response = create();
+    class MalformedProjectWorker {
+      private readonly listeners = new Map<string, Set<(event: unknown) => void>>();
+
+      addEventListener(type: string, listener: (event: unknown) => void): void {
+        const listeners = this.listeners.get(type) ?? new Set();
+        listeners.add(listener);
+        this.listeners.set(type, listeners);
+      }
+
+      removeEventListener(type: string, listener: (event: unknown) => void): void {
+        this.listeners.get(type)?.delete(listener);
+      }
+
+      postMessage(message: unknown): void {
+        const requestId = (message as { requestId?: unknown }).requestId;
+        for (const listener of this.listeners.get('message') ?? []) {
+          listener({
+            data: {
+              type: 'project-prepared',
+              requestId,
+              project: response.prepared,
+            },
+          });
+        }
+      }
+
+      terminate(): void {}
+    }
+    vi.stubGlobal('Worker', MalformedProjectWorker);
+    const harness = createHarness();
+    const store = createProductionLocalWorkspaceStore(harness.environment);
+    const bootstrap = await store.bootstrap();
+    expect(bootstrap.status).toBe('ready');
+    if (bootstrap.status !== 'ready') return;
+    const before = await inspect(harness);
+    harness.records.length = 0;
+    useQueueTimers();
+
+    const save = store.commit({
+      type: 'save-project',
+      project: trustedProjectNamed(bootstrap.snapshot.projects[0], 'Must remain open'),
+    });
+    const saveAssertion = expect(save).rejects.toMatchObject({ code: 'unavailable' });
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    await saveAssertion;
+    if ('getter' in response) expect(response.getter).not.toHaveBeenCalled();
+    expect(writeTransactions(harness.records)).toHaveLength(0);
+    expect(harness.records.filter(record =>
+      record.mode === 'readonly' && sameStores(record.stores, READ_ALL_SCOPE))).toHaveLength(0);
+    expect(await inspect(harness)).toEqual(before);
+  });
+
   it('retains exactly one newest follow-up while a project save is in flight', async () => {
     const hold = transactionCompletionHold(['projects', 'migrationLedger']);
     const { store, harness, snapshot } = await readyStore({ hook: hold.hook });
@@ -2112,6 +2199,77 @@ describe('failure handling and private revisions', () => {
         ]),
       },
     });
+  });
+
+  it('protects exact recovery bytes and loses authority when post-commit publication fails', async () => {
+    const { store, harness, snapshot } = await readyStore();
+    const onAuthorityLost = vi.fn();
+    await store.bootstrap({ onAuthorityLost });
+    const originalStructuredClone = globalThis.structuredClone;
+    const snapshotCloneCounts = new WeakMap<object, number>();
+    let armed = false;
+    vi.spyOn(globalThis, 'structuredClone').mockImplementation((value, options) => {
+      if (armed
+        && value !== null
+        && typeof value === 'object'
+        && Array.isArray((value as WorkspaceSnapshot).projects)
+        && Array.isArray((value as WorkspaceSnapshot).customPresets)
+        && Array.isArray((value as WorkspaceSnapshot).pendingImports)) {
+        const count = (snapshotCloneCounts.get(value) ?? 0) + 1;
+        snapshotCloneCounts.set(value, count);
+        if (count === 2) {
+          throw new DOMException('Injected publication clone failure.', 'DataCloneError');
+        }
+      }
+      return originalStructuredClone(value, options);
+    });
+    useQueueTimers();
+
+    const save = store.commit({
+      type: 'save-project',
+      project: trustedProjectNamed(snapshot.projects[0], 'Committed before publication failure'),
+    });
+    armed = true;
+    await vi.advanceTimersByTimeAsync(1_000);
+    await expect(save).rejects.toMatchObject({ code: 'authority-lost' });
+
+    expect(onAuthorityLost).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'unavailable',
+      availableExports: expect.arrayContaining(['indexeddb-workspace']),
+    }));
+    const protectedBeforeForeignWrite = await (
+      await store.exportRecoveryBundle('indexeddb-workspace')
+    ).text();
+    expect(JSON.parse(protectedBeforeForeignWrite)).toMatchObject({
+      workspace: {
+        projects: [expect.objectContaining({ name: 'Committed before publication failure' })],
+      },
+    });
+
+    const foreign = createIndexedDbAdapter({
+      indexedDB: harness.indexedDB,
+      now: () => TEST_NOW,
+    });
+    const committedRecord = (await foreign.inspect()).projects
+      .find(record => record.id === 'project-a')!;
+    await foreign.saveProject(
+      projectNamed('Foreign write after publication failure'),
+      storedProjectLineage(committedRecord),
+    );
+    const protectedAfterForeignWrite = await (
+      await store.exportRecoveryBundle('indexeddb-workspace')
+    ).text();
+
+    expect(protectedAfterForeignWrite).toBe(protectedBeforeForeignWrite);
+    expect((await foreign.inspect()).projects.find(record => record.id === 'project-a'))
+      .toMatchObject({ project: { name: 'Foreign write after publication failure' } });
+    const writesAfterLoss = writeTransactions(harness.records).length;
+    await expect(store.commit({
+      type: 'activate-project',
+      projectId: 'project-a',
+    })).rejects.toMatchObject({ code: 'authority-lost' });
+    expect(writeTransactions(harness.records)).toHaveLength(writesAfterLoss);
+    foreign.close();
   });
 });
 

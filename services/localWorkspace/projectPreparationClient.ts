@@ -2,6 +2,7 @@ import {
   WorkspaceStoreError,
   type WorkspaceProject,
 } from './contracts';
+import { validatePreparedWorkspaceProject } from './validation';
 
 export interface ProjectPreparationWorker {
   addEventListener(type: string, listener: (event: unknown) => void): void;
@@ -115,19 +116,18 @@ export const prepareProjectInModuleWorker = (
       if (envelope.type === 'project-prepared') {
         const prepared = readPlainDataRecord(data, ['type', 'requestId', 'project']);
         const candidate = prepared && readPlainDataRecord(prepared.project);
-        const initialState = candidate && readPlainDataRecord(candidate.initialState);
         if (!prepared
           || prepared.requestId !== 1
-          || !candidate
-          || candidate.id !== project.id
-          || typeof candidate.id !== 'string'
-          || candidate.id.length === 0
-          || typeof candidate.name !== 'string'
-          || !initialState) {
+          || !candidate) {
           protocolFailure();
           return;
         }
-        settle({ project: prepared.project as WorkspaceProject });
+        const validated = validatePreparedWorkspaceProject(candidate);
+        if (validated.id !== project.id) {
+          protocolFailure();
+          return;
+        }
+        settle({ project: validated });
         return;
       }
       if (envelope.type === 'project-preparation-failed') {
@@ -161,12 +161,12 @@ export const prepareProjectInModuleWorker = (
   });
 
   try {
-    worker.addEventListener('message', onMessage);
     registeredListeners.push(['message', onMessage]);
-    worker.addEventListener('error', onError);
+    worker.addEventListener('message', onMessage);
     registeredListeners.push(['error', onError]);
-    worker.addEventListener('messageerror', onMessageError);
+    worker.addEventListener('error', onError);
     registeredListeners.push(['messageerror', onMessageError]);
+    worker.addEventListener('messageerror', onMessageError);
     responseTimer = setTimeout(() => settle({
       error: unavailable('Project preparation Worker did not respond.'),
     }), WORKER_RESPONSE_TIMEOUT_MS);

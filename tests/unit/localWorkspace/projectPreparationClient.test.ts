@@ -77,7 +77,7 @@ describe('private project preparation worker client', () => {
       }),
     ));
 
-    await expect(prepareProjectInModuleWorker(source, () => worker)).resolves.toBe(source);
+    await expect(prepareProjectInModuleWorker(source, () => worker)).resolves.toEqual(source);
   });
 
   it('rejects its response when Worker termination fails during cleanup', async () => {
@@ -135,10 +135,29 @@ describe('private project preparation worker client', () => {
     await expect(prepareProjectInModuleWorker(project(), () => worker)).rejects.toMatchObject({
       code: 'unavailable',
     });
-    expect(remove).toHaveBeenCalledOnce();
+    expect(remove).toHaveBeenCalledTimes(2);
     expect(remove).toHaveBeenCalledWith('message', expect.any(Function));
+    expect(remove).toHaveBeenCalledWith('error', expect.any(Function));
     expect(worker.terminate).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('cleans a listener when registration mutates the Worker and then throws', async () => {
+    const worker = new FakeWorker();
+    const originalAdd = worker.addEventListener.bind(worker);
+    const remove = vi.spyOn(worker, 'removeEventListener');
+    worker.addEventListener = vi.fn((type, listener) => {
+      originalAdd(type, listener);
+      if (type === 'error') throw new Error('listener setup failed after registration');
+    });
+
+    await expect(prepareProjectInModuleWorker(project(), () => worker)).rejects.toMatchObject({
+      code: 'unavailable',
+    });
+    expect(remove).toHaveBeenCalledWith('message', expect.any(Function));
+    expect(remove).toHaveBeenCalledWith('error', expect.any(Function));
+    expect(Array.from(worker.listeners.values()).every(listeners => listeners.size === 0)).toBe(true);
+    expect(worker.terminate).toHaveBeenCalledOnce();
   });
 
   it('attempts every cleanup and rejects a valid response when required cleanup fails', async () => {
@@ -276,6 +295,50 @@ describe('private project preparation worker client', () => {
       code: 'unavailable',
     });
     expect(nameGetter).not.toHaveBeenCalled();
+    expect(worker.terminate).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ['invalid current state', () => ({
+      prepared: { ...project(), initialState: {} },
+    })],
+    ['cyclic state', () => {
+      const initialState = currentState() as unknown as Record<string, unknown>;
+      initialState.cycle = initialState;
+      return { prepared: { ...project(), initialState } };
+    }],
+    ['nested custom prototype', () => {
+      const initialState = currentState();
+      initialState.nodes.root.data = Object.assign(
+        Object.create(null),
+        initialState.nodes.root.data,
+      );
+      return { prepared: { ...project(), initialState } };
+    }],
+    ['nested accessor', () => {
+      const initialState = currentState();
+      const getter = vi.fn(() => { throw new Error('hostile nested getter ran'); });
+      Object.defineProperty(initialState.nodes.root.data, 'hostile', {
+        enumerable: true,
+        get: getter,
+      });
+      return { prepared: { ...project(), initialState }, getter };
+    }],
+  ] as const)('rejects a deeply malformed prepared project: %s', async (_label, create) => {
+    const worker = new FakeWorker();
+    const response = create();
+    worker.postMessage.mockImplementation(() => worker.emit('message', {
+      data: {
+        type: 'project-prepared',
+        requestId: 1,
+        project: response.prepared,
+      },
+    }));
+
+    await expect(prepareProjectInModuleWorker(project(), () => worker)).rejects.toMatchObject({
+      code: 'unavailable',
+    });
+    if ('getter' in response) expect(response.getter).not.toHaveBeenCalled();
     expect(worker.terminate).toHaveBeenCalledOnce();
   });
 

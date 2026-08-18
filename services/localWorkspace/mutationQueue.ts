@@ -39,6 +39,10 @@ interface MutationOperations {
   ): Promise<WorkspaceSnapshot>;
   runExclusive(admission: ExclusiveAdmission): Promise<WorkspaceSnapshot>;
   onFailedProjectLineageUnpinned?(projectId: string): void;
+  onPostCommitPublicationFailure?(
+    snapshot: WorkspaceSnapshot,
+    error: WorkspaceStoreError,
+  ): void;
 }
 
 interface Waiter {
@@ -83,7 +87,7 @@ export const createMutationQueue = (
 ): MutationQueue => {
   const entries: QueueEntry[] = [];
   let queuedSaves = new Map<string, SaveEntry>();
-  const projectLineages = new Map<string, ProjectLineage>();
+  let projectLineages = new Map<string, ProjectLineage>();
   const drainWaiters: Array<() => void> = [];
   let activeSave: SaveEntry | undefined;
   let running = false;
@@ -192,22 +196,43 @@ export const createMutationQueue = (
       running = false;
       pump();
     };
+    const abortAfterPublicationFailure = (error: WorkspaceStoreError): void => {
+      cleaned = true;
+      frozen = true;
+      settleFailure(entry.waiters, error);
+      if (entry.kind === 'exclusive') settleFailure(entry.canceledSaveWaiters, error);
+      for (const pending of entries.splice(0)) {
+        if (pending.kind === 'save' && pending.timer !== undefined) clearTimeout(pending.timer);
+        settleFailure(pending.waiters, error);
+        if (pending.kind === 'exclusive') settleFailure(pending.canceledSaveWaiters, error);
+      }
+      queuedSaves = new Map();
+      projectLineages = new Map();
+      activeSave = undefined;
+      running = false;
+      notifyDrained();
+    };
     void operation.then(snapshot => {
       let publication: WorkspaceSnapshot;
       try {
         publication = cloneWorkspaceSnapshotWithProjectAuthority(snapshot);
       } catch (error) {
-        cleanEntry(true);
         const cloneError = new WorkspaceStoreError(
           'Workspace mutation result could not be isolated for publication.',
           'clone',
           error,
         );
-        settleFailure(entry.waiters, cloneError);
-        if (entry.kind === 'exclusive') {
-          settleFailure(entry.canceledSaveWaiters, cloneError);
+        const authorityError = new WorkspaceStoreError(
+          'Local workspace authority was lost after a durable result could not be published.',
+          'authority-lost',
+          cloneError,
+        );
+        abortAfterPublicationFailure(authorityError);
+        try {
+          operations.onPostCommitPublicationFailure?.(snapshot, authorityError);
+        } catch {
+          // Queue is already terminal; reporting failure cannot resume mutation authority.
         }
-        resume();
         return;
       }
       if (entry.kind === 'save') {
