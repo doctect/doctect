@@ -416,6 +416,12 @@ const { JSDOM } = nodeRequire('jsdom') as {
 const DirectSourceTextModule = (nodeRequire('node:vm') as {
   SourceTextModule?: new (source: string, options: { identifier: string }) => object;
 }).SourceTextModule;
+const { parse: parseWithBabel } = nodeRequire('@babel/parser') as {
+  parse(source: string, options: {
+    sourceType: 'module' | 'script';
+    plugins?: Array<string | [string, Record<string, unknown>]>;
+  }): unknown;
+};
 
 const workflowRunsOnEveryPullRequest = (workflow: string): boolean => {
   const jobsStart = workflow.search(/^jobs:/m);
@@ -593,6 +599,35 @@ const moduleParseFailures = (sources: readonly string[]): Map<string, ParseFailu
     }
   }
   return failures;
+};
+
+const transformedModuleParseFailureCache = new Map<string, ParseFailure | undefined>();
+const transformedModuleParseFailure = (
+  source: string,
+  scriptKind: ts.ScriptKind,
+): ParseFailure | undefined => {
+  const key = `${scriptKind}\0${source}`;
+  if (transformedModuleParseFailureCache.has(key)) return transformedModuleParseFailureCache.get(key);
+  const plugins = scriptKind === ts.ScriptKind.JSX
+    ? ['jsx', 'decorators-legacy']
+    : ['typescript', ...(scriptKind === ts.ScriptKind.TSX ? ['jsx'] : []), 'decorators-legacy'];
+  let failure: ParseFailure | undefined;
+  try {
+    parseWithBabel(source, { sourceType: 'module', plugins });
+  } catch (error) {
+    if (!(error instanceof Error)) throw error;
+    const position = (error as Error & { pos?: unknown }).pos;
+    failure = {
+      message: error.message.replace(/ \(\d+:\d+\)$/, ''),
+      offset: typeof position === 'number' ? position : 0,
+    };
+  }
+  if (transformedModuleParseFailureCache.size >= 512) {
+    const oldest = transformedModuleParseFailureCache.keys().next().value as string | undefined;
+    if (oldest !== undefined) transformedModuleParseFailureCache.delete(oldest);
+  }
+  transformedModuleParseFailureCache.set(key, failure);
+  return failure;
 };
 
 const positionSegments = (offsets: readonly number[]): SourcePositionSegment[] => {
@@ -1780,6 +1815,29 @@ const sourceValueBindingScopes = (
       addExported(identifier, scope, declaration, visibility);
     }
   };
+  const hasUseStrictDirective = (statements: readonly ts.Statement[]): boolean => {
+    for (const statement of statements) {
+      if (!ts.isExpressionStatement(statement) || !ts.isStringLiteral(statement.expression)) return false;
+      if (statement.expression.text === 'use strict') return true;
+    }
+    return false;
+  };
+  const usesStrictFunctionSemantics = (node: ts.FunctionDeclaration): boolean => {
+    if (sourceVariablesAreLexical) return true;
+    let current: ts.Node | undefined = node.parent;
+    while (current) {
+      if (ts.isClassDeclaration(current)
+        || ts.isClassExpression(current)
+        || ts.isClassStaticBlockDeclaration(current)) return true;
+      if (ts.isFunctionLike(current)) {
+        const body = (current as ts.FunctionLikeDeclaration).body;
+        if (body && ts.isBlock(body) && hasUseStrictDirective(body.statements)) return true;
+      }
+      if (ts.isSourceFile(current)) return hasUseStrictDirective(current.statements);
+      current = current.parent;
+    }
+    return false;
+  };
   const visit = (node: ts.Node): void => {
     if (ts.isVariableDeclaration(node)) {
       if (ts.isCatchClause(node.parent)) {
@@ -1806,9 +1864,19 @@ const sourceValueBindingScopes = (
       addBindingName(node.name, functionOrSourceScope(node));
     } else if (ts.isFunctionDeclaration(node)) {
       if (!hasDeclareModifier(node)) {
-        const scope = lexicalScope(node);
-        if (sourceVariablesAreLexical || scope !== sourceFile || node.parent === sourceFile) {
-          addExported(node.name, scope, node);
+        if (sourceVariablesAreLexical) {
+          addExported(node.name, lexicalScope(node), node);
+        } else if (node.parent !== sourceFile) {
+          const statementListDeclaration = ts.isBlock(node.parent)
+            || ts.isCaseClause(node.parent)
+            || ts.isDefaultClause(node.parent);
+          if (statementListDeclaration) addExported(node.name, lexicalScope(node), node);
+          if (!usesStrictFunctionSemantics(node)) {
+            const variableEnvironment = functionOrSourceScope(node);
+            if (variableEnvironment && ts.isFunctionLike(variableEnvironment)) {
+              addExported(node.name, variableEnvironment, node, 'body');
+            }
+          }
         }
       }
     } else if (ts.isClassDeclaration(node)
@@ -2414,11 +2482,12 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
     const reportOffset = (offset: number, message: string): void => {
       appendFinding(`${policyPath}:${reportLine(input, offset)}: ${message}`);
     };
-    const parseFailure = input.parseFailure ?? (
-      input.moduleGoal && scriptKinds.get(extname(input.path)) === ts.ScriptKind.JS
-      ? moduleFailures.get(input.source)
-      : undefined
-    );
+    const scriptKind = scriptKinds.get(extname(input.path))!;
+    const parseFailure = input.parseFailure ?? (input.moduleGoal
+      ? scriptKind === ts.ScriptKind.JS
+        ? moduleFailures.get(input.source)
+        : transformedModuleParseFailure(input.source, scriptKind)
+      : undefined);
     if (parseFailure) {
       reportOffset(parseFailure.offset, `could not be parsed: ${parseFailure.message}`);
       continue;
@@ -2429,7 +2498,7 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
       input.source,
       ts.ScriptTarget.Latest,
       true,
-      scriptKinds.get(extname(input.path)),
+      scriptKind,
     );
     const parseDiagnostics = (sourceFile as ts.SourceFile & {
       parseDiagnostics: readonly ts.Diagnostic[];
@@ -4205,6 +4274,37 @@ describe('local workspace static boundary', () => {
     expect(findings).toEqual([]);
   });
 
+  it.each([
+    [
+      'TypeScript duplicate lexical declaration',
+      'pages/duplicate.ts',
+      'const parent: number = 1; const parent: number = 2;',
+    ],
+    ['TypeScript invalid export', 'pages/export.ts', 'export { missing };'],
+    [
+      'TSX duplicate lexical declaration',
+      'pages/duplicate.tsx',
+      'const parent = <div />; const parent = <span />;',
+    ],
+    ['TSX invalid export', 'pages/export.tsx', 'export { missing };'],
+    [
+      'JSX duplicate lexical declaration',
+      'pages/duplicate.jsx',
+      'const parent = <div />; const parent = <span />;',
+    ],
+    ['JSX invalid export', 'pages/export.jsx', 'export { missing };'],
+  ])('fails closed for transformed external module %s', (_case, scriptPath, scriptSource) => {
+    const findings = referencedProductionScriptFindings(
+      'pages/shell.html',
+      `<script type='module' src='./${scriptPath.slice('pages/'.length)}'></script>`,
+      scriptPath,
+      scriptSource,
+    );
+    expect(findings).toEqual(expect.arrayContaining([
+      expect.stringContaining('could not be parsed'),
+    ]));
+  });
+
   it('still rejects an unbound root in an external module', () => {
     const findings = referencedProductionScriptFindings(
       'pages/shell.html',
@@ -4270,6 +4370,92 @@ describe('local workspace static boundary', () => {
     }
   });
 
+  const reservedRootNames = ['parent', 'top', 'opener', 'frames', 'open'] as const;
+  const reservedRootUse = (rootName: typeof reservedRootNames[number]): string => rootName === 'open'
+    ? "open()?.['local' + 'Storage']?.getItem(runtimeKey);"
+    : `${rootName}['local' + 'Storage'].getItem(runtimeKey);`;
+  const reservedRootFinding = (rootName: typeof reservedRootNames[number]): string => rootName === 'open'
+    ? 'calls unbound browser open outside approved static seams'
+    : 'acquires an ambient browser capability outside approved static seams';
+  const classicAnnexVariableEnvironmentCases = [
+    [
+      'nested block',
+      'parent',
+      (use: string) => `{ if (false) function parent() {} ${use} }`,
+      '{ if (false) function parent() {} }',
+    ],
+    [
+      'nested if',
+      'top',
+      (use: string) => `if (true) { if (false) function top() {} ${use} }`,
+      'if (true) { if (false) function top() {} }',
+    ],
+    [
+      'loop block',
+      'opener',
+      (use: string) => `for (let once = 0; once < 1; once += 1) { if (false) function opener() {} ${use} }`,
+      'for (let once = 0; once < 1; once += 1) { if (false) function opener() {} }',
+    ],
+    [
+      'switch case',
+      'frames',
+      (use: string) => `switch (0) { case 0: if (false) function frames() {} ${use} break; }`,
+      'switch (0) { case 0: if (false) function frames() {} break; }',
+    ],
+    [
+      'try block',
+      'open',
+      (use: string) => `try { if (false) function open() {} ${use} } finally {}`,
+      'try { if (false) function open() {} } finally {}',
+    ],
+  ] as const;
+
+  it.each(classicAnnexVariableEnvironmentCases)(
+    'keeps global classic %s Annex B %s ambient',
+    (_form, rootName, globalBody) => {
+      expect(analyzeProductionSource(
+        'pages/annex-b-global.html',
+        `<script>${globalBody(reservedRootUse(rootName))}</script>`,
+      )).toEqual(expect.arrayContaining([
+        expect.stringContaining(reservedRootFinding(rootName)),
+      ]));
+    },
+  );
+
+  it.each(classicAnnexVariableEnvironmentCases)(
+    'keeps external global classic %s Annex B %s ambient',
+    (_form, rootName, globalBody) => {
+      const findings = referencedProductionScriptFindings(
+        'pages/shell.html',
+        "<script src='./legacy.js'></script>",
+        'pages/legacy.js',
+        globalBody(reservedRootUse(rootName)),
+      );
+      expect(findings).toEqual(expect.arrayContaining([
+        expect.stringContaining(reservedRootFinding(rootName)),
+      ]));
+    },
+  );
+
+  it.each(reservedRootNames)('keeps direct global classic function %s conservative', rootName => {
+    expect(analyzeProductionSource(
+      'pages/direct-global.html',
+      `<script>function ${rootName}() {} ${reservedRootUse(rootName)}</script>`,
+    )).toEqual(expect.arrayContaining([
+      expect.stringContaining(reservedRootFinding(rootName)),
+    ]));
+  });
+
+  it.each(classicAnnexVariableEnvironmentCases)(
+    'binds function-local classic %s Annex B %s in its variable environment',
+    (_form, rootName, _globalBody, localDeclaration) => {
+      expect(analyzeProductionSource(
+        'pages/annex-b-local.html',
+        `<script>function inspect() { ${localDeclaration} ${reservedRootUse(rootName)} } inspect();</script>`,
+      )).toEqual([]);
+    },
+  );
+
   it.each([
     [
       'false parent branch',
@@ -4293,18 +4479,20 @@ describe('local workspace static boundary', () => {
   });
 
   it.each([
-    ['direct classic parent', '<script>function parent() {} void parent;</script>'],
-    ['direct classic open', '<script>function open() {} open();</script>'],
     [
-      'function-local Annex B parent',
-      '<script>function inspect() { if (false) function parent() {} void parent; } inspect();</script>',
+      'strict block binding',
+      "<script>function inspect() { 'use strict'; { function parent() {} void parent; } } inspect();</script>",
     ],
     [
-      'function-local Annex B open',
-      '<script>function inspect() { if (false) function open() {} open(); } inspect();</script>',
+      'module block binding',
+      "<script type='module'>{ function open() {} open(); }</script>",
     ],
-  ])('preserves %s binding semantics', (_case, source) => {
-    expect(analyzeProductionSource('pages/annex-b-local.html', source)).toEqual([]);
+    [
+      'module direct binding',
+      "<script type='module'>function frames() {} void frames;</script>",
+    ],
+  ])('preserves %s semantics', (_case, source) => {
+    expect(analyzeProductionSource('pages/strict-module-binding.html', source)).toEqual([]);
   });
 
   it.each([
@@ -4382,31 +4570,70 @@ describe('local workspace static boundary', () => {
   it('matches Annex B root activation in Chromium', { timeout: 30_000 }, async () => {
     const browser = await chromium.launch({ headless: true });
     try {
-      const declarations = [
-        ['direct', 'function ROOT() {}', false],
-        ['conditional', 'if (false) function ROOT() {}', true],
-        ['block', 'if (false) { function ROOT() {} }', true],
-        ['loop block', 'while (false) { function ROOT() {} }', true],
-        ['strict block', "'use strict'; if (false) { function ROOT() {} }", true],
-      ] as const;
-      for (const rootName of ['parent', 'open']) {
-        for (const [form, declaration, expectedSame] of declarations) {
-          const page = await browser.newPage();
-          await page.setContent([
-            `<script>window['__doctectBefore'] = window[${JSON.stringify(rootName)}];</script>`,
-            `<script>${declaration.replaceAll('ROOT', rootName)};`,
-            `window['__doctectSame'] = window[${JSON.stringify(rootName)}]`,
-            "=== window['__doctectBefore'];</script>",
-          ].join(''));
-          expect(
-            await page.evaluate(() => (
-              (window as unknown as Record<string, unknown>).__doctectSame
-            )),
-            `${rootName} ${form}`,
-          ).toBe(expectedSame);
-          await page.close();
-        }
+      const page = await browser.newPage();
+      await page.route('https://doctect.invalid/**', route => {
+        const match = new URL(route.request().url()).pathname.match(/^\/annex-(parent|top|opener|frames|open)\.html$/);
+        if (!match) return route.fulfill({ status: 404, body: 'missing' });
+        const rootName = match[1] as typeof reservedRootNames[number];
+        const annexCase = classicAnnexVariableEnvironmentCases.find(entry => entry[1] === rootName)!;
+        const key = `annex-${rootName}`;
+        const setup = rootName === 'opener'
+          ? 'window.opener = window;'
+          : rootName === 'open'
+            ? 'window.open = () => window;'
+            : '';
+        const use = rootName === 'open'
+          ? `open()?.['local' + 'Storage']?.setItem('${key}', 'written');`
+          : `${rootName}['local' + 'Storage'].setItem('${key}', 'written');`;
+        return route.fulfill({
+          contentType: 'text/html',
+          body: `<script>${setup}${annexCase[2](use)}`
+            + `function inspect() { ${annexCase[3]} return ${rootName} === undefined; }`
+            + 'window.__doctectLocal = inspect();</script>',
+        });
+      });
+
+      for (const rootName of reservedRootNames) {
+        await page.goto(`https://doctect.invalid/annex-${rootName}.html`);
+        expect(await page.evaluate(key => ({
+          local: (window as unknown as Record<string, unknown>).__doctectLocal,
+          stored: localStorage.getItem(key),
+        }), `annex-${rootName}`), `${rootName} nested and local`).toEqual({
+          local: true,
+          stored: 'written',
+        });
+
+        const directPage = await browser.newPage();
+        await directPage.setContent([
+          `<script>window.__doctectBefore = window[${JSON.stringify(rootName)}];</script>`,
+          `<script>function ${rootName}() {}</script>`,
+          `<script>window.__doctectSame = window[${JSON.stringify(rootName)}]`,
+          ' === window.__doctectBefore;</script>',
+        ].join(''));
+        expect(
+          await directPage.evaluate(() => (
+            (window as unknown as Record<string, unknown>).__doctectSame
+          )),
+          `${rootName} direct`,
+        ).toBe(rootName === 'top');
+        await directPage.close();
+
+        const strictPage = await browser.newPage();
+        await strictPage.setContent([
+          `<script>window.__doctectBefore = window[${JSON.stringify(rootName)}];</script>`,
+          `<script>'use strict'; { function ${rootName}() {} }`,
+          `window.__doctectSame = window[${JSON.stringify(rootName)}]`,
+          ' === window.__doctectBefore;</script>',
+        ].join(''));
+        expect(
+          await strictPage.evaluate(() => (
+            (window as unknown as Record<string, unknown>).__doctectSame
+          )),
+          `${rootName} strict block`,
+        ).toBe(true);
+        await strictPage.close();
       }
+      await page.close();
     } finally {
       await browser.close();
     }
