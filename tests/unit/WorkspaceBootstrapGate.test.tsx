@@ -115,32 +115,6 @@ function AuthorityLossOnLayoutProbe({
   return <div data-testid="editor-page" />;
 }
 
-function AuthorityLossCleanupProbe({
-  mount,
-  protectedWorkspace,
-  staleWorkspace,
-  onUnmount,
-}: {
-  mount: WorkspaceEditorMount;
-  protectedWorkspace: WorkspaceSnapshot;
-  staleWorkspace: WorkspaceSnapshot;
-  onUnmount: () => void;
-}) {
-  useLayoutEffect(() => () => {
-    onUnmount();
-    mount.onWorkspaceChange(staleWorkspace);
-  }, [mount, onUnmount, staleWorkspace]);
-
-  return (
-    <button
-      data-testid="editor-page"
-      onClick={() => mount.onWorkspaceChange(protectedWorkspace)}
-    >
-      Publish protected work
-    </button>
-  );
-}
-
 function ReplacementActionProbe({
   store,
   downloadDuringLayout,
@@ -792,66 +766,50 @@ describe('WorkspaceBootstrapGate', () => {
     }, 'doctect-open-workspace.json');
   });
 
-  it('blocks once and drops only open-work recovery when protected capture cloning fails', async () => {
-    const initial = workspaceSnapshot();
-    const protectedWorkspace = workspaceSnapshot({
-      projects: [{ ...initial.projects[0], name: 'Protected clone failure' }],
-    });
-    const staleWorkspace = workspaceSnapshot({
-      projects: [{ ...initial.projects[0], name: 'Stale cleanup publication' }],
+  it('retries a provisional capture after initial clone failure while the editor stays blocked', async () => {
+    const initial = workspaceSnapshot({
+      projects: [{ ...workspaceSnapshot().projects[0], name: 'Provisional retry source' }],
     });
     const store = fakeReadyStore({ snapshot: initial });
     const originalStructuredClone = globalThis.structuredClone.bind(globalThis);
-    let protectedCloneAttempts = 0;
-    let staleCloneAttempts = 0;
+    let cloningBlockedCapture = false;
+    let failCapture = true;
+    let captureAttempts = 0;
     vi.spyOn(globalThis, 'structuredClone').mockImplementation(function cloneWithFailure<T>(
       value: T,
       options?: StructuredSerializeOptions,
     ): T {
       const name = (value as WorkspaceSnapshot)?.projects?.[0]?.name;
-      if (name === 'Protected clone failure') {
-        protectedCloneAttempts += 1;
-        if (protectedCloneAttempts === 2) throw new DOMException('clone failed', 'DataCloneError');
+      if (cloningBlockedCapture && name === 'Provisional retry source') {
+        captureAttempts += 1;
+        if (failCapture) throw new DOMException('clone failed', 'DataCloneError');
       }
-      if (name === 'Stale cleanup publication') staleCloneAttempts += 1;
       return originalStructuredClone(value, options);
     });
-    const unmounted = vi.fn();
-    let publish: WorkspaceEditorMount['onWorkspaceChange'] | undefined;
-    const renderEditor = (mount: WorkspaceEditorMount) => {
-      publish = mount.onWorkspaceChange;
-      return <AuthorityLossCleanupProbe
-        mount={mount}
-        protectedWorkspace={protectedWorkspace}
-        staleWorkspace={staleWorkspace}
-        onUnmount={unmounted}
-      />;
-    };
-    const view = render(
-      <WorkspaceBootstrapGate store={store} renderEditor={renderEditor} />,
+    render(
+      <WorkspaceBootstrapGate store={store} renderEditor={fakeEditorRenderer} />,
     );
-    fireEvent.click(await screen.findByTestId('editor-page'));
-    const signal = store.observers[0]?.signal;
+    await screen.findByTestId('editor-page');
     const firstResult = recoveryResult(splitBrainRecovery({
       recoveryId: 'capture-clone-failed',
     }));
-    const notifyAuthorityLost = vi.fn(() => {
+    const emitAuthorityLost = (result: Parameters<typeof store.emitAuthorityLost>[0]) => {
+      cloningBlockedCapture = true;
       try {
-        store.emitAuthorityLost(firstResult);
-      } catch {
-        // The real store isolates observer failures from its authority transition.
+        act(() => store.emitAuthorityLost(result));
+      } finally {
+        cloningBlockedCapture = false;
       }
-    });
+    };
 
-    act(() => notifyAuthorityLost());
+    emitAuthorityLost(firstResult);
 
-    expect(notifyAuthorityLost).toHaveBeenCalledOnce();
-    expect(unmounted).toHaveBeenCalledOnce();
     expect(screen.queryByTestId('editor-page')).not.toBeInTheDocument();
     const alert = screen.getByRole('alert');
     expect(within(alert).getByRole('heading', {
       name: 'Project copies changed in another tab',
     })).toBeVisible();
+    expect(captureAttempts).toBe(1);
     expect(within(alert).queryByRole('button', { name: 'Download open work' }))
       .not.toBeInTheDocument();
     expect(within(alert).getByRole('button', { name: 'Download current browser copy' }))
@@ -863,27 +821,187 @@ describe('WorkspaceBootstrapGate', () => {
     expect(store.commit).not.toHaveBeenCalled();
     expect(trackEvent).not.toHaveBeenCalled();
 
-    act(() => store.emitAuthorityLost(unavailableResult({
+    failCapture = false;
+    emitAuthorityLost(unavailableResult({
       availableExports: ['indexeddb-workspace'],
-    })));
+    }));
     expect(screen.getByRole('heading', {
       name: 'Local project storage is unavailable',
     })).toBeVisible();
     expect(screen.getByRole('button', { name: 'Download editor copy' })).toBeEnabled();
-    expect(screen.queryByRole('button', { name: 'Download open work' }))
-      .not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Download open work' })).toBeEnabled();
+    expect(screen.queryByTestId('editor-page')).not.toBeInTheDocument();
     expect(screen.getAllByRole('alert')).toHaveLength(1);
-    expect(protectedCloneAttempts).toBe(2);
-    expect(staleCloneAttempts).toBe(0);
+    expect(captureAttempts).toBe(2);
+    fireEvent.click(screen.getByRole('button', { name: 'Download open work' }));
+    expect(downloadJson).toHaveBeenCalledWith({
+      format: 'doctect.open-workspace-recovery',
+      version: 1,
+      capturedAt: expect.any(String),
+      workspace: initial,
+    }, 'doctect-open-workspace.json');
+  });
+
+  it('keeps a successful protected capture when a repeated notification clone would fail', async () => {
+    const initial = workspaceSnapshot({
+      projects: [{ ...workspaceSnapshot().projects[0], name: 'Protected before repeat' }],
+    });
+    const store = fakeReadyStore({ snapshot: initial });
+    const originalStructuredClone = globalThis.structuredClone.bind(globalThis);
+    let cloningBlockedCapture = false;
+    let failCapture = false;
+    let captureAttempts = 0;
+    vi.spyOn(globalThis, 'structuredClone').mockImplementation(function cloneWithFailure<T>(
+      value: T,
+      options?: StructuredSerializeOptions,
+    ): T {
+      if (cloningBlockedCapture
+        && (value as WorkspaceSnapshot)?.projects?.[0]?.name === 'Protected before repeat') {
+        captureAttempts += 1;
+        if (failCapture) throw new DOMException('repeat clone failed', 'DataCloneError');
+      }
+      return originalStructuredClone(value, options);
+    });
+    render(<WorkspaceBootstrapGate store={store} renderEditor={fakeEditorRenderer} />);
+    await screen.findByTestId('editor-page');
+    const emitAuthorityLost = (result: Parameters<typeof store.emitAuthorityLost>[0]) => {
+      cloningBlockedCapture = true;
+      try {
+        act(() => store.emitAuthorityLost(result));
+      } finally {
+        cloningBlockedCapture = false;
+      }
+    };
+
+    emitAuthorityLost(recoveryResult(splitBrainRecovery({ recoveryId: 'protected-first' })));
+    expect(screen.queryByTestId('editor-page')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Download open work' })).toBeEnabled();
+
+    failCapture = true;
+    emitAuthorityLost(unavailableResult({ availableExports: ['indexeddb-workspace'] }));
+
+    expect(screen.queryByTestId('editor-page')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Download open work' })).toBeEnabled();
+    expect(captureAttempts).toBe(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Download open work' }));
+    expect(downloadJson).toHaveBeenCalledWith({
+      format: 'doctect.open-workspace-recovery',
+      version: 1,
+      capturedAt: expect.any(String),
+      workspace: initial,
+    }, 'doctect-open-workspace.json');
+  });
+
+  it('does not replace protected open work when repeated cloning returns changed source', async () => {
+    const initial = workspaceSnapshot({
+      projects: [{ ...workspaceSnapshot().projects[0], name: 'Changing provisional source' }],
+    });
+    const firstProtected = workspaceSnapshot({
+      projects: [{ ...initial.projects[0], name: 'First protected copy' }],
+    });
+    const changedRepeat = workspaceSnapshot({
+      projects: [{ ...initial.projects[0], name: 'Changed repeated source' }],
+    });
+    const store = fakeReadyStore({ snapshot: initial });
+    const originalStructuredClone = globalThis.structuredClone.bind(globalThis);
+    let cloningBlockedCapture = false;
+    let captureAttempts = 0;
+    vi.spyOn(globalThis, 'structuredClone').mockImplementation(function cloneChangedSource<T>(
+      value: T,
+      options?: StructuredSerializeOptions,
+    ): T {
+      if (cloningBlockedCapture
+        && (value as WorkspaceSnapshot)?.projects?.[0]?.name === 'Changing provisional source') {
+        captureAttempts += 1;
+        return originalStructuredClone(
+          captureAttempts === 1 ? firstProtected : changedRepeat,
+          options,
+        ) as T;
+      }
+      return originalStructuredClone(value, options);
+    });
+    render(<WorkspaceBootstrapGate store={store} renderEditor={fakeEditorRenderer} />);
+    await screen.findByTestId('editor-page');
+    const emitAuthorityLost = (result: Parameters<typeof store.emitAuthorityLost>[0]) => {
+      cloningBlockedCapture = true;
+      try {
+        act(() => store.emitAuthorityLost(result));
+      } finally {
+        cloningBlockedCapture = false;
+      }
+    };
+
+    emitAuthorityLost(recoveryResult(splitBrainRecovery({ recoveryId: 'changed-source-first' })));
+    expect(screen.queryByTestId('editor-page')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Download open work' })).toBeEnabled();
+    emitAuthorityLost(recoveryResult(splitBrainRecovery({ recoveryId: 'changed-source-repeat' })));
+
+    expect(screen.queryByTestId('editor-page')).not.toBeInTheDocument();
+    expect(captureAttempts).toBe(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Download open work' }));
+    expect(downloadJson).toHaveBeenCalledWith({
+      format: 'doctect.open-workspace-recovery',
+      version: 1,
+      capturedAt: expect.any(String),
+      workspace: firstProtected,
+    }, 'doctect-open-workspace.json');
+  });
+
+  it('ignores stale publications and notifications after unmounting a protected blocked gate', async () => {
+    const initial = workspaceSnapshot({
+      projects: [{ ...workspaceSnapshot().projects[0], name: 'Protected before unmount' }],
+    });
+    const stale = workspaceSnapshot({
+      projects: [{ ...initial.projects[0], name: 'Stale after unmount' }],
+    });
+    const store = fakeReadyStore({ snapshot: initial });
+    const originalStructuredClone = globalThis.structuredClone.bind(globalThis);
+    let cloningBlockedCapture = false;
+    let captureAttempts = 0;
+    let staleCloneAttempts = 0;
+    vi.spyOn(globalThis, 'structuredClone').mockImplementation(function countClones<T>(
+      value: T,
+      options?: StructuredSerializeOptions,
+    ): T {
+      const name = (value as WorkspaceSnapshot)?.projects?.[0]?.name;
+      if (cloningBlockedCapture && name === 'Protected before unmount') captureAttempts += 1;
+      if (name === 'Stale after unmount') staleCloneAttempts += 1;
+      return originalStructuredClone(value, options);
+    });
+    let publish: WorkspaceEditorMount['onWorkspaceChange'] | undefined;
+    const view = render(<WorkspaceBootstrapGate
+      store={store}
+      renderEditor={mount => {
+        publish = mount.onWorkspaceChange;
+        return <div data-testid="editor-page" />;
+      }}
+    />);
+    await screen.findByTestId('editor-page');
+    const signal = store.observers[0]?.signal;
+    cloningBlockedCapture = true;
+    try {
+      act(() => store.emitAuthorityLost(recoveryResult(splitBrainRecovery())));
+    } finally {
+      cloningBlockedCapture = false;
+    }
+    expect(screen.getByRole('button', { name: 'Download open work' })).toBeEnabled();
+    expect(captureAttempts).toBe(1);
 
     view.unmount();
     expect(signal?.aborted).toBe(true);
-    act(() => {
-      publish?.(staleWorkspace);
-      store.emitAuthorityLost(unavailableResult({ availableExports: [] }));
-    });
-    expect(protectedCloneAttempts).toBe(2);
+    cloningBlockedCapture = true;
+    try {
+      act(() => {
+        publish?.(stale);
+        store.emitAuthorityLost(unavailableResult({ availableExports: [] }));
+      });
+    } finally {
+      cloningBlockedCapture = false;
+    }
+
+    expect(captureAttempts).toBe(1);
     expect(staleCloneAttempts).toBe(0);
+    expect(screen.queryByTestId('editor-page')).not.toBeInTheDocument();
   });
 
   it('seeds a verified initial snapshot before an editor publishes', async () => {

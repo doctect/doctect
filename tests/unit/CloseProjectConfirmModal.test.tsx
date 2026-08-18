@@ -52,6 +52,8 @@ describe('CloseProjectConfirmModal', () => {
       fireEvent.click(discard, { detail: 0 });
     });
 
+    expect(onConfirmClose).not.toHaveBeenCalled();
+    await act(async () => { await Promise.resolve(); });
     expect(onConfirmClose).toHaveBeenCalledOnce();
     expect(discard).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Save JSON & Close' })).toBeDisabled();
@@ -81,6 +83,8 @@ describe('CloseProjectConfirmModal', () => {
       fireEvent.click(titleClose);
     });
 
+    expect(onSaveAndClose).not.toHaveBeenCalled();
+    await act(async () => { await Promise.resolve(); });
     expect(onSaveAndClose).toHaveBeenCalledOnce();
     expect(onConfirmClose).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
@@ -112,6 +116,39 @@ describe('CloseProjectConfirmModal', () => {
     expect(save).toBeEnabled();
     await act(async () => fireEvent.click(save));
     expect(onSaveAndClose).toHaveBeenCalledTimes(2);
+  });
+
+  it('holds the lock through a synchronous throw task and rejection microtask', async () => {
+    const onConfirmClose = vi.fn((): Promise<void> => {
+      throw new Error('synchronous close failure');
+    });
+    const onSaveAndClose = vi.fn(() => Promise.resolve());
+    const unhandledRejection = vi.fn();
+    window.addEventListener('unhandledrejection', unhandledRejection);
+    try {
+      renderModal({ onConfirmClose, onSaveAndClose });
+      const discard = screen.getByRole('button', { name: 'Close without Saving' });
+      const save = screen.getByRole('button', { name: 'Save JSON & Close' });
+
+      await act(async () => {
+        fireEvent.click(discard);
+        fireEvent.click(save);
+        await Promise.resolve().then(() => fireEvent.click(save, { detail: 0 }));
+      });
+
+      expect(onConfirmClose).toHaveBeenCalledOnce();
+      expect(onSaveAndClose).not.toHaveBeenCalled();
+      expect(unhandledRejection).not.toHaveBeenCalled();
+      expect(save).toBeEnabled();
+
+      await act(async () => {
+        fireEvent.click(save);
+        await Promise.resolve();
+      });
+      expect(onSaveAndClose).toHaveBeenCalledOnce();
+    } finally {
+      window.removeEventListener('unhandledrejection', unhandledRejection);
+    }
   });
 
   it('handles pending rejection after unmount without another action', async () => {

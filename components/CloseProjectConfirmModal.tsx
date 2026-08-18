@@ -31,7 +31,7 @@ export const CloseProjectConfirmModal: React.FC<CloseProjectConfirmModalProps> =
     pendingRef.current = true;
     setPending(true);
     try {
-      await action();
+      await Promise.resolve().then(action);
     } catch {
       // Parent state remains intact so the user can retry either close path.
     } finally {

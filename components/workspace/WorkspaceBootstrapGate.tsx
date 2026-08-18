@@ -221,11 +221,21 @@ export function WorkspaceBootstrapGate({
     const capture = openWorkspaceRef.current;
     let openWorkspace: WorkspaceSnapshot | undefined;
     if (capture?.store === resultStore) {
-      capture.provenance = 'protected';
-      try {
-        openWorkspace = structuredClone(capture.workspace);
-      } catch {
-        if (openWorkspaceRef.current === capture) openWorkspaceRef.current = null;
+      if (capture.provenance === 'protected') {
+        openWorkspace = capture.workspace;
+      } else {
+        try {
+          openWorkspace = structuredClone(capture.workspace);
+          if (openWorkspaceRef.current === capture) {
+            openWorkspaceRef.current = {
+              ...capture,
+              workspace: openWorkspace,
+              provenance: 'protected',
+            };
+          }
+        } catch {
+          // Keep the provisional source available for a later blocked notification.
+        }
       }
     }
     return {
