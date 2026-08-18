@@ -7,6 +7,16 @@ import { describe, expect, it } from 'vitest';
 const repositoryRoot = path.resolve(import.meta.dirname, '../..');
 const workflowPath = path.join(repositoryRoot, '.github/workflows/local-workspace-migration.yml');
 const benchmarkMarker = 'coalesces near-limit built-editor interactions before one module-Worker save';
+const migrationSpecPath = 'tests/e2e/local_workspace_migration.spec.js';
+const playwrightCommand = ['npx', 'playwright', 'test', migrationSpecPath];
+const sourceProjects = [
+    'chromium',
+    'firefox',
+    'webkit',
+    'workspace-large-chromium',
+    'workspace-large-firefox',
+];
+const completionMarkerVariable = '$E2E_BUILT_WORKER_COMPLETION_MARKER';
 const probeScript = `
 const config = require('./playwright.config.cjs');
 process.stdout.write(JSON.stringify({
@@ -34,61 +44,241 @@ const probeConfig = overrides => {
     return JSON.parse(result.stdout);
 };
 
-const unquoteYamlScalar = value => {
-    const trimmed = value.trim();
-    if ((trimmed.startsWith("'") && trimmed.endsWith("'"))
-        || (trimmed.startsWith('"') && trimmed.endsWith('"'))) {
-        return trimmed.slice(1, -1);
+const parseNarrowYamlScalar = source => {
+    if (typeof source !== 'string') return null;
+    const value = source.trim();
+    if (!value) return null;
+    if (value.startsWith("'")) {
+        if (value.length < 2 || !value.endsWith("'")) return null;
+        let parsed = '';
+        const inner = value.slice(1, -1);
+        for (let index = 0; index < inner.length; index += 1) {
+            if (inner[index] !== "'") {
+                parsed += inner[index];
+            } else if (inner[index + 1] === "'") {
+                parsed += "'";
+                index += 1;
+            } else {
+                return null;
+            }
+        }
+        return parsed;
     }
-    return trimmed;
+    if (value.startsWith('"')) {
+        try {
+            const parsed = JSON.parse(value);
+            return typeof parsed === 'string' ? parsed : null;
+        } catch {
+            return null;
+        }
+    }
+    if (value.includes("'") || value.includes('"')) return null;
+    return value;
+};
+
+const lineIndent = line => {
+    const spaces = line.match(/^ */)?.[0].length ?? 0;
+    return line[spaces] === '\t' ? null : spaces;
+};
+
+const normalizeRunBlock = (lines, style, keyIndent) => {
+    const firstContent = lines.find(line => line.trim());
+    if (!firstContent) return null;
+    const contentIndent = lineIndent(firstContent);
+    if (contentIndent === null || contentIndent <= keyIndent) return null;
+
+    const content = [];
+    for (const line of lines) {
+        if (!line.trim()) {
+            content.push('');
+            continue;
+        }
+        const indent = lineIndent(line);
+        if (indent === null || indent < contentIndent) return null;
+        if (style.startsWith('>') && indent !== contentIndent) return null;
+        content.push(line.slice(contentIndent));
+    }
+    if (style.startsWith('|')) return content.join('\n');
+
+    return content.reduce((script, line, index) => {
+        if (index === 0) return line;
+        const separator = !line || !content[index - 1] ? '\n' : ' ';
+        return `${script}${separator}${line}`;
+    }, '');
+};
+
+// Deliberately supports only simple commands used by this workflow. Variables
+// remain symbolic; malformed quotes and shell control syntax fail closed.
+const tokenizeShellCommands = script => {
+    const commands = [];
+    let argv = [];
+    let token = '';
+    let tokenStarted = false;
+    let quote = null;
+
+    const finishToken = () => {
+        if (!tokenStarted) return;
+        argv.push(token);
+        token = '';
+        tokenStarted = false;
+    };
+    const finishCommand = () => {
+        finishToken();
+        if (argv.length) commands.push(argv);
+        argv = [];
+    };
+
+    for (let index = 0; index < script.length; index += 1) {
+        const character = script[index];
+        if (quote === "'") {
+            if (character === "'") quote = null;
+            else if (character === '\n') return null;
+            else token += character;
+            continue;
+        }
+        if (quote === '"') {
+            if (character === '"') {
+                quote = null;
+            } else if (character === '\n' || character === '`') {
+                return null;
+            } else if (character === '\\') {
+                const next = script[index + 1];
+                if (next === undefined) return null;
+                if (next === '\n') {
+                    index += 1;
+                } else if ('$`"\\'.includes(next)) {
+                    token += next;
+                    index += 1;
+                } else {
+                    token += character;
+                }
+            } else {
+                token += character;
+            }
+            continue;
+        }
+        if (character === "'" || character === '"') {
+            quote = character;
+            tokenStarted = true;
+        } else if (character === '\\') {
+            const next = script[index + 1];
+            if (next === undefined) return null;
+            if (next === '\n') {
+                index += 1;
+            } else {
+                token += next;
+                tokenStarted = true;
+                index += 1;
+            }
+        } else if (character === ' ' || character === '\t') {
+            finishToken();
+        } else if (character === '\n') {
+            finishCommand();
+        } else if (';&|<>()`#'.includes(character)) {
+            return null;
+        } else {
+            token += character;
+            tokenStarted = true;
+        }
+    }
+    if (quote !== null) return null;
+    finishCommand();
+    return commands.length ? commands : null;
+};
+
+const parseWorkflowStep = (lines, start, end, stepIndent) => {
+    const env = {};
+    let commands = null;
+    for (let index = start + 1; index < end; index += 1) {
+        const indent = lineIndent(lines[index]);
+        if (indent === null) return null;
+        if (!lines[index].trim() || indent !== stepIndent + 2) continue;
+        const key = lines[index].trim();
+        if (key === 'env:') {
+            let cursor = index + 1;
+            for (; cursor < end; cursor += 1) {
+                const line = lines[cursor];
+                if (!line.trim()) continue;
+                const childIndent = lineIndent(line);
+                if (childIndent === null) return null;
+                if (childIndent <= stepIndent + 2) break;
+                const entry = line.slice(childIndent).match(/^([A-Z][A-Z0-9_]*):(?: +(.*))?$/);
+                if (!entry || Object.hasOwn(env, entry[1])) return null;
+                const value = parseNarrowYamlScalar(entry[2]);
+                if (value === null) return null;
+                env[entry[1]] = value;
+            }
+            index = cursor - 1;
+            continue;
+        }
+
+        const run = key.match(/^run: +([>|][+-]?)$/);
+        if (!run) continue;
+        if (commands !== null) return null;
+        let cursor = index + 1;
+        const blockLines = [];
+        for (; cursor < end; cursor += 1) {
+            const line = lines[cursor];
+            const childIndent = lineIndent(line);
+            if (childIndent === null) return null;
+            if (line.trim() && childIndent <= stepIndent + 2) break;
+            blockLines.push(line);
+        }
+        const script = normalizeRunBlock(blockLines, run[1], stepIndent + 2);
+        if (script === null) return null;
+        commands = tokenizeShellCommands(script);
+        if (commands === null) return null;
+        index = cursor - 1;
+    }
+    return commands === null ? null : { env, commands };
 };
 
 const extractNamedWorkflowStep = (workflow, name) => {
     const lines = workflow.split(/\r?\n/);
-    const start = lines.findIndex(line => line.trim() === `- name: ${name}`);
-    if (start === -1) return null;
+    for (let start = 0; start < lines.length; start += 1) {
+        const stepName = lines[start].match(/^( *)- +name:(?: +(.*))?$/);
+        if (!stepName || parseNarrowYamlScalar(stepName[2]) !== name) continue;
 
-    const stepIndent = lines[start].search(/\S/);
-    let end = lines.length;
-    for (let index = start + 1; index < lines.length; index += 1) {
-        if (lines[index].search(/\S/) === stepIndent && lines[index].trim().startsWith('- ')) {
-            end = index;
-            break;
-        }
-    }
-
-    const env = {};
-    const runLines = [];
-    let section = null;
-    for (const line of lines.slice(start + 1, end)) {
-        const indent = line.search(/\S/);
-        const trimmed = line.trim();
-        if (!trimmed) continue;
-        if (indent === stepIndent + 2) {
-            section = null;
-            if (trimmed === 'env:') section = 'env';
-            if (trimmed.startsWith('run:')) {
-                section = 'run';
-                const inline = trimmed.slice('run:'.length).trim();
-                if (inline && !/^[>|][+-]?$/.test(inline)) runLines.push(inline);
+        const stepIndent = stepName[1].length;
+        let end = lines.length;
+        for (let index = start + 1; index < lines.length; index += 1) {
+            const nextStep = lines[index].match(/^( *)- +/);
+            if (nextStep?.[1].length === stepIndent) {
+                end = index;
+                break;
             }
-            continue;
         }
-        if (indent <= stepIndent + 2) continue;
-        if (section === 'env') {
-            const separator = trimmed.indexOf(':');
-            if (separator !== -1) {
-                env[trimmed.slice(0, separator)] = unquoteYamlScalar(trimmed.slice(separator + 1));
-            }
-        } else if (section === 'run') {
-            runLines.push(trimmed);
-        }
+        return parseWorkflowStep(lines, start, end, stepIndent);
     }
+    return null;
+};
 
-    return {
-        env,
-        run: runLines.join(' ').replace(/\s+/g, ' ').trim(),
-    };
+const assertMigrationWorkflow = workflow => {
+    expect(extractNamedWorkflowStep(workflow, 'Browser migration matrix')).toEqual({
+        env: {},
+        commands: [[
+            ...playwrightCommand,
+            ...sourceProjects.map(project => `--project=${project}`),
+        ]],
+    });
+    expect(extractNamedWorkflowStep(workflow, 'Built Chromium Worker save proof')).toEqual({
+        env: {
+            E2E_BUILT_BUNDLE: '1',
+            E2E_BUILT_WORKER_COMPLETION_MARKER:
+                '${{ runner.temp }}/built-worker-proof-complete.json',
+        },
+        commands: [
+            ['rm', '-f', completionMarkerVariable],
+            [
+                ...playwrightCommand,
+                '--project=chromium',
+                `--grep=${benchmarkMarker}$`,
+                '--workers=1',
+                '--retries=0',
+            ],
+            ['test', '-s', completionMarkerVariable],
+        ],
+    });
 };
 
 describe('playwright config ports', () => {
@@ -141,31 +331,63 @@ describe('playwright config ports', () => {
 
     it('runs the built Worker save proof separately from the five-project source matrix', () => {
         const workflow = fs.readFileSync(workflowPath, 'utf8');
-        const sourceMatrix = extractNamedWorkflowStep(workflow, 'Browser migration matrix');
-        const builtProof = extractNamedWorkflowStep(workflow, 'Built Chromium Worker save proof');
 
-        expect(sourceMatrix).not.toBeNull();
-        expect(sourceMatrix?.run.match(/--project=/g)).toHaveLength(5);
-        for (const project of [
-            'chromium',
-            'firefox',
-            'webkit',
-            'workspace-large-chromium',
-            'workspace-large-firefox',
-        ]) {
-            expect(sourceMatrix?.run).toContain(`--project=${project}`);
-        }
-        expect(sourceMatrix?.env.E2E_BUILT_BUNDLE).toBeUndefined();
-        expect(builtProof).not.toBeNull();
-        expect(builtProof?.env.E2E_BUILT_BUNDLE).toBe('1');
-        expect(builtProof?.env.E2E_BUILT_WORKER_COMPLETION_MARKER)
-            .toContain('built-worker-proof-complete.json');
-        expect(builtProof?.run).toContain('playwright test tests/e2e/local_workspace_migration.spec.js');
-        expect(builtProof?.run).toContain('--project=chromium');
-        expect(builtProof?.run).toContain(`--grep="${benchmarkMarker}$"`);
-        expect(builtProof?.run).toContain('--workers=1');
-        expect(builtProof?.run).toContain('--retries=0');
-        expect(builtProof?.run).toContain('rm -f "$E2E_BUILT_WORKER_COMPLETION_MARKER"');
-        expect(builtProof?.run).toContain('test -s "$E2E_BUILT_WORKER_COMPLETION_MARKER"');
+        assertMigrationWorkflow(workflow);
+    });
+
+    it.each([
+        ['single', "'"],
+        ['double', '"'],
+    ])('recognizes %s-quoted workflow step names', (_style, quote) => {
+        const workflow = fs.readFileSync(workflowPath, 'utf8')
+            .replace(
+                '- name: Browser migration matrix',
+                `- name: ${quote}Browser migration matrix${quote}`,
+            )
+            .replace(
+                '- name: Built Chromium Worker save proof',
+                `- name: ${quote}Built Chromium Worker save proof${quote}`,
+            );
+
+        assertMigrationWorkflow(workflow);
+    });
+
+    it.each([
+        [
+            'project suffix',
+            workflow => workflow.replace(
+                '          --project=chromium\n',
+                '          --project=chromium-renamed\n',
+            ),
+        ],
+        [
+            'grep suffix',
+            workflow => workflow.replace(
+                `--grep="${benchmarkMarker}$"`,
+                `--grep="${benchmarkMarker}$"-renamed`,
+            ),
+        ],
+    ])('rejects a near-miss %s token', (_case, mutate) => {
+        const workflow = fs.readFileSync(workflowPath, 'utf8');
+
+        expect(() => assertMigrationWorkflow(mutate(workflow))).toThrow();
+    });
+
+    it('fails closed on malformed YAML step-name quoting', () => {
+        const workflow = fs.readFileSync(workflowPath, 'utf8').replace(
+            '- name: Browser migration matrix',
+            '- name: "Browser migration matrix',
+        );
+
+        expect(extractNamedWorkflowStep(workflow, 'Browser migration matrix')).toBeNull();
+    });
+
+    it('fails closed on malformed shell quoting', () => {
+        const workflow = fs.readFileSync(workflowPath, 'utf8').replace(
+            'rm -f "$E2E_BUILT_WORKER_COMPLETION_MARKER"',
+            'rm -f "$E2E_BUILT_WORKER_COMPLETION_MARKER',
+        );
+
+        expect(extractNamedWorkflowStep(workflow, 'Built Chromium Worker save proof')).toBeNull();
     });
 });
