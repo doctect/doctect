@@ -621,7 +621,7 @@ const createLocalWorkspaceStoreAtVersion = (
     recoveryBundle?: Blob,
   ): void => {
     protectedIndexedDbRecoveryBundle = recoveryBundle;
-    if (authority === 'ready') {
+    if (authority === 'ready' || authority === 'recovery') {
       handleAuthorityLost(error);
     } else {
       mutationQueue?.freeze();
@@ -1873,6 +1873,37 @@ const createLocalWorkspaceStoreAtVersion = (
       throw failure;
     }
 
+    let protectedRecoveryBundle: Blob;
+    try {
+      protectedRecoveryBundle = createProtectedIndexedDbRecoveryBundle(
+        snapshot,
+        environment.now(),
+      );
+    } catch (error) {
+      const failure = new WorkspaceStoreError(
+        'Recovered durable state could not be protected.',
+        'authority-lost',
+        error,
+      );
+      terminateValidatedReadback(failure);
+      throw failure;
+    }
+    const failRecoveryFinalization = (message: string, cause: unknown): never => {
+      const failure = new WorkspaceStoreError(message, 'authority-lost', cause);
+      terminateValidatedReadback(failure, protectedRecoveryBundle);
+      throw failure;
+    };
+    const cloneRecoveredSnapshot = (): WorkspaceSnapshot => {
+      try {
+        return structuredClone(snapshot);
+      } catch (error) {
+        return failRecoveryFinalization(
+          'Recovered durable state could not be published.',
+          error,
+        );
+      }
+    };
+
     try {
       let current = await captureObservedLegacy(assertRecoveryLifecycle);
       let currentLedger = nextLedger;
@@ -1889,11 +1920,12 @@ const createLocalWorkspaceStoreAtVersion = (
               persistedLedger,
             );
             assertRecoveryLifecycle();
+            const publication = cloneRecoveredSnapshot();
             invalidateDurableAuthority();
             authority = 'recovery';
             lifecycleResult = result;
             notifyAuthorityLost(result);
-            return structuredClone(snapshot);
+            return publication;
           }
           if (canonicalStringify(persistedLedger) !== canonicalStringify(nextLedger)) {
             throw new WorkspaceStoreError(
@@ -1901,17 +1933,35 @@ const createLocalWorkspaceStoreAtVersion = (
               'conflict',
             );
           }
-          const installed = installDurableState(records, snapshot);
-          const readyResult = ready(
-            cloneWorkspaceSnapshotWithProjectAuthority(installed),
-            persistedLedger,
-          );
+          let installed: WorkspaceSnapshot;
+          try {
+            installed = installDurableState(records, snapshot);
+          } catch (error) {
+            return failRecoveryFinalization(
+              'Recovered durable state could not be installed.',
+              error,
+            );
+          }
+          let readyResult: Extract<WorkspaceBootstrapResult, { status: 'ready' }>;
+          let publication: WorkspaceSnapshot;
+          try {
+            readyResult = ready(
+              cloneWorkspaceSnapshotWithProjectAuthority(installed),
+              persistedLedger,
+            );
+            publication = cloneWorkspaceSnapshotWithProjectAuthority(installed);
+          } catch (error) {
+            return failRecoveryFinalization(
+              'Recovered durable state could not be published.',
+              error,
+            );
+          }
           assertRecoveryLifecycle();
           authority = 'ready';
           cachedReady = readyResult;
           lifecycleResult = undefined;
           resetCommandQueue?.();
-          return cloneWorkspaceSnapshotWithProjectAuthority(installed);
+          return publication;
         }
 
         const recorded = await recordLegacyDrift(current, currentLedger);
@@ -1932,11 +1982,12 @@ const createLocalWorkspaceStoreAtVersion = (
           continue;
         }
         assertRecoveryLifecycle();
+        const publication = cloneRecoveredSnapshot();
         invalidateDurableAuthority();
         authority = 'recovery';
         lifecycleResult = result;
         notifyAuthorityLost(result);
-        return structuredClone(snapshot);
+        return publication;
       }
       throw new LegacyCaptureError(
         'Legacy storage changed repeatedly after recovery.',
@@ -1946,11 +1997,12 @@ const createLocalWorkspaceStoreAtVersion = (
       if (error instanceof LegacyCaptureError) {
         const result = await populateCapabilities(recovery('legacy-changing'));
         assertRecoveryLifecycle();
+        const publication = cloneRecoveredSnapshot();
         invalidateDurableAuthority();
         authority = 'recovery';
         lifecycleResult = result;
         notifyAuthorityLost(result);
-        return structuredClone(snapshot);
+        return publication;
       }
       const failure = error instanceof WorkspaceStoreError
         ? error

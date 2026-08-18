@@ -26,12 +26,14 @@ import {
 } from '../../../services/localWorkspace/indexedDbAdapter';
 import { captureLegacySnapshot } from '../../../services/localWorkspace/legacy';
 import { digestLegacySnapshot } from '../../../services/localWorkspace/canonical';
+import { reconstructWorkspace } from '../../../services/localWorkspace/migration';
 import {
   decodeLegacyRecoveryBundle,
   prepareLegacyRecovery,
 } from '../../../services/localWorkspace/recovery';
 import {
   WORKSPACE_DB_NAME,
+  storedProjectLineage,
 } from '../../../services/localWorkspace/schema';
 import {
   LEGACY_DOCUMENT_KEYS,
@@ -262,6 +264,16 @@ const bundleJson = async (blob: Blob): Promise<Record<string, unknown>> => {
 const snapshotFromValues = (values: Partial<Record<LegacyDocumentKey, string>>): LegacySnapshot =>
   legacySnapshot(values);
 
+const RECOVERED_CLONE_NAME = 'Recovered — Guarded recovery source';
+
+const isRecoveredWorkspaceSnapshot = (value: unknown): value is WorkspaceSnapshot =>
+  value !== null
+  && typeof value === 'object'
+  && Array.isArray((value as WorkspaceSnapshot).projects)
+  && Array.isArray((value as WorkspaceSnapshot).customPresets)
+  && Array.isArray((value as WorkspaceSnapshot).pendingImports)
+  && (value as WorkspaceSnapshot).projects.some(project => project.name === RECOVERED_CLONE_NAME);
+
 describe('recovery bundle exports', () => {
   it('exports legacy-current without opening IndexedDB and preserves every raw byte and presence bit', async () => {
     const indexedDB = new IDBFactory();
@@ -379,6 +391,155 @@ describe('recovery bundle exports', () => {
 });
 
 describe('explicit recover legacy as copies', () => {
+  const prepareCloneGuardRecovery = async () => {
+    const original = validLegacyValues({
+      [LEGACY_KEYS.projects]: JSON.stringify([legacyProject(), secondProject()]),
+      [LEGACY_KEYS.activeProject]: 'project-a',
+    });
+    const current = validLegacyValues({
+      [LEGACY_KEYS.projects]: JSON.stringify([
+        legacyProject('project-a', 11, { name: 'Guarded recovery source' }),
+        secondProject(),
+      ]),
+      [LEGACY_KEYS.activeProject]: 'project-a',
+    });
+    const harness = createHarness({ values: original });
+    const onAuthorityLost = vi.fn();
+    const { store } = await readyStore(harness, onAuthorityLost);
+    const recovery = await observeDrift(harness, store, current);
+    onAuthorityLost.mockClear();
+    return { harness, onAuthorityLost, recovery, store };
+  };
+
+  it('publishes successful recovery only after exactly three snapshot clones', async () => {
+    const { onAuthorityLost, recovery, store } = await prepareCloneGuardRecovery();
+    const originalStructuredClone = globalThis.structuredClone;
+    let snapshotCloneOrdinal = 0;
+    const cloneSpy = vi.spyOn(globalThis, 'structuredClone').mockImplementation((value, options) => {
+      if (isRecoveredWorkspaceSnapshot(value)) snapshotCloneOrdinal += 1;
+      return originalStructuredClone(value, options);
+    });
+
+    const recovered = await store.commit({
+      type: 'recover-legacy-as-copies',
+      recoveryId: recovery.recoveryId,
+    });
+
+    expect(snapshotCloneOrdinal).toBe(3);
+    expect(recovered.projects).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: RECOVERED_CLONE_NAME }),
+    ]));
+    expect(onAuthorityLost).not.toHaveBeenCalled();
+    cloneSpy.mockRestore();
+    await expect(store.commit({
+      type: 'close-project',
+      projectId: 'project-b',
+    })).resolves.toMatchObject({
+      projects: expect.not.arrayContaining([expect.objectContaining({ id: 'project-b' })]),
+    });
+  });
+
+  it.each([1, 2, 3])(
+    'terminally loses authority at explicit recovery snapshot clone %i',
+    async cloneToFail => {
+      const { harness, onAuthorityLost, recovery, store } = await prepareCloneGuardRecovery();
+      const originalStructuredClone = globalThis.structuredClone;
+      let snapshotCloneOrdinal = 0;
+      let injectedCloneOrdinal: number | undefined;
+      const cloneSpy = vi.spyOn(globalThis, 'structuredClone')
+        .mockImplementation((value, options) => {
+          if (isRecoveredWorkspaceSnapshot(value)) {
+            snapshotCloneOrdinal += 1;
+            if (snapshotCloneOrdinal === cloneToFail) {
+              injectedCloneOrdinal = snapshotCloneOrdinal;
+              throw new DOMException(
+                `Injected explicit recovery clone ${cloneToFail} failure.`,
+                'DataCloneError',
+              );
+            }
+          }
+          return originalStructuredClone(value, options);
+        });
+
+      const failure = await store.commit({
+        type: 'recover-legacy-as-copies',
+        recoveryId: recovery.recoveryId,
+      }).then(() => undefined, error => error);
+
+      expect(injectedCloneOrdinal).toBe(cloneToFail);
+      expect(snapshotCloneOrdinal).toBe(cloneToFail);
+      expect(failure).toMatchObject({
+        code: 'authority-lost',
+        message: expect.stringMatching(/recovered durable state could not be (installed|published)/i),
+      });
+      expect(failure).not.toBeInstanceOf(DOMException);
+      expect(onAuthorityLost).toHaveBeenCalledOnce();
+      expect(onAuthorityLost).toHaveBeenCalledWith(expect.objectContaining({
+        status: 'unavailable',
+        availableExports: expect.arrayContaining(['indexeddb-workspace']),
+      }));
+      cloneSpy.mockRestore();
+
+      const committed = await inspect(harness);
+      expect(committed.migrationLedger[0].unresolvedRecovery).toBeNull();
+      const expectedRecoveredSnapshot = reconstructWorkspace({
+        projects: committed.projects,
+        workspace: committed.workspace[0],
+        presets: committed.presets,
+        pendingImports: committed.pendingImports,
+      });
+      const protectedBeforeForeignWrite = await (
+        await store.exportRecoveryBundle('indexeddb-workspace')
+      ).text();
+      expect(JSON.parse(protectedBeforeForeignWrite)).toEqual({
+        format: 'doctect.indexeddb-workspace-recovery',
+        version: 1,
+        capturedAt: TEST_NOW,
+        workspace: expectedRecoveredSnapshot,
+      });
+
+      const writesBeforeRejectedClose = harness.records.filter(record =>
+        record.mode === 'readwrite').length;
+      await expect(store.commit({
+        type: 'close-project',
+        projectId: 'project-b',
+      })).rejects.toMatchObject({ code: 'authority-lost' });
+      expect(harness.records.filter(record => record.mode === 'readwrite'))
+        .toHaveLength(writesBeforeRejectedClose);
+
+      const foreign = createIndexedDbAdapter({
+        indexedDB: harness.indexedDB,
+        now: () => TEST_NOW,
+      });
+      const foreignProject = committed.projects.find(record => record.id === 'project-a')!;
+      await foreign.saveProject({
+        ...foreignProject.project,
+        name: 'Foreign write after recovery clone failure',
+      }, storedProjectLineage(foreignProject));
+      foreign.close();
+      const protectedAfterForeignWrite = await (
+        await store.exportRecoveryBundle('indexeddb-workspace')
+      ).text();
+      expect(protectedAfterForeignWrite).toBe(protectedBeforeForeignWrite);
+
+      await expect(store.bootstrap()).resolves.toMatchObject({
+        status: 'ready',
+        snapshot: {
+          projects: expect.arrayContaining([
+            expect.objectContaining({ name: 'Foreign write after recovery clone failure' }),
+          ]),
+        },
+      });
+      expect(onAuthorityLost).toHaveBeenCalledOnce();
+      await expect(store.commit({
+        type: 'close-project',
+        projectId: 'project-b',
+      })).resolves.toMatchObject({
+        projects: expect.not.arrayContaining([expect.objectContaining({ id: 'project-b' })]),
+      });
+    },
+  );
+
   it('copies only changed and new records, ignores deletions, strips cloud, and preserves target authority', async () => {
     const originalProjects = [
       legacyProject('project-a', 11, { name: 'Original A' }),
