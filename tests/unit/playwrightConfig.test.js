@@ -265,26 +265,35 @@ const parseWorkflowStep = (lines, start, end, stepIndent, allowEnv) => {
 };
 
 const scanWorkflowJobs = lines => {
-    const jobsLines = lines
-        .map((line, index) => line === 'jobs:' ? index : -1)
-        .filter(index => index !== -1);
-    if (jobsLines.length !== 1) return null;
-
-    const start = jobsLines[0];
-    let end = lines.length;
-    for (let index = start + 1; index < lines.length; index += 1) {
-        if (!lines[index].trim()) continue;
-        const indent = lineIndent(lines[index]);
-        if (indent === null) return null;
-        if (indent === 0) {
-            end = index;
-            break;
+    const roots = new Map();
+    let index = 0;
+    while (index < lines.length) {
+        if (!lines[index].trim()) {
+            index += 1;
+            continue;
         }
-        if (indent < 2) return null;
+        if (lineIndent(lines[index]) !== 0) return null;
+        const mapping = parseNarrowYamlMapping(lines[index]);
+        if (!mapping || roots.has(mapping.key)) return null;
+
+        let rootEnd = index + 1;
+        for (; rootEnd < lines.length; rootEnd += 1) {
+            if (!lines[rootEnd].trim()) continue;
+            const childIndent = lineIndent(lines[rootEnd]);
+            if (childIndent === null) return null;
+            if (childIndent === 0) break;
+            if (childIndent < 2) return null;
+        }
+        roots.set(mapping.key, { start: index, end: rootEnd, value: mapping.value });
+        index = rootEnd;
     }
 
+    const jobsRoot = roots.get('jobs');
+    if (!jobsRoot || jobsRoot.value) return null;
+    const { start, end } = jobsRoot;
+
     const jobs = new Map();
-    let index = start + 1;
+    index = start + 1;
     while (index < end) {
         if (!lines[index].trim()) {
             index += 1;
@@ -466,6 +475,13 @@ ${stepBlocks.join('')}`;
 const insertSiblingJob = (workflow, job, position) => position === 'before'
     ? workflow.replace('  release-gate:\n', `${job}  release-gate:\n`)
     : `${workflow.trimEnd()}\n${job}`;
+
+const yamlKey = (key, style) => style === 'plain'
+    ? key
+    : style === 'single' ? `'${key}'` : `"${key}"`;
+
+const duplicateKeyCases = ['before', 'after'].flatMap(position =>
+    ['plain', 'single', 'double'].map(style => [position, style]));
 
 describe('playwright config ports', () => {
     it('uses the selected API port instead of a stale ambient API base', () => {
@@ -756,4 +772,62 @@ ${nestedBlocks}            - name: Nested sentinel
 
         expect(() => assertMigrationWorkflow(workflow.replace(block, `${block}${block}`))).toThrow();
     });
+
+    it.each(['single', 'double'])('accepts a %s-quoted jobs root', style => {
+        const workflow = fs.readFileSync(workflowPath, 'utf8').replace(
+            'jobs:',
+            `${yamlKey('jobs', style)}:`,
+        );
+
+        expect(() => assertMigrationWorkflow(workflow)).not.toThrow();
+    });
+
+    it.each(duplicateKeyCases)(
+        'rejects a %s %s-style semantic jobs root',
+        (position, style) => {
+            const workflow = fs.readFileSync(workflowPath, 'utf8');
+            const duplicate = `${yamlKey('jobs', style)}:
+  release-gate:
+    if: false
+    runs-on: ubuntu-latest
+    steps: []
+`;
+            const mutated = position === 'before'
+                ? workflow.replace('jobs:\n', `${duplicate}jobs:\n`)
+                : `${workflow.trimEnd()}\n${duplicate}`;
+
+            expect(() => assertMigrationWorkflow(mutated)).toThrow();
+        },
+    );
+
+    it.each(duplicateKeyCases)(
+        'rejects a %s %s-style semantic release-gate job ID',
+        (position, style) => {
+            const workflow = fs.readFileSync(workflowPath, 'utf8');
+            const duplicate = `  ${yamlKey('release-gate', style)}:
+    runs-on: ubuntu-latest
+    steps: []
+`;
+            const mutated = position === 'before'
+                ? workflow.replace('  release-gate:\n', `${duplicate}  release-gate:\n`)
+                : `${workflow.trimEnd()}\n${duplicate}`;
+
+            expect(() => assertMigrationWorkflow(mutated)).toThrow();
+        },
+    );
+
+    it.each(duplicateKeyCases)(
+        'rejects a %s %s-style semantic release-gate steps key',
+        (position, style) => {
+            const workflow = fs.readFileSync(workflowPath, 'utf8');
+            const duplicate = `    ${yamlKey('steps', style)}:
+      - run: true
+`;
+            const mutated = position === 'before'
+                ? workflow.replace('    steps:\n', `${duplicate}    steps:\n`)
+                : `${workflow.trimEnd()}\n${duplicate}`;
+
+            expect(() => assertMigrationWorkflow(mutated)).toThrow();
+        },
+    );
 });
