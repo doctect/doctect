@@ -58,7 +58,7 @@ export const workspaceRecovery = (
   kind: 'migration-failed',
   category: 'migration-failed',
   message: 'Local workspace migration could not be completed.',
-  availableExports: ['legacy-current'],
+  availableExports: [],
   canRetry: true,
   canRecoverLegacyAsCopies: false,
   ...overrides,
@@ -101,7 +101,7 @@ export const unavailableResult = (
 ): Extract<WorkspaceBootstrapResult, { status: 'unavailable' }> => ({
   status: 'unavailable',
   message: 'Local workspace storage is unavailable.',
-  availableExports: ['legacy-current'],
+  availableExports: [],
   ...overrides,
 });
 

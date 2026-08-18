@@ -202,7 +202,10 @@ describe('fork import ownership replacement', () => {
     readback.arm();
 
     await expect(accountA.stageForkImport('gallery-source'))
-      .rejects.toMatchObject({ code: 'io' });
+      .rejects.toMatchObject({
+        code: 'authority-lost',
+        cause: expect.objectContaining({ code: 'io' }),
+      });
 
     const afterA = await inspect(indexedDB);
     const pendingA = afterA.pendingImports.find(record =>

@@ -360,7 +360,7 @@ const recovery = (
 };
 
 const unavailable = (
-  availableExports: RecoverySource[] = ['legacy-current'],
+  availableExports: RecoverySource[] = [],
 ): Extract<WorkspaceBootstrapResult, { status: 'unavailable' }> => ({
   status: 'unavailable',
   message: 'Local workspace storage is unavailable.',
@@ -490,8 +490,8 @@ const createLocalWorkspaceStoreAtVersion = (
     authority = error.code === 'authority-lost' ? 'frozen' : 'unavailable';
     lifecycleGeneration += 1;
     lifecycleResult = unavailable(protectedIndexedDbRecoveryBundle
-      ? ['legacy-current', 'indexeddb-workspace']
-      : undefined);
+      ? ['indexeddb-workspace']
+      : []);
     notifyAuthorityLost(lifecycleResult);
   };
 
@@ -1524,23 +1524,19 @@ const createLocalWorkspaceStoreAtVersion = (
       records = await getAdapter().readWorkspaceRecords();
       snapshot = reconstructWorkspace(records);
     } catch (error) {
-      const failure = error instanceof WorkspaceStoreError
+      const cause = error instanceof WorkspaceStoreError
         ? error
         : new WorkspaceStoreError(
             'Durable workspace failed post-command validation.',
             'io',
             error,
           );
-      if (authority === 'ready') {
-        handleAuthorityLost(new WorkspaceStoreError(
-          'Durable workspace authority could not be revalidated after commit.',
-          'authority-lost',
-          failure,
-        ));
-      } else {
-        mutationQueue?.freeze();
-        invalidateDurableAuthority();
-      }
+      const failure = new WorkspaceStoreError(
+        'Durable workspace authority could not be revalidated after commit.',
+        'authority-lost',
+        cause,
+      );
+      terminateValidatedReadback(failure);
       throw failure;
     }
     return finalizeValidatedReadback(records, snapshot, {
@@ -1864,12 +1860,19 @@ const createLocalWorkspaceStoreAtVersion = (
       snapshot = reconstructWorkspace(records);
     } catch (error) {
       if (!recoveryLifecycleIsCurrent()) throw error;
+      const cause = error instanceof WorkspaceStoreError
+        ? error
+        : new WorkspaceStoreError(
+            'Recovered workspace failed independent validation.',
+            'io',
+            error,
+          );
       const failure = new WorkspaceStoreError(
-        'Recovered workspace failed independent validation.',
-        'unavailable',
-        error,
+        'Recovered workspace authority could not be revalidated after commit.',
+        'authority-lost',
+        cause,
       );
-      handleAuthorityLost(failure);
+      terminateValidatedReadback(failure);
       throw failure;
     }
 

@@ -12,12 +12,24 @@ const fail = (error) => ({ ok: false, error });
 const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const isStr = (v) => typeof v === 'string';
 const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
+const ownEnumerableDataValue = (object, key) => {
+    const descriptor = Object.getOwnPropertyDescriptor(object, key);
+    return descriptor?.enumerable && Object.hasOwn(descriptor, 'value')
+        ? descriptor.value
+        : undefined;
+};
 const utf8ByteLength = value => new TextEncoder().encode(value).byteLength;
 const TEXT_OVERFLOW_VALUES = ['clip', 'ellipsis', 'shrink', 'visible'];
 const TEXT_PADDING_SIDES = ['top', 'right', 'bottom', 'left'];
 
 export const validateAppState = (state) => {
     if (!isObj(state)) return fail('state must be an object');
+    const nodes = ownEnumerableDataValue(state, 'nodes');
+    if (!isObj(nodes)) return fail('nodes must be an object');
+    const rootId = ownEnumerableDataValue(state, 'rootId');
+    if (!isStr(rootId) || !isObj(ownEnumerableDataValue(nodes, rootId))) {
+        return fail('rootId must reference an existing node');
+    }
 
     let serialized;
     try { serialized = JSON.stringify(state); }
@@ -32,11 +44,9 @@ export const validateAppState = (state) => {
         if (!generatorResult.ok) return fail(generatorResult.message);
     }
 
-    if (!isObj(state.nodes)) return fail('nodes must be an object');
-    if (!isStr(state.rootId) || !state.nodes[state.rootId]) return fail('rootId must reference an existing node');
-    if (Object.keys(state.nodes).length > MAX_NODES) return fail('too many nodes (max 20000)');
+    if (Object.keys(nodes).length > MAX_NODES) return fail('too many nodes (max 20000)');
 
-    for (const [id, node] of Object.entries(state.nodes)) {
+    for (const [id, node] of Object.entries(nodes)) {
         if (!isObj(node)) return fail(`node ${id} must be an object`);
         if (!isStr(node.id) || node.id !== id) return fail(`node ${id} has mismatched id`);
         if (node.parentId !== null && !isStr(node.parentId)) return fail(`node ${id} parentId invalid`);

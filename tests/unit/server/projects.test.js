@@ -30,6 +30,40 @@ describe('projects API', () => {
         expect(res.status).toBe(400);
     });
 
+    it.each(['__proto__', 'constructor', 'toString'])(
+        'rejects inherited %s roots without creating a cloud project',
+        async rootId => {
+            const before = await request(app).get('/api/projects').set('Cookie', cookieA);
+            const res = await request(app).post('/api/projects').set('Cookie', cookieA)
+                .send({ name: `Inherited ${rootId}`, state: { ...minimalState(), nodes: {}, rootId } });
+            const after = await request(app).get('/api/projects').set('Cookie', cookieA);
+
+            expect(res.status).toBe(400);
+            expect(after.body.projects).toHaveLength(before.body.projects.length);
+        },
+    );
+
+    it('rejects an inherited root commit without moving cloud head or writing history', async () => {
+        const create = await request(app).post('/api/projects').set('Cookie', cookieA)
+            .send({ name: 'Inherited root commit', state: minimalState('Original') });
+        const projectId = create.body.project.id;
+        const head = create.body.commit.id;
+
+        const rejected = await request(app).post(`/api/projects/${projectId}/commits`)
+            .set('Cookie', cookieA)
+            .set('If-Match', `"${head}"`)
+            .send({
+                state: { ...minimalState('Malformed'), nodes: {}, rootId: '__proto__' },
+                message: 'Must not persist',
+            });
+        const project = await request(app).get(`/api/projects/${projectId}`).set('Cookie', cookieA);
+        const history = await request(app).get(`/api/projects/${projectId}/commits`).set('Cookie', cookieA);
+
+        expect(rejected.status).toBe(400);
+        expect(project.body.project.headCommitId).toBe(head);
+        expect(history.body.commits).toHaveLength(1);
+    });
+
     it('lists only my projects', async () => {
         const res = await request(app).get('/api/projects').set('Cookie', cookieB);
         expect(res.status).toBe(200);

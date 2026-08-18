@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
     MAX_STATE_BYTES,
     validateAppState,
@@ -48,6 +48,34 @@ describe('validateAppState', () => {
     it('rejects missing rootId in nodes', () => {
         const s = goodState(); s.rootId = 'nope';
         expect(validateAppState(s).ok).toBe(false);
+    });
+    it.each(['__proto__', 'constructor', 'toString'])(
+        'rejects inherited %s as a root node', rootId => {
+            expect(validateAppState({ ...goodState(), nodes: {}, rootId })).toEqual({
+                ok: false,
+                error: 'rootId must reference an existing node',
+            });
+        },
+    );
+    it('rejects an accessor root without invoking it', () => {
+        const getter = vi.fn(() => goodState().nodes.root);
+        const nodes = {};
+        Object.defineProperty(nodes, 'root', { enumerable: true, get: getter });
+
+        expect(validateAppState({ ...goodState(), nodes })).toEqual({
+            ok: false,
+            error: 'rootId must reference an existing node',
+        });
+        expect(getter).not.toHaveBeenCalled();
+    });
+    it('accepts an own reserved root in a null-prototype node map', () => {
+        const state = goodState();
+        const nodes = Object.create(null);
+        nodes.__proto__ = { ...state.nodes.root, id: '__proto__' };
+        state.nodes = nodes;
+        state.rootId = '__proto__';
+
+        expect(validateAppState(state)).toEqual({ ok: true });
     });
     it('rejects malformed nodes', () => {
         const s = goodState(); s.nodes.bad = { id: 'bad' };

@@ -309,6 +309,11 @@ describe('initial migration preparation', () => {
     ['malformed project state', LEGACY_KEYS.projects, JSON.stringify([
       legacyProject('bad', 11, { initialState: null }),
     ])],
+    ['inherited project root', LEGACY_KEYS.projects, JSON.stringify([
+      legacyProject('project-a', 11, {
+        initialState: { ...currentState(), nodes: {}, rootId: '__proto__' },
+      }),
+    ])],
     ['unresolved active project', LEGACY_KEYS.activeProject, 'missing'],
     ['empty preset ID', LEGACY_KEYS.customPresets, JSON.stringify([
       legacyCustomPreset('', 11),

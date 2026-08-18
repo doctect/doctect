@@ -324,6 +324,12 @@ describe('private project preparation worker client', () => {
       });
       return { prepared: { ...project(), initialState }, getter };
     }],
+    ['inherited root node', () => {
+      const initialState = currentState();
+      initialState.nodes = {};
+      initialState.rootId = '__proto__';
+      return { prepared: { ...project(), initialState } };
+    }],
   ] as const)('rejects a deeply malformed prepared project: %s', async (_label, create) => {
     const worker = new FakeWorker();
     const response = create();

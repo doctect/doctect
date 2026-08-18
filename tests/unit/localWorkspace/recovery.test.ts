@@ -476,7 +476,7 @@ describe('explicit recover legacy as copies', () => {
       expect(onAuthorityLost).toHaveBeenCalledOnce();
       expect(onAuthorityLost).toHaveBeenCalledWith(expect.objectContaining({
         status: 'unavailable',
-        availableExports: expect.arrayContaining(['indexeddb-workspace']),
+        availableExports: ['indexeddb-workspace'],
       }));
       cloneSpy.mockRestore();
 
@@ -908,6 +908,28 @@ describe('explicit recover legacy as copies', () => {
     });
   });
 
+  it('rejects inherited-root recovery input before opening a recovery write', async () => {
+    const harness = createHarness();
+    const { store } = await readyStore(harness);
+    const inheritedRoot = legacyProject('project-a', 11, {
+      initialState: { ...currentState(), nodes: {}, rootId: 'toString' },
+    });
+    const recovery = await observeDrift(harness, store, validLegacyValues({
+      [LEGACY_KEYS.projects]: JSON.stringify([inheritedRoot]),
+    }));
+    const before = await inspect(harness);
+    const writesBefore = harness.records.filter(record => record.mode === 'readwrite').length;
+
+    expect(recovery.canRecoverLegacyAsCopies).toBe(false);
+    await expect(store.commit({
+      type: 'recover-legacy-as-copies',
+      recoveryId: recovery.recoveryId,
+    })).rejects.toMatchObject({ code: 'validation' });
+
+    expect(harness.records.filter(record => record.mode === 'readwrite')).toHaveLength(writesBefore);
+    expect(await inspect(harness)).toEqual(before);
+  });
+
   it('does not advertise copy recovery after legacy changes behind the persisted marker', async () => {
     const changedAgain = validLegacyValues({
       [LEGACY_KEYS.projects]: JSON.stringify([
@@ -1010,16 +1032,26 @@ describe('explicit recover legacy as copies', () => {
         }
       },
     });
-    const { store } = await readyStore(harness);
+    const onAuthorityLost = vi.fn();
+    const { store } = await readyStore(harness, onAuthorityLost);
     const recovery = await observeDrift(harness, store, validLegacyValues({
       [LEGACY_KEYS.projects]: JSON.stringify([legacyProject(), secondProject()]),
     }));
+    onAuthorityLost.mockClear();
     armed = true;
 
     await expect(store.commit({
       type: 'recover-legacy-as-copies',
       recoveryId: recovery.recoveryId,
-    })).rejects.toMatchObject({ code: 'unavailable' });
+    })).rejects.toMatchObject({
+      code: 'authority-lost',
+      cause: expect.objectContaining({ code: 'io' }),
+    });
+    expect(onAuthorityLost).toHaveBeenCalledOnce();
+    expect(onAuthorityLost).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'unavailable',
+      availableExports: [],
+    }));
 
     const committed = await inspect(harness);
     expect(committed.migrationLedger[0].unresolvedRecovery).toBeNull();

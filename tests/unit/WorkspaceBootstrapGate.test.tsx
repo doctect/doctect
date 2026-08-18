@@ -228,6 +228,21 @@ describe('WorkspaceBootstrapGate', () => {
     expect(screen.queryByTestId('editor-page')).not.toBeInTheDocument();
   });
 
+  it('advertises no store export when bootstrap rejects before capability probing', async () => {
+    const store = fakeStore({
+      bootstrap: () => Promise.reject(new Error('Bootstrap rejected before source validation.')),
+    });
+
+    render(<WorkspaceBootstrapGate store={store} renderEditor={fakeEditorRenderer} />);
+
+    expect(await screen.findByRole('heading', {
+      name: "We couldn't upgrade local projects",
+    })).toBeVisible();
+    expect(screen.getByText('No recovery downloads are currently available.')).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Download backup' })).not.toBeInTheDocument();
+    expect(store.exportRecoveryBundle).not.toHaveBeenCalled();
+  });
+
   it('announces all five truthful bootstrap phase labels', () => {
     const bootstrap = deferred<ReturnType<typeof readyResult>>();
     const store = fakeStore({ bootstrap: bootstrap.promise });
@@ -338,6 +353,9 @@ describe('WorkspaceBootstrapGate', () => {
 
     const alert = await screen.findByRole('alert');
     expect(within(alert).getByRole('button', { name: 'Retry' })).toBeEnabled();
+    expect(within(alert).getByRole('button', { name: 'Download open work' })).toBeEnabled();
+    expect(within(alert).queryByRole('button', { name: 'Download editor copy' }))
+      .not.toBeInTheDocument();
     expect(screen.queryByTestId('editor-page')).not.toBeInTheDocument();
     expect(initial.pendingImports).toEqual([pending]);
     expect(trackEvent).not.toHaveBeenCalled();

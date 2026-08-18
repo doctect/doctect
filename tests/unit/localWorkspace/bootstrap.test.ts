@@ -1196,6 +1196,22 @@ describe('existing target decision table', () => {
     expect(recoveryResult(result).recovery.kind).toBe('verification-failed');
   });
 
+  it('does not verify a durable project whose root resolves only through Object.prototype', async () => {
+    const harness = createHarness();
+    const copy = await seedCopy(harness, { state: 'verified' });
+    const malformed = structuredClone(copy.projects[0]);
+    malformed.project.initialState = {
+      ...malformed.project.initialState,
+      nodes: {},
+      rootId: 'constructor',
+    };
+    await putRaw(harness.indexedDB, 'projects', malformed);
+
+    const result = await createLocalWorkspaceStore(harness.environment).bootstrap();
+
+    expect(recoveryResult(result).recovery.kind).toBe('verification-failed');
+  });
+
   it('returns split-brain when verified legacy no longer matches the accepted digest', async () => {
     const storage = memoryStorage(validLegacyValues());
     const harness = createHarness({ storage });
@@ -1583,7 +1599,7 @@ describe('IndexedDB availability and lifecycle loss', () => {
     expect(result).toMatchObject({
       status: 'unavailable',
       message: expect.any(String),
-      availableExports: expect.any(Array),
+      availableExports: ['legacy-current'],
     });
   });
 
@@ -1599,7 +1615,7 @@ describe('IndexedDB availability and lifecycle loss', () => {
     forceCloseDatabase(rawDatabase as never);
 
     await vi.waitFor(() => expect(onAuthorityLost).toHaveBeenCalledWith(
-      expect.objectContaining({ status: 'unavailable' }),
+      expect.objectContaining({ status: 'unavailable', availableExports: [] }),
     ));
     await expect(store.commit({ type: 'activate-project', projectId: 'project-a' }))
       .rejects.toMatchObject({ code: 'authority-lost' });

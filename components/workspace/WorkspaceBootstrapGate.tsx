@@ -155,7 +155,7 @@ const rejectedBootstrapResult = (error: unknown): WorkspaceBlockingResult => ({
     message: error instanceof Error
       ? error.message
       : 'Local workspace migration could not be completed.',
-    availableExports: ['legacy-current'],
+    availableExports: [],
     canRetry: true,
     canRecoverLegacyAsCopies: false,
   },
@@ -168,7 +168,7 @@ const rejectedImportConsumptionResult = (): WorkspaceBlockingResult => ({
     kind: 'migration-failed',
     category: 'consume-import-failed',
     message: 'A pending project import could not be committed to local storage.',
-    availableExports: ['indexeddb-workspace'],
+    availableExports: [],
     canRetry: true,
     canRecoverLegacyAsCopies: false,
   },

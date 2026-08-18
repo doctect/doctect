@@ -1720,7 +1720,7 @@ describe('preset and import commands', () => {
     const command = replaceForkImportCommand(oldPending);
     failPostCommitRead = true;
 
-    await expect(store.commit(command)).rejects.toMatchObject({ code: 'io' });
+    await expect(store.commit(command)).rejects.toMatchObject({ code: 'authority-lost' });
     expect((await inspect(harness)).pendingImports.map(record => record.id))
       .toContain('fork-import-b');
 
@@ -1820,7 +1820,7 @@ describe('preset and import commands', () => {
     };
     failPostCommitRead = true;
 
-    await expect(store.commit(command)).rejects.toMatchObject({ code: 'io' });
+    await expect(store.commit(command)).rejects.toMatchObject({ code: 'authority-lost' });
     expect((await inspect(harness)).pendingImports
       .filter(record => record.id === 'restart-stage')).toHaveLength(1);
 
@@ -1909,7 +1909,7 @@ describe('preset and import commands', () => {
     await expect(store.commit({
       type: 'consume-import',
       importId: 'restart-import',
-    })).rejects.toMatchObject({ code: 'io' });
+    })).rejects.toMatchObject({ code: 'authority-lost' });
 
     const committed = (await inspect(harness)).projects.find(record =>
       record.id === 'restart-target') as {
@@ -2163,7 +2163,7 @@ describe('failure handling and private revisions', () => {
     expect(writeTransactions(harness.records)).toHaveLength(writesAfterLoss);
   });
 
-  it('freezes and invalidates authority when post-commit reconstruction cannot run', async () => {
+  it('terminally aborts queued stage, preset, and coalesced save work after committed readback loss', async () => {
     let failPostCommitRead = false;
     const hook: TransactionHook = (stores, mode) => {
       if (failPostCommitRead && mode === 'readonly' && sameStores(stores, READ_ALL_SCOPE)) {
@@ -2171,34 +2171,97 @@ describe('failure handling and private revisions', () => {
         throw new Error('Injected post-commit read failure.');
       }
     };
-    const { store, snapshot } = await readyStore({ hook });
+    const { store, harness, snapshot } = await readyStore({ hook, values: twoProjectValues() });
     const onAuthorityLost = vi.fn();
     await store.bootstrap({ onAuthorityLost });
     useQueueTimers();
     failPostCommitRead = true;
 
-    const save = store.commit({
-      type: 'save-project',
-      project: trustedProjectNamed(snapshot.projects[0], 'Committed'),
+    const stage = store.commit({
+      type: 'stage-import',
+      pendingImport: pendingImport('committed-stage', 'committed-target'),
     });
-    await vi.advanceTimersByTimeAsync(1_000);
-    await expect(save).rejects.toMatchObject({ code: 'io' });
+    const firstSave = store.commit({
+      type: 'save-project',
+      project: trustedProjectNamed(snapshot.projects[0], 'First queued save'),
+    });
+    const latestSave = store.commit({
+      type: 'save-project',
+      project: trustedProjectNamed(snapshot.projects[0], 'Latest queued save'),
+    });
+    const preset = store.commit({
+      type: 'save-custom-preset',
+      preset: presetNamed('queued-preset'),
+    });
+    const outcomes = await Promise.all([stage, firstSave, latestSave, preset].map(promise =>
+      promise.then(
+        value => ({ status: 'fulfilled' as const, value }),
+        error => ({ status: 'rejected' as const, error }),
+      )));
 
+    expect(outcomes.map(outcome => outcome.status)).toEqual([
+      'rejected',
+      'rejected',
+      'rejected',
+      'rejected',
+    ]);
+    const errors = outcomes.map(outcome => outcome.status === 'rejected' ? outcome.error : undefined);
+    expect(errors[0]).toMatchObject({
+      code: 'authority-lost',
+      cause: expect.objectContaining({ code: 'io' }),
+    });
+    expect(errors.slice(1).every(error => error === errors[0])).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
     expect(onAuthorityLost).toHaveBeenCalledWith(expect.objectContaining({
       status: 'unavailable',
+      availableExports: [],
     }));
+    expect(onAuthorityLost).toHaveBeenCalledOnce();
+    expect(writeTransactions(harness.records)).toHaveLength(1);
+    const writesAfterLoss = writeTransactions(harness.records).length;
     await expect(store.commit({
-      type: 'activate-project',
-      projectId: 'project-a',
+      type: 'close-project',
+      projectId: 'project-b',
     })).rejects.toMatchObject({ code: 'authority-lost' });
+    expect(writeTransactions(harness.records)).toHaveLength(writesAfterLoss);
+
     await expect(store.bootstrap()).resolves.toMatchObject({
       status: 'ready',
       snapshot: {
         projects: expect.arrayContaining([
-          expect.objectContaining({ id: 'project-a', name: 'Committed' }),
+          expect.objectContaining({ id: 'project-a', name: snapshot.projects[0].name }),
+        ]),
+        customPresets: expect.not.arrayContaining([
+          expect.objectContaining({ id: 'queued-preset' }),
+        ]),
+        pendingImports: expect.arrayContaining([
+          expect.objectContaining({ id: 'committed-stage' }),
         ]),
       },
     });
+  });
+
+  it('keeps pre-commit adapter I/O failure resumable with no partial command', async () => {
+    const { store, harness } = await readyStore();
+    harness.setFault(new Error('Injected adapter operation failure.'));
+
+    await expect(store.commit({
+      type: 'stage-import',
+      pendingImport: pendingImport('failed-stage', 'failed-target'),
+    })).rejects.toMatchObject({ code: 'io' });
+    harness.setFault();
+
+    await expect(store.commit({
+      type: 'save-custom-preset',
+      preset: presetNamed('resumed-preset'),
+    })).resolves.toMatchObject({
+      customPresets: expect.arrayContaining([
+        expect.objectContaining({ id: 'resumed-preset' }),
+      ]),
+    });
+    const durable = await inspect(harness);
+    expect(durable.pendingImports.some(record => record.id === 'failed-stage')).toBe(false);
+    expect(durable.presets.some(record => record.id === 'resumed-preset')).toBe(true);
   });
 
   it.each([
@@ -2269,7 +2332,7 @@ describe('failure handling and private revisions', () => {
     expect(onAuthorityLost).toHaveBeenCalledOnce();
     expect(onAuthorityLost).toHaveBeenCalledWith(expect.objectContaining({
       status: 'unavailable',
-      availableExports: expect.arrayContaining(['indexeddb-workspace']),
+      availableExports: ['indexeddb-workspace'],
     }));
     expect(writeTransactions(harness.records)).toHaveLength(1);
     expect(harness.records.filter(record =>
