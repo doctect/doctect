@@ -14,15 +14,26 @@ type ProjectPreparationWorkerFactory = () => ProjectPreparationWorker;
 
 const WORKER_RESPONSE_TIMEOUT_MS = 30_000;
 
-const isPlainObject = (value: unknown): value is Record<string, unknown> =>
-  value !== null
-  && typeof value === 'object'
-  && !Array.isArray(value)
-  && Object.getPrototypeOf(value) === Object.prototype;
-
-const hasExactKeys = (value: Record<string, unknown>, keys: readonly string[]): boolean => {
-  const actual = Object.keys(value);
-  return actual.length === keys.length && actual.every(key => keys.includes(key));
+const readPlainDataRecord = (
+  value: unknown,
+  exactKeys?: readonly string[],
+): Record<string, unknown> | undefined => {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  if (Object.getPrototypeOf(value) !== Object.prototype) return undefined;
+  const keys = Reflect.ownKeys(value);
+  if (keys.some(key => typeof key !== 'string')) return undefined;
+  const names = keys as string[];
+  if (exactKeys
+    && (names.length !== exactKeys.length || names.some(key => !exactKeys.includes(key)))) {
+    return undefined;
+  }
+  const record: Record<string, unknown> = {};
+  for (const key of names) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (!descriptor || !descriptor.enumerable || !('value' in descriptor)) return undefined;
+    record[key] = descriptor.value;
+  }
+  return record;
 };
 
 const unavailable = (message: string, cause?: unknown): WorkspaceStoreError =>
@@ -54,26 +65,36 @@ export const prepareProjectInModuleWorker = (
 
   let settled = false;
   let responseTimer: ReturnType<typeof setTimeout> | undefined;
-  const attemptCleanup = (operation: () => void): void => {
-    try {
-      operation();
-    } catch {
-      // Cleanup failures cannot leave the request promise unsettled.
+  const registeredListeners: Array<[string, (event: unknown) => void]> = [];
+  const cleanup = (): unknown | undefined => {
+    const failures: unknown[] = [];
+    const attempt = (operation: () => void): void => {
+      try {
+        operation();
+      } catch (error) {
+        failures.push(error);
+      }
+    };
+    if (responseTimer !== undefined) attempt(() => clearTimeout(responseTimer));
+    for (const [type, listener] of registeredListeners) {
+      attempt(() => worker.removeEventListener(type, listener));
     }
-  };
-  const cleanup = (): void => {
-    if (responseTimer !== undefined) attemptCleanup(() => clearTimeout(responseTimer));
-    attemptCleanup(() => worker.removeEventListener('message', onMessage));
-    attemptCleanup(() => worker.removeEventListener('error', onError));
-    attemptCleanup(() => worker.removeEventListener('messageerror', onMessageError));
-    attemptCleanup(() => worker.terminate());
+    attempt(() => worker.terminate());
+    if (failures.length === 0) return undefined;
+    return failures.length === 1
+      ? failures[0]
+      : new AggregateError(failures, 'Project preparation Worker cleanup failed.');
   };
   const settle = (
     outcome: { project: WorkspaceProject } | { error: WorkspaceStoreError },
   ): void => {
     if (settled) return;
     settled = true;
-    cleanup();
+    const cleanupFailure = cleanup();
+    if (cleanupFailure !== undefined) {
+      reject(unavailable('Project preparation Worker could not be cleaned up.', cleanupFailure));
+      return;
+    }
     if ('error' in outcome) reject(outcome.error);
     else resolve(outcome.project);
   };
@@ -81,34 +102,50 @@ export const prepareProjectInModuleWorker = (
     error: unavailable('Project preparation Worker returned an invalid response.'),
   });
   const onMessage = (event: unknown): void => {
-    const data = event !== null && typeof event === 'object' && 'data' in event
-      ? (event as { data: unknown }).data
-      : undefined;
-    if (!isPlainObject(data) || data.requestId !== 1) {
+    let data: unknown;
+    try {
+      data = event !== null && typeof event === 'object' && 'data' in event
+        ? (event as { data: unknown }).data
+        : undefined;
+      const envelope = readPlainDataRecord(data);
+      if (!envelope) {
+        protocolFailure();
+        return;
+      }
+      if (envelope.type === 'project-prepared') {
+        const prepared = readPlainDataRecord(data, ['type', 'requestId', 'project']);
+        const candidate = prepared && readPlainDataRecord(prepared.project);
+        const initialState = candidate && readPlainDataRecord(candidate.initialState);
+        if (!prepared
+          || prepared.requestId !== 1
+          || !candidate
+          || candidate.id !== project.id
+          || typeof candidate.id !== 'string'
+          || candidate.id.length === 0
+          || typeof candidate.name !== 'string'
+          || !initialState) {
+          protocolFailure();
+          return;
+        }
+        settle({ project: prepared.project as WorkspaceProject });
+        return;
+      }
+      if (envelope.type === 'project-preparation-failed') {
+        const failure = readPlainDataRecord(data, ['type', 'requestId', 'message']);
+        if (!failure
+          || failure.requestId !== 1
+          || typeof failure.message !== 'string'
+          || failure.message.length === 0) {
+          protocolFailure();
+          return;
+        }
+        settle({ error: new WorkspaceStoreError(failure.message, 'validation') });
+        return;
+      }
       protocolFailure();
-      return;
+    } catch {
+      protocolFailure();
     }
-    if (data.type === 'project-prepared') {
-      if (!hasExactKeys(data, ['type', 'requestId', 'project'])
-        || !isPlainObject(data.project)
-        || data.project.id !== project.id) {
-        protocolFailure();
-        return;
-      }
-      settle({ project: data.project as unknown as WorkspaceProject });
-      return;
-    }
-    if (data.type === 'project-preparation-failed') {
-      if (!hasExactKeys(data, ['type', 'requestId', 'message'])
-        || typeof data.message !== 'string'
-        || data.message.length === 0) {
-        protocolFailure();
-        return;
-      }
-      settle({ error: new WorkspaceStoreError(data.message, 'validation') });
-      return;
-    }
-    protocolFailure();
   };
   const onError = (event: unknown): void => {
     const eventDetails = event as { error?: unknown; message?: unknown };
@@ -123,17 +160,20 @@ export const prepareProjectInModuleWorker = (
     error: unavailable('Project preparation Worker message could not be decoded.', event),
   });
 
-  worker.addEventListener('message', onMessage);
-  worker.addEventListener('error', onError);
-  worker.addEventListener('messageerror', onMessageError);
-  responseTimer = setTimeout(() => settle({
-    error: unavailable('Project preparation Worker did not respond.'),
-  }), WORKER_RESPONSE_TIMEOUT_MS);
   try {
+    worker.addEventListener('message', onMessage);
+    registeredListeners.push(['message', onMessage]);
+    worker.addEventListener('error', onError);
+    registeredListeners.push(['error', onError]);
+    worker.addEventListener('messageerror', onMessageError);
+    registeredListeners.push(['messageerror', onMessageError]);
+    responseTimer = setTimeout(() => settle({
+      error: unavailable('Project preparation Worker did not respond.'),
+    }), WORKER_RESPONSE_TIMEOUT_MS);
     worker.postMessage({ type: 'prepare-project', requestId: 1, project });
   } catch (error) {
     settle({
-      error: unavailable('Project preparation Worker message could not be sent.', error),
+      error: unavailable('Project preparation Worker could not be initialized.', error),
     });
   }
 });

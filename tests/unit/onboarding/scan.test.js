@@ -1,8 +1,16 @@
 // tests/unit/onboarding/scan.test.js
 import { describe, it, expect } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'path';
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'url';
-import { SCAN_EXCLUDES, scanTree, collectVitals } from '../../../onboarding/build.mjs';
+import {
+    SCAN_EXCLUDES,
+    collectVitals,
+    flattenTreePaths,
+    scanTree,
+} from '../../../onboarding/build.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 
@@ -32,6 +40,35 @@ describe('scanTree', () => {
         }
         const server = tree.children.find(c => c.name === 'server');
         expect(server.children.map(c => c.name)).not.toContain('analytics.db');
+    });
+
+    it('excludes ignored Playwright result state from maintained-source discovery', () => {
+        expect(flattenTreePaths(tree)).not.toContain('test-results/.last-run.json');
+    });
+
+    it('excludes case and nested artifact directories and never follows symlinks', () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'doctect-onboarding-scan-'));
+        try {
+            execFileSync('git', ['init', '-q'], { cwd: root });
+            fs.mkdirSync(path.join(root, 'src'));
+            fs.writeFileSync(path.join(root, '.gitignore'), '/test-results/\n');
+            fs.writeFileSync(path.join(root, 'src/index.js'), 'export const tracked = true;\n');
+            execFileSync('git', ['add', '.gitignore', 'src/index.js'], { cwd: root });
+            fs.mkdirSync(path.join(root, 'test-results'));
+            fs.writeFileSync(path.join(root, 'test-results/.last-run.json'), '{}\n');
+            fs.mkdirSync(path.join(root, 'nested/TEST-RESULTS'), { recursive: true });
+            fs.writeFileSync(path.join(root, 'nested/TEST-RESULTS/output.json'), '{}\n');
+            fs.symlinkSync('src', path.join(root, 'linked-source'));
+
+            const paths = flattenTreePaths(scanTree(root));
+
+            expect(paths).toContain('src/index.js');
+            expect(paths).not.toContain('test-results/.last-run.json');
+            expect(paths).not.toContain('nested/TEST-RESULTS/output.json');
+            expect(paths.some(file => file.startsWith('linked-source/'))).toBe(false);
+        } finally {
+            fs.rmSync(root, { recursive: true, force: true });
+        }
     });
 
     it('records size and line counts for text files, null lines for binaries', () => {

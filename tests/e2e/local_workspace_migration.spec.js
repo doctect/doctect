@@ -1,9 +1,7 @@
 import { test, expect } from '@playwright/test';
 import {
-    readActiveProject,
     readBootstrapResult,
     readWorkspace,
-    seedNativeProject,
     updateActiveProject,
 } from './localWorkspaceHelpers.js';
 import {
@@ -30,6 +28,7 @@ import {
     mountVersionTwoWorkspaceGate,
     navigateSpaToEditor,
     prepareLargeLegacyWorkspace,
+    prepareNearLimitLegacyWorkspaceFromBuiltEditor,
     prepareLegacyFailure,
     prepareValidLegacyWorkspace,
     readCapturedBootstrapResult,
@@ -528,98 +527,140 @@ test.describe('local workspace migration release gate', () => {
         });
     });
 
-    test('coalesces near-limit saves before one real module-Worker preparation and survives reload', async ({ page, browserName }, testInfo) => {
+    test('coalesces near-limit built-editor interactions before one module-Worker save', async ({ page, context, browserName }, testInfo) => {
         test.skip(browserName !== 'chromium', 'Production module-Worker persistence proof is Chromium-only.');
-        test.setTimeout(120_000);
+        test.skip(process.env.E2E_BUILT_BUNDLE !== '1', 'This proof requires a freshly built Vite preview bundle.');
+        test.setTimeout(180_000);
         await installProjectPreparationWorkerCapture(page);
         await page.goto('/');
-        const large = await createLargeLegacyWorkspace(page);
+        const scriptSources = await page.locator('script[src]').evaluateAll(scripts =>
+            scripts.map(script => script.getAttribute('src')));
+        expect(scriptSources.some(source => source?.includes('/@vite/client'))).toBe(false);
+        expect(scriptSources.some(source => source?.startsWith('/assets/'))).toBe(true);
+
+        const large = await prepareNearLimitLegacyWorkspaceFromBuiltEditor(page);
         const nearLimitProject = large.projects[0];
         expect(large.nearLimitStateBytes).toBeGreaterThan(MAX_STATE_BYTES - 2048);
-        await seedNativeProject(page, nearLimitProject);
         await page.goto('/app');
-        await expect(editorPane(page).first()).toBeVisible();
+        await continueToEditor(page);
 
-        const measurement = await page.evaluate(async () => {
-            const { localWorkspaceStore } = await import('/services/localWorkspace/index.ts');
-            const { inheritInstalledProjectAuthority } = await import(
-                '/services/localWorkspace/projectAuthority.ts'
-            );
-            const bootstrap = await localWorkspaceStore.bootstrap();
-            if (bootstrap.status !== 'ready') throw new Error(`workspace ${bootstrap.status}`);
-            const current = bootstrap.snapshot.projects.find(
-                project => project.id === bootstrap.snapshot.activeProjectId,
-            );
-            if (!current) throw new Error('Active near-limit project is missing.');
-            const names = ['Burst one', 'Burst two', 'Burst latest'];
-
-            const cloneStartedAt = performance.now();
-            const cloneOnly = names.map(name => ({ ...structuredClone(current), name }));
-            const cloneOnlyMs = performance.now() - cloneStartedAt;
-            let checksum = 0;
-            for (const cloned of cloneOnly) checksum += cloned.name.length;
-
-            const payloads = names.map(name => {
-                const payload = { ...structuredClone(current), name };
-                inheritInstalledProjectAuthority(payload, current);
-                return payload;
+        const measurement = await page.evaluate(async ({ databaseName, projectId }) => {
+            const requestResult = request => new Promise((resolve, reject) => {
+                request.addEventListener('success', () => resolve(request.result), { once: true });
+                request.addEventListener('error', () => reject(request.error), { once: true });
             });
-            const admissionStartedAt = performance.now();
-            const saves = payloads.map(project => localWorkspaceStore.commit({
-                type: 'save-project',
-                project,
-            }));
-            const admissionMs = performance.now() - admissionStartedAt;
-            const immediateWorkers = globalThis.__workspaceProjectPreparationWorkers.workers.length;
-            await Promise.resolve();
-            const microtaskWorkers = globalThis.__workspaceProjectPreparationWorkers.workers.length;
-            const results = await Promise.all(saves);
-            const capture = globalThis.__workspaceProjectPreparationWorkers;
-            return {
-                admissionMs,
-                checksum,
-                cloneOnlyMs,
-                immediateWorkers,
-                microtaskWorkers,
-                sharedReadback: results.every(result => result === results[0]),
-                latestName: results[0].projects.find(project => project.id === current.id)?.name,
-                workers: capture.workers,
-                requests: capture.requests,
-                responses: capture.responses,
+            const database = await requestResult(indexedDB.open(databaseName));
+            const transaction = database.transaction('projects', 'readonly');
+            const record = await requestResult(transaction.objectStore('projects').get(projectId));
+            database.close();
+            if (!record?.project) throw new Error('Near-limit project record is missing.');
+            const waitTask = () => new Promise(resolve => setTimeout(resolve, 0));
+            const quantile = (values, fraction) => {
+                const sorted = [...values].sort((left, right) => left - right);
+                return sorted[Math.min(sorted.length - 1, Math.ceil(sorted.length * fraction) - 1)];
             };
-        });
+            const cloneSamples = [];
+            for (let index = 0; index < 9; index += 1) {
+                const startedAt = performance.now();
+                const cloned = structuredClone(record.project);
+                await waitTask();
+                cloneSamples.push(performance.now() - startedAt);
+                if (cloned.id !== projectId) throw new Error('Clone baseline detached project identity.');
+            }
 
-        await testInfo.attach('workspace-save-admission.json', {
-            body: Buffer.from(JSON.stringify({
-                admissionMs: measurement.admissionMs,
-                cloneOnlyMs: measurement.cloneOnlyMs,
-                ratio: measurement.admissionMs / measurement.cloneOnlyMs,
-                nearLimitStateBytes: large.nearLimitStateBytes,
-                workers: measurement.workers.length,
-                requests: measurement.requests,
-                responses: measurement.responses,
-            }, null, 2)),
-            contentType: 'application/json',
-        });
-        expect(measurement.cloneOnlyMs).toBeGreaterThan(0);
-        expect(measurement.checksum).toBeGreaterThan(0);
-        // Admission may cost at most 2.5x an equal clone-only burst; validation is excluded.
-        expect(measurement.admissionMs).toBeLessThanOrEqual(measurement.cloneOnlyMs * 2.5);
-        expect(measurement.immediateWorkers).toBe(0);
-        expect(measurement.microtaskWorkers).toBe(0);
-        expect(measurement.sharedReadback).toBe(true);
-        expect(measurement.latestName).toBe('Burst latest');
-        expect(measurement.workers).toHaveLength(1);
-        expect(measurement.workers[0]).toMatchObject({ type: 'module' });
-        expect(measurement.workers[0].url).toContain('projectPreparationWorker');
-        expect(measurement.requests).toBe(1);
-        expect(measurement.responses).toBe(1);
+            const capture = globalThis.__workspaceProjectPreparationWorkers;
+            capture.workers.length = 0;
+            capture.requests = 0;
+            capture.responses = 0;
+            capture.transactions.length = 0;
+            const showGrid = document.querySelector('[data-testid="project-pane"] button[title="Show Grid"]');
+            if (!(showGrid instanceof HTMLButtonElement)) throw new Error('Show Grid control is missing.');
+            const interactionSamples = [];
+            for (let index = 0; index < 9; index += 1) {
+                const startedAt = performance.now();
+                showGrid.click();
+                await waitTask();
+                interactionSamples.push(performance.now() - startedAt);
+            }
+            const measuredCloneSamples = cloneSamples.slice(2);
+            const measuredInteractionSamples = interactionSamples.slice(2);
+            const cloneP90Ms = quantile(measuredCloneSamples, 0.9);
+            const interactionP90Ms = quantile(measuredInteractionSamples, 0.9);
+            return {
+                cloneSamples: measuredCloneSamples,
+                interactionSamples: measuredInteractionSamples,
+                cloneP90Ms,
+                interactionP90Ms,
+                p90Ratio: interactionP90Ms / cloneP90Ms,
+                workersDuringInteraction: capture.workers.length,
+                requestsDuringInteraction: capture.requests,
+                responsesDuringInteraction: capture.responses,
+            };
+        }, { databaseName: 'doctect-local-workspace', projectId: nearLimitProject.id });
+
+        expect(measurement.cloneP90Ms).toBeGreaterThan(0);
+        expect(measurement.interactionP90Ms).toBeGreaterThan(0);
+        expect(measurement.p90Ratio).toBeLessThanOrEqual(4);
+        expect(measurement.workersDuringInteraction).toBe(0);
+        expect(measurement.requestsDuringInteraction).toBe(0);
+        expect(measurement.responsesDuringInteraction).toBe(0);
+        await expect.poll(() => page.evaluate(() =>
+            globalThis.__workspaceProjectPreparationWorkers.requests)).toBe(1);
+        await expect(page.getByText('Saved locally', { exact: true })).toBeVisible();
+
+        const saveCapture = await page.evaluate(() => ({
+            workers: globalThis.__workspaceProjectPreparationWorkers.workers,
+            requests: globalThis.__workspaceProjectPreparationWorkers.requests,
+            responses: globalThis.__workspaceProjectPreparationWorkers.responses,
+            transactions: globalThis.__workspaceProjectPreparationWorkers.transactions,
+        }));
+        console.log('[built-worker-proof]', JSON.stringify({
+            nearLimitStateBytes: large.nearLimitStateBytes,
+            cloneP90Ms: measurement.cloneP90Ms,
+            interactionP90Ms: measurement.interactionP90Ms,
+            p90Ratio: measurement.p90Ratio,
+            workers: saveCapture.workers.length,
+            requests: saveCapture.requests,
+            responses: saveCapture.responses,
+        }));
+        const workspaceTransactions = saveCapture.transactions.filter(transaction =>
+            transaction.database === 'doctect-local-workspace');
+        expect(saveCapture.workers).toHaveLength(1);
+        expect(saveCapture.workers[0]).toMatchObject({ type: 'module' });
+        expect(saveCapture.workers[0].url).toContain('projectPreparationWorker');
+        expect(saveCapture.requests).toBe(1);
+        expect(saveCapture.responses).toBe(1);
+        const writes = workspaceTransactions.filter(transaction => transaction.mode === 'readwrite');
+        const readbacks = workspaceTransactions.filter(transaction => transaction.mode === 'readonly');
+        expect(writes).toHaveLength(1);
+        expect([...writes[0].stores].sort()).toEqual(['migrationLedger', 'projects']);
+        expect(readbacks).toHaveLength(1);
+        expect([...readbacks[0].stores].sort())
+            .toEqual(['pendingImports', 'presets', 'projects', 'workspace']);
+
         const inspection = await inspectWorkspaceDatabase(page);
         expect(inspection.records.projects.find(record => record.id === nearLimitProject.id))
-            .toMatchObject({ storageRevision: 1, project: { name: 'Burst latest' } });
+            .toMatchObject({ storageRevision: 1, project: { initialState: { showGrid: true } } });
+        await testInfo.attach('workspace-built-editor-save.json', {
+            body: Buffer.from(JSON.stringify({ ...measurement, saveCapture }, null, 2)),
+            contentType: 'application/json',
+        });
 
         await page.reload();
         await expect(editorPane(page).first()).toBeVisible();
-        expect((await readActiveProject(page)).name).toBe('Burst latest');
+        await expect(page.getByTitle('Show Grid')).toHaveClass(/bg-blue-600/);
+
+        const changed = createChangedLegacyWorkspace(large, 'Built proof drift', 'built-proof');
+        const oldPage = await context.newPage();
+        await oldPage.goto('/');
+        await armLegacyStorageEvent(page);
+        await writeLegacyRaw(oldPage, changed.raw);
+        await waitForLegacyStorageEvent(page);
+        await expect(page.getByRole('heading', { name: 'Project copies changed in another tab' })).toBeVisible();
+        await expect(editorPane(page)).toHaveCount(0);
+        const editorBundle = await downloadJson(page, 'Download editor copy');
+        expect(editorBundle.workspace.projects.find(project => project.id === nearLimitProject.id))
+            .toMatchObject({ initialState: { showGrid: true } });
+        await oldPage.close();
     });
 });

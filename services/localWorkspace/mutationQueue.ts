@@ -4,6 +4,7 @@ import {
   type WorkspaceProject,
   type WorkspaceSnapshot,
 } from './contracts';
+import { cloneWorkspaceSnapshotWithProjectAuthority } from './projectAuthority';
 import {
   nextProjectLineage,
   sameProjectLineage,
@@ -89,7 +90,7 @@ export const createMutationQueue = (
   let frozen = false;
 
   const settleSuccess = (waiters: Waiter[], snapshot: WorkspaceSnapshot): void => {
-    // One physical readback settles a coalesced operation. Returned snapshots are immutable.
+    // One isolated publication settles a coalesced operation. Callers treat it as immutable.
     for (const waiter of waiters) waiter.resolve(snapshot);
   };
 
@@ -192,12 +193,29 @@ export const createMutationQueue = (
       pump();
     };
     void operation.then(snapshot => {
+      let publication: WorkspaceSnapshot;
+      try {
+        publication = cloneWorkspaceSnapshotWithProjectAuthority(snapshot);
+      } catch (error) {
+        cleanEntry(true);
+        const cloneError = new WorkspaceStoreError(
+          'Workspace mutation result could not be isolated for publication.',
+          'clone',
+          error,
+        );
+        settleFailure(entry.waiters, cloneError);
+        if (entry.kind === 'exclusive') {
+          settleFailure(entry.canceledSaveWaiters, cloneError);
+        }
+        resume();
+        return;
+      }
       if (entry.kind === 'save') {
         projectLineages.set(entry.project.id, nextProjectLineage(entry.expectedLineage));
       }
-      settleSuccess(entry.waiters, snapshot);
+      settleSuccess(entry.waiters, publication);
       if (entry.kind === 'exclusive') {
-        settleSuccess(entry.canceledSaveWaiters, snapshot);
+        settleSuccess(entry.canceledSaveWaiters, publication);
       }
     }, error => {
       // Restore installed authority before a rejected waiter can admit fresh work.
@@ -227,11 +245,13 @@ export const createMutationQueue = (
   return {
     enqueueProjectSave(project, expectedLineage) {
       if (frozen) return Promise.reject(frozenError());
-      const queued = queuedSaves.get(project.id);
+      const admittedProject = structuredClone(project);
+      const projectId = admittedProject.id;
+      const queued = queuedSaves.get(projectId);
       if (queued) {
-        const pinnedLineage = projectLineages.get(project.id);
+        const pinnedLineage = projectLineages.get(projectId);
         if (!pinnedLineage || !sameProjectLineage(pinnedLineage, expectedLineage)) {
-          return Promise.reject(lineageError(project.id));
+          return Promise.reject(lineageError(projectId));
         }
         const authorityCanReachExpected = sameProjectLineage(
           expectedLineage,
@@ -242,14 +262,13 @@ export const createMutationQueue = (
             nextProjectLineage(queued.predecessorLineage),
             queued.expectedLineage,
           ));
-        if (!authorityCanReachExpected) return Promise.reject(lineageError(project.id));
+        if (!authorityCanReachExpected) return Promise.reject(lineageError(projectId));
         const { promise, waiter } = waiterPromise();
-        queued.project = structuredClone(project);
+        queued.project = admittedProject;
         queued.authorityLineage = { ...expectedLineage };
         queued.waiters.push(waiter);
         return promise;
       }
-      const projectId = project.id;
       const priorEntry = [...entries].reverse().find(candidate =>
         candidate.kind === 'save' && candidate.project.id === projectId) as SaveEntry | undefined;
       const predecessor = priorEntry
@@ -275,7 +294,7 @@ export const createMutationQueue = (
 
       const entry: SaveEntry = {
         kind: 'save',
-        project: structuredClone(project),
+        project: admittedProject,
         authorityLineage: { ...expectedLineage },
         expectedLineage: dispatchLineage,
         ...(predecessorLineage ? { predecessorLineage } : {}),
@@ -288,7 +307,7 @@ export const createMutationQueue = (
           pump();
         }, SAVE_DEBOUNCE_MS);
       }
-      queuedSaves.set(project.id, entry);
+      queuedSaves.set(projectId, entry);
       entries.push(entry);
       pump();
       return promise;

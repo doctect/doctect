@@ -3,7 +3,7 @@
 // Every step is exported pure so tests exercise them without writing files.
 import fs from 'fs';
 import path from 'path';
-import { execSync } from 'child_process';
+import { execFileSync, execSync } from 'child_process';
 import { fileURLToPath, pathToFileURL } from 'url';
 import ts from 'typescript';
 
@@ -11,17 +11,34 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = path.resolve(HERE, '..');
 export const REPOSITORY_DISPLAY_NAME = 'doctect';
 
-// Basenames excluded anywhere; paths (with '/') excluded at that exact repo-relative path.
+// Basenames excluded case-insensitively anywhere; paths excluded at the exact relative path.
 export const SCAN_EXCLUDES = [
-    'node_modules', 'dist', '.git', '.claude', 'scratch', 'playwright-report', 'archives',
+    'node_modules', 'dist', '.git', '.claude', 'scratch', 'playwright-report', 'test-results',
+    'coverage', '.vite', 'archives',
     'tutorial-videos', '.superpowers', 'package-lock.json', 'server.log',
     'server/analytics.db', 'onboarding/index.html', '.env',
 ];
 
 const BINARY_EXT = /\.(png|jpe?g|webp|gif|ico|pdf|zip|woff2?|ttf|otf|mp4|webm|db|sqlite3?)$/i;
 
-const isExcluded = (relPath, name) =>
-    SCAN_EXCLUDES.includes(name) || SCAN_EXCLUDES.includes(relPath);
+const EXCLUDED_NAMES = new Set(
+    SCAN_EXCLUDES.filter(entry => !entry.includes('/')).map(entry => entry.toLowerCase()),
+);
+const EXCLUDED_PATHS = new Set(
+    SCAN_EXCLUDES.filter(entry => entry.includes('/')).map(entry => entry.toLowerCase()),
+);
+
+const isExcluded = relPath => {
+    const normalized = relPath.replaceAll(path.sep, '/').toLowerCase();
+    return EXCLUDED_PATHS.has(normalized)
+        || normalized.split('/').some(segment => EXCLUDED_NAMES.has(segment));
+};
+
+export const listMaintainedSourcePaths = rootDir => execFileSync(
+    'git',
+    ['ls-files', '--cached', '--others', '--exclude-standard', '-z'],
+    { cwd: rootDir, encoding: 'utf8' },
+).split('\0').filter(relPath => relPath && !isExcluded(relPath));
 
 // wc -l semantics: a trailing newline TERMINATES the last line, it does not start
 // an empty one. Counting split segments overcounts every newline-terminated file by
@@ -41,26 +58,48 @@ const skipIfGone = (fn) => {
     try { return fn(); } catch (e) { if (e.code === 'ENOENT') return GONE; throw e; }
 };
 
-export const scanTree = (rootDir, relPath = '') => {
-    const abs = path.join(rootDir, relPath);
-    const name = relPath === '' ? REPOSITORY_DISPLAY_NAME : path.basename(relPath);
-    const stat = skipIfGone(() => fs.statSync(abs));
-    if (stat === GONE) return null;
-    if (stat.isDirectory()) {
-        const entries = skipIfGone(() => fs.readdirSync(abs));
-        if (entries === GONE) return null;
-        const children = entries
-            .filter(entry => !isExcluded(relPath ? `${relPath}/${entry}` : entry, entry))
-            .map(entry => scanTree(rootDir, relPath ? `${relPath}/${entry}` : entry))
-            .filter(Boolean)
-            .sort((a, b) => (a.kind === b.kind ? a.name.localeCompare(b.name) : a.kind === 'dir' ? -1 : 1));
-        return { name, path: relPath, kind: 'dir', size: children.reduce((s, c) => s + c.size, 0),
-                 lines: null, children };
+export const scanTree = (rootDir, relPath = '', maintainedPaths = undefined) => {
+    const files = new Set(
+        (maintainedPaths ?? listMaintainedSourcePaths(rootDir)).filter(file => !isExcluded(file)),
+    );
+    const directories = new Set(['']);
+    for (const file of files) {
+        let parent = path.posix.dirname(file);
+        while (parent !== '.') {
+            directories.add(parent);
+            parent = path.posix.dirname(parent);
+        }
     }
-    if (BINARY_EXT.test(name)) return { name, path: relPath, kind: 'file', size: stat.size, lines: null };
-    const text = skipIfGone(() => fs.readFileSync(abs, 'utf8'));
-    if (text === GONE) return null;
-    return { name, path: relPath, kind: 'file', size: stat.size, lines: countLines(text) };
+
+    const scan = currentPath => {
+        if (currentPath && !files.has(currentPath) && !directories.has(currentPath)) return null;
+        const abs = path.join(rootDir, currentPath);
+        const name = currentPath === '' ? REPOSITORY_DISPLAY_NAME : path.basename(currentPath);
+        const stat = skipIfGone(() => currentPath ? fs.lstatSync(abs) : fs.statSync(abs));
+        if (stat === GONE || stat.isSymbolicLink()) return null;
+        if (stat.isDirectory()) {
+            const entries = skipIfGone(() => fs.readdirSync(abs));
+            if (entries === GONE) return null;
+            const children = entries
+                .map(entry => currentPath ? `${currentPath}/${entry}` : entry)
+                .filter(childPath => !isExcluded(childPath))
+                .map(scan)
+                .filter(Boolean)
+                .sort((a, b) => (a.kind === b.kind
+                    ? a.name.localeCompare(b.name)
+                    : a.kind === 'dir' ? -1 : 1));
+            return { name, path: currentPath, kind: 'dir', size: children.reduce((s, c) => s + c.size, 0),
+                     lines: null, children };
+        }
+        if (BINARY_EXT.test(name)) {
+            return { name, path: currentPath, kind: 'file', size: stat.size, lines: null };
+        }
+        const text = skipIfGone(() => fs.readFileSync(abs, 'utf8'));
+        if (text === GONE) return null;
+        return { name, path: currentPath, kind: 'file', size: stat.size, lines: countLines(text) };
+    };
+
+    return scan(relPath);
 };
 
 const walkFiles = (node, out = []) => {

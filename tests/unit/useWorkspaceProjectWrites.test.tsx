@@ -742,6 +742,26 @@ describe('useWorkspaceProjectWrites', () => {
     expect(result.current.hasUnsavedWork).toBe(true);
   });
 
+  it('retains the working copy when a malformed Worker response fails closed', async () => {
+    const store = storeWithCommit(async () => {
+      throw new WorkspaceStoreError(
+        'Project preparation Worker returned an invalid response.',
+        'unavailable',
+      );
+    });
+    const { result } = renderHook(() => useWorkspaceProjectWrites(store, snapshot()));
+    const working = project('Malformed response working copy', 15);
+
+    act(() => { void result.current.updateProject('project-1', () => working); });
+
+    await waitFor(() => expect(result.current.saveStates.get('project-1')).toMatchObject({
+      status: 'failed',
+      message: 'Project preparation Worker returned an invalid response.',
+    }));
+    expect(result.current.workspace.projects[0]).toBe(working);
+    expect(result.current.hasUnsavedWork).toBe(true);
+  });
+
   it('retries the latest generation and clears the failure only after it saves', async () => {
     const retry = deferred<WorkspaceSnapshot>();
     const store = storeWithCommit(vi.fn()

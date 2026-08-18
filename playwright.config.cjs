@@ -7,6 +7,7 @@ if (!Number.isInteger(webPort) || webPort <= 0 || !Number.isInteger(apiPort) || 
 }
 const webOrigin = `http://localhost:${webPort}`;
 const apiOrigin = `http://localhost:${apiPort}`;
+const builtBundle = process.env.E2E_BUILT_BUNDLE === '1';
 process.env.E2E_API_BASE = apiOrigin;
 
 const e2eOwnerEmail = process.env.E2E_OWNER_EMAIL || `owner-${Date.now()}-${process.pid}@test.dev`;
@@ -41,7 +42,10 @@ module.exports = defineConfig({
     projects: [
         {
             name: 'chromium',
-            use: { ...devices['Desktop Chrome'] },
+            use: {
+                ...devices['Desktop Chrome'],
+                ...(builtBundle ? { launchOptions: { args: ['--unlimited-storage'] } } : {}),
+            },
         },
 
         {
@@ -85,7 +89,9 @@ module.exports = defineConfig({
      * 3000 / 3001 processes while preserving explicit server ownership.
      */
     webServer: {
-        command: `npx concurrently --kill-others-on-fail "vite --host 127.0.0.1 --port ${webPort} --strictPort" "node server/index.js"`,
+        command: builtBundle
+            ? `npm run build && npx concurrently --kill-others-on-fail "vite preview --host 127.0.0.1 --port ${webPort} --strictPort" "node server/index.js"`
+            : `npx concurrently --kill-others-on-fail "vite --host 127.0.0.1 --port ${webPort} --strictPort" "node server/index.js"`,
         url: webOrigin,
         reuseExistingServer: false,
         env: {

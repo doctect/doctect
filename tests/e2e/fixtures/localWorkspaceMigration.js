@@ -545,8 +545,10 @@ export const legacyRawFromBundle = bundle => Object.fromEntries(
 
 const sizeState = state => encoder.encode(JSON.stringify(state)).byteLength;
 
-export const createLargeLegacyWorkspace = async page => {
-    const firstState = await stateFromProduction(page);
+export const createLargeLegacyWorkspace = async (page, baseState) => {
+    const firstState = baseState === undefined
+        ? await stateFromProduction(page)
+        : clone(baseState);
     const targetBytes = MAX_STATE_BYTES - 1024;
     firstState.nodes[firstState.rootId].data = {
         ...firstState.nodes[firstState.rootId].data,
@@ -587,6 +589,31 @@ export const prepareLargeLegacyWorkspace = async page => {
     return { ...legacy, seed };
 };
 
+export const prepareNearLimitLegacyWorkspaceFromBuiltEditor = async page => {
+    await resetLocalWorkspace(page);
+    await page.goto('/app');
+    await page.getByTestId('project-pane').first().waitFor();
+    const blankInspection = await inspectWorkspaceDatabase(page);
+    const baseState = blankInspection?.records.projects[0]?.project?.initialState;
+    if (!baseState) throw new Error('Built editor did not create a seed project state.');
+
+    await resetLocalWorkspace(page);
+    const large = await createLargeLegacyWorkspace(page, baseState);
+    const projects = [large.projects[0]];
+    const raw = {
+        ...large.raw,
+        [LEGACY_KEYS.projects]: rawJson(projects),
+    };
+    const seed = await seedLegacyRaw(page, raw);
+    return {
+        ...large,
+        raw,
+        projects,
+        aggregateProjectBytes: encoder.encode(raw[LEGACY_KEYS.projects]).byteLength,
+        seed,
+    };
+};
+
 export const installPerformanceCapture = page => page.addInitScript(() => {
     window.__workspaceMigrationPerformance = {
         startedAt: performance.now(),
@@ -624,8 +651,19 @@ export const installProjectPreparationWorkerCapture = page => page.addInitScript
         workers: [],
         requests: 0,
         responses: 0,
+        transactions: [],
     };
     globalThis.__workspaceProjectPreparationWorkers = capture;
+    const transaction = IDBDatabase.prototype.transaction;
+    IDBDatabase.prototype.transaction = function(storeNames, mode, options) {
+        const opened = transaction.call(this, storeNames, mode, options);
+        capture.transactions.push({
+            database: this.name,
+            stores: typeof storeNames === 'string' ? [storeNames] : Array.from(storeNames),
+            mode: mode ?? 'readonly',
+        });
+        return opened;
+    };
     globalThis.Worker = new Proxy(NativeWorker, {
         construct(Target, args) {
             const worker = Reflect.construct(Target, args);

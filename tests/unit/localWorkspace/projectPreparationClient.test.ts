@@ -80,7 +80,7 @@ describe('private project preparation worker client', () => {
     await expect(prepareProjectInModuleWorker(source, () => worker)).resolves.toBe(source);
   });
 
-  it('settles its response even when Worker termination throws during cleanup', async () => {
+  it('rejects its response when Worker termination fails during cleanup', async () => {
     const worker = new FakeWorker();
     const source = project();
     worker.terminate.mockImplementation(() => { throw new Error('termination failed'); });
@@ -98,7 +98,7 @@ describe('private project preparation worker client', () => {
     await Promise.resolve();
 
     expect(settled).toBe(true);
-    await expect(preparation).resolves.toBe(source);
+    await expect(preparation).rejects.toMatchObject({ code: 'unavailable' });
   });
 
   it('rejects unsupported Worker execution without main-thread fallback', async () => {
@@ -119,6 +119,52 @@ describe('private project preparation worker client', () => {
     worker.postMessage.mockImplementation(() => { throw messageFailure; });
     await expect(prepareProjectInModuleWorker(project(), () => worker))
       .rejects.toMatchObject({ code: 'unavailable', cause: messageFailure });
+    expect(worker.terminate).toHaveBeenCalledOnce();
+  });
+
+  it('cleans a partially registered Worker when listener setup fails', async () => {
+    vi.useFakeTimers();
+    const worker = new FakeWorker();
+    const originalAdd = worker.addEventListener.bind(worker);
+    const remove = vi.spyOn(worker, 'removeEventListener');
+    worker.addEventListener = vi.fn((type, listener) => {
+      if (type === 'error') throw new Error('listener setup failed');
+      originalAdd(type, listener);
+    });
+
+    await expect(prepareProjectInModuleWorker(project(), () => worker)).rejects.toMatchObject({
+      code: 'unavailable',
+    });
+    expect(remove).toHaveBeenCalledOnce();
+    expect(remove).toHaveBeenCalledWith('message', expect.any(Function));
+    expect(worker.terminate).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('attempts every cleanup and rejects a valid response when required cleanup fails', async () => {
+    const worker = new FakeWorker();
+    const remove = vi.fn((_type: string, _listener: (event: unknown) => void) => {
+      throw new Error('listener removal failed');
+    });
+    worker.removeEventListener = remove;
+    worker.terminate.mockImplementation(() => { throw new Error('termination failed'); });
+    worker.postMessage.mockImplementation(() => worker.emit('message', {
+      data: {
+        type: 'project-prepared',
+        requestId: 1,
+        project: project(),
+      },
+    }));
+
+    await expect(prepareProjectInModuleWorker(project(), () => worker)).rejects.toMatchObject({
+      code: 'unavailable',
+    });
+    expect(remove).toHaveBeenCalledTimes(3);
+    expect(remove.mock.calls.map(([type]) => type)).toEqual([
+      'message',
+      'error',
+      'messageerror',
+    ]);
     expect(worker.terminate).toHaveBeenCalledOnce();
   });
 
@@ -156,15 +202,80 @@ describe('private project preparation worker client', () => {
     undefined,
     null,
     {},
+    Object.assign(Object.create(null), {
+      type: 'project-prepared',
+      requestId: 1,
+      project: project(),
+    }),
     { type: 'project-prepared', requestId: 2, project: project() },
+    { type: 'project-prepared', requestId: 1, project: { id: 'project-a' } },
+    { type: 'project-prepared', requestId: 1, project: { id: 'project-a', name: 'Missing state' } },
+    {
+      type: 'project-prepared',
+      requestId: 1,
+      project: { id: 'project-a', name: 'Wrong state', initialState: [] },
+    },
+    {
+      type: 'project-prepared',
+      requestId: 1,
+      project: Object.assign(Object.create(null), project()),
+    },
     { type: 'project-prepared', requestId: 1, project: { ...project(), id: 'wrong-project' } },
     { type: 'project-prepared', requestId: 1, project: project(), extra: true },
+    {
+      type: 'project-preparation-failed',
+      requestId: 1,
+      message: 'ambiguous',
+      project: project(),
+    },
   ])('rejects malformed or mismatched protocol response %#', async response => {
     const worker = new FakeWorker();
     worker.postMessage.mockImplementation(() => worker.emit('message', { data: response }));
 
     await expect(prepareProjectInModuleWorker(project(), () => worker))
       .rejects.toMatchObject({ code: 'unavailable' });
+    expect(worker.terminate).toHaveBeenCalledOnce();
+  });
+
+  it('rejects an accessor-hostile envelope without invoking its getter', async () => {
+    const worker = new FakeWorker();
+    const requestIdGetter = vi.fn(() => { throw new Error('hostile getter ran'); });
+    const response = {
+      type: 'project-prepared',
+      project: project(),
+    } as Record<string, unknown>;
+    Object.defineProperty(response, 'requestId', {
+      enumerable: true,
+      get: requestIdGetter,
+    });
+    worker.postMessage.mockImplementation(() => worker.emit('message', { data: response }));
+
+    await expect(prepareProjectInModuleWorker(project(), () => worker)).rejects.toMatchObject({
+      code: 'unavailable',
+    });
+    expect(requestIdGetter).not.toHaveBeenCalled();
+    expect(worker.terminate).toHaveBeenCalledOnce();
+  });
+
+  it('rejects an accessor-hostile prepared project without invoking its getter', async () => {
+    const worker = new FakeWorker();
+    const nameGetter = vi.fn(() => { throw new Error('hostile project getter ran'); });
+    const prepared = {
+      id: 'project-a',
+      initialState: currentState(),
+    } as Record<string, unknown>;
+    Object.defineProperty(prepared, 'name', {
+      enumerable: true,
+      get: nameGetter,
+    });
+    worker.postMessage.mockImplementation(() => worker.emit('message', {
+      data: { type: 'project-prepared', requestId: 1, project: prepared },
+    }));
+
+    await expect(prepareProjectInModuleWorker(project(), () => worker)).rejects.toMatchObject({
+      code: 'unavailable',
+    });
+    expect(nameGetter).not.toHaveBeenCalled();
     expect(worker.terminate).toHaveBeenCalledOnce();
   });
 

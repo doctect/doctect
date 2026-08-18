@@ -1,5 +1,6 @@
 // @vitest-environment node
 import path from 'node:path';
+import fs from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 
@@ -11,6 +12,7 @@ process.stdout.write(JSON.stringify({
     apiBase: process.env.E2E_API_BASE,
     serverPort: config.webServer.env.PORT,
     serverApiBase: config.webServer.env.E2E_API_BASE,
+    serverCommand: config.webServer.command,
 }));
 `;
 
@@ -41,6 +43,7 @@ describe('playwright config ports', () => {
             apiBase: 'http://localhost:4318',
             serverPort: '4318',
             serverApiBase: 'http://localhost:4318',
+            serverCommand: 'npx concurrently --kill-others-on-fail "vite --host 127.0.0.1 --port 4317 --strictPort" "node server/index.js"',
         });
     });
 
@@ -50,6 +53,31 @@ describe('playwright config ports', () => {
             apiBase: 'http://localhost:3001',
             serverPort: '3001',
             serverApiBase: 'http://localhost:3001',
+            serverCommand: 'npx concurrently --kill-others-on-fail "vite --host 127.0.0.1 --port 3000 --strictPort" "node server/index.js"',
         });
+    });
+
+    it('serves the explicit built-bundle proof with Vite preview', () => {
+        const config = probeConfig({
+            E2E_BUILT_BUNDLE: '1',
+            E2E_WEB_PORT: '4327',
+            E2E_API_PORT: '4328',
+        });
+
+        expect(config.serverCommand).toContain('vite preview');
+        expect(config.serverCommand).not.toContain('"vite --host');
+    });
+
+    it('keeps the Worker benchmark out of direct source-store imports', () => {
+        const source = fs.readFileSync(
+            path.join(repositoryRoot, 'tests/e2e/local_workspace_migration.spec.js'),
+            'utf8',
+        );
+        const marker = 'coalesces near-limit built-editor interactions';
+        const benchmarkStart = source.indexOf(marker);
+
+        expect(benchmarkStart).toBeGreaterThanOrEqual(0);
+        const benchmark = source.slice(benchmarkStart);
+        expect(benchmark).not.toContain("import('/services/localWorkspace/index.ts')");
     });
 });

@@ -100,6 +100,25 @@ describe('built page', () => {
 
         expect(await buildPage(alternateRoot)).toBe(await buildPage(REPO_ROOT));
     });
+
+    it('builds byte-identically when ignored Playwright result state changes', async () => {
+        const artifact = path.join(REPO_ROOT, 'test-results/.last-run.json');
+        const existed = fs.existsSync(artifact);
+        const original = existed ? fs.readFileSync(artifact) : undefined;
+        const before = await buildPage(REPO_ROOT);
+        try {
+            fs.mkdirSync(path.dirname(artifact), { recursive: true });
+            fs.writeFileSync(artifact, JSON.stringify({
+                status: 'failed',
+                failedTests: ['ignored-built-page-nondeterminism-probe'],
+            }, null, 2));
+
+            expect(await buildPage(REPO_ROOT)).toBe(before);
+        } finally {
+            if (original) fs.writeFileSync(artifact, original);
+            else fs.rmSync(artifact, { force: true });
+        }
+    });
 });
 
 describe('extractExcerpts', () => {

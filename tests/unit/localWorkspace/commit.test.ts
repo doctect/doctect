@@ -83,6 +83,7 @@ afterAll(() => {
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 interface TransactionRecord {
@@ -665,6 +666,31 @@ describe('project save queues', () => {
       record.mode === 'readonly' && sameStores(record.stores, READ_ALL_SCOPE))).toHaveLength(1);
   });
 
+  it('keeps caller mutation out of durable state and unrelated command readbacks', async () => {
+    const { store, harness, snapshot } = await readyStore();
+    const source = snapshot.projects[0];
+    useQueueTimers();
+
+    const save = store.commit({
+      type: 'save-project',
+      project: trustedProjectNamed(source, 'Durable saved name'),
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    const publication = await save;
+    publication.projects.find(project => project.id === source.id)!.name = 'Caller mutation';
+
+    const laterReadback = await store.commit({
+      type: 'save-custom-preset',
+      preset: presetNamed('unrelated-preset'),
+    });
+    const durable = await inspect(harness);
+
+    expect(laterReadback.projects.find(project => project.id === source.id)?.name)
+      .toBe('Durable saved name');
+    expect(durable.projects.find(record => record.id === source.id)?.project.name)
+      .toBe('Durable saved name');
+  });
+
   it('admits cloned bytes before debounce and prepares only the newest physical payload', async () => {
     const prepareProject = vi.fn(async (project: WorkspaceProject) => structuredClone(project));
     const { store, harness, snapshot } = await readyStore({ prepareProject });
@@ -782,6 +808,57 @@ describe('project save queues', () => {
     const save = store.commit({
       type: 'save-project',
       project: trustedProjectNamed(bootstrap.snapshot.projects[0], 'Must not persist'),
+    });
+    const saveAssertion = expect(save).rejects.toMatchObject({ code: 'unavailable' });
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    await saveAssertion;
+    expect(writeTransactions(harness.records)).toHaveLength(0);
+    expect(await inspect(harness)).toEqual(before);
+  });
+
+  it('rejects a same-id malformed Worker project before any adapter write', async () => {
+    class MalformedProjectWorker {
+      private readonly listeners = new Map<string, Set<(event: unknown) => void>>();
+
+      addEventListener(type: string, listener: (event: unknown) => void): void {
+        const listeners = this.listeners.get(type) ?? new Set();
+        listeners.add(listener);
+        this.listeners.set(type, listeners);
+      }
+
+      removeEventListener(type: string, listener: (event: unknown) => void): void {
+        this.listeners.get(type)?.delete(listener);
+      }
+
+      postMessage(message: unknown): void {
+        const requestId = (message as { requestId?: unknown }).requestId;
+        for (const listener of this.listeners.get('message') ?? []) {
+          listener({
+            data: {
+              type: 'project-prepared',
+              requestId,
+              project: { id: 'project-a' },
+            },
+          });
+        }
+      }
+
+      terminate(): void {}
+    }
+    vi.stubGlobal('Worker', MalformedProjectWorker);
+    const harness = createHarness();
+    const store = createProductionLocalWorkspaceStore(harness.environment);
+    const bootstrap = await store.bootstrap();
+    expect(bootstrap.status).toBe('ready');
+    if (bootstrap.status !== 'ready') return;
+    const before = await inspect(harness);
+    harness.records.length = 0;
+    useQueueTimers();
+
+    const save = store.commit({
+      type: 'save-project',
+      project: trustedProjectNamed(bootstrap.snapshot.projects[0], 'Must remain open'),
     });
     const saveAssertion = expect(save).rejects.toMatchObject({ code: 'unavailable' });
     await vi.advanceTimersByTimeAsync(1_000);

@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  getInstalledProjectAuthorityToken,
+  registerInstalledProjectAuthority,
+} from '../../../services/localWorkspace/projectAuthority';
+import {
   WorkspaceStoreError,
   type WorkspaceProject,
   type WorkspaceSnapshot,
@@ -38,6 +42,7 @@ const deferred = <T = void>() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 describe('project revision lineages', () => {
@@ -392,6 +397,39 @@ describe('project revision lineages', () => {
 });
 
 describe('deferred project preparation', () => {
+  it('leaves no lineage pin when cloning an admitted payload fails', async () => {
+    vi.useFakeTimers();
+    const calls: ProjectLineage[] = [];
+    const queue = createMutationQueue({
+      async prepareProject(project) {
+        return project;
+      },
+      async saveProject(project, expectedLineage) {
+        calls.push(expectedLineage);
+        return snapshotWith(project);
+      },
+      async runExclusive() {
+        throw new Error('Unexpected exclusive command.');
+      },
+    });
+    const uncloneable = projectNamed('Uncloneable');
+    (uncloneable.initialState.nodes.root.data as Record<string, unknown>).callback = () => {};
+
+    expect(() => queue.enqueueProjectSave(uncloneable, lineage(0))).toThrow();
+    expect(queue.hasPinnedProjectLineage(uncloneable.id)).toBe(false);
+
+    const afterForeignReadback = queue.enqueueProjectSave(
+      projectNamed('Valid foreign readback'),
+      lineage(1, 'foreign-incarnation'),
+    );
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    await expect(afterForeignReadback).resolves.toMatchObject({
+      projects: [{ name: 'Valid foreign readback' }],
+    });
+    expect(calls).toEqual([lineage(1, 'foreign-incarnation')]);
+  });
+
   it('clones at admission, then prepares and writes only the newest burst payload', async () => {
     vi.useFakeTimers();
     const prepareProject = vi.fn(async (project: WorkspaceProject) => ({
@@ -429,9 +467,14 @@ describe('deferred project preparation', () => {
     );
   });
 
-  it('shares one immutable physical snapshot across every coalesced waiter', async () => {
+  it('clones one authority-bearing publication shared across every coalesced waiter', async () => {
     vi.useFakeTimers();
     const physicalSnapshot = snapshotWith(projectNamed('Physical readback'));
+    const authorityToken = registerInstalledProjectAuthority(
+      physicalSnapshot.projects[0],
+      lineage(1),
+    );
+    const clone = vi.spyOn(globalThis, 'structuredClone');
     const queue = createMutationQueue({
       async prepareProject(project) {
         return project;
@@ -446,11 +489,17 @@ describe('deferred project preparation', () => {
 
     const first = queue.enqueueProjectSave(projectNamed('First'), lineage(0));
     const second = queue.enqueueProjectSave(projectNamed('Second'), lineage(0));
+    clone.mockClear();
     await vi.advanceTimersByTimeAsync(1_000);
     const [firstResult, secondResult] = await Promise.all([first, second]);
 
-    expect(firstResult).toBe(physicalSnapshot);
-    expect(secondResult).toBe(physicalSnapshot);
+    expect(firstResult).not.toBe(physicalSnapshot);
+    expect(firstResult).toBe(secondResult);
+    expect(clone).toHaveBeenCalledOnce();
+    expect(getInstalledProjectAuthorityToken(firstResult.projects[0])).toBe(authorityToken);
+
+    firstResult.projects[0].name = 'Caller-mutated publication';
+    expect(physicalSnapshot.projects[0].name).toBe('Physical readback');
   });
 
   it('rejects every coalesced waiter with the same preparation failure and never writes', async () => {
@@ -505,9 +554,9 @@ describe('deferred project preparation', () => {
     const [firstResult, secondResult, closeResult] = await Promise.all([first, second, close]);
 
     expect(prepareProject).not.toHaveBeenCalled();
-    expect(firstResult).toBe(closeSnapshot);
-    expect(secondResult).toBe(closeSnapshot);
-    expect(closeResult).toBe(closeSnapshot);
+    expect(firstResult).not.toBe(closeSnapshot);
+    expect(firstResult).toBe(secondResult);
+    expect(secondResult).toBe(closeResult);
   });
 
   it('freezes new admission while deferred accepted work prepares and drain waits for settlement', async () => {
