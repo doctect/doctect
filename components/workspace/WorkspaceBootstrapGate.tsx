@@ -219,14 +219,20 @@ export function WorkspaceBootstrapGate({
     result: WorkspaceBlockingResult,
   ): GateState => {
     const capture = openWorkspaceRef.current;
-    if (capture?.store === resultStore) capture.provenance = 'protected';
+    let openWorkspace: WorkspaceSnapshot | undefined;
+    if (capture?.store === resultStore) {
+      capture.provenance = 'protected';
+      try {
+        openWorkspace = structuredClone(capture.workspace);
+      } catch {
+        if (openWorkspaceRef.current === capture) openWorkspaceRef.current = null;
+      }
+    }
     return {
       kind: 'blocked',
       store: resultStore,
       result,
-      ...(capture?.store === resultStore
-        ? { openWorkspace: structuredClone(capture.workspace) }
-        : {}),
+      ...(openWorkspace ? { openWorkspace } : {}),
     };
   };
 

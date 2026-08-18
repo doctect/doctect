@@ -468,8 +468,8 @@ export function EditorPage({
       <CloseProjectConfirmModal
         isOpen={Boolean(closingProjectIntent)}
         onClose={() => setClosingProjectIntent(null)}
-        onConfirmClose={() => { void executeCloseProject(); }}
-        onSaveAndClose={() => { void handleSaveAndClose(); }}
+        onConfirmClose={executeCloseProject}
+        onSaveAndClose={handleSaveAndClose}
         projectName={closingProject?.name ?? 'Project'}
       />
 

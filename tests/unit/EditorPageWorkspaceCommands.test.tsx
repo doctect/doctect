@@ -33,6 +33,7 @@ const cloudResults = vi.hoisted(() => ({
   link: undefined as boolean | undefined,
   restore: undefined as boolean | undefined,
 }));
+const closeModalProps = vi.hoisted(() => ({ current: undefined as any }));
 
 const generatedProject = {
   schemaVersion: 11 as const,
@@ -187,13 +188,16 @@ vi.mock('../../components/NewProjectModal', () => ({
 }));
 
 vi.mock('../../components/CloseProjectConfirmModal', () => ({
-  CloseProjectConfirmModal: (props: any) => props.isOpen ? (
-    <div role="dialog" aria-label={`Close ${props.projectName}`}>
-      <button type="button" onClick={props.onConfirmClose}>Confirm close</button>
-      <button type="button" onClick={props.onSaveAndClose}>Download JSON and close</button>
-      <button type="button" onClick={props.onClose}>Cancel close</button>
-    </div>
-  ) : null,
+  CloseProjectConfirmModal: (props: any) => {
+    closeModalProps.current = props;
+    return props.isOpen ? (
+      <div role="dialog" aria-label={`Close ${props.projectName}`}>
+        <button type="button" onClick={props.onConfirmClose}>Confirm close</button>
+        <button type="button" onClick={props.onSaveAndClose}>Download JSON and close</button>
+        <button type="button" onClick={props.onClose}>Cancel close</button>
+      </div>
+    ) : null;
+  },
 }));
 
 vi.mock('../../components/AccountMenu', () => ({ AccountMenu: () => null }));
@@ -396,6 +400,7 @@ describe('EditorPage workspace commands', () => {
     presetSaveResult.current = undefined;
     cloudResults.link = undefined;
     cloudResults.restore = undefined;
+    closeModalProps.current = undefined;
     localStorage.clear();
     vi.spyOn(globalThis.crypto, 'randomUUID').mockReturnValue(
       '00000000-0000-4000-8000-000000000001',
@@ -467,6 +472,35 @@ describe('EditorPage workspace commands', () => {
         name: 'Blank Project',
       }),
     });
+  });
+
+  it.each([
+    ['onConfirmClose', false],
+    ['onSaveAndClose', true],
+  ] as const)('returns the %s Promise supplied to the close modal', async (action, downloads) => {
+    const initial = workspace([
+      project('project-a', 'Project A'),
+      project('project-b', 'Project B'),
+    ]);
+    const pending = deferred<WorkspaceSnapshot>();
+    let closedSnapshot: WorkspaceSnapshot | undefined;
+    const { store, commit } = commandStore(initial, (command, next) => {
+      if (command.type !== 'close-project') return undefined;
+      closedSnapshot = next;
+      return pending.promise;
+    });
+    renderEditor(store, initial);
+    fireEvent.click(screen.getByRole('button', { name: 'Close Project A' }));
+
+    let result: Promise<void> | undefined;
+    act(() => { result = closeModalProps.current[action](); });
+
+    expect(result).toBeInstanceOf(Promise);
+    expect(commit).toHaveBeenCalledOnce();
+    expect(downloadJson).toHaveBeenCalledTimes(downloads ? 1 : 0);
+    await act(async () => pending.resolve(closedSnapshot!));
+    await expect(result!).resolves.toBeUndefined();
+    expect(screen.queryByRole('dialog', { name: 'Close Project A' })).not.toBeInTheDocument();
   });
 
   it.each(['create', 'activate', 'close'] as const)(

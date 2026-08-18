@@ -115,6 +115,32 @@ function AuthorityLossOnLayoutProbe({
   return <div data-testid="editor-page" />;
 }
 
+function AuthorityLossCleanupProbe({
+  mount,
+  protectedWorkspace,
+  staleWorkspace,
+  onUnmount,
+}: {
+  mount: WorkspaceEditorMount;
+  protectedWorkspace: WorkspaceSnapshot;
+  staleWorkspace: WorkspaceSnapshot;
+  onUnmount: () => void;
+}) {
+  useLayoutEffect(() => () => {
+    onUnmount();
+    mount.onWorkspaceChange(staleWorkspace);
+  }, [mount, onUnmount, staleWorkspace]);
+
+  return (
+    <button
+      data-testid="editor-page"
+      onClick={() => mount.onWorkspaceChange(protectedWorkspace)}
+    >
+      Publish protected work
+    </button>
+  );
+}
+
 function ReplacementActionProbe({
   store,
   downloadDuringLayout,
@@ -764,6 +790,100 @@ describe('WorkspaceBootstrapGate', () => {
       capturedAt: expect.any(String),
       workspace: expected,
     }, 'doctect-open-workspace.json');
+  });
+
+  it('blocks once and drops only open-work recovery when protected capture cloning fails', async () => {
+    const initial = workspaceSnapshot();
+    const protectedWorkspace = workspaceSnapshot({
+      projects: [{ ...initial.projects[0], name: 'Protected clone failure' }],
+    });
+    const staleWorkspace = workspaceSnapshot({
+      projects: [{ ...initial.projects[0], name: 'Stale cleanup publication' }],
+    });
+    const store = fakeReadyStore({ snapshot: initial });
+    const originalStructuredClone = globalThis.structuredClone.bind(globalThis);
+    let protectedCloneAttempts = 0;
+    let staleCloneAttempts = 0;
+    vi.spyOn(globalThis, 'structuredClone').mockImplementation(function cloneWithFailure<T>(
+      value: T,
+      options?: StructuredSerializeOptions,
+    ): T {
+      const name = (value as WorkspaceSnapshot)?.projects?.[0]?.name;
+      if (name === 'Protected clone failure') {
+        protectedCloneAttempts += 1;
+        if (protectedCloneAttempts === 2) throw new DOMException('clone failed', 'DataCloneError');
+      }
+      if (name === 'Stale cleanup publication') staleCloneAttempts += 1;
+      return originalStructuredClone(value, options);
+    });
+    const unmounted = vi.fn();
+    let publish: WorkspaceEditorMount['onWorkspaceChange'] | undefined;
+    const renderEditor = (mount: WorkspaceEditorMount) => {
+      publish = mount.onWorkspaceChange;
+      return <AuthorityLossCleanupProbe
+        mount={mount}
+        protectedWorkspace={protectedWorkspace}
+        staleWorkspace={staleWorkspace}
+        onUnmount={unmounted}
+      />;
+    };
+    const view = render(
+      <WorkspaceBootstrapGate store={store} renderEditor={renderEditor} />,
+    );
+    fireEvent.click(await screen.findByTestId('editor-page'));
+    const signal = store.observers[0]?.signal;
+    const firstResult = recoveryResult(splitBrainRecovery({
+      recoveryId: 'capture-clone-failed',
+    }));
+    const notifyAuthorityLost = vi.fn(() => {
+      try {
+        store.emitAuthorityLost(firstResult);
+      } catch {
+        // The real store isolates observer failures from its authority transition.
+      }
+    });
+
+    act(() => notifyAuthorityLost());
+
+    expect(notifyAuthorityLost).toHaveBeenCalledOnce();
+    expect(unmounted).toHaveBeenCalledOnce();
+    expect(screen.queryByTestId('editor-page')).not.toBeInTheDocument();
+    const alert = screen.getByRole('alert');
+    expect(within(alert).getByRole('heading', {
+      name: 'Project copies changed in another tab',
+    })).toBeVisible();
+    expect(within(alert).queryByRole('button', { name: 'Download open work' }))
+      .not.toBeInTheDocument();
+    expect(within(alert).getByRole('button', { name: 'Download current browser copy' }))
+      .toBeEnabled();
+    expect(within(alert).getByRole('button', { name: 'Download original backup' }))
+      .toBeEnabled();
+    expect(within(alert).getByRole('button', { name: 'Download editor copy' }))
+      .toBeEnabled();
+    expect(store.commit).not.toHaveBeenCalled();
+    expect(trackEvent).not.toHaveBeenCalled();
+
+    act(() => store.emitAuthorityLost(unavailableResult({
+      availableExports: ['indexeddb-workspace'],
+    })));
+    expect(screen.getByRole('heading', {
+      name: 'Local project storage is unavailable',
+    })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Download editor copy' })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: 'Download open work' }))
+      .not.toBeInTheDocument();
+    expect(screen.getAllByRole('alert')).toHaveLength(1);
+    expect(protectedCloneAttempts).toBe(2);
+    expect(staleCloneAttempts).toBe(0);
+
+    view.unmount();
+    expect(signal?.aborted).toBe(true);
+    act(() => {
+      publish?.(staleWorkspace);
+      store.emitAuthorityLost(unavailableResult({ availableExports: [] }));
+    });
+    expect(protectedCloneAttempts).toBe(2);
+    expect(staleCloneAttempts).toBe(0);
   });
 
   it('seeds a verified initial snapshot before an editor publishes', async () => {
