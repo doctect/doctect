@@ -15,6 +15,7 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { extname, join, posix, relative, sep } from 'node:path';
 import { Script } from 'node:vm';
+import { chromium } from '@playwright/test';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 import { buildBrowserPreferencesBundle } from '../../onboarding/build.mjs';
@@ -1425,6 +1426,7 @@ const executableDocumentExtraction = (input: SourceInput): ExecutableDocumentExt
             source: prepared.source,
             browserBase,
             directStorageBoundary: input.directStorageBoundary,
+            moduleGoal: false,
             parseFailure: classicScriptParseFailure(prepared.source),
             positionSegments: composedPositionSegments(input, prepared.offsets),
             reportPath,
@@ -1442,6 +1444,7 @@ const executableDocumentExtraction = (input: SourceInput): ExecutableDocumentExt
               source: prepared.source,
               browserBase,
               directStorageBoundary: input.directStorageBoundary,
+              moduleGoal: false,
               parseFailure: classicScriptParseFailure(prepared.source),
               positionSegments: composedPositionSegments(input, prepared.offsets),
               reportPath,
@@ -1666,6 +1669,7 @@ type ValueBindingVisibility = 'all' | 'body';
 
 const sourceValueBindingScopes = (
   sourceFile: ts.SourceFile,
+  sourceVariablesAreLexical: boolean,
 ): Map<string, Map<ts.Node, ValueBindingVisibility>> => {
   const scopes = new Map<string, Map<ts.Node, ValueBindingVisibility>>();
   const add = (
@@ -1728,7 +1732,9 @@ const sourceValueBindingScopes = (
         }
         const blockScoped = Boolean(list && (list.flags & ts.NodeFlags.BlockScoped));
         const scope = blockScoped ? lexicalScope(node) : functionOrSourceScope(node);
-        addBindingName(node.name, scope, !blockScoped && scope && ts.isFunctionLike(scope) ? 'body' : 'all');
+        if (blockScoped || scope !== sourceFile || sourceVariablesAreLexical) {
+          addBindingName(node.name, scope, !blockScoped && scope && ts.isFunctionLike(scope) ? 'body' : 'all');
+        }
       }
     } else if (ts.isParameter(node)) {
       addBindingName(node.name, functionOrSourceScope(node));
@@ -1753,7 +1759,7 @@ const sourceValueBindingScopes = (
         }
       }
     } else if (ts.isImportEqualsDeclaration(node)) {
-      if (!node.isTypeOnly) add(node.name, sourceFile);
+      if (!node.isTypeOnly) add(node.name, lexicalScope(node));
     }
     ts.forEachChild(node, visit);
   };
@@ -2329,7 +2335,7 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
       continue;
     }
 
-    const valueBindingScopes = sourceValueBindingScopes(sourceFile);
+    const valueBindingScopes = sourceValueBindingScopes(sourceFile, input.moduleGoal !== false);
     const hasLexicalValueBinding = (identifier: ts.Identifier): boolean => {
       const bindingScopes = valueBindingScopes.get(identifier.text);
       if (!bindingScopes) return false;
@@ -2722,8 +2728,17 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
       (ts.isPropertyAccessExpression(node.parent) && node.parent.name === node)
       || (ts.isQualifiedName(node.parent) && node.parent.right === node)
     );
+    const jsxNonValueName = (node: ts.Identifier): boolean => (
+      ((ts.isJsxOpeningElement(node.parent)
+        || ts.isJsxSelfClosingElement(node.parent)
+        || ts.isJsxClosingElement(node.parent))
+        && node.parent.tagName === node)
+      || (ts.isJsxAttribute(node.parent) && node.parent.name === node)
+      || ts.isJsxNamespacedName(node.parent)
+    );
     const nonValueBrowserRootName = (node: ts.Identifier): boolean => (
       propertyAccessName(node)
+      || jsxNonValueName(node)
       || (ts.isPropertyAssignment(node.parent) && node.parent.name === node)
       || (ts.isBindingElement(node.parent) && node.parent.propertyName === node)
       || ((ts.isVariableDeclaration(node.parent) || ts.isParameter(node.parent))
@@ -2736,6 +2751,7 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
         || ts.isModuleDeclaration(node.parent))
         && node.parent.name === node)
       || (ts.isImportClause(node.parent) && node.parent.name === node)
+      || (ts.isImportEqualsDeclaration(node.parent) && node.parent.name === node)
       || (ts.isNamespaceImport(node.parent) && node.parent.name === node)
       || (ts.isImportSpecifier(node.parent)
         && (node.parent.propertyName === node || node.parent.name === node))
@@ -3964,6 +3980,167 @@ describe('local workspace static boundary', () => {
       'services/generatorSandbox.ts',
       readFileSync(join(root, 'services/generatorSandbox.ts'), 'utf8'),
     )).toEqual([]);
+  });
+
+  it.each([
+    ['frames', 'var frames; void frames;', 'acquires an ambient browser capability'],
+    ['top', 'var top; void top;', 'acquires an ambient browser capability'],
+    ['parent', 'var parent; void parent;', 'acquires an ambient browser capability'],
+    ['opener', 'var opener; void opener;', 'acquires an ambient browser capability'],
+    ['open', 'var open; false && open();', 'calls unbound browser open'],
+  ])('rejects classic-global var binding for %s', (_name, body, message) => {
+    expect(analyzeProductionSource('shell.html', `<script>${body}</script>`)).toEqual(
+      expect.arrayContaining([expect.stringContaining(message)]),
+    );
+  });
+
+  it('rejects classic-global var binding in a javascript URL', () => {
+    const source = '<a href="javascript:var parent; void parent">open</a>';
+    expect(analyzeProductionSource('shell.html', source)).toEqual(expect.arrayContaining([
+      expect.stringContaining('acquires an ambient browser capability'),
+    ]));
+  });
+
+  it.each([
+    [
+      'ordinary forced module var',
+      'components/ModuleRoot.ts',
+      'var parent = supplied; void parent;',
+    ],
+    [
+      'inline module var',
+      'shell.html',
+      '<script type="module">var parent = supplied; void parent;</script>',
+    ],
+    [
+      'classic lexical binding',
+      'shell.html',
+      '<script>let parent = supplied; void parent;</script>',
+    ],
+    [
+      'classic function-local var',
+      'shell.html',
+      '<script>function inspect() { var parent = supplied; void parent; } inspect();</script>',
+    ],
+  ])('preserves %s', (_case, path, source) => {
+    expect(analyzeProductionSource(path, source)).toEqual([]);
+  });
+
+  const emittedClassicTypeScriptRoot = (
+    kind: 'namespace' | 'enum',
+    name: string,
+  ): string => {
+    const declaration = kind === 'namespace'
+      ? `namespace ${name} { export const __doctectMarker = 1; }`
+      : `enum ${name} { __doctectMarker }`;
+    const use = name === 'open' ? 'false && open();' : `void ${name};`;
+    return ts.transpileModule(`${declaration} ${use}`, {
+      compilerOptions: {
+        module: ts.ModuleKind.None,
+        moduleDetection: ts.ModuleDetectionKind.Legacy,
+        target: ts.ScriptTarget.ES2022,
+      },
+    }).outputText;
+  };
+
+  it.each(['namespace', 'enum'] as const)(
+    'rejects classic %s emission that aliases browser roots',
+    kind => {
+      for (const name of ['frames', 'top', 'parent', 'opener', 'open']) {
+        const emitted = emittedClassicTypeScriptRoot(kind, name);
+        expect(emitted, `${kind} ${name} should emit a classic var`).toMatch(
+          new RegExp(`^var ${name};`),
+        );
+        const message = name === 'open'
+          ? 'calls unbound browser open'
+          : 'acquires an ambient browser capability';
+        expect(
+          analyzeProductionSource('shell.html', `<script>${emitted}</script>`),
+          `${kind} ${name}`,
+        ).toEqual(expect.arrayContaining([expect.stringContaining(message)]));
+      }
+    },
+  );
+
+  it('matches classic var and TypeScript emission behavior in Chromium', { timeout: 30_000 }, async () => {
+    const browser = await chromium.launch({ headless: true });
+    try {
+      const classicPage = await browser.newPage();
+      await classicPage.setContent([
+        '<script>window.opener = window;',
+        "window['__doctectBefore'] = { frames, top, parent, opener, open };</script>",
+        '<script>var frames, top, parent, opener, open;',
+        "window['__doctectSame'] = {",
+        "frames: frames === window['__doctectBefore'].frames,",
+        "top: top === window['__doctectBefore'].top,",
+        "parent: parent === window['__doctectBefore'].parent,",
+        "opener: opener === window['__doctectBefore'].opener,",
+        "open: open === window['__doctectBefore'].open };</script>",
+      ].join(''));
+      await expect(classicPage.evaluate(() => (
+        (window as unknown as Record<string, unknown>).__doctectSame
+      ))).resolves.toEqual({ frames: true, top: true, parent: true, opener: true, open: true });
+      await classicPage.close();
+
+      for (const kind of ['namespace', 'enum'] as const) {
+        for (const name of ['frames', 'top', 'parent', 'opener', 'open']) {
+          const page = await browser.newPage();
+          await page.setContent([
+            '<script>window.opener = window;',
+            `window['__doctectBefore'] = window[${JSON.stringify(name)}];</script>`,
+            `<script>${emittedClassicTypeScriptRoot(kind, name)}</script>`,
+          ].join(''));
+          const result = await page.evaluate(rootName => {
+            const values = window as unknown as Record<string, Record<string, unknown>>;
+            return {
+              same: values[rootName] === values.__doctectBefore,
+              marker: Object.prototype.hasOwnProperty.call(values[rootName], '__doctectMarker'),
+            };
+          }, name);
+          expect(result, `${kind} ${name}`).toEqual({ same: true, marker: true });
+          await page.close();
+        }
+      }
+    } finally {
+      await browser.close();
+    }
+  });
+
+  it('limits an import-equals binding to its namespace block', () => {
+    const source = [
+      'namespace Values {',
+      '  import parent = supplied.parent;',
+      '  void parent;',
+      '}',
+      'void parent;',
+    ].join('\n');
+    expect(analyzeProductionSource('components/NamespaceAlias.ts', source)).toEqual([
+      expect.stringContaining('components/NamespaceAlias.ts:5: acquires an ambient browser capability'),
+    ]);
+  });
+
+  it('treats JSX intrinsic tags and attribute names as non-value syntax', () => {
+    const source = [
+      'const view = (',
+      '  <parent opener="safe">',
+      '    <top frames="safe" />',
+      '    <open />',
+      '  </parent>',
+      ');',
+    ].join('\n');
+    expect(analyzeProductionSource('components/IntrinsicRoots.tsx', source)).toEqual([]);
+  });
+
+  it.each([
+    ['frames', 'const view = <frames frames={frames} />;', 'acquires an ambient browser capability'],
+    ['top', 'const view = <top top={top} />;', 'acquires an ambient browser capability'],
+    ['parent', 'const view = <parent parent={parent} />;', 'acquires an ambient browser capability'],
+    ['opener', 'const view = <opener opener={opener} />;', 'acquires an ambient browser capability'],
+    ['open', 'const view = <open open={open()} />;', 'calls unbound browser open'],
+  ])('still inspects JSX %s expression containers', (_name, source, message) => {
+    expect(analyzeProductionSource('components/ExpressionRoots.tsx', source)).toEqual([
+      expect.stringContaining(message),
+    ]);
   });
 
   it("rejects the reviewer's alternate-root probe", () => {
