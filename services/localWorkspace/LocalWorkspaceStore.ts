@@ -601,18 +601,63 @@ const createLocalWorkspaceStoreAtVersion = (
       }
     }
     const nextWorkspaceRevision = records.workspace.revision;
+    const nextCachedReady = options.updateCachedReady && cachedReady
+      ? {
+          ...cachedReady,
+          snapshot: cloneWorkspaceSnapshotWithProjectAuthority(nextSnapshot),
+        }
+      : undefined;
     durableSnapshot = nextSnapshot;
     installedProjectLineages = nextInstalledProjectLineages;
     expectedProjectLineages = nextProjectLineages;
     expectedWorkspaceRevision = nextWorkspaceRevision;
     consumedImportTargets = nextConsumedImportTargets;
-    if (options.updateCachedReady && cachedReady) {
-      cachedReady = {
-        ...cachedReady,
-        snapshot: cloneWorkspaceSnapshotWithProjectAuthority(nextSnapshot),
-      };
-    }
+    if (nextCachedReady) cachedReady = nextCachedReady;
     return nextSnapshot;
+  };
+
+  const terminateValidatedReadback = (
+    error: WorkspaceStoreError,
+    recoveryBundle?: Blob,
+  ): void => {
+    protectedIndexedDbRecoveryBundle = recoveryBundle;
+    if (authority === 'ready') {
+      handleAuthorityLost(error);
+    } else {
+      mutationQueue?.freeze();
+      invalidateDurableAuthority();
+    }
+  };
+
+  const finalizeValidatedReadback = (
+    records: WorkspaceRecords,
+    snapshot: WorkspaceSnapshot,
+    options: Parameters<typeof installDurableState>[2],
+  ): WorkspaceSnapshot => {
+    let recoveryBundle: Blob;
+    try {
+      recoveryBundle = createProtectedIndexedDbRecoveryBundle(snapshot, environment.now());
+    } catch (error) {
+      const authorityError = new WorkspaceStoreError(
+        'Validated durable state could not be protected before installation.',
+        'authority-lost',
+        error,
+      );
+      terminateValidatedReadback(authorityError);
+      throw authorityError;
+    }
+
+    try {
+      return installDurableState(records, snapshot, options);
+    } catch (error) {
+      const authorityError = new WorkspaceStoreError(
+        'Validated durable state could not be installed.',
+        'authority-lost',
+        error,
+      );
+      terminateValidatedReadback(authorityError, recoveryBundle);
+      throw authorityError;
+    }
   };
 
   const validateBackup = async (
@@ -1498,7 +1543,7 @@ const createLocalWorkspaceStoreAtVersion = (
       }
       throw failure;
     }
-    return installDurableState(records, snapshot, {
+    return finalizeValidatedReadback(records, snapshot, {
       updateCachedReady: true,
       preservePinnedProjectLineages: true,
       preserveProjectAuthority,
@@ -1930,15 +1975,16 @@ const createLocalWorkspaceStoreAtVersion = (
       }
     },
     onPostCommitPublicationFailure(snapshot, error) {
+      let recoveryBundle: Blob | undefined;
       try {
-        protectedIndexedDbRecoveryBundle = createProtectedIndexedDbRecoveryBundle(
+        recoveryBundle = createProtectedIndexedDbRecoveryBundle(
           snapshot,
           environment.now(),
         );
       } catch {
-        protectedIndexedDbRecoveryBundle = undefined;
+        // Authority still becomes terminal when recovery bytes cannot be protected.
       }
-      handleAuthorityLost(error);
+      terminateValidatedReadback(error, recoveryBundle);
     },
   });
   resetCommandQueue = () => {

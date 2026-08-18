@@ -196,7 +196,7 @@ export const createMutationQueue = (
       running = false;
       pump();
     };
-    const abortAfterPublicationFailure = (error: WorkspaceStoreError): void => {
+    const abortAfterAuthorityLoss = (error: WorkspaceStoreError): void => {
       cleaned = true;
       frozen = true;
       settleFailure(entry.waiters, error);
@@ -227,7 +227,7 @@ export const createMutationQueue = (
           'authority-lost',
           cloneError,
         );
-        abortAfterPublicationFailure(authorityError);
+        abortAfterAuthorityLoss(authorityError);
         try {
           operations.onPostCommitPublicationFailure?.(snapshot, authorityError);
         } catch {
@@ -243,6 +243,10 @@ export const createMutationQueue = (
         settleSuccess(entry.canceledSaveWaiters, publication);
       }
     }, error => {
+      if (error instanceof WorkspaceStoreError && error.code === 'authority-lost') {
+        abortAfterAuthorityLoss(error);
+        return;
+      }
       // Restore installed authority before a rejected waiter can admit fresh work.
       cleanEntry(true);
       settleFailure(entry.waiters, error);

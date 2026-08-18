@@ -2201,12 +2201,21 @@ describe('failure handling and private revisions', () => {
     });
   });
 
-  it('protects exact recovery bytes and loses authority when post-commit publication fails', async () => {
-    const { store, harness, snapshot } = await readyStore();
+  it.each([
+    [1, 'private durable clone', /durable state could not be installed/i],
+    [2, 'cached-ready authority clone', /durable state could not be installed/i],
+    [3, 'queue publication clone', /durable result could not be published/i],
+  ] as const)('terminally loses authority at post-commit clone %i: %s', async (
+    cloneToFail,
+    _label,
+    expectedReason,
+  ) => {
+    const { store, harness, snapshot } = await readyStore({ values: twoProjectValues() });
     const onAuthorityLost = vi.fn();
     await store.bootstrap({ onAuthorityLost });
     const originalStructuredClone = globalThis.structuredClone;
-    const snapshotCloneCounts = new WeakMap<object, number>();
+    let snapshotCloneOrdinal = 0;
+    let injectedCloneOrdinal: number | undefined;
     let armed = false;
     vi.spyOn(globalThis, 'structuredClone').mockImplementation((value, options) => {
       if (armed
@@ -2215,34 +2224,72 @@ describe('failure handling and private revisions', () => {
         && Array.isArray((value as WorkspaceSnapshot).projects)
         && Array.isArray((value as WorkspaceSnapshot).customPresets)
         && Array.isArray((value as WorkspaceSnapshot).pendingImports)) {
-        const count = (snapshotCloneCounts.get(value) ?? 0) + 1;
-        snapshotCloneCounts.set(value, count);
-        if (count === 2) {
-          throw new DOMException('Injected publication clone failure.', 'DataCloneError');
+        snapshotCloneOrdinal += 1;
+        if (snapshotCloneOrdinal === cloneToFail) {
+          injectedCloneOrdinal = snapshotCloneOrdinal;
+          throw new DOMException(
+            `Injected post-commit clone ${cloneToFail} failure.`,
+            'DataCloneError',
+          );
         }
       }
       return originalStructuredClone(value, options);
     });
     useQueueTimers();
+    const source = snapshot.projects.find(project => project.id === 'project-a')!;
 
-    const save = store.commit({
+    const first = store.commit({
       type: 'save-project',
-      project: trustedProjectNamed(snapshot.projects[0], 'Committed before publication failure'),
+      project: trustedProjectNamed(source, 'First coalesced save'),
+    });
+    const newest = store.commit({
+      type: 'save-project',
+      project: trustedProjectNamed(source, 'Committed before clone failure'),
     });
     armed = true;
-    await vi.advanceTimersByTimeAsync(1_000);
-    await expect(save).rejects.toMatchObject({ code: 'authority-lost' });
+    const close = store.commit({ type: 'close-project', projectId: 'project-b' });
+    const outcomes = await Promise.all([first, newest, close].map(promise => promise.then(
+      value => ({ status: 'fulfilled' as const, value }),
+      error => ({ status: 'rejected' as const, error }),
+    )));
 
+    expect(injectedCloneOrdinal).toBe(cloneToFail);
+    expect(outcomes.map(outcome => outcome.status)).toEqual([
+      'rejected',
+      'rejected',
+      'rejected',
+    ]);
+    const errors = outcomes.map(outcome => outcome.status === 'rejected' ? outcome.error : undefined);
+    expect(errors[0]).toBe(errors[1]);
+    expect(errors[1]).toBe(errors[2]);
+    expect(errors[0]).toMatchObject({
+      code: 'authority-lost',
+      message: expect.stringMatching(expectedReason),
+    });
+    expect(onAuthorityLost).toHaveBeenCalledOnce();
     expect(onAuthorityLost).toHaveBeenCalledWith(expect.objectContaining({
       status: 'unavailable',
       availableExports: expect.arrayContaining(['indexeddb-workspace']),
     }));
+    expect(writeTransactions(harness.records)).toHaveLength(1);
+    expect(harness.records.filter(record =>
+      record.mode === 'readonly' && sameStores(record.stores, READ_ALL_SCOPE))).toHaveLength(1);
+    const writesAfterLoss = writeTransactions(harness.records).length;
+    await expect(store.commit({
+      type: 'activate-project',
+      projectId: 'project-a',
+    })).rejects.toMatchObject({ code: 'authority-lost' });
+    expect(writeTransactions(harness.records)).toHaveLength(writesAfterLoss);
+
     const protectedBeforeForeignWrite = await (
       await store.exportRecoveryBundle('indexeddb-workspace')
     ).text();
     expect(JSON.parse(protectedBeforeForeignWrite)).toMatchObject({
       workspace: {
-        projects: [expect.objectContaining({ name: 'Committed before publication failure' })],
+        projects: [
+          expect.objectContaining({ id: 'project-a', name: 'Committed before clone failure' }),
+          expect.objectContaining({ id: 'project-b' }),
+        ],
       },
     });
 
@@ -2263,13 +2310,46 @@ describe('failure handling and private revisions', () => {
     expect(protectedAfterForeignWrite).toBe(protectedBeforeForeignWrite);
     expect((await foreign.inspect()).projects.find(record => record.id === 'project-a'))
       .toMatchObject({ project: { name: 'Foreign write after publication failure' } });
-    const writesAfterLoss = writeTransactions(harness.records).length;
-    await expect(store.commit({
-      type: 'activate-project',
-      projectId: 'project-a',
-    })).rejects.toMatchObject({ code: 'authority-lost' });
-    expect(writeTransactions(harness.records)).toHaveLength(writesAfterLoss);
     foreign.close();
+    await expect(store.bootstrap()).resolves.toMatchObject({
+      status: 'ready',
+      snapshot: {
+        projects: expect.arrayContaining([
+          expect.objectContaining({ name: 'Foreign write after publication failure' }),
+        ]),
+      },
+    });
+  });
+
+  it('uses exactly three authority-bearing snapshot clones after validated readback', async () => {
+    const { store, snapshot } = await readyStore();
+    const originalStructuredClone = globalThis.structuredClone;
+    let armed = false;
+    let snapshotCloneCount = 0;
+    vi.spyOn(globalThis, 'structuredClone').mockImplementation((value, options) => {
+      if (armed
+        && value !== null
+        && typeof value === 'object'
+        && Array.isArray((value as WorkspaceSnapshot).projects)
+        && Array.isArray((value as WorkspaceSnapshot).customPresets)
+        && Array.isArray((value as WorkspaceSnapshot).pendingImports)) {
+        snapshotCloneCount += 1;
+      }
+      return originalStructuredClone(value, options);
+    });
+    useQueueTimers();
+
+    const save = store.commit({
+      type: 'save-project',
+      project: trustedProjectNamed(snapshot.projects[0], 'Counted clone save'),
+    });
+    armed = true;
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    await expect(save).resolves.toMatchObject({
+      projects: [expect.objectContaining({ name: 'Counted clone save' })],
+    });
+    expect(snapshotCloneCount).toBe(3);
   });
 });
 

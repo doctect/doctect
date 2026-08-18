@@ -547,6 +547,51 @@ describe('deferred project preparation', () => {
     expect(saveProject).toHaveBeenCalledOnce();
   });
 
+  it('terminally drains pending work when an operation reports authority loss', async () => {
+    vi.useFakeTimers();
+    const firstWrite = deferred<WorkspaceSnapshot>();
+    const started = deferred();
+    const saveProject = vi.fn((project: WorkspaceProject) => {
+      if (saveProject.mock.calls.length === 1) {
+        started.resolve();
+        return firstWrite.promise;
+      }
+      return Promise.resolve(snapshotWith(project));
+    });
+    const queue = createMutationQueue({
+      async prepareProject(project) {
+        return project;
+      },
+      saveProject,
+      async runExclusive() {
+        throw new Error('Unexpected exclusive command.');
+      },
+    });
+
+    const first = queue.enqueueProjectSave(projectNamed('First'), lineage(0));
+    await vi.advanceTimersByTimeAsync(1_000);
+    await started.promise;
+    const pending = queue.enqueueProjectSave(projectNamed('Pending'), lineage(0));
+    const outcomes = Promise.all([
+      first.then(() => undefined, error => error),
+      pending.then(() => undefined, error => error),
+    ]);
+    const authorityError = new WorkspaceStoreError(
+      'Validated durable state could not be installed.',
+      'authority-lost',
+    );
+    firstWrite.reject(authorityError);
+
+    const [firstError, pendingError] = await outcomes;
+    expect(firstError).toBe(authorityError);
+    expect(pendingError).toBe(authorityError);
+    expect(saveProject).toHaveBeenCalledOnce();
+    await expect(queue.drain()).resolves.toBeUndefined();
+    await expect(queue.enqueueProjectSave(projectNamed('Retry'), lineage(1)))
+      .rejects.toMatchObject({ code: 'authority-lost' });
+    expect(saveProject).toHaveBeenCalledOnce();
+  });
+
   it('rejects every coalesced waiter with the same preparation failure and never writes', async () => {
     vi.useFakeTimers();
     const failure = new WorkspaceStoreError('Worker preparation failed.', 'validation');
