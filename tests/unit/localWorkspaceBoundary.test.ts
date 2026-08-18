@@ -1296,6 +1296,7 @@ interface ExternalScriptEdge {
   specifier: string;
   offset: number;
   browserBase: BrowserUrlBase;
+  moduleGoal: boolean;
 }
 
 const staticDocumentBrowserBase = (
@@ -1379,6 +1380,7 @@ const executableDocumentExtraction = (input: SourceInput): ExecutableDocumentExt
           specifier: eligibility.externalSpecifier,
           offset: originalOffset(input, location.startTag.startOffset),
           browserBase,
+          moduleGoal: eligibility.type === 'module',
         });
         continue;
       }
@@ -1692,6 +1694,8 @@ const sourceValueBindingScopes = (
   };
   const hasDeclareModifier = (node: ts.Node): boolean => ts.canHaveModifiers(node)
     && (ts.getModifiers(node)?.some(modifier => modifier.kind === ts.SyntaxKind.DeclareKeyword) ?? false);
+  const hasExportModifier = (node: ts.Node): boolean => ts.canHaveModifiers(node)
+    && (ts.getModifiers(node)?.some(modifier => modifier.kind === ts.SyntaxKind.ExportKeyword) ?? false);
   const functionOrSourceScope = (node: ts.Node): ts.Node | undefined => {
     let current: ts.Node | undefined = node.parent;
     while (current
@@ -1719,6 +1723,63 @@ const sourceValueBindingScopes = (
     }
     return undefined;
   };
+  const namespaceKeys = new Map<ts.ModuleDeclaration, string>();
+  const namespaceKey = (declaration: ts.ModuleDeclaration): string => {
+    const existing = namespaceKeys.get(declaration);
+    if (existing) return existing;
+    let parentKey: string;
+    if (ts.isModuleDeclaration(declaration.parent)) {
+      parentKey = namespaceKey(declaration.parent);
+    } else {
+      const scope = lexicalScope(declaration);
+      if (scope === sourceFile) {
+        parentKey = 'source';
+      } else if (scope && ts.isModuleBlock(scope) && hasExportModifier(declaration)) {
+        parentKey = namespaceKey(scope.parent);
+      } else {
+        parentKey = `scope:${scope?.pos ?? declaration.pos}`;
+      }
+    }
+    const name = ts.isIdentifier(declaration.name)
+      ? declaration.name.text
+      : `external:${declaration.pos}`;
+    const key = `${parentKey}/${name}`;
+    namespaceKeys.set(declaration, key);
+    return key;
+  };
+  const namespaceBlocksByKey = new Map<string, ts.ModuleBlock[]>();
+  const collectNamespaceBlocks = (node: ts.Node): void => {
+    if (ts.isModuleBlock(node) && ts.isModuleDeclaration(node.parent)) {
+      const key = namespaceKey(node.parent);
+      const blocks = namespaceBlocksByKey.get(key) ?? [];
+      blocks.push(node);
+      namespaceBlocksByKey.set(key, blocks);
+    }
+    ts.forEachChild(node, collectNamespaceBlocks);
+  };
+  collectNamespaceBlocks(sourceFile);
+  const addExported = (
+    identifier: ts.Identifier | undefined,
+    scope: ts.Node | undefined,
+    declaration: ts.Node,
+    visibility: ValueBindingVisibility = 'all',
+  ): void => {
+    add(identifier, scope, visibility);
+    if (!identifier || !scope || !ts.isModuleBlock(scope) || !hasExportModifier(declaration)) return;
+    const key = namespaceKey(scope.parent);
+    for (const block of namespaceBlocksByKey.get(key) ?? []) add(identifier, block, visibility);
+  };
+  const addExportedBindingName = (
+    name: ts.BindingName | undefined,
+    scope: ts.Node | undefined,
+    declaration: ts.Node,
+    visibility: ValueBindingVisibility = 'all',
+  ): void => {
+    if (!name) return;
+    for (const identifier of bindingIdentifiers(name)) {
+      addExported(identifier, scope, declaration, visibility);
+    }
+  };
   const visit = (node: ts.Node): void => {
     if (ts.isVariableDeclaration(node)) {
       if (ts.isCatchClause(node.parent)) {
@@ -1733,17 +1794,32 @@ const sourceValueBindingScopes = (
         const blockScoped = Boolean(list && (list.flags & ts.NodeFlags.BlockScoped));
         const scope = blockScoped ? lexicalScope(node) : functionOrSourceScope(node);
         if (blockScoped || scope !== sourceFile || sourceVariablesAreLexical) {
-          addBindingName(node.name, scope, !blockScoped && scope && ts.isFunctionLike(scope) ? 'body' : 'all');
+          const visibility = !blockScoped && scope && ts.isFunctionLike(scope) ? 'body' : 'all';
+          if (statement && ts.isVariableStatement(statement)) {
+            addExportedBindingName(node.name, scope, statement, visibility);
+          } else {
+            addBindingName(node.name, scope, visibility);
+          }
         }
       }
     } else if (ts.isParameter(node)) {
       addBindingName(node.name, functionOrSourceScope(node));
-    } else if (ts.isFunctionDeclaration(node)
-      || ts.isClassDeclaration(node)
+    } else if (ts.isFunctionDeclaration(node)) {
+      if (!hasDeclareModifier(node)) {
+        const scope = lexicalScope(node);
+        if (sourceVariablesAreLexical || scope !== sourceFile || node.parent === sourceFile) {
+          addExported(node.name, scope, node);
+        }
+      }
+    } else if (ts.isClassDeclaration(node)
       || ts.isEnumDeclaration(node)
       || ts.isModuleDeclaration(node)) {
       if (!hasDeclareModifier(node)) {
-        add(ts.isIdentifier(node.name) ? node.name : undefined, lexicalScope(node));
+        addExported(
+          ts.isIdentifier(node.name) ? node.name : undefined,
+          lexicalScope(node),
+          node,
+        );
       }
     } else if (ts.isFunctionExpression(node) || ts.isClassExpression(node)) {
       add(node.name, node);
@@ -1759,7 +1835,7 @@ const sourceValueBindingScopes = (
         }
       }
     } else if (ts.isImportEqualsDeclaration(node)) {
-      if (!node.isTypeOnly) add(node.name, lexicalScope(node));
+      if (!node.isTypeOnly) addExported(node.name, lexicalScope(node), node);
     }
     ts.forEachChild(node, visit);
   };
@@ -2263,10 +2339,26 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
   const results = new Map(inputs.map(input => [input.path, [] as string[]]));
   const resultIdentities = new Map(inputs.map(input => [input.path, new Set<string>()]));
   const extractions = inputs.map(input => executableDocumentExtraction(input));
+  const externalExecutionContexts = new Map<string, Array<{
+    browserBase: BrowserUrlBase;
+    moduleGoal: boolean;
+  }>>();
 
   for (const [index, input] of inputs.entries()) {
     if (input.path.startsWith('tests/')) continue;
     for (const edge of extractions[index].externalEdges) {
+      const resolved = resolvedBrowserEdge(edge.browserBase, edge.specifier);
+      if (typeof resolved === 'string' && results.has(resolved)) {
+        const contexts = externalExecutionContexts.get(resolved) ?? [];
+        if (!contexts.some(context => (
+          context.moduleGoal === edge.moduleGoal
+          && context.browserBase.url === edge.browserBase.url
+          && context.browserBase.invalid === edge.browserBase.invalid
+        ))) {
+          contexts.push({ browserBase: edge.browserBase, moduleGoal: edge.moduleGoal });
+          externalExecutionContexts.set(resolved, contexts);
+        }
+      }
       if (!browserEntersExcludedDirectory(edge.browserBase, edge.specifier)) continue;
       const finding = `${input.path}:${sourceLine(input.source, edge.offset)}: `
         + 'loads executable code from excluded repository paths';
@@ -2290,10 +2382,25 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
   }
 
   const executable = extractions
-    .flatMap(extraction => extraction.inputs)
+    .flatMap((extraction, index) => {
+      const input = inputs[index];
+      const contexts = externalExecutionContexts.get(input.path) ?? [];
+      if (!scriptKinds.has(extname(input.path)) || contexts.length === 0) return extraction.inputs;
+      return [
+        ...extraction.inputs,
+        ...contexts.map(context => ({
+          ...input,
+          browserBase: context.browserBase,
+          moduleGoal: context.moduleGoal,
+          parseFailure: context.moduleGoal ? undefined : classicScriptParseFailure(input.source),
+        })),
+      ];
+    })
     .filter(input => scriptKinds.has(extname(input.path)));
   const moduleFailures = moduleParseFailures(
-    executable.filter(input => input.moduleGoal).map(input => input.source),
+    executable
+      .filter(input => input.moduleGoal && scriptKinds.get(extname(input.path)) === ts.ScriptKind.JS)
+      .map(input => input.source),
   );
   for (const input of executable) {
     const policyPath = input.reportPath ?? input.path;
@@ -2307,9 +2414,11 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
     const reportOffset = (offset: number, message: string): void => {
       appendFinding(`${policyPath}:${reportLine(input, offset)}: ${message}`);
     };
-    const parseFailure = input.parseFailure ?? (input.moduleGoal
+    const parseFailure = input.parseFailure ?? (
+      input.moduleGoal && scriptKinds.get(extname(input.path)) === ts.ScriptKind.JS
       ? moduleFailures.get(input.source)
-      : undefined);
+      : undefined
+    );
     if (parseFailure) {
       reportOffset(parseFailure.offset, `could not be parsed: ${parseFailure.message}`);
       continue;
@@ -2838,7 +2947,11 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
         report(node, 'acquires an ambient browser capability outside approved static seams');
       }
       if (enforceDirectStorageBoundary && ts.isCallExpression(node)) {
-        const callee = unwrap(node.expression);
+        let callee = unwrap(node.expression);
+        while (ts.isBinaryExpression(callee)
+          && callee.operatorToken.kind === ts.SyntaxKind.CommaToken) {
+          callee = unwrap(callee.right);
+        }
         if (ts.isIdentifier(callee)
           && callee.text === 'open'
           && !hasLexicalValueBinding(callee)) {
@@ -3999,6 +4112,441 @@ describe('local workspace static boundary', () => {
     expect(analyzeProductionSource('shell.html', source)).toEqual(expect.arrayContaining([
       expect.stringContaining('acquires an ambient browser capability'),
     ]));
+  });
+
+  const referencedProductionScriptFindings = (
+    documentPath: string,
+    documentSource: string,
+    scriptPath: string,
+    scriptSource: string,
+  ): string[] => analyzeSources([
+    { path: documentPath, source: documentSource, directStorageBoundary: true },
+    { path: scriptPath, source: scriptSource, directStorageBoundary: true },
+  ] as DirectStorageBoundaryInput[]).get(scriptPath) ?? [];
+
+  it.each([
+    [
+      'top-level document',
+      'pages/shell.html',
+      "<script src='./legacy.js'></script>",
+      'pages/legacy.js',
+    ],
+    [
+      'nested srcdoc and path',
+      'pages/shell.html',
+      '<iframe srcdoc="&lt;script src=&quot;./scripts/nested/legacy.js&quot;&gt;&lt;/script&gt;"></iframe>',
+      'pages/scripts/nested/legacy.js',
+    ],
+  ])('propagates classic execution goal through %s', (_case, documentPath, documentSource, scriptPath) => {
+    const findings = referencedProductionScriptFindings(
+      documentPath,
+      documentSource,
+      scriptPath,
+      "var parent; parent['local' + 'Storage'].setItem(runtimeKey, value);",
+    );
+    expect(findings).toEqual(expect.arrayContaining([
+      expect.stringContaining('acquires an ambient browser capability outside approved static seams'),
+    ]));
+  });
+
+  it('propagates module parse goal to an external script', () => {
+    const findings = referencedProductionScriptFindings(
+      'pages/shell.html',
+      "<script type='module' src='./entry.js'></script>",
+      'pages/entry.js',
+      'if (false) function parent() {} void parent;',
+    );
+    expect(findings).toEqual(expect.arrayContaining([
+      expect.stringContaining('could not be parsed'),
+    ]));
+  });
+
+  it.each([
+    [
+      'inline module var',
+      () => analyzeProductionSource(
+        'pages/shell.html',
+        "<script type='module'>var parent = supplied; void parent;</script>",
+      ),
+    ],
+    [
+      'external module var',
+      () => referencedProductionScriptFindings(
+        'pages/shell.html',
+        "<script type='module' src='./entry.js'></script>",
+        'pages/entry.js',
+        'var parent = supplied; void parent;',
+      ),
+    ],
+    [
+      'external classic lexical binding',
+      () => referencedProductionScriptFindings(
+        'pages/shell.html',
+        "<script src='./legacy.js'></script>",
+        'pages/legacy.js',
+        'const parent = supplied; void parent;',
+      ),
+    ],
+  ])('preserves %s across executable edges', (_case, findings) => {
+    expect(findings()).toEqual([]);
+  });
+
+  it.each([
+    ['TypeScript', 'pages/entry.ts', 'var parent: unknown = supplied; void parent;'],
+    ['TSX', 'pages/entry.tsx', 'var parent = supplied; const view = <parent />; void parent;'],
+    ['JSX', 'pages/entry.jsx', 'var parent = supplied; const view = <parent />; void parent;'],
+  ])('preserves transformed external module %s syntax', (_case, scriptPath, scriptSource) => {
+    const findings = referencedProductionScriptFindings(
+      'pages/shell.html',
+      `<script type='module' src='./${scriptPath.slice('pages/'.length)}'></script>`,
+      scriptPath,
+      scriptSource,
+    );
+    expect(findings).toEqual([]);
+  });
+
+  it('still rejects an unbound root in an external module', () => {
+    const findings = referencedProductionScriptFindings(
+      'pages/shell.html',
+      "<script type='module' src='./entry.js'></script>",
+      'pages/entry.js',
+      "parent['local' + 'Storage'].setItem(runtimeKey, value);",
+    );
+    expect(findings).toEqual(expect.arrayContaining([
+      expect.stringContaining('acquires an ambient browser capability outside approved static seams'),
+    ]));
+  });
+
+  it('matches external classic and module root behavior in Chromium', { timeout: 30_000 }, async () => {
+    const browser = await chromium.launch({ headless: true });
+    try {
+      const page = await browser.newPage();
+      await page.route('https://doctect.invalid/**', route => {
+        const pathname = new URL(route.request().url()).pathname;
+        if (pathname === '/classic.html') {
+          return route.fulfill({
+            contentType: 'text/html',
+            body: "<script src='./scripts/nested/legacy.js'></script>",
+          });
+        }
+        if (pathname === '/module.html') {
+          return route.fulfill({
+            contentType: 'text/html',
+            body: "<script type='module' src='./scripts/nested/module.js'></script>",
+          });
+        }
+        if (pathname === '/scripts/nested/legacy.js') {
+          return route.fulfill({
+            contentType: 'text/javascript',
+            body: "var parent; parent['local' + 'Storage'].setItem('external-classic', 'written');",
+          });
+        }
+        if (pathname === '/scripts/nested/module.js') {
+          return route.fulfill({
+            contentType: 'text/javascript',
+            body: [
+              'var parent;',
+              'window.__doctectModuleLocal = parent === undefined;',
+              "try { parent['local' + 'Storage'].setItem('external-module', 'written'); }",
+              'catch { window.__doctectModuleCaught = true; }',
+            ].join('\n'),
+          });
+        }
+        return route.fulfill({ status: 404, body: 'missing' });
+      });
+
+      await page.goto('https://doctect.invalid/classic.html');
+      expect(await page.evaluate(() => localStorage.getItem('external-classic'))).toBe('written');
+      await page.goto('https://doctect.invalid/module.html');
+      await page.waitForFunction(() => (
+        (window as unknown as Record<string, unknown>).__doctectModuleCaught === true
+      ));
+      expect(await page.evaluate(() => ({
+        local: (window as unknown as Record<string, unknown>).__doctectModuleLocal,
+        stored: localStorage.getItem('external-module'),
+      }))).toEqual({ local: true, stored: null });
+    } finally {
+      await browser.close();
+    }
+  });
+
+  it.each([
+    [
+      'false parent branch',
+      'if (false) function parent() {} void parent;',
+      'acquires an ambient browser capability outside approved static seams',
+    ],
+    [
+      'unreached parent else branch',
+      'if (true) {} else function parent() {} void parent;',
+      'acquires an ambient browser capability outside approved static seams',
+    ],
+    [
+      'false open branch',
+      'if (false) function open() {} open();',
+      'calls unbound browser open outside approved static seams',
+    ],
+  ])('rejects ambient use after Annex B %s', (_case, body, message) => {
+    expect(analyzeProductionSource('pages/annex-b.html', `<script>${body}</script>`)).toEqual(
+      expect.arrayContaining([expect.stringContaining(message)]),
+    );
+  });
+
+  it.each([
+    ['direct classic parent', '<script>function parent() {} void parent;</script>'],
+    ['direct classic open', '<script>function open() {} open();</script>'],
+    [
+      'function-local Annex B parent',
+      '<script>function inspect() { if (false) function parent() {} void parent; } inspect();</script>',
+    ],
+    [
+      'function-local Annex B open',
+      '<script>function inspect() { if (false) function open() {} open(); } inspect();</script>',
+    ],
+  ])('preserves %s binding semantics', (_case, source) => {
+    expect(analyzeProductionSource('pages/annex-b-local.html', source)).toEqual([]);
+  });
+
+  it.each([
+    [
+      'sloppy block parent',
+      '<script>if (false) { function parent() {} } void parent;</script>',
+      'acquires an ambient browser capability',
+    ],
+    [
+      'sloppy loop block open',
+      '<script>while (false) { function open() {} } open();</script>',
+      'calls unbound browser open',
+    ],
+    [
+      'strict block parent',
+      "<script>'use strict'; if (false) { function parent() {} } void parent;</script>",
+      'acquires an ambient browser capability',
+    ],
+    [
+      'module block open',
+      "<script type='module'>if (false) { function open() {} } open();</script>",
+      'calls unbound browser open',
+    ],
+  ])('keeps %s declarations block-scoped', (_case, source, message) => {
+    expect(analyzeProductionSource('pages/annex-b-block.html', source)).toEqual(
+      expect.arrayContaining([expect.stringContaining(message)]),
+    );
+  });
+
+  it.each([
+    ['sloppy while body', '<script>while (false) function parent() {} void parent;</script>'],
+    ['sloppy for body', '<script>for (; false;) function open() {} open();</script>'],
+    [
+      'strict conditional body',
+      "<script>'use strict'; if (false) function parent() {} void parent;</script>",
+    ],
+    [
+      'module conditional body',
+      "<script type='module'>if (false) function open() {} open();</script>",
+    ],
+  ])('fails closed for invalid %s function declaration', (_case, source) => {
+    expect(analyzeProductionSource('pages/invalid-function.html', source)).toEqual(
+      expect.arrayContaining([expect.stringContaining('could not be parsed')]),
+    );
+  });
+
+  it('matches Annex B parser acceptance in Babel, TypeScript, and Node', () => {
+    const { parse } = nodeRequire('@babel/parser') as {
+      parse(source: string, options: { sourceType: 'module' | 'script' }): unknown;
+    };
+    const probes = [
+      ['sloppy conditional', 'if (false) function parent() {}', 'script', true],
+      ['sloppy block', 'if (false) { function parent() {} }', 'script', true],
+      ['sloppy loop body', 'while (false) function parent() {}', 'script', false],
+      ["strict conditional", "'use strict'; if (false) function parent() {}", 'script', false],
+      ['module conditional', 'if (false) function parent() {}', 'module', false],
+      ['module block', 'if (false) { function parent() {} }', 'module', true],
+    ] as const;
+    for (const [name, source, sourceType, valid] of probes) {
+      const sourceFile = ts.createSourceFile(
+        `${name}.js`,
+        source,
+        ts.ScriptTarget.Latest,
+        true,
+        ts.ScriptKind.JS,
+      );
+      expect((sourceFile as ts.SourceFile & { parseDiagnostics: readonly ts.Diagnostic[] }).parseDiagnostics)
+        .toEqual([]);
+      const parseWithBabel = () => parse(source, { sourceType });
+      if (valid) expect(parseWithBabel, name).not.toThrow();
+      else expect(parseWithBabel, name).toThrow();
+    }
+  });
+
+  it('matches Annex B root activation in Chromium', { timeout: 30_000 }, async () => {
+    const browser = await chromium.launch({ headless: true });
+    try {
+      const declarations = [
+        ['direct', 'function ROOT() {}', false],
+        ['conditional', 'if (false) function ROOT() {}', true],
+        ['block', 'if (false) { function ROOT() {} }', true],
+        ['loop block', 'while (false) { function ROOT() {} }', true],
+        ['strict block', "'use strict'; if (false) { function ROOT() {} }", true],
+      ] as const;
+      for (const rootName of ['parent', 'open']) {
+        for (const [form, declaration, expectedSame] of declarations) {
+          const page = await browser.newPage();
+          await page.setContent([
+            `<script>window['__doctectBefore'] = window[${JSON.stringify(rootName)}];</script>`,
+            `<script>${declaration.replaceAll('ROOT', rootName)};`,
+            `window['__doctectSame'] = window[${JSON.stringify(rootName)}]`,
+            "=== window['__doctectBefore'];</script>",
+          ].join(''));
+          expect(
+            await page.evaluate(() => (
+              (window as unknown as Record<string, unknown>).__doctectSame
+            )),
+            `${rootName} ${form}`,
+          ).toBe(expectedSame);
+          await page.close();
+        }
+      }
+    } finally {
+      await browser.close();
+    }
+  });
+
+  it.each([
+    [
+      'reviewer sequence call',
+      "(0, open)()?.['local' + 'Storage']?.getItem(runtimeKey);",
+    ],
+    [
+      'optional sequence call',
+      "(0, open)?.('about:blank')?.['local' + 'Storage']?.getItem(runtimeKey);",
+    ],
+    [
+      'parenthesized sequence call',
+      "(((0, (open))))()?.['local' + 'Storage']?.getItem(runtimeKey);",
+    ],
+    [
+      'chained comma call',
+      "(supplied, 0, open)()?.['local' + 'Storage']?.getItem(runtimeKey);",
+    ],
+    [
+      'transparent TypeScript sequence call',
+      "(0, (open as Window['open'])!)()?.['local' + 'Storage']?.getItem(runtimeKey);",
+    ],
+  ])('rejects unbound open through %s', (_case, source) => {
+    expect(analyzeProductionSource('components/SequenceOpen.ts', source)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('calls unbound browser open outside approved static seams'),
+      ]),
+    );
+  });
+
+  it.each([
+    [
+      'lexical sequence target',
+      "const open = suppliedOpen; void (0, open)?.('about:blank');",
+    ],
+    [
+      'parameter sequence target',
+      'function launch(open: () => unknown) { return (0, open)(); } void launch;',
+    ],
+    [
+      'non-final open operand',
+      'void (open, suppliedOpen)();',
+    ],
+  ])('allows %s', (_case, source) => {
+    expect(analyzeProductionSource('components/LocalSequenceOpen.ts', source)).toEqual([]);
+  });
+
+  it('calls comma-wrapped browser open variants in Chromium', { timeout: 30_000 }, async () => {
+    const browser = await chromium.launch({ headless: true });
+    try {
+      const page = await browser.newPage();
+      await page.setContent('<p>open sequence probe</p>');
+      for (const expression of [
+        "(0, open)('about:blank')",
+        "(0, open)?.('about:blank')",
+        "(((0, (open))))('about:blank')",
+      ]) {
+        const popupPromise = page.waitForEvent('popup');
+        await page.evaluate(source => (0, eval)(source), expression);
+        const popup = await popupPromise;
+        expect(popup.url()).toBe('about:blank');
+        await popup.close();
+      }
+    } finally {
+      await browser.close();
+    }
+  });
+
+  const mergedNamespaceSource = (exportMembers: boolean, includeOuterUses: boolean): string => [
+    'export namespace Values {',
+    `  ${exportMembers ? 'export ' : ''}const parent = { safe: true };`,
+    `  ${exportMembers ? 'export ' : ''}function open() { return parent; }`,
+    '}',
+    'export namespace Values {',
+    '  void parent;',
+    '  open();',
+    '}',
+    ...(includeOuterUses ? ['void parent;', 'open();'] : []),
+  ].join('\n');
+
+  it('shares exported value bindings across merged namespaces only', () => {
+    const path = 'components/MergedNamespace.ts';
+    expect(analyzeProductionSource(path, mergedNamespaceSource(true, true))).toEqual([
+      `${path}:9: acquires an ambient browser capability outside approved static seams`,
+      `${path}:10: calls unbound browser open outside approved static seams`,
+    ]);
+  });
+
+  it('keeps non-exported members private to one namespace declaration', () => {
+    const path = 'components/PrivateMergedNamespace.ts';
+    expect(analyzeProductionSource(path, mergedNamespaceSource(false, false))).toEqual([
+      `${path}:6: acquires an ambient browser capability outside approved static seams`,
+      `${path}:7: calls unbound browser open outside approved static seams`,
+    ]);
+  });
+
+  it('does not merge exported members across different containing namespaces', () => {
+    const path = 'components/SeparateMergedNamespace.ts';
+    const source = [
+      'namespace Left {',
+      '  export namespace Values { export const parent = supplied; }',
+      '}',
+      'namespace Right {',
+      '  export namespace Values { void parent; }',
+      '}',
+    ].join('\n');
+    expect(analyzeProductionSource(path, source)).toEqual([
+      `${path}:5: acquires an ambient browser capability outside approved static seams`,
+    ]);
+  });
+
+  it('matches emitted TypeScript for exported and private namespace merges', () => {
+    const emit = (source: string): string => ts.transpileModule(source, {
+      compilerOptions: {
+        module: ts.ModuleKind.ESNext,
+        moduleDetection: ts.ModuleDetectionKind.Force,
+        target: ts.ScriptTarget.ES2022,
+      },
+    }).outputText;
+    const exportedSource = mergedNamespaceSource(true, false);
+    const exported = emit(exportedSource);
+    expect(exported).toContain('void Values.parent;');
+    expect(exported).toContain('Values.open();');
+    expect(analyzeProductionSource('components/ExportedNamespaceSource.ts', exportedSource)).toEqual([]);
+    expect(analyzeProductionSource('components/ExportedNamespaceOutput.js', exported)).toEqual([]);
+
+    const privateSource = mergedNamespaceSource(false, false);
+    const privateOutput = emit(privateSource);
+    expect(privateOutput).toContain('void parent;');
+    expect(privateOutput).toContain('open();');
+    expect(analyzeProductionSource('components/PrivateNamespaceOutput.js', privateOutput)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('acquires an ambient browser capability'),
+        expect.stringContaining('calls unbound browser open'),
+      ]),
+    );
   });
 
   it.each([
