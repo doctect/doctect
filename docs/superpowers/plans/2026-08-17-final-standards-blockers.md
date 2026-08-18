@@ -26,6 +26,8 @@
 3. Keep closed syntax: reject acquisition sites; do not trace aliases or evaluate property-key expressions.
 4. Add safe controls for ordinary document members, local bindings, and existing generator/iframe production forms. Run both parser modes, full boundary, typecheck, build, and parity. Commit independently.
 
+**Static-policy bound:** The enforceable claim covers reserved storage syntax plus the enumerated browser-root and capability-acquisition syntax in parsed executable source. Dynamic code, import maps, runtime-computed property names containing no reserved syntax, and Window capabilities supplied through parameters remain outside static semantics; this bound does not weaken rejection of any reserved syntax.
+
 ## Task 3: Coalesce Before Expensive Save Preparation
 
 **Files:** `services/localWorkspace/LocalWorkspaceStore.ts`, `services/localWorkspace/mutationQueue.ts`, new private browser project-preparation worker/client, `services/localWorkspace/index.ts`, `hooks/useWorkspaceProjectWrites.ts`, `components/workspace/WorkspaceBootstrapGate.tsx`, focused unit/browser tests.

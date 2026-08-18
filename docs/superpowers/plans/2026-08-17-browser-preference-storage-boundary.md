@@ -1,6 +1,6 @@
 # Browser Preference Storage Boundary Plan
 
-**Goal:** Replace direct production `localStorage` access with one closed preference module, then make repository policy reject direct browser-storage access outside approved persistence modules.
+**Goal:** Replace direct production `localStorage` access with one closed preference module, then make repository policy reject reserved browser-storage and capability-acquisition syntax outside approved persistence modules and exact seams.
 
 **Context:** Final Standards review showed static key reconstruction can always lag JavaScript mutation semantics. Existing migration policy must not depend on interpreting every possible expression before deciding whether production code may touch browser storage.
 
@@ -11,7 +11,8 @@
 - Production callers cannot pass arbitrary strings to browser storage.
 - Migration receipt keys may vary only by the approved receipt prefix.
 - Storage unavailability never crashes preference-only UI.
-- Direct production `localStorage` access outside approved modules fails repository policy regardless of key construction.
+- Outside approved persistence modules and exact capability seams, repository policy rejects exact `localStorage` syntax, browser-root escapes, exact executable `defaultView`/`contentWindow`/`storageArea` member acquisition, unbound `frames`/`top`/`parent`/`opener` value use, and direct unbound `open()` calls. These sites fail even when later storage access uses a computed key.
+- This is a bounded parsed-source claim, not whole-program capability analysis. Dynamic code, import maps, runtime-computed property names containing no reserved syntax, and Window capabilities supplied through parameters remain outside static semantics; encountering any reserved syntax above still requires rejection.
 - No migration, IndexedDB, cloud, analytics, or public `LocalWorkspaceStore` contract changes.
 
 ## Module interface
@@ -57,8 +58,9 @@ Run targeted tests and observe failure before production edits.
 - Reject direct production `localStorage` member access outside:
   - `services/browserPreferences.ts`;
   - approved `services/localWorkspace` migration implementation.
+- Reject the enumerated browser-root and capability-acquisition syntax at its use or acquisition site, except exact fingerprinted production seams.
 - Keep existing exact-key and HTML/source discovery checks as defense in depth.
-- Stop claiming unresolved mutable-array `.join` calls are statically safe; generic direct-access rejection owns that case.
+- Do not trace aliases or evaluate property-key expressions. Stop claiming unresolved mutable-array `.join` calls, dynamic code, import maps, or supplied Window parameters are covered; reserved-syntax rejection owns only its bounded cases.
 
 ## Task 4: Verify and review
 

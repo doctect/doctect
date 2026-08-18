@@ -112,6 +112,26 @@ describe('measureAutoWidthText', () => {
         expect(probe.parentNode).toBeNull();
     });
 
+    it('uses the captured native detachment when the live Node prototype is replaced', () => {
+        const sibling = document.createElement('div');
+        document.body.appendChild(sibling);
+        const before = document.body.childElementCount;
+        const probe = document.createElement('div');
+        vi.spyOn(document, 'createElement').mockReturnValue(probe);
+        vi.spyOn(probe, 'remove').mockImplementation(() => { throw new Error('remove failed'); });
+        const removeChild = vi.spyOn(Node.prototype, 'removeChild').mockImplementation(() => {
+            throw new Error('live prototype removeChild failed');
+        });
+        vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(10);
+        vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(10);
+
+        expect(measureAutoWidthText('Alpha', { fontSize: 12 })).toEqual({ w: 35, h: 20 });
+        expect(removeChild).toHaveBeenCalledWith(probe);
+        expect(document.body.childElementCount).toBe(before);
+        expect(Array.from(document.body.children)).toEqual([sibling]);
+        expect(probe.parentNode).toBeNull();
+    });
+
     it.each([
         [Number.NaN, 10],
         [Number.POSITIVE_INFINITY, 10],

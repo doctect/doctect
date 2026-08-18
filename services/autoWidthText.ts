@@ -2,6 +2,8 @@ import type { TemplateElement } from '../types';
 import { resolveCanvasFontFamily } from './canvasTextLayout';
 import { resolveTextFontSize } from './textVisibility';
 
+const nativeRemoveChild = typeof Node === 'undefined' ? undefined : Node.prototype.removeChild;
+
 export interface AutoWidthMeasurement {
     w: number;
     h: number;
@@ -71,8 +73,6 @@ export function measureAutoWidthText(
             }
             if (cleanupSafe && parent) {
                 try {
-                    const nativeRemoveChild = probe.ownerDocument?.defaultView
-                        ?.Node.prototype.removeChild;
                     if (!nativeRemoveChild) throw new Error('Native DOM cleanup unavailable');
                     nativeRemoveChild.call(parent, probe);
                 } catch {

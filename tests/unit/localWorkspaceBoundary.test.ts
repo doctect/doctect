@@ -147,6 +147,8 @@ const scriptKinds = new Map<string, ts.ScriptKind>([
 ]);
 const storageMutators = new Set(['setItem', 'removeItem', 'clear']);
 const browserGlobalNames = new Set(['window', 'globalThis', 'self']);
+const reservedBrowserCapabilityMembers = new Set(['defaultView', 'contentWindow', 'storageArea']);
+const ambientBrowserCapabilityNames = new Set(['frames', 'top', 'parent', 'opener']);
 const approvedBrowserRootProperties = new Set([
   'DOCTECT',
   'DoctectDiff',
@@ -1516,6 +1518,46 @@ const directPropertyName = (name: ts.PropertyName): string | undefined => {
   return ts.isComputedPropertyName(name) ? directStringLiteral(name.expression) : undefined;
 };
 
+const assignmentPatternObjectLiteral = (literal: ts.ObjectLiteralExpression): boolean => {
+  let current: ts.Expression = literal;
+  while (true) {
+    const parent = current.parent;
+    if (ts.isBinaryExpression(parent)
+      && parent.left === current
+      && parent.operatorToken.kind === ts.SyntaxKind.EqualsToken) return true;
+    if ((ts.isForInStatement(parent) || ts.isForOfStatement(parent))
+      && parent.initializer === current) return true;
+    if (ts.isPropertyAssignment(parent)
+      && parent.initializer === current
+      && ts.isObjectLiteralExpression(parent.parent)) {
+      current = parent.parent;
+      continue;
+    }
+    if (ts.isArrayLiteralExpression(parent) && parent.elements.some(element => element === current)) {
+      current = parent;
+      continue;
+    }
+    return false;
+  }
+};
+
+const executableCapabilityMemberName = (node: ts.Node): string | undefined => {
+  if (ts.isPropertyAccessExpression(node)) return node.name.text;
+  if (ts.isElementAccessExpression(node)) return directStringLiteral(node.argumentExpression);
+  if (ts.isBindingElement(node)) {
+    if (node.propertyName) return directPropertyName(node.propertyName);
+    return ts.isIdentifier(node.name) ? node.name.text : undefined;
+  }
+  if (ts.isPropertyAssignment(node)
+    && ts.isObjectLiteralExpression(node.parent)
+    && assignmentPatternObjectLiteral(node.parent)) return directPropertyName(node.name);
+  return ts.isShorthandPropertyAssignment(node)
+    && ts.isObjectLiteralExpression(node.parent)
+    && assignmentPatternObjectLiteral(node.parent)
+    ? node.name.text
+    : undefined;
+};
+
 const syntaxFingerprint = (source: string): string => {
   const scanner = ts.createScanner(
     ts.ScriptTarget.Latest,
@@ -1538,6 +1580,11 @@ const approvedBrowserPreferenceSyntax = '7af5f5c562faed881be020c3c7ee2ad624b46ab
 const approvedGeneratorEvaluatorSyntax = 'dbe902dcb1f1ae81ed1fe600b84e88837c703ddbb68e382a01dd02845ddeda42';
 const approvedRestoreIndexedDbSyntax = 'b374e90adbabba0e5f5feb7792d155a60ff238d93a68754b611aacbc245ac0ca';
 const approvedOpenWithFactorySyntax = 'caf87c7f6d3ff1817db584990469483e9ec871a6788fd3cfcce59d96880f6bad';
+const approvedGeneratorCapabilitySyntax = new Map([
+  ['send', 'a0991d2e0d1d48d1983734c9f3e1d21e06951e019b68e9bb0e49ebc43ba9c313'],
+  ['handleMessage', '1b5891bf38f6c0a275913a206f7a478446976b0d0141688910bf0854bb9b1077'],
+  ['cleanup', '3e9692436b34d0b8c60bda2fe96c9b30f83a2ef6123bc1352ef3bf3edb99521e'],
+]);
 const browserPreferencesBundleStart = '/* doctect-browser-preferences:start */';
 const browserPreferencesBundleEnd = '/* doctect-browser-preferences:end */';
 const approvedBrowserPreferencesBundleBytes = 2279;
@@ -1613,6 +1660,105 @@ const sourceValueBindings = (sourceFile: ts.SourceFile, name: string): ts.Identi
   };
   visit(sourceFile);
   return [...bindings.values()];
+};
+
+type ValueBindingVisibility = 'all' | 'body';
+
+const sourceValueBindingScopes = (
+  sourceFile: ts.SourceFile,
+): Map<string, Map<ts.Node, ValueBindingVisibility>> => {
+  const scopes = new Map<string, Map<ts.Node, ValueBindingVisibility>>();
+  const add = (
+    identifier: ts.Identifier | undefined,
+    scope: ts.Node | undefined,
+    visibility: ValueBindingVisibility = 'all',
+  ): void => {
+    if (!identifier || !scope) return;
+    if (!scopes.has(identifier.text)) scopes.set(identifier.text, new Map());
+    const existing = scopes.get(identifier.text)!.get(scope);
+    scopes.get(identifier.text)!.set(scope, existing === 'all' ? 'all' : visibility);
+  };
+  const addBindingName = (
+    name: ts.BindingName | undefined,
+    scope: ts.Node | undefined,
+    visibility: ValueBindingVisibility = 'all',
+  ): void => {
+    if (!name) return;
+    for (const identifier of bindingIdentifiers(name)) add(identifier, scope, visibility);
+  };
+  const hasDeclareModifier = (node: ts.Node): boolean => ts.canHaveModifiers(node)
+    && (ts.getModifiers(node)?.some(modifier => modifier.kind === ts.SyntaxKind.DeclareKeyword) ?? false);
+  const functionOrSourceScope = (node: ts.Node): ts.Node | undefined => {
+    let current: ts.Node | undefined = node.parent;
+    while (current
+      && !ts.isFunctionLike(current)
+      && !ts.isSourceFile(current)
+      && !ts.isModuleBlock(current)
+      && !ts.isClassStaticBlockDeclaration(current)) {
+      current = current.parent;
+    }
+    return current;
+  };
+  const lexicalScope = (node: ts.Node): ts.Node | undefined => {
+    let current: ts.Node | undefined = node.parent;
+    while (current) {
+      if (ts.isSourceFile(current)
+        || ts.isBlock(current)
+        || ts.isCaseBlock(current)
+        || ts.isModuleBlock(current)
+        || ts.isClassStaticBlockDeclaration(current)
+        || ts.isForStatement(current)
+        || ts.isForInStatement(current)
+        || ts.isForOfStatement(current)
+        || ts.isCatchClause(current)) return current;
+      current = current.parent;
+    }
+    return undefined;
+  };
+  const visit = (node: ts.Node): void => {
+    if (ts.isVariableDeclaration(node)) {
+      if (ts.isCatchClause(node.parent)) {
+        addBindingName(node.name, node.parent);
+      } else {
+        const list = ts.isVariableDeclarationList(node.parent) ? node.parent : undefined;
+        const statement = list?.parent;
+        if (statement && ts.isVariableStatement(statement) && hasDeclareModifier(statement)) {
+          ts.forEachChild(node, visit);
+          return;
+        }
+        const blockScoped = Boolean(list && (list.flags & ts.NodeFlags.BlockScoped));
+        const scope = blockScoped ? lexicalScope(node) : functionOrSourceScope(node);
+        addBindingName(node.name, scope, !blockScoped && scope && ts.isFunctionLike(scope) ? 'body' : 'all');
+      }
+    } else if (ts.isParameter(node)) {
+      addBindingName(node.name, functionOrSourceScope(node));
+    } else if (ts.isFunctionDeclaration(node)
+      || ts.isClassDeclaration(node)
+      || ts.isEnumDeclaration(node)
+      || ts.isModuleDeclaration(node)) {
+      if (!hasDeclareModifier(node)) {
+        add(ts.isIdentifier(node.name) ? node.name : undefined, lexicalScope(node));
+      }
+    } else if (ts.isFunctionExpression(node) || ts.isClassExpression(node)) {
+      add(node.name, node);
+    } else if (ts.isImportClause(node)) {
+      if (!node.isTypeOnly) {
+        add(node.name, sourceFile);
+        if (node.namedBindings && ts.isNamespaceImport(node.namedBindings)) {
+          add(node.namedBindings.name, sourceFile);
+        } else if (node.namedBindings && ts.isNamedImports(node.namedBindings)) {
+          for (const element of node.namedBindings.elements) {
+            if (!element.isTypeOnly) add(element.name, sourceFile);
+          }
+        }
+      }
+    } else if (ts.isImportEqualsDeclaration(node)) {
+      if (!node.isTypeOnly) add(node.name, sourceFile);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return scopes;
 };
 
 const assignmentOperators = new Set<ts.SyntaxKind>([
@@ -1778,6 +1924,30 @@ const enclosingFunction = (node: ts.Node): ts.FunctionLikeDeclaration | undefine
   let current: ts.Node | undefined = node.parent;
   while (current) {
     if (ts.isFunctionLike(current)) return current as ts.FunctionLikeDeclaration;
+    current = current.parent;
+  }
+  return undefined;
+};
+
+const enclosingVariableFunction = (
+  node: ts.Node,
+): { declaration: ts.FunctionLikeDeclaration; variable: ts.VariableDeclaration } | undefined => {
+  let current: ts.Node | undefined = node.parent;
+  while (current) {
+    if (ts.isFunctionLike(current)) {
+      let expression: ts.Node = current;
+      while (ts.isParenthesizedExpression(expression.parent)
+        || ts.isAsExpression(expression.parent)
+        || ts.isTypeAssertionExpression(expression.parent)
+        || ts.isNonNullExpression(expression.parent)
+        || ts.isSatisfiesExpression(expression.parent)) {
+        expression = expression.parent;
+      }
+      if (ts.isVariableDeclaration(expression.parent)
+        && expression.parent.initializer === expression) {
+        return { declaration: current as ts.FunctionLikeDeclaration, variable: expression.parent };
+      }
+    }
     current = current.parent;
   }
   return undefined;
@@ -2159,6 +2329,27 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
       continue;
     }
 
+    const valueBindingScopes = sourceValueBindingScopes(sourceFile);
+    const hasLexicalValueBinding = (identifier: ts.Identifier): boolean => {
+      const bindingScopes = valueBindingScopes.get(identifier.text);
+      if (!bindingScopes) return false;
+      const parameterScopes = new Set<ts.Node>();
+      let ancestor: ts.Node | undefined = identifier.parent;
+      while (ancestor) {
+        if (ts.isParameter(ancestor)) {
+          if (ts.isFunctionLike(ancestor.parent)) parameterScopes.add(ancestor.parent);
+        }
+        ancestor = ancestor.parent;
+      }
+      let current: ts.Node | undefined = identifier.parent;
+      while (current) {
+        const visibility = bindingScopes.get(current);
+        if (visibility && (visibility === 'all' || !parameterScopes.has(current))) return true;
+        current = current.parent;
+      }
+      return false;
+    };
+
     const importsAllowed = policyPath.startsWith('services/localWorkspace/')
       || policyPath === 'tests/helpers/localWorkspaceFixtures.ts';
     const localWorkspaceSource = policyPath.startsWith('services/localWorkspace/');
@@ -2349,6 +2540,91 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
       }
       return runtimeWriteCache.get(key)!;
     };
+    const generatorCreateFrame = (() => {
+      if (policyPath !== 'services/generatorSandbox.ts') return undefined;
+      const factory = uniqueTopLevelFunction(sourceFile, 'createBrowserEnvironment');
+      if (!factory || !ts.isArrowFunction(factory) || ts.isBlock(factory.body)) return undefined;
+      const environment = unwrap(factory.body);
+      if (!ts.isObjectLiteralExpression(environment)) return undefined;
+      const properties = environment.properties.filter(property => (
+        ts.isPropertyAssignment(property) && directPropertyName(property.name) === 'createFrame'
+      ));
+      if (properties.length !== 1 || !ts.isPropertyAssignment(properties[0])) return undefined;
+      const initializer = unwrap(properties[0].initializer);
+      return ts.isArrowFunction(initializer) || ts.isFunctionExpression(initializer)
+        ? initializer
+        : undefined;
+    })();
+    const exactGeneratorIframeBinding = (() => {
+      if (!generatorCreateFrame
+        || sourceValueBindings(sourceFile, 'iframe').length !== 1
+        || sourceValueBindings(sourceFile, 'document').length !== 0
+        || hasRuntimeWrite('iframe')
+        || hasRuntimeWrite('iframe', 'contentWindow')
+        || hasRuntimeWrite('document')
+        || hasRuntimeWrite('document', 'createElement')) return false;
+      const declarations: ts.VariableDeclaration[] = [];
+      const collect = (node: ts.Node): void => {
+        if (ts.isVariableDeclaration(node)
+          && ts.isIdentifier(node.name)
+          && node.name.text === 'iframe'
+          && enclosingFunction(node) === generatorCreateFrame) declarations.push(node);
+        ts.forEachChild(node, collect);
+      };
+      collect(generatorCreateFrame);
+      if (declarations.length !== 1) return false;
+      const declaration = declarations[0];
+      if (!ts.isVariableDeclarationList(declaration.parent)
+        || (declaration.parent.flags & ts.NodeFlags.Const) === 0
+        || !declaration.initializer) return false;
+      const initializer = unwrap(declaration.initializer);
+      if (!ts.isCallExpression(initializer)
+        || initializer.questionDotToken !== undefined
+        || initializer.arguments.length !== 1
+        || directStringLiteral(initializer.arguments[0]) !== 'iframe') return false;
+      const member = unwrap(initializer.expression);
+      return ts.isPropertyAccessExpression(member)
+        && member.questionDotToken === undefined
+        && ts.isIdentifier(member.expression)
+        && member.expression.text === 'document'
+        && member.name.text === 'createElement';
+    })();
+    const generatorContentWindowAcquisitions: ts.Node[] = [];
+    if (policyPath === 'services/generatorSandbox.ts') {
+      const collect = (node: ts.Node): void => {
+        if (ts.isTypeNode(node)) return;
+        if (executableCapabilityMemberName(node) === 'contentWindow') {
+          generatorContentWindowAcquisitions.push(node);
+        }
+        ts.forEachChild(node, collect);
+      };
+      collect(sourceFile);
+    }
+    const exactGeneratorCapabilitySeams = (() => {
+      if (!exactGeneratorIframeBinding || generatorContentWindowAcquisitions.length !== 3) return false;
+      const declarations = new Map<string, ts.FunctionLikeDeclaration>();
+      for (const acquisition of generatorContentWindowAcquisitions) {
+        if (!ts.isPropertyAccessExpression(acquisition)
+          || !ts.isIdentifier(acquisition.expression)
+          || acquisition.expression.text !== 'iframe') return false;
+        const enclosing = enclosingVariableFunction(acquisition);
+        if (!enclosing
+          || !ts.isIdentifier(enclosing.variable.name)
+          || enclosingFunction(enclosing.declaration) !== generatorCreateFrame) return false;
+        const name = enclosing.variable.name.text;
+        const fingerprint = approvedGeneratorCapabilitySyntax.get(name);
+        if (!fingerprint
+          || declarations.has(name)
+          || lineSensitiveSyntaxFingerprint(enclosing.declaration.getText(sourceFile)) !== fingerprint) {
+          return false;
+        }
+        declarations.set(name, enclosing.declaration);
+      }
+      return declarations.size === approvedGeneratorCapabilitySyntax.size;
+    })();
+    const approvedGeneratorCapabilityAcquisition = (node: ts.Node): boolean => (
+      exactGeneratorCapabilitySeams && generatorContentWindowAcquisitions.includes(node)
+    );
     const unshadowedBuiltIn = (name: string): boolean => (
       sourceValueBindings(sourceFile, name).length === 0 && !hasRuntimeWrite(name)
     );
@@ -2450,6 +2726,28 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
       propertyAccessName(node)
       || (ts.isPropertyAssignment(node.parent) && node.parent.name === node)
       || (ts.isBindingElement(node.parent) && node.parent.propertyName === node)
+      || ((ts.isVariableDeclaration(node.parent) || ts.isParameter(node.parent))
+        && node.parent.name === node)
+      || ((ts.isFunctionDeclaration(node.parent)
+        || ts.isFunctionExpression(node.parent)
+        || ts.isClassDeclaration(node.parent)
+        || ts.isClassExpression(node.parent)
+        || ts.isEnumDeclaration(node.parent)
+        || ts.isModuleDeclaration(node.parent))
+        && node.parent.name === node)
+      || (ts.isImportClause(node.parent) && node.parent.name === node)
+      || (ts.isNamespaceImport(node.parent) && node.parent.name === node)
+      || (ts.isImportSpecifier(node.parent)
+        && (node.parent.propertyName === node || node.parent.name === node))
+      || (ts.isExportSpecifier(node.parent)
+        && (node.parent.propertyName === node || node.parent.name === node))
+      || (ts.isLabeledStatement(node.parent) && node.parent.label === node)
+      || ((ts.isBreakStatement(node.parent) || ts.isContinueStatement(node.parent))
+        && node.parent.label === node)
+      || ((ts.isInterfaceDeclaration(node.parent)
+        || ts.isTypeAliasDeclaration(node.parent)
+        || ts.isTypeParameterDeclaration(node.parent))
+        && node.parent.name === node)
       || ((ts.isMethodDeclaration(node.parent)
         || ts.isGetAccessorDeclaration(node.parent)
         || ts.isSetAccessorDeclaration(node.parent)
@@ -2508,6 +2806,28 @@ const analyzeSources = (inputs: readonly SourceInput[]): Map<string, string[]> =
         && !directStorageApprovedAt(node)
         && localStorageSyntax(node)) {
         reportDirectStorage(node);
+      }
+      const capabilityMember = executableCapabilityMemberName(node);
+      if (enforceDirectStorageBoundary
+        && capabilityMember
+        && reservedBrowserCapabilityMembers.has(capabilityMember)
+        && !approvedGeneratorCapabilityAcquisition(node)) {
+        report(node, 'acquires a browser capability outside approved static seams');
+      }
+      if (enforceDirectStorageBoundary
+        && ts.isIdentifier(node)
+        && ambientBrowserCapabilityNames.has(node.text)
+        && !nonValueBrowserRootName(node)
+        && !hasLexicalValueBinding(node)) {
+        report(node, 'acquires an ambient browser capability outside approved static seams');
+      }
+      if (enforceDirectStorageBoundary && ts.isCallExpression(node)) {
+        const callee = unwrap(node.expression);
+        if (ts.isIdentifier(callee)
+          && callee.text === 'open'
+          && !hasLexicalValueBinding(callee)) {
+          report(node, 'calls unbound browser open outside approved static seams');
+        }
       }
       if (enforceDirectStorageBoundary
         && !directStorageApprovedAt(node)
@@ -3644,6 +3964,276 @@ describe('local workspace static boundary', () => {
       'services/generatorSandbox.ts',
       readFileSync(join(root, 'services/generatorSandbox.ts'), 'utf8'),
     )).toEqual([]);
+  });
+
+  it("rejects the reviewer's alternate-root probe", () => {
+    const source = "document.defaultView?.['local' + 'Storage']?.setItem(runtimeKey, value);";
+    expect(analyzeProductionSource('components/AlternateRoot.ts', source)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('acquires a browser capability outside approved static seams'),
+      ]),
+    );
+  });
+
+  it.each([
+    [
+      'ownerDocument defaultView',
+      "probe.ownerDocument.defaultView?.['local' + 'Storage']?.getItem(runtimeKey);",
+    ],
+    [
+      'literal defaultView element access',
+      "document['defaultView']?.['local' + 'Storage']?.getItem(runtimeKey);",
+    ],
+    [
+      'wrapped defaultView receiver',
+      "((document as Document)!).defaultView?.['local' + 'Storage']?.getItem(runtimeKey);",
+    ],
+    [
+      'optional defaultView receiver',
+      "document?.defaultView?.['local' + 'Storage']?.getItem(runtimeKey);",
+    ],
+    [
+      'renamed defaultView destructuring',
+      "const { defaultView: browser } = document; browser?.['local' + 'Storage']?.getItem(runtimeKey);",
+    ],
+    [
+      'literal defaultView destructuring',
+      "const { ['defaultView']: browser } = document; browser?.['local' + 'Storage']?.getItem(runtimeKey);",
+    ],
+    [
+      'shorthand defaultView destructuring',
+      "const { defaultView } = document; defaultView?.['local' + 'Storage']?.getItem(runtimeKey);",
+    ],
+    [
+      'frame contentWindow',
+      "iframe.contentWindow?.['local' + 'Storage']?.getItem(runtimeKey);",
+    ],
+    [
+      'literal frame contentWindow',
+      "iframe?.['contentWindow']?.['local' + 'Storage']?.getItem(runtimeKey);",
+    ],
+    [
+      'destructured frame contentWindow',
+      "const { contentWindow: browser } = iframe; browser?.['local' + 'Storage']?.getItem(runtimeKey);",
+    ],
+    [
+      'frame element contentWindow',
+      "frame.contentWindow?.['local' + 'Storage']?.getItem(runtimeKey);",
+    ],
+    [
+      'assigned defaultView destructuring',
+      "let browser; ({ defaultView: browser } = document); browser?.['local' + 'Storage']?.getItem(runtimeKey);",
+    ],
+    [
+      'literal assigned contentWindow destructuring',
+      "let browser; ({ ['contentWindow']: browser } = iframe); browser?.['local' + 'Storage']?.getItem(runtimeKey);",
+    ],
+    [
+      'StorageEvent storageArea',
+      'event.storageArea?.getItem(runtimeKey);',
+    ],
+    [
+      'literal StorageEvent storageArea',
+      "event['storageArea']?.getItem(runtimeKey);",
+    ],
+    [
+      'destructured StorageEvent storageArea',
+      'const { storageArea: storage } = event; storage?.getItem(runtimeKey);',
+    ],
+    [
+      'parameter StorageEvent storageArea',
+      'function read({ storageArea: storage }: StorageEvent) { return storage?.getItem(runtimeKey); }',
+    ],
+  ])('rejects alternate browser capability acquisition through %s', (_case, source) => {
+    expect(analyzeProductionSource('components/AlternateCapability.ts', source)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('acquires a browser capability outside approved static seams'),
+      ]),
+    );
+  });
+
+  it.each([
+    ['frames alias', "const browser = frames; browser['local' + 'Storage'].getItem(runtimeKey);"],
+    ['top container', "const browsers = [top]; browsers[0]['local' + 'Storage'].getItem(runtimeKey);"],
+    [
+      'parent object container',
+      "const browsers = { active: parent }; browsers.active['local' + 'Storage'].getItem(runtimeKey);",
+    ],
+    ['opener alias', "const browser = opener; browser['local' + 'Storage'].getItem(runtimeKey);"],
+    [
+      'unrelated parent binding',
+      "function inspect(parent: object) { return parent; } const browser = parent; void browser;",
+    ],
+    [
+      'unrelated top binding',
+      "function inspect(top: object) { return top; } const browser = top; void browser;",
+    ],
+    [
+      'type-only parent import',
+      "import { type parent } from './types'; const browser = parent; void browser;",
+    ],
+    [
+      'ambient opener declaration',
+      'declare const opener: Window; const browser = opener; void browser;',
+    ],
+    [
+      'function-body parent var from a parameter initializer',
+      'function inspect(value = parent) { var parent = supplied; return value; }',
+    ],
+    [
+      'namespace-scoped parent binding',
+      'namespace Values { export const parent = supplied; } const browser = parent; void browser;',
+    ],
+    [
+      'static-block opener binding',
+      'class Values { static { var opener = supplied; void opener; } } const browser = opener; void browser;',
+    ],
+  ])('rejects unbound ambient browser capability through %s', (_case, source) => {
+    expect(analyzeProductionSource('components/AmbientCapability.ts', source)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('acquires an ambient browser capability outside approved static seams'),
+      ]),
+    );
+  });
+
+  it.each([
+    ['direct call', "open()?.['local' + 'Storage']?.getItem(runtimeKey);"],
+    ['wrapped direct call', "((open as Window['open']))()?.['local' + 'Storage']?.getItem(runtimeKey);"],
+    ['optional direct call', "open?.('about:blank')?.['local' + 'Storage']?.getItem(runtimeKey);"],
+    [
+      'alias after direct call',
+      "const popup = open(); popup?.['local' + 'Storage']?.getItem(runtimeKey);",
+    ],
+    [
+      'container after direct call',
+      "const popups = [open()]; popups[0]?.['local' + 'Storage']?.getItem(runtimeKey);",
+    ],
+    [
+      'unrelated open binding',
+      "function inspect(open: () => unknown) { return open(); } const popup = open(); void popup;",
+    ],
+    [
+      'type-only open import',
+      "import type { open } from './types'; const popup = open(); void popup;",
+    ],
+    [
+      'ambient open declaration',
+      'declare function open(): Window; const popup = open(); void popup;',
+    ],
+    [
+      'function-body open var from a parameter initializer',
+      'function inspect(value = open()) { var open = supplied; return value; }',
+    ],
+    [
+      'namespace-scoped open binding',
+      'namespace Values { export const open = supplied; } const popup = open(); void popup;',
+    ],
+  ])('rejects direct unbound browser open through %s', (_case, source) => {
+    expect(analyzeProductionSource('components/PopupCapability.ts', source)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('calls unbound browser open outside approved static seams'),
+      ]),
+    );
+  });
+
+  it.each([
+    'void document.body; void document.documentElement;',
+    'const domain = { view: 1, source: 2 }; void domain.view; void domain.source;',
+    [
+      'const frames = supplied.frames; const top = supplied.top;',
+      'const parent = supplied.parent; const opener = supplied.opener;',
+      "void frames['local' + 'Storage']; void top['local' + 'Storage'];",
+      "void parent['local' + 'Storage']; void opener['local' + 'Storage'];",
+    ].join(' '),
+    [
+      'function inspect(parent: object, top: object) { return [parent, top]; }',
+      'const frames = (value: unknown) => value; const opener = { value: true };',
+      'void inspect(opener, frames(opener));',
+    ].join(' '),
+    [
+      "const open = () => ({ ['local' + 'Storage']: supplied });",
+      "void open()?.['local' + 'Storage'];",
+    ].join(' '),
+    [
+      "function inspect() { var parent = supplied.parent; var top = supplied.top;",
+      "var open = supplied.open; return [parent, top, open()]; } inspect();",
+    ].join(' '),
+    [
+      'const domain = { frames: 1, top: 2, parent: 3, opener: 4, open() {} };',
+      'const { frames: frameCount, top: topEdge, parent: parentId, opener: openerId } = domain;',
+      'domain.open(); void [frameCount, topEdge, parentId, openerId];',
+    ].join(' '),
+    "iframe.hidden = true; iframe.srcdoc = '<p>safe</p>'; iframe.setAttribute('sandbox', 'allow-scripts');",
+    "const capabilityName = 'defaultView'; void supplied[capabilityName];",
+    "function read(browser: Window) { return browser['local' + 'Storage']; } void read;",
+  ])('allows ordinary document, domain, lexical, or iframe syntax: %s', source => {
+    expect(analyzeProductionSource('components/OrdinaryBrowserSyntax.ts', source)).toEqual([]);
+  });
+
+  it('allows current production capability seams', () => {
+    for (const path of ['services/autoWidthText.ts', 'services/generatorSandbox.ts']) {
+      expect(analyzeProductionSource(path, readFileSync(join(root, path), 'utf8')), path).toEqual([]);
+    }
+  });
+
+  it.each([
+    [
+      'iframe shadowing',
+      (source: string) => source.replace(
+        'const send = (request: GeneratorSandboxRequest) => {',
+        'const send = (request: GeneratorSandboxRequest, iframe: HTMLIFrameElement) => {',
+      ),
+    ],
+    [
+      'iframe mutation',
+      (source: string) => source.replace(
+        'let disposed = false;',
+        "let disposed = false;\n        iframe = document.createElement('iframe');",
+      ),
+    ],
+    [
+      'document createElement mutation',
+      (source: string) => source.replace(
+        'let disposed = false;',
+        'let disposed = false;\n        document.createElement = suppliedCreateElement;',
+      ),
+    ],
+    [
+      'reflected contentWindow mutation',
+      (source: string) => source.replace(
+        'let disposed = false;',
+        "let disposed = false;\n        Object.defineProperty(iframe, 'contentWindow', { value: suppliedWindow });",
+      ),
+    ],
+    [
+      'literal postMessage receiver',
+      (source: string) => source.replace(
+        'iframe.contentWindow?.postMessage({',
+        "iframe['contentWindow']?.postMessage({",
+      ),
+    ],
+    [
+      'reversed source comparison',
+      (source: string) => source.replace(
+        'event.source !== iframe.contentWindow',
+        'iframe.contentWindow !== event.source',
+      ),
+    ],
+    [
+      'renamed enclosing declaration',
+      (source: string) => source.replace(
+        'const send = (request: GeneratorSandboxRequest) => {',
+        'const dispatch = (request: GeneratorSandboxRequest) => {',
+      ),
+    ],
+  ])('revokes generator contentWindow approval after %s', (_case, mutate) => {
+    const path = 'services/generatorSandbox.ts';
+    const original = readFileSync(join(root, path), 'utf8');
+    const source = mutate(original);
+    expect(source).not.toBe(original);
+    expect(analyzeProductionSource(path, source)).toEqual(expect.arrayContaining([
+      expect.stringContaining('acquires a browser capability outside approved static seams'),
+    ]));
   });
 
   it.each([
