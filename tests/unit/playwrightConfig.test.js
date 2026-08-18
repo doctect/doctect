@@ -264,59 +264,142 @@ const parseWorkflowStep = (lines, start, end, stepIndent, allowEnv) => {
         : { env, commands };
 };
 
-const extractNamedWorkflowStep = (workflow, name) => {
-    const lines = workflow.split(/\r?\n/);
-    for (let start = 0; start < lines.length; start += 1) {
-        const stepName = lines[start].match(/^( *)- +name:(?: +(.*))?$/);
-        if (!stepName || parseNarrowYamlScalar(stepName[2]) !== name) continue;
+const scanWorkflowJobs = lines => {
+    const jobsLines = lines
+        .map((line, index) => line === 'jobs:' ? index : -1)
+        .filter(index => index !== -1);
+    if (jobsLines.length !== 1) return null;
 
-        const stepIndent = stepName[1].length;
-        let end = lines.length;
-        for (let index = start + 1; index < lines.length; index += 1) {
-            const nextStep = lines[index].match(/^( *)- +/);
-            if (nextStep?.[1].length === stepIndent) {
-                end = index;
-                break;
-            }
+    const start = jobsLines[0];
+    let end = lines.length;
+    for (let index = start + 1; index < lines.length; index += 1) {
+        if (!lines[index].trim()) continue;
+        const indent = lineIndent(lines[index]);
+        if (indent === null) return null;
+        if (indent === 0) {
+            end = index;
+            break;
         }
-        return parseWorkflowStep(
-            lines,
-            start,
-            end,
-            stepIndent,
-            name === 'Built Chromium Worker save proof',
-        );
+        if (indent < 2) return null;
     }
-    return null;
+
+    const jobs = new Map();
+    let index = start + 1;
+    while (index < end) {
+        if (!lines[index].trim()) {
+            index += 1;
+            continue;
+        }
+        const indent = lineIndent(lines[index]);
+        if (indent !== 2) return null;
+        const mapping = parseNarrowYamlMapping(lines[index].slice(indent));
+        if (!mapping || mapping.value || jobs.has(mapping.key)) return null;
+
+        let jobEnd = index + 1;
+        for (; jobEnd < end; jobEnd += 1) {
+            if (!lines[jobEnd].trim()) continue;
+            const childIndent = lineIndent(lines[jobEnd]);
+            if (childIndent === null) return null;
+            if (childIndent === 2) break;
+            if (childIndent < 4) return null;
+        }
+        jobs.set(mapping.key, { start: index, end: jobEnd });
+        index = jobEnd;
+    }
+    return { jobs, lines };
 };
 
-const releaseGateJobIsUnconditional = workflow => {
+const scanReleaseGate = workflow => {
     const lines = workflow.split(/\r?\n/);
-    const start = lines.findIndex(line => line === '  release-gate:');
-    if (start === -1) return false;
+    const workflowJobs = scanWorkflowJobs(lines);
+    const releaseGate = workflowJobs?.jobs.get('release-gate');
+    if (!workflowJobs || !releaseGate) return null;
 
     const allowedKeys = new Set(['runs-on', 'timeout-minutes', 'steps']);
     const seenKeys = new Set();
-    for (let index = start + 1; index < lines.length; index += 1) {
+    let activeKey = null;
+    let stepsStart = null;
+    let stepsEnd = null;
+    for (let index = releaseGate.start + 1; index < releaseGate.end; index += 1) {
         const line = lines[index];
         if (!line.trim()) continue;
         const indent = lineIndent(line);
-        if (indent === null) return false;
-        if (indent <= 2) break;
+        if (indent === null || indent < 4) return null;
         if (indent > 4) {
-            if (!seenKeys.has('steps')) return false;
+            if (activeKey !== 'steps') return null;
             continue;
         }
-        if (indent !== 4) return false;
+        if (stepsStart !== null && stepsEnd === null) stepsEnd = index;
 
         const mapping = parseNarrowYamlMapping(line.slice(indent));
         if (!mapping || mapping.quoted || !allowedKeys.has(mapping.key)
-            || seenKeys.has(mapping.key)) return false;
-        if (mapping.key === 'steps' ? mapping.value : !mapping.value) return false;
+            || seenKeys.has(mapping.key)) return null;
+        if (mapping.key === 'steps' ? mapping.value : !mapping.value) return null;
         seenKeys.add(mapping.key);
+        activeKey = mapping.key;
+        if (mapping.key === 'steps') stepsStart = index;
     }
-    return seenKeys.size === allowedKeys.size
-        && [...allowedKeys].every(key => seenKeys.has(key));
+    if (seenKeys.size !== allowedKeys.size
+        || [...allowedKeys].some(key => !seenKeys.has(key))
+        || stepsStart === null) return null;
+    return {
+        lines,
+        stepsStart,
+        stepsEnd: stepsEnd ?? releaseGate.end,
+    };
+};
+
+const scanDirectRequiredSteps = releaseGate => {
+    const steps = new Map();
+    let index = releaseGate.stepsStart + 1;
+    while (index < releaseGate.stepsEnd) {
+        if (!releaseGate.lines[index].trim()) {
+            index += 1;
+            continue;
+        }
+        const indent = lineIndent(releaseGate.lines[index]);
+        if (indent !== 6 || !releaseGate.lines[index].trim().startsWith('- ')) return null;
+
+        const start = index;
+        let end = start + 1;
+        for (; end < releaseGate.stepsEnd; end += 1) {
+            if (!releaseGate.lines[end].trim()) continue;
+            const childIndent = lineIndent(releaseGate.lines[end]);
+            if (childIndent === null) return null;
+            if (childIndent === 6 && releaseGate.lines[end].trim().startsWith('- ')) break;
+            if (childIndent < 8) return null;
+        }
+
+        const stepName = releaseGate.lines[start].match(/^ {6}- +name:(?: +(.*))?$/);
+        if (stepName) {
+            const name = parseNarrowYamlScalar(stepName[1]);
+            if (name === null) return null;
+            if (requiredMigrationSteps.includes(name)) {
+                if (steps.has(name)) return null;
+                const step = parseWorkflowStep(
+                    releaseGate.lines,
+                    start,
+                    end,
+                    6,
+                    name === 'Built Chromium Worker save proof',
+                );
+                if (step === null) return null;
+                steps.set(name, step);
+            }
+        }
+        index = end;
+    }
+    return steps;
+};
+
+const extractNamedWorkflowStep = (workflow, name) => {
+    const releaseGate = scanReleaseGate(workflow);
+    const steps = releaseGate && scanDirectRequiredSteps(releaseGate);
+    return steps?.get(name) ?? null;
+};
+
+const releaseGateJobIsUnconditional = workflow => {
+    return scanReleaseGate(workflow) !== null;
 };
 
 const assertMigrationWorkflow = workflow => {
@@ -354,6 +437,35 @@ const addStepEntry = (workflow, stepName, entry) => {
     if (mutated === workflow) throw new Error(`Missing workflow step: ${stepName}`);
     return mutated;
 };
+
+const directStepBlock = (workflow, stepName) => {
+    const lines = workflow.split('\n');
+    const start = lines.findIndex(line => line === `      - name: ${stepName}`);
+    if (start === -1) throw new Error(`Missing direct workflow step: ${stepName}`);
+    let end = start + 1;
+    for (; end < lines.length; end += 1) {
+        if (!lines[end].trim()) continue;
+        const indent = lineIndent(lines[end]);
+        if (indent === null || indent <= 4
+            || (indent === 6 && lines[end].trim().startsWith('- '))) break;
+    }
+    return `${lines.slice(start, end).join('\n')}\n`;
+};
+
+const removeDirectSteps = (workflow, stepNames = requiredMigrationSteps) => stepNames.reduce(
+    (source, stepName) => source.replace(directStepBlock(source, stepName), ''),
+    workflow,
+);
+
+const disabledShadowJob = (stepBlocks, id = 'disabled-shadow') => `  ${id}:
+    if: false
+    runs-on: ubuntu-latest
+    steps:
+${stepBlocks.join('')}`;
+
+const insertSiblingJob = (workflow, job, position) => position === 'before'
+    ? workflow.replace('  release-gate:\n', `${job}  release-gate:\n`)
+    : `${workflow.trimEnd()}\n${job}`;
 
 describe('playwright config ports', () => {
     it('uses the selected API port instead of a stale ambient API base', () => {
@@ -546,5 +658,102 @@ describe('playwright config ports', () => {
         );
 
         expect(() => assertMigrationWorkflow(mutated)).toThrow();
+    });
+
+    it.each(['before', 'after'])(
+        'rejects required steps relocated to an if-false sibling %s release-gate',
+        position => {
+            const workflow = fs.readFileSync(workflowPath, 'utf8');
+            const blocks = requiredMigrationSteps.map(stepName => directStepBlock(workflow, stepName));
+            const relocated = insertSiblingJob(
+                removeDirectSteps(workflow),
+                disabledShadowJob(blocks),
+                position,
+            );
+
+            expect(() => assertMigrationWorkflow(relocated)).toThrow();
+        },
+    );
+
+    it.each(['before', 'after'])(
+        'ignores a same-name sibling shadow %s release-gate',
+        position => {
+            const workflow = fs.readFileSync(workflowPath, 'utf8');
+            const blocks = requiredMigrationSteps
+                .map(stepName => directStepBlock(workflow, stepName))
+                .map(block => block.replace('--project=chromium', '--project=chromium-shadow'));
+            const shadowed = insertSiblingJob(
+                workflow,
+                disabledShadowJob(blocks),
+                position,
+            );
+
+            expect(() => assertMigrationWorkflow(shadowed)).not.toThrow();
+        },
+    );
+
+    it.each([
+        [
+            'release-gate ID',
+            workflow => `${workflow.trimEnd()}\n  release-gate:\n    runs-on: ubuntu-latest\n    steps: []\n`,
+        ],
+        [
+            'mixed quoted release-gate ID',
+            workflow => `${workflow.trimEnd()}\n  'release-gate':\n    runs-on: ubuntu-latest\n    steps: []\n`,
+        ],
+        [
+            'sibling job ID',
+            workflow => `${workflow.trimEnd()}\n  duplicate-shadow:\n    runs-on: ubuntu-latest\n    steps: []\n  duplicate-shadow:\n    runs-on: ubuntu-latest\n    steps: []\n`,
+        ],
+    ])('rejects duplicate %s', (_case, mutate) => {
+        const workflow = fs.readFileSync(workflowPath, 'utf8');
+
+        expect(() => assertMigrationWorkflow(mutate(workflow))).toThrow();
+    });
+
+    it('rejects required names nested below a non-required step', () => {
+        const workflow = fs.readFileSync(workflowPath, 'utf8');
+        const blocks = requiredMigrationSteps.map(stepName => directStepBlock(workflow, stepName));
+        const nestedBlocks = blocks
+            .map(block => block.split('\n').map(line => line ? `      ${line}` : line).join('\n'))
+            .join('');
+        const nested = removeDirectSteps(workflow).replace(
+            '      - uses: actions/checkout@v4\n',
+            `      - uses: actions/checkout@v4
+        with:
+          misleading:
+${nestedBlocks}            - name: Nested sentinel
+              run: >-
+                true
+`,
+        );
+
+        expect(() => assertMigrationWorkflow(nested)).toThrow();
+    });
+
+    it.each([
+        ['single', "'"],
+        ['double', '"'],
+    ])('accepts a %s-quoted release-gate job ID', (_style, quote) => {
+        const workflow = fs.readFileSync(workflowPath, 'utf8').replace(
+            '  release-gate:',
+            `  ${quote}release-gate${quote}:`,
+        );
+
+        expect(() => assertMigrationWorkflow(workflow)).not.toThrow();
+    });
+
+    it.each(requiredMigrationSteps)('rejects missing direct step %s', stepName => {
+        const workflow = fs.readFileSync(workflowPath, 'utf8');
+        const missing = removeDirectSteps(workflow, [stepName]);
+
+        expect(() => assertMigrationWorkflow(missing)).toThrow();
+    });
+
+    it.each(requiredMigrationSteps)('rejects duplicate direct step %s', stepName => {
+        const workflow = fs.readFileSync(workflowPath, 'utf8');
+        const block = directStepBlock(workflow, stepName);
+
+        expect(() => assertMigrationWorkflow(workflow.replace(block, `${block}${block}`))).toThrow();
     });
 });
