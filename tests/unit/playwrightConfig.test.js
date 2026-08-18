@@ -16,6 +16,10 @@ const sourceProjects = [
     'workspace-large-chromium',
     'workspace-large-firefox',
 ];
+const requiredMigrationSteps = [
+    'Browser migration matrix',
+    'Built Chromium Worker save proof',
+];
 const completionMarkerVariable = '$E2E_BUILT_WORKER_COMPLETION_MARKER';
 const probeScript = `
 const config = require('./playwright.config.cjs');
@@ -79,6 +83,21 @@ const parseNarrowYamlScalar = source => {
 const lineIndent = line => {
     const spaces = line.match(/^ */)?.[0].length ?? 0;
     return line[spaces] === '\t' ? null : spaces;
+};
+
+const parseNarrowYamlMapping = source => {
+    for (let index = 0; index < source.length; index += 1) {
+        if (source[index] !== ':') continue;
+        const keySource = source.slice(0, index).trim();
+        const key = parseNarrowYamlScalar(keySource);
+        if (key === null || !/^[a-z][a-z0-9-]*$/.test(key)) continue;
+        return {
+            key,
+            quoted: keySource.startsWith("'") || keySource.startsWith('"'),
+            value: source.slice(index + 1).trim(),
+        };
+    }
+    return null;
 };
 
 const normalizeRunBlock = (lines, style, keyIndent) => {
@@ -186,22 +205,28 @@ const tokenizeShellCommands = script => {
     return commands.length ? commands : null;
 };
 
-const parseWorkflowStep = (lines, start, end, stepIndent) => {
+const parseWorkflowStep = (lines, start, end, stepIndent, allowEnv) => {
     const env = {};
     let commands = null;
+    const seenKeys = new Set(['name']);
     for (let index = start + 1; index < end; index += 1) {
         const indent = lineIndent(lines[index]);
         if (indent === null) return null;
-        if (!lines[index].trim() || indent !== stepIndent + 2) continue;
-        const key = lines[index].trim();
-        if (key === 'env:') {
+        if (!lines[index].trim()) continue;
+        if (indent !== stepIndent + 2) return null;
+        const mapping = parseNarrowYamlMapping(lines[index].slice(indent));
+        if (!mapping || mapping.quoted || seenKeys.has(mapping.key)) return null;
+        if (mapping.key === 'env') {
+            if (!allowEnv || mapping.value) return null;
+            seenKeys.add(mapping.key);
             let cursor = index + 1;
             for (; cursor < end; cursor += 1) {
                 const line = lines[cursor];
                 if (!line.trim()) continue;
                 const childIndent = lineIndent(line);
                 if (childIndent === null) return null;
-                if (childIndent <= stepIndent + 2) break;
+                if (childIndent === stepIndent + 2) break;
+                if (childIndent !== stepIndent + 4) return null;
                 const entry = line.slice(childIndent).match(/^([A-Z][A-Z0-9_]*):(?: +(.*))?$/);
                 if (!entry || Object.hasOwn(env, entry[1])) return null;
                 const value = parseNarrowYamlScalar(entry[2]);
@@ -212,16 +237,18 @@ const parseWorkflowStep = (lines, start, end, stepIndent) => {
             continue;
         }
 
-        const run = key.match(/^run: +([>|][+-]?)$/);
-        if (!run) continue;
-        if (commands !== null) return null;
+        if (mapping.key !== 'run') return null;
+        const run = mapping.value.match(/^([>|][+-]?)$/);
+        if (!run) return null;
+        seenKeys.add(mapping.key);
         let cursor = index + 1;
         const blockLines = [];
         for (; cursor < end; cursor += 1) {
             const line = lines[cursor];
             const childIndent = lineIndent(line);
             if (childIndent === null) return null;
-            if (line.trim() && childIndent <= stepIndent + 2) break;
+            if (line.trim() && childIndent === stepIndent + 2) break;
+            if (line.trim() && childIndent < stepIndent + 2) return null;
             blockLines.push(line);
         }
         const script = normalizeRunBlock(blockLines, run[1], stepIndent + 2);
@@ -230,7 +257,11 @@ const parseWorkflowStep = (lines, start, end, stepIndent) => {
         if (commands === null) return null;
         index = cursor - 1;
     }
-    return commands === null ? null : { env, commands };
+    const expectedKeys = allowEnv ? ['name', 'env', 'run'] : ['name', 'run'];
+    return commands === null || expectedKeys.some(key => !seenKeys.has(key))
+        || seenKeys.size !== expectedKeys.length
+        ? null
+        : { env, commands };
 };
 
 const extractNamedWorkflowStep = (workflow, name) => {
@@ -248,12 +279,48 @@ const extractNamedWorkflowStep = (workflow, name) => {
                 break;
             }
         }
-        return parseWorkflowStep(lines, start, end, stepIndent);
+        return parseWorkflowStep(
+            lines,
+            start,
+            end,
+            stepIndent,
+            name === 'Built Chromium Worker save proof',
+        );
     }
     return null;
 };
 
+const releaseGateJobIsUnconditional = workflow => {
+    const lines = workflow.split(/\r?\n/);
+    const start = lines.findIndex(line => line === '  release-gate:');
+    if (start === -1) return false;
+
+    const allowedKeys = new Set(['runs-on', 'timeout-minutes', 'steps']);
+    const seenKeys = new Set();
+    for (let index = start + 1; index < lines.length; index += 1) {
+        const line = lines[index];
+        if (!line.trim()) continue;
+        const indent = lineIndent(line);
+        if (indent === null) return false;
+        if (indent <= 2) break;
+        if (indent > 4) {
+            if (!seenKeys.has('steps')) return false;
+            continue;
+        }
+        if (indent !== 4) return false;
+
+        const mapping = parseNarrowYamlMapping(line.slice(indent));
+        if (!mapping || mapping.quoted || !allowedKeys.has(mapping.key)
+            || seenKeys.has(mapping.key)) return false;
+        if (mapping.key === 'steps' ? mapping.value : !mapping.value) return false;
+        seenKeys.add(mapping.key);
+    }
+    return seenKeys.size === allowedKeys.size
+        && [...allowedKeys].every(key => seenKeys.has(key));
+};
+
 const assertMigrationWorkflow = workflow => {
+    expect(releaseGateJobIsUnconditional(workflow)).toBe(true);
     expect(extractNamedWorkflowStep(workflow, 'Browser migration matrix')).toEqual({
         env: {},
         commands: [[
@@ -279,6 +346,13 @@ const assertMigrationWorkflow = workflow => {
             ['test', '-s', completionMarkerVariable],
         ],
     });
+};
+
+const addStepEntry = (workflow, stepName, entry) => {
+    const marker = `      - name: ${stepName}\n`;
+    const mutated = workflow.replace(marker, `${marker}${entry}`);
+    if (mutated === workflow) throw new Error(`Missing workflow step: ${stepName}`);
+    return mutated;
 };
 
 describe('playwright config ports', () => {
@@ -389,5 +463,88 @@ describe('playwright config ports', () => {
         );
 
         expect(extractNamedWorkflowStep(workflow, 'Built Chromium Worker save proof')).toBeNull();
+    });
+
+    it.each(requiredMigrationSteps.flatMap(stepName => [
+        ['if', stepName, '        if: false\n'],
+        ['continue-on-error', stepName, '        continue-on-error: true\n'],
+        ['timeout-minutes', stepName, '        timeout-minutes: 1\n'],
+        ['shell', stepName, '        shell: bash\n'],
+        ['working-directory', stepName, '        working-directory: tests\n'],
+        ['quoted if', stepName, '        "if": false\n'],
+        ['uses', stepName, '        uses: example/action@v1\n'],
+    ]))('rejects unmodeled %s on %s', (_case, stepName, entry) => {
+        const workflow = fs.readFileSync(workflowPath, 'utf8');
+        const mutated = addStepEntry(workflow, stepName, entry);
+
+        expect(extractNamedWorkflowStep(mutated, stepName)).toBeNull();
+    });
+
+    it.each(requiredMigrationSteps)(
+        'rejects a duplicate name on %s',
+        stepName => {
+            const workflow = fs.readFileSync(workflowPath, 'utf8');
+            const mutated = addStepEntry(workflow, stepName, '        name: Duplicate gate\n');
+
+            expect(extractNamedWorkflowStep(mutated, stepName)).toBeNull();
+        },
+    );
+
+    it.each(requiredMigrationSteps)(
+        'rejects a duplicate run on %s',
+        stepName => {
+            const workflow = fs.readFileSync(workflowPath, 'utf8');
+            const mutated = addStepEntry(workflow, stepName, '        run: >-\n          true\n');
+
+            expect(extractNamedWorkflowStep(mutated, stepName)).toBeNull();
+        },
+    );
+
+    it('rejects env on the source matrix and duplicate env on the built proof', () => {
+        const workflow = fs.readFileSync(workflowPath, 'utf8');
+        const sourceEnv = addStepEntry(
+            workflow,
+            'Browser migration matrix',
+            "        env:\n          E2E_BUILT_BUNDLE: '1'\n",
+        );
+        const duplicateBuiltEnv = workflow.replace(
+            '        run: |\n',
+            '        env:\n          DUPLICATE: value\n        run: |\n',
+        );
+
+        expect(extractNamedWorkflowStep(sourceEnv, 'Browser migration matrix')).toBeNull();
+        expect(extractNamedWorkflowStep(duplicateBuiltEnv, 'Built Chromium Worker save proof'))
+            .toBeNull();
+    });
+
+    it('rejects malformed step and env indentation', () => {
+        const workflow = fs.readFileSync(workflowPath, 'utf8');
+        const malformedStep = addStepEntry(
+            workflow,
+            'Browser migration matrix',
+            '         if: false\n',
+        );
+        const malformedEnv = workflow.replace(
+            '          E2E_BUILT_BUNDLE:',
+            '         E2E_BUILT_BUNDLE:',
+        );
+
+        expect(extractNamedWorkflowStep(malformedStep, 'Browser migration matrix')).toBeNull();
+        expect(extractNamedWorkflowStep(malformedEnv, 'Built Chromium Worker save proof'))
+            .toBeNull();
+    });
+
+    it.each([
+        ['if', '    if: false\n'],
+        ['continue-on-error', '    continue-on-error: true\n'],
+        ['quoted if', '    "if": false\n'],
+    ])('rejects release-gate job-level %s', (_case, entry) => {
+        const workflow = fs.readFileSync(workflowPath, 'utf8');
+        const mutated = workflow.replace(
+            '  release-gate:\n',
+            `  release-gate:\n${entry}`,
+        );
+
+        expect(() => assertMigrationWorkflow(mutated)).toThrow();
     });
 });
