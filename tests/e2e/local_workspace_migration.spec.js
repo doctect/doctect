@@ -3,6 +3,7 @@ import {
     readActiveProject,
     readBootstrapResult,
     readWorkspace,
+    seedNativeProject,
     updateActiveProject,
 } from './localWorkspaceHelpers.js';
 import {
@@ -10,6 +11,7 @@ import {
     WORKSPACE_STORE_NAMES,
     armLegacyStorageEvent,
     createChangedLegacyWorkspace,
+    createLargeLegacyWorkspace,
     downloadJson,
     holdVersionOneWorkspaceDatabase,
     inspectWorkspaceDatabase,
@@ -23,6 +25,7 @@ import {
     installInitialCopyAbort,
     installInitialCopyCorruption,
     installPerformanceCapture,
+    installProjectPreparationWorkerCapture,
     legacyRawFromBundle,
     mountVersionTwoWorkspaceGate,
     navigateSpaToEditor,
@@ -523,5 +526,100 @@ test.describe('local workspace migration release gate', () => {
             }, null, 2)),
             contentType: 'application/json',
         });
+    });
+
+    test('coalesces near-limit saves before one real module-Worker preparation and survives reload', async ({ page, browserName }, testInfo) => {
+        test.skip(browserName !== 'chromium', 'Production module-Worker persistence proof is Chromium-only.');
+        test.setTimeout(120_000);
+        await installProjectPreparationWorkerCapture(page);
+        await page.goto('/');
+        const large = await createLargeLegacyWorkspace(page);
+        const nearLimitProject = large.projects[0];
+        expect(large.nearLimitStateBytes).toBeGreaterThan(MAX_STATE_BYTES - 2048);
+        await seedNativeProject(page, nearLimitProject);
+        await page.goto('/app');
+        await expect(editorPane(page).first()).toBeVisible();
+
+        const measurement = await page.evaluate(async () => {
+            const { localWorkspaceStore } = await import('/services/localWorkspace/index.ts');
+            const { inheritInstalledProjectAuthority } = await import(
+                '/services/localWorkspace/projectAuthority.ts'
+            );
+            const bootstrap = await localWorkspaceStore.bootstrap();
+            if (bootstrap.status !== 'ready') throw new Error(`workspace ${bootstrap.status}`);
+            const current = bootstrap.snapshot.projects.find(
+                project => project.id === bootstrap.snapshot.activeProjectId,
+            );
+            if (!current) throw new Error('Active near-limit project is missing.');
+            const names = ['Burst one', 'Burst two', 'Burst latest'];
+
+            const cloneStartedAt = performance.now();
+            const cloneOnly = names.map(name => ({ ...structuredClone(current), name }));
+            const cloneOnlyMs = performance.now() - cloneStartedAt;
+            let checksum = 0;
+            for (const cloned of cloneOnly) checksum += cloned.name.length;
+
+            const payloads = names.map(name => {
+                const payload = { ...structuredClone(current), name };
+                inheritInstalledProjectAuthority(payload, current);
+                return payload;
+            });
+            const admissionStartedAt = performance.now();
+            const saves = payloads.map(project => localWorkspaceStore.commit({
+                type: 'save-project',
+                project,
+            }));
+            const admissionMs = performance.now() - admissionStartedAt;
+            const immediateWorkers = globalThis.__workspaceProjectPreparationWorkers.workers.length;
+            await Promise.resolve();
+            const microtaskWorkers = globalThis.__workspaceProjectPreparationWorkers.workers.length;
+            const results = await Promise.all(saves);
+            const capture = globalThis.__workspaceProjectPreparationWorkers;
+            return {
+                admissionMs,
+                checksum,
+                cloneOnlyMs,
+                immediateWorkers,
+                microtaskWorkers,
+                sharedReadback: results.every(result => result === results[0]),
+                latestName: results[0].projects.find(project => project.id === current.id)?.name,
+                workers: capture.workers,
+                requests: capture.requests,
+                responses: capture.responses,
+            };
+        });
+
+        await testInfo.attach('workspace-save-admission.json', {
+            body: Buffer.from(JSON.stringify({
+                admissionMs: measurement.admissionMs,
+                cloneOnlyMs: measurement.cloneOnlyMs,
+                ratio: measurement.admissionMs / measurement.cloneOnlyMs,
+                nearLimitStateBytes: large.nearLimitStateBytes,
+                workers: measurement.workers.length,
+                requests: measurement.requests,
+                responses: measurement.responses,
+            }, null, 2)),
+            contentType: 'application/json',
+        });
+        expect(measurement.cloneOnlyMs).toBeGreaterThan(0);
+        expect(measurement.checksum).toBeGreaterThan(0);
+        // Admission may cost at most 2.5x an equal clone-only burst; validation is excluded.
+        expect(measurement.admissionMs).toBeLessThanOrEqual(measurement.cloneOnlyMs * 2.5);
+        expect(measurement.immediateWorkers).toBe(0);
+        expect(measurement.microtaskWorkers).toBe(0);
+        expect(measurement.sharedReadback).toBe(true);
+        expect(measurement.latestName).toBe('Burst latest');
+        expect(measurement.workers).toHaveLength(1);
+        expect(measurement.workers[0]).toMatchObject({ type: 'module' });
+        expect(measurement.workers[0].url).toContain('projectPreparationWorker');
+        expect(measurement.requests).toBe(1);
+        expect(measurement.responses).toBe(1);
+        const inspection = await inspectWorkspaceDatabase(page);
+        expect(inspection.records.projects.find(record => record.id === nearLimitProject.id))
+            .toMatchObject({ storageRevision: 1, project: { name: 'Burst latest' } });
+
+        await page.reload();
+        await expect(editorPane(page).first()).toBeVisible();
+        expect((await readActiveProject(page)).name).toBe('Burst latest');
     });
 });

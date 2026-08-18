@@ -15,11 +15,13 @@ import { createMemoryRouter, RouterProvider } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AppState } from '../../types';
 import {
-  createLocalWorkspaceStore,
   type LocalWorkspaceEnvironment,
   type WorkspaceProject,
   type WorkspaceSnapshot,
 } from '../../services/localWorkspace/index';
+import {
+  createLocalWorkspaceStoreForTesting as createLocalWorkspaceStore,
+} from '../../services/localWorkspace/LocalWorkspaceStore';
 import { createIndexedDbAdapter } from '../../services/localWorkspace/indexedDbAdapter';
 import {
   getInstalledProjectAuthorityToken,

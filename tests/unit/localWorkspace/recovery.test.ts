@@ -11,10 +11,10 @@ import {
   it,
   vi,
 } from 'vitest';
+import type { LocalWorkspaceEnvironment } from '../../../services/localWorkspace';
 import {
-  createLocalWorkspaceStore,
-  type LocalWorkspaceEnvironment,
-} from '../../../services/localWorkspace';
+  createLocalWorkspaceStoreForTesting as createLocalWorkspaceStore,
+} from '../../../services/localWorkspace/LocalWorkspaceStore';
 import type {
   LocalWorkspaceStore,
   WorkspaceBootstrapResult,

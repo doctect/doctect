@@ -4,7 +4,6 @@ import {
   type WorkspaceProject,
   type WorkspaceSnapshot,
 } from './contracts';
-import { cloneWorkspaceSnapshotWithProjectAuthority } from './projectAuthority';
 import {
   nextProjectLineage,
   sameProjectLineage,
@@ -32,6 +31,7 @@ export interface MutationQueue {
 }
 
 interface MutationOperations {
+  prepareProject(project: WorkspaceProject): Promise<WorkspaceProject>;
   saveProject(
     project: WorkspaceProject,
     expectedLineage: ProjectLineage,
@@ -75,9 +75,6 @@ const lineageError = (projectId: string): WorkspaceStoreError => new WorkspaceSt
   'conflict',
 );
 
-const cloneSnapshot = (snapshot: WorkspaceSnapshot): WorkspaceSnapshot =>
-  cloneWorkspaceSnapshotWithProjectAuthority(snapshot);
-
 const SAVE_DEBOUNCE_MS = 1_000;
 
 export const createMutationQueue = (
@@ -92,7 +89,8 @@ export const createMutationQueue = (
   let frozen = false;
 
   const settleSuccess = (waiters: Waiter[], snapshot: WorkspaceSnapshot): void => {
-    for (const waiter of waiters) waiter.resolve(cloneSnapshot(snapshot));
+    // One physical readback settles a coalesced operation. Returned snapshots are immutable.
+    for (const waiter of waiters) waiter.resolve(snapshot);
   };
 
   const settleFailure = (waiters: Waiter[], error: unknown): void => {
@@ -152,7 +150,9 @@ export const createMutationQueue = (
       ? pinnedLineage
         && sameProjectLineage(pinnedLineage, entry.expectedLineage)
         && authorityCanReachExpected
-        ? operations.saveProject(entry.project, entry.expectedLineage)
+        ? Promise.resolve()
+            .then(() => operations.prepareProject(entry.project))
+            .then(project => operations.saveProject(project, entry.expectedLineage))
         : Promise.reject(lineageError(entry.project.id))
       : entry.admission.kind === 'close'
         ? closePinnedLineage

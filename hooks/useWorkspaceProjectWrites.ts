@@ -107,14 +107,14 @@ export function useWorkspaceProjectWrites(
 
   const publishWorkspace = useCallback((snapshot: WorkspaceSnapshot) => {
     hasPublishedWorkspaceRef.current = true;
-    onWorkspaceChangeRef.current?.(structuredClone(snapshot));
+    onWorkspaceChangeRef.current?.(snapshot);
     setWorkspace(snapshot);
   }, []);
 
   useEffect(() => {
     if (hasPublishedWorkspaceRef.current) return;
     hasPublishedWorkspaceRef.current = true;
-    onWorkspaceChangeRef.current?.(structuredClone(initialWorkspace));
+    onWorkspaceChangeRef.current?.(initialWorkspace);
   }, [initialWorkspace]);
 
   const reconcileSnapshot = useCallback((

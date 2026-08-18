@@ -45,6 +45,9 @@ describe('project revision lineages', () => {
     vi.useFakeTimers();
     const calls: Array<{ name: string; expectedLineage: ProjectLineage }> = [];
     const queue = createMutationQueue({
+      async prepareProject(project) {
+        return project;
+      },
       async saveProject(project, expectedLineage) {
         calls.push({ name: project.name, expectedLineage });
         return snapshotWith(project);
@@ -66,6 +69,9 @@ describe('project revision lineages', () => {
     vi.useFakeTimers();
     const calls: Array<{ name: string; expectedLineage: ProjectLineage }> = [];
     const queue = createMutationQueue({
+      async prepareProject(project) {
+        return project;
+      },
       async saveProject(project, expectedLineage) {
         calls.push({ name: project.name, expectedLineage });
         return snapshotWith(project);
@@ -92,6 +98,9 @@ describe('project revision lineages', () => {
     vi.useFakeTimers();
     const calls: Array<{ name: string; expectedLineage: ProjectLineage }> = [];
     const queue = createMutationQueue({
+      async prepareProject(project) {
+        return project;
+      },
       async saveProject(project, expectedLineage) {
         calls.push({ name: project.name, expectedLineage });
         return snapshotWith(project);
@@ -120,6 +129,9 @@ describe('project revision lineages', () => {
     const started = deferred();
     const calls: Array<{ project: WorkspaceProject; expectedLineage: ProjectLineage }> = [];
     const queue = createMutationQueue({
+      async prepareProject(project) {
+        return project;
+      },
       saveProject(project, expectedLineage) {
         calls.push({ project, expectedLineage });
         if (calls.length === 1) {
@@ -149,6 +161,9 @@ describe('project revision lineages', () => {
     const started = deferred();
     const calls: Array<{ name: string; expectedLineage: ProjectLineage }> = [];
     const queue = createMutationQueue({
+      async prepareProject(project) {
+        return project;
+      },
       saveProject(project, expectedLineage) {
         calls.push({ name: project.name, expectedLineage });
         if (calls.length === 1) {
@@ -183,6 +198,9 @@ describe('project revision lineages', () => {
     const started = deferred();
     const calls: Array<{ name: string; expectedLineage: ProjectLineage }> = [];
     const queue = createMutationQueue({
+      async prepareProject(project) {
+        return project;
+      },
       saveProject(project, expectedLineage) {
         calls.push({ name: project.name, expectedLineage });
         if (calls.length === 1) {
@@ -217,6 +235,9 @@ describe('project revision lineages', () => {
     const started = deferred();
     const calls: ProjectLineage[] = [];
     const queue = createMutationQueue({
+      async prepareProject(project) {
+        return project;
+      },
       saveProject(project, expectedLineage) {
         calls.push(expectedLineage);
         if (calls.length === 1) {
@@ -249,6 +270,9 @@ describe('project revision lineages', () => {
   it('does not coalesce a replacement incarnation into an admitted save', async () => {
     vi.useFakeTimers();
     const queue = createMutationQueue({
+      async prepareProject(project) {
+        return project;
+      },
       async saveProject(project) {
         return snapshotWith(project);
       },
@@ -270,6 +294,9 @@ describe('project revision lineages', () => {
     vi.useFakeTimers();
     const exclusiveAdmissions: unknown[] = [];
     const queue = createMutationQueue({
+      async prepareProject(project) {
+        return project;
+      },
       async saveProject() {
         throw new Error('Canceled save must not dispatch.');
       },
@@ -300,6 +327,9 @@ describe('project revision lineages', () => {
     const started = deferred();
     const exclusiveAdmissions: unknown[] = [];
     const queue = createMutationQueue({
+      async prepareProject(project) {
+        return project;
+      },
       saveProject(project) {
         started.resolve();
         return firstWrite.promise.then(() => snapshotWith(project));
@@ -334,6 +364,9 @@ describe('project revision lineages', () => {
     const started = deferred();
     const runExclusive = vi.fn();
     const queue = createMutationQueue({
+      async prepareProject(project) {
+        return project;
+      },
       saveProject() {
         started.resolve();
         return firstWrite.promise;
@@ -355,5 +388,155 @@ describe('project revision lineages', () => {
 
     await Promise.all([saveAssertion, closeAssertion]);
     expect(runExclusive).not.toHaveBeenCalled();
+  });
+});
+
+describe('deferred project preparation', () => {
+  it('clones at admission, then prepares and writes only the newest burst payload', async () => {
+    vi.useFakeTimers();
+    const prepareProject = vi.fn(async (project: WorkspaceProject) => ({
+      ...project,
+      name: `${project.name} prepared`,
+    }));
+    const saveProject = vi.fn(async (project: WorkspaceProject) => snapshotWith(project));
+    const queue = createMutationQueue({
+      prepareProject,
+      saveProject,
+      async runExclusive() {
+        throw new Error('Unexpected exclusive command.');
+      },
+    });
+    const firstPayload = projectNamed('First');
+
+    const first = queue.enqueueProjectSave(firstPayload, lineage(0));
+    firstPayload.name = 'Mutated after admission';
+    const newestPayload = projectNamed('Newest');
+    const newest = queue.enqueueProjectSave(newestPayload, lineage(0));
+    newestPayload.name = 'Also mutated after admission';
+
+    await vi.advanceTimersByTimeAsync(999);
+    expect(prepareProject).not.toHaveBeenCalled();
+    expect(saveProject).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await Promise.all([first, newest]);
+
+    expect(prepareProject).toHaveBeenCalledOnce();
+    expect(prepareProject).toHaveBeenCalledWith(expect.objectContaining({ name: 'Newest' }));
+    expect(saveProject).toHaveBeenCalledOnce();
+    expect(saveProject).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'Newest prepared' }),
+      lineage(0),
+    );
+  });
+
+  it('shares one immutable physical snapshot across every coalesced waiter', async () => {
+    vi.useFakeTimers();
+    const physicalSnapshot = snapshotWith(projectNamed('Physical readback'));
+    const queue = createMutationQueue({
+      async prepareProject(project) {
+        return project;
+      },
+      async saveProject() {
+        return physicalSnapshot;
+      },
+      async runExclusive() {
+        throw new Error('Unexpected exclusive command.');
+      },
+    });
+
+    const first = queue.enqueueProjectSave(projectNamed('First'), lineage(0));
+    const second = queue.enqueueProjectSave(projectNamed('Second'), lineage(0));
+    await vi.advanceTimersByTimeAsync(1_000);
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+
+    expect(firstResult).toBe(physicalSnapshot);
+    expect(secondResult).toBe(physicalSnapshot);
+  });
+
+  it('rejects every coalesced waiter with the same preparation failure and never writes', async () => {
+    vi.useFakeTimers();
+    const failure = new WorkspaceStoreError('Worker preparation failed.', 'validation');
+    const saveProject = vi.fn(async (project: WorkspaceProject) => snapshotWith(project));
+    const queue = createMutationQueue({
+      async prepareProject() {
+        throw failure;
+      },
+      saveProject,
+      async runExclusive() {
+        throw new Error('Unexpected exclusive command.');
+      },
+    });
+
+    const first = queue.enqueueProjectSave(projectNamed('First'), lineage(0));
+    const second = queue.enqueueProjectSave(projectNamed('Second'), lineage(0));
+    const outcomes = Promise.all([
+      first.then(() => undefined, error => error),
+      second.then(() => undefined, error => error),
+    ]);
+    await vi.advanceTimersByTimeAsync(1_000);
+    const [firstError, secondError] = await outcomes;
+
+    expect(firstError).toBe(failure);
+    expect(secondError).toBe(failure);
+    expect(saveProject).not.toHaveBeenCalled();
+  });
+
+  it('cancels deferred preparation on close and settles all canceled waiters from its readback', async () => {
+    vi.useFakeTimers();
+    const prepareProject = vi.fn();
+    const closeSnapshot = snapshotWith(projectNamed('Closed readback'));
+    const queue = createMutationQueue({
+      prepareProject,
+      async saveProject() {
+        throw new Error('Canceled save must not dispatch.');
+      },
+      async runExclusive() {
+        return closeSnapshot;
+      },
+    });
+
+    const first = queue.enqueueProjectSave(projectNamed('First'), lineage(0));
+    const second = queue.enqueueProjectSave(projectNamed('Second'), lineage(0));
+    const close = queue.runExclusive({
+      kind: 'close',
+      command: { type: 'close-project', projectId: 'project-a' },
+      targetLineage: lineage(0),
+    });
+    const [firstResult, secondResult, closeResult] = await Promise.all([first, second, close]);
+
+    expect(prepareProject).not.toHaveBeenCalled();
+    expect(firstResult).toBe(closeSnapshot);
+    expect(secondResult).toBe(closeSnapshot);
+    expect(closeResult).toBe(closeSnapshot);
+  });
+
+  it('freezes new admission while deferred accepted work prepares and drain waits for settlement', async () => {
+    vi.useFakeTimers();
+    const prepareProject = vi.fn(async (project: WorkspaceProject) => project);
+    const queue = createMutationQueue({
+      prepareProject,
+      async saveProject(project) {
+        return snapshotWith(project);
+      },
+      async runExclusive() {
+        throw new Error('Unexpected exclusive command.');
+      },
+    });
+
+    const accepted = queue.enqueueProjectSave(projectNamed('Accepted'), lineage(0));
+    queue.freeze();
+    await expect(queue.enqueueProjectSave(projectNamed('Rejected'), lineage(0)))
+      .rejects.toMatchObject({ code: 'authority-lost' });
+    let drained = false;
+    const drain = queue.drain().then(() => { drained = true; });
+
+    await vi.advanceTimersByTimeAsync(999);
+    expect(prepareProject).not.toHaveBeenCalled();
+    expect(drained).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await Promise.all([accepted, drain]);
+
+    expect(prepareProject).toHaveBeenCalledOnce();
+    expect(drained).toBe(true);
   });
 });

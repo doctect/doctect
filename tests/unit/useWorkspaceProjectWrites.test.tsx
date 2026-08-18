@@ -88,6 +88,24 @@ describe('useWorkspaceProjectWrites', () => {
     });
   });
 
+  it('publishes its visible workspace by identity so the gate owns the protected clone', () => {
+    const pending = new Promise<WorkspaceSnapshot>(() => {});
+    const store = storeWithCommit(() => pending);
+    const onWorkspaceChange = vi.fn();
+    const { result } = renderHook(() => useWorkspaceProjectWrites(
+      store,
+      snapshot(),
+      onWorkspaceChange,
+    ));
+    const working = project('Single-copy publication', 14);
+
+    act(() => { void result.current.updateProject('project-1', () => working); });
+
+    const published = onWorkspaceChange.mock.calls.at(-1)?.[0];
+    expect(published).toBe(result.current.workspace);
+    expect(published.projects[0]).toBe(working);
+  });
+
   it('publishes the initial visible workspace once under StrictMode without writing', () => {
     const initial = snapshot();
     const store = storeWithCommit(async () => initial);
@@ -702,6 +720,8 @@ describe('useWorkspaceProjectWrites', () => {
   it.each([
     ['quota', 'failed'],
     ['io', 'failed'],
+    ['unavailable', 'failed'],
+    ['validation', 'failed'],
     ['conflict', 'conflict'],
   ] as const)('preserves working state after a %s error', async (code, status) => {
     const store = storeWithCommit(async () => {

@@ -149,6 +149,7 @@ export class WorkspaceStoreError extends Error {
 
 export interface LocalWorkspaceStore {
   bootstrap(observer?: WorkspaceBootstrapObserver): Promise<WorkspaceBootstrapResult>;
+  /** Returned snapshots are authority-bearing, shared readbacks and must be treated as immutable. */
   commit(command: WorkspaceCommand): Promise<WorkspaceSnapshot>;
   exportRecoveryBundle(source: RecoverySource): Promise<Blob>;
 }

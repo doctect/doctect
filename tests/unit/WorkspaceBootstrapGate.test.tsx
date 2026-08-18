@@ -716,6 +716,38 @@ describe('WorkspaceBootstrapGate', () => {
     }, 'doctect-open-workspace.json');
   });
 
+  it('clones project-edit publication before synchronous authority-loss unmount', async () => {
+    const store = fakeReadyStore();
+    const published = workspaceSnapshot({
+      projects: [{ ...workspaceSnapshot().projects[0], name: 'Captured before unmount' }],
+    });
+    const expected = structuredClone(published);
+    const renderEditor = ({ onWorkspaceChange }: WorkspaceEditorMount) => (
+      <button
+        data-testid="editor-page"
+        onClick={() => {
+          onWorkspaceChange(published);
+          published.projects[0].name = 'Caller mutation after publication';
+          store.emitAuthorityLost(recoveryResult(splitBrainRecovery()));
+        }}
+      >
+        Publish and lose authority
+      </button>
+    );
+    render(<WorkspaceBootstrapGate store={store} renderEditor={renderEditor} />);
+
+    fireEvent.click(await screen.findByTestId('editor-page'));
+    expect(screen.queryByTestId('editor-page')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Download open work' }));
+
+    expect(downloadJson).toHaveBeenCalledWith({
+      format: 'doctect.open-workspace-recovery',
+      version: 1,
+      capturedAt: expect.any(String),
+      workspace: expected,
+    }, 'doctect-open-workspace.json');
+  });
+
   it('seeds a verified initial snapshot before an editor publishes', async () => {
     const initial = workspaceSnapshot({
       projects: [{ ...workspaceSnapshot().projects[0], name: 'Verified initial work' }],

@@ -51,9 +51,9 @@ import {
   cloneWorkspaceSnapshotWithProjectAuthority,
   getInstalledProjectAuthorityLineage,
   getInstalledProjectAuthorityToken,
-  inheritInstalledProjectAuthority,
   registerInstalledProjectAuthority,
 } from './projectAuthority';
+import { prepareProjectInModuleWorker } from './projectPreparationClient';
 import {
   createIndexedDbRecoveryBundle,
   createLegacyRecoveryBundle,
@@ -88,6 +88,8 @@ export interface LocalWorkspaceEnvironment {
   createBlankProject(): AppState;
   fault?: FaultInjector;
 }
+
+type ProjectPreparation = (project: WorkspaceProject) => Promise<WorkspaceProject>;
 
 type AuthorityState =
   | 'cold'
@@ -433,6 +435,7 @@ const verificationError = (message: string): WorkspaceMigrationError =>
 const createLocalWorkspaceStoreAtVersion = (
   environment: LocalWorkspaceEnvironment,
   requestedIndexedDbVersion: number,
+  prepareProjectForSave: ProjectPreparation,
 ): LocalWorkspaceStore => {
   let authority: AuthorityState = 'cold';
   let inFlight: Promise<WorkspaceBootstrapResult> | undefined;
@@ -1371,14 +1374,11 @@ const createLocalWorkspaceStoreAtVersion = (
     return incarnation;
   };
 
-  const prepareCommand = (command: WorkspaceCommand): WorkspaceCommand => {
+  type NonSaveWorkspaceCommand = Exclude<WorkspaceCommand, { type: 'save-project' }>;
+
+  const prepareCommand = (command: NonSaveWorkspaceCommand): NonSaveWorkspaceCommand => {
     try {
       switch (command.type) {
-        case 'save-project': {
-          const project = validateWorkspaceProject(command.project, { warningPolicy: 'reject' });
-          inheritInstalledProjectAuthority(project, command.project);
-          return { ...command, project };
-        }
         case 'create-and-activate-project':
           return {
             ...command,
@@ -1525,6 +1525,27 @@ const createLocalWorkspaceStoreAtVersion = (
       );
     }
     return expectedWorkspaceRevision;
+  };
+
+  const prepareAdmittedProjectSave = async (
+    project: WorkspaceProject,
+  ): Promise<WorkspaceProject> => {
+    try {
+      const prepared = await prepareProjectForSave(project);
+      if (prepared === null
+        || typeof prepared !== 'object'
+        || prepared.id !== project.id) {
+        throw new WorkspaceStoreError(
+          'Prepared project identity does not match its admitted save.',
+          'validation',
+        );
+      }
+      return prepared;
+    } catch (error) {
+      throw error instanceof WorkspaceStoreError
+        ? error
+        : new WorkspaceStoreError('Workspace project preparation failed.', 'validation', error);
+    }
   };
 
   const executeProjectSave = (
@@ -1895,6 +1916,7 @@ const createLocalWorkspaceStoreAtVersion = (
   };
 
   const createCommandQueue = (): MutationQueue => createMutationQueue({
+    prepareProject: prepareAdmittedProjectSave,
     saveProject: executeProjectSave,
     runExclusive: executeExclusiveCommand,
     onFailedProjectLineageUnpinned(projectId) {
@@ -2002,7 +2024,45 @@ const createLocalWorkspaceStoreAtVersion = (
           'authority-lost',
         ));
       }
-      let prepared: WorkspaceCommand;
+      if (command.type === 'save-project') {
+        const project = command.project;
+        let projectId: string;
+        let authorityLineage: ProjectLineage;
+        try {
+          if (project === null || typeof project !== 'object') {
+            throw new WorkspaceStoreError(
+              'Workspace project must be an object.',
+              'validation',
+            );
+          }
+          projectId = requireCommandId(project.id, 'Project id');
+          if (!expectedProjectLineages.has(projectId)) {
+            throw new WorkspaceStoreError(`Project ${projectId} does not exist.`, 'validation');
+          }
+          const installedLineage = getInstalledProjectAuthorityLineage(project);
+          if (installedLineage === undefined) {
+            throw new WorkspaceStoreError(
+              `Project ${projectId} save authority is unavailable.`,
+              'conflict',
+            );
+          }
+          authorityLineage = installedLineage;
+        } catch (error) {
+          return Promise.reject(validationError(error));
+        }
+        try {
+          return queue.enqueueProjectSave(project, authorityLineage);
+        } catch (error) {
+          return Promise.reject(error instanceof WorkspaceStoreError
+            ? error
+            : new WorkspaceStoreError(
+                `Project ${projectId} could not be cloned for save admission.`,
+                'clone',
+                error,
+              ));
+        }
+      }
+      let prepared: NonSaveWorkspaceCommand;
       try {
         prepared = prepareCommand(command);
       } catch (error) {
@@ -2022,27 +2082,7 @@ const createLocalWorkspaceStoreAtVersion = (
           targetLineage: { ...targetLineage },
         });
       }
-      if (prepared.type !== 'save-project') {
-        return queue.runExclusive({ kind: 'command', command: prepared });
-      }
-      const expectedLineage = expectedProjectLineages.get(prepared.project.id);
-      if (expectedLineage === undefined) {
-        return Promise.reject(new WorkspaceStoreError(
-          `Project ${prepared.project.id} does not exist.`,
-          'validation',
-        ));
-      }
-      const authorityLineage = getInstalledProjectAuthorityLineage(prepared.project);
-      if (authorityLineage === undefined) {
-        return Promise.reject(new WorkspaceStoreError(
-          `Project ${prepared.project.id} save authority is unavailable.`,
-          'conflict',
-        ));
-      }
-      return queue.enqueueProjectSave(
-        prepared.project,
-        authorityLineage,
-      );
+      return queue.runExclusive({ kind: 'command', command: prepared });
     },
 
     async exportRecoveryBundle(source: RecoverySource): Promise<Blob> {
@@ -2119,13 +2159,19 @@ export const createLocalWorkspaceStore = (
 ): LocalWorkspaceStore => createLocalWorkspaceStoreAtVersion(
   environment,
   WORKSPACE_DB_VERSION,
+  prepareProjectInModuleWorker,
 );
 
-// Real-browser upgrade tests import this module directly; public barrel stays production-only.
+const prepareProjectForTesting: ProjectPreparation = async project =>
+  validateWorkspaceProject(project, { warningPolicy: 'reject' });
+
+// Tests import this module directly; public barrel stays production module-Worker-only.
 export const createLocalWorkspaceStoreForTesting = (
   environment: LocalWorkspaceEnvironment,
-  requestedIndexedDbVersion: number,
+  requestedIndexedDbVersion = WORKSPACE_DB_VERSION,
+  prepareProject: ProjectPreparation = prepareProjectForTesting,
 ): LocalWorkspaceStore => createLocalWorkspaceStoreAtVersion(
   environment,
   requestedIndexedDbVersion,
+  prepareProject,
 );

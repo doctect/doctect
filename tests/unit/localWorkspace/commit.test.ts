@@ -13,16 +13,18 @@ import {
   vi,
 } from 'vitest';
 import {
-  createLocalWorkspaceStore,
+  createLocalWorkspaceStore as createProductionLocalWorkspaceStore,
   type LocalWorkspaceEnvironment,
 } from '../../../services/localWorkspace';
-import type {
-  LocalWorkspaceStore,
-  WorkspaceCommand,
-  WorkspaceCustomPreset,
-  WorkspaceImportInput,
-  WorkspaceProject,
-  WorkspaceSnapshot,
+import { createLocalWorkspaceStoreForTesting } from '../../../services/localWorkspace/LocalWorkspaceStore';
+import {
+  WorkspaceStoreError,
+  type LocalWorkspaceStore,
+  type WorkspaceCommand,
+  type WorkspaceCustomPreset,
+  type WorkspaceImportInput,
+  type WorkspaceProject,
+  type WorkspaceSnapshot,
 } from '../../../services/localWorkspace/contracts';
 import type { WorkspaceFaultPoint } from '../../../services/localWorkspace/faults';
 import {
@@ -35,6 +37,7 @@ import {
 } from '../../../services/localWorkspace/canonical';
 import {
   WORKSPACE_DB_NAME,
+  WORKSPACE_DB_VERSION,
   storedProjectLineage,
 } from '../../../services/localWorkspace/schema';
 import {
@@ -317,6 +320,7 @@ const NO_FAULT = Symbol('no-fault');
 interface HarnessOptions {
   values?: Record<string, string>;
   hook?: TransactionHook;
+  prepareProject?: (project: WorkspaceProject) => Promise<WorkspaceProject>;
 }
 
 interface Harness {
@@ -365,6 +369,15 @@ const createHarness = (options: HarnessOptions = {}): Harness => {
   };
 };
 
+const createLocalWorkspaceStore = (
+  environment: LocalWorkspaceEnvironment,
+  prepareProject?: (project: WorkspaceProject) => Promise<WorkspaceProject>,
+): LocalWorkspaceStore => createLocalWorkspaceStoreForTesting(
+  environment,
+  WORKSPACE_DB_VERSION,
+  prepareProject,
+);
+
 const readyStore = async (
   options: HarnessOptions = {},
 ): Promise<{
@@ -373,7 +386,7 @@ const readyStore = async (
   snapshot: WorkspaceSnapshot;
 }> => {
   const harness = createHarness(options);
-  const store = createLocalWorkspaceStore(harness.environment);
+  const store = createLocalWorkspaceStore(harness.environment, options.prepareProject);
   const result = await store.bootstrap();
   expect(result.status).toBe('ready');
   if (result.status !== 'ready') throw new Error(`Expected ready, got ${result.status}.`);
@@ -638,12 +651,144 @@ describe('project save queues', () => {
     await vi.advanceTimersByTimeAsync(1);
 
     const [firstResult, secondResult] = await Promise.all([first, second]);
+    expect(firstResult).toBe(secondResult);
+    expect(getInstalledProjectAuthorityToken(
+      firstResult.projects.find(project => project.id === source.id)!,
+    )).toBe(getInstalledProjectAuthorityToken(source));
     expect(firstResult.projects.find(project => project.id === 'project-a')?.name).toBe('B');
     expect(secondResult.projects.find(project => project.id === 'project-a')?.name).toBe('B');
     expect((await inspect(harness)).projects.find(record => record.id === 'project-a'))
       .toMatchObject({ project: { name: 'B' }, storageRevision: 1 });
     expect(writeTransactions(harness.records).filter(record =>
       sameStores(record.stores, ['projects', 'migrationLedger']))).toHaveLength(1);
+    expect(harness.records.filter(record =>
+      record.mode === 'readonly' && sameStores(record.stores, READ_ALL_SCOPE))).toHaveLength(1);
+  });
+
+  it('admits cloned bytes before debounce and prepares only the newest physical payload', async () => {
+    const prepareProject = vi.fn(async (project: WorkspaceProject) => structuredClone(project));
+    const { store, harness, snapshot } = await readyStore({ prepareProject });
+    const source = snapshot.projects.find(project => project.id === 'project-a')!;
+    const firstPayload = structuredClone(source);
+    firstPayload.name = 'First admitted';
+    inheritInstalledProjectAuthority(firstPayload, source);
+    const newestPayload = structuredClone(source);
+    newestPayload.name = 'Newest admitted';
+    inheritInstalledProjectAuthority(newestPayload, source);
+    useQueueTimers();
+
+    const first = store.commit({ type: 'save-project', project: firstPayload });
+    firstPayload.name = 'Mutated first caller bytes';
+    firstPayload.initialState.nodes[firstPayload.initialState.rootId].title = 'Mutated first state';
+    const newest = store.commit({ type: 'save-project', project: newestPayload });
+    newestPayload.name = 'Mutated newest caller bytes';
+    newestPayload.initialState.nodes[newestPayload.initialState.rootId].title = 'Mutated newest state';
+
+    await vi.advanceTimersByTimeAsync(999);
+    expect(prepareProject).not.toHaveBeenCalled();
+    expect(writeTransactions(harness.records)).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(1);
+    const [firstResult, newestResult] = await Promise.all([first, newest]);
+
+    expect(prepareProject).toHaveBeenCalledOnce();
+    expect(prepareProject).toHaveBeenCalledWith(expect.objectContaining({
+      name: 'Newest admitted',
+    }));
+    expect(firstResult).toBe(newestResult);
+    expect(firstResult.projects.find(project => project.id === source.id)).toMatchObject({
+      name: 'Newest admitted',
+      initialState: {
+        nodes: {
+          [source.initialState.rootId]: {
+            title: source.initialState.nodes[source.initialState.rootId].title,
+          },
+        },
+      },
+    });
+    expect(writeTransactions(harness.records).filter(record =>
+      sameStores(record.stores, ['projects', 'migrationLedger']))).toHaveLength(1);
+  });
+
+  it('defers full invalid-project rejection until physical preparation', async () => {
+    const { store, harness, snapshot } = await readyStore();
+    const invalid = trustedProjectNamed(snapshot.projects[0], 'Future schema');
+    invalid.initialState = {
+      ...invalid.initialState,
+      schemaVersion: 12,
+    } as WorkspaceProject['initialState'];
+    useQueueTimers();
+    let settled = false;
+
+    const save = store.commit({ type: 'save-project', project: invalid });
+    const outcome = save.then(
+      value => ({ status: 'fulfilled' as const, value }),
+      error => ({ status: 'rejected' as const, error }),
+    ).finally(() => { settled = true; });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(999);
+    expect(settled).toBe(false);
+    expect(writeTransactions(harness.records)).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(outcome).resolves.toMatchObject({
+      status: 'rejected',
+      error: { code: 'validation' },
+    });
+    expect(writeTransactions(harness.records)).toHaveLength(0);
+  });
+
+  it('rejects all coalesced waiters with one preparation failure and performs no write', async () => {
+    const failure = new WorkspaceStoreError('Preparation worker failed.', 'unavailable');
+    const prepareProject = vi.fn(async (): Promise<WorkspaceProject> => { throw failure; });
+    const { store, harness, snapshot } = await readyStore({ prepareProject });
+    const source = snapshot.projects[0];
+    useQueueTimers();
+
+    const first = store.commit({
+      type: 'save-project',
+      project: trustedProjectNamed(source, 'First'),
+    });
+    const second = store.commit({
+      type: 'save-project',
+      project: trustedProjectNamed(source, 'Second'),
+    });
+    const outcomes = Promise.all([
+      first.then(() => undefined, error => error),
+      second.then(() => undefined, error => error),
+    ]);
+    await vi.advanceTimersByTimeAsync(1_000);
+    const [firstError, secondError] = await outcomes;
+
+    expect(prepareProject).toHaveBeenCalledOnce();
+    expect(firstError).toBe(failure);
+    expect(secondError).toBe(failure);
+    expect(writeTransactions(harness.records)).toHaveLength(0);
+    expect((await inspect(harness)).projects.find(record => record.id === source.id)?.project.name)
+      .toBe(source.name);
+  });
+
+  it('fails closed when production project preparation Worker is unsupported', async () => {
+    expect(globalThis.Worker).toBeUndefined();
+    const harness = createHarness();
+    const store = createProductionLocalWorkspaceStore(harness.environment);
+    const bootstrap = await store.bootstrap();
+    expect(bootstrap.status).toBe('ready');
+    if (bootstrap.status !== 'ready') return;
+    const before = await inspect(harness);
+    harness.records.length = 0;
+    useQueueTimers();
+
+    const save = store.commit({
+      type: 'save-project',
+      project: trustedProjectNamed(bootstrap.snapshot.projects[0], 'Must not persist'),
+    });
+    const saveAssertion = expect(save).rejects.toMatchObject({ code: 'unavailable' });
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    await saveAssertion;
+    expect(writeTransactions(harness.records)).toHaveLength(0);
+    expect(await inspect(harness)).toEqual(before);
   });
 
   it('retains exactly one newest follow-up while a project save is in flight', async () => {

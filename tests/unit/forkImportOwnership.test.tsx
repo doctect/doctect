@@ -5,7 +5,9 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WorkspaceBootstrapGate } from '../../components/workspace/WorkspaceBootstrapGate';
 import { trackEvent } from '../../services/analytics';
-import { createLocalWorkspaceStore } from '../../services/localWorkspace/LocalWorkspaceStore';
+import {
+  createLocalWorkspaceStoreForTesting as createLocalWorkspaceStore,
+} from '../../services/localWorkspace/LocalWorkspaceStore';
 import type {
   LocalWorkspaceStore,
   WorkspaceSnapshot,

@@ -617,3 +617,34 @@ export const readPerformanceCapture = page => page.evaluate(() => {
         longTasks: capture.longTasks,
     };
 });
+
+export const installProjectPreparationWorkerCapture = page => page.addInitScript(() => {
+    const NativeWorker = globalThis.Worker;
+    const capture = {
+        workers: [],
+        requests: 0,
+        responses: 0,
+    };
+    globalThis.__workspaceProjectPreparationWorkers = capture;
+    globalThis.Worker = new Proxy(NativeWorker, {
+        construct(Target, args) {
+            const worker = Reflect.construct(Target, args);
+            capture.workers.push({
+                url: String(args[0]),
+                type: args[1]?.type ?? null,
+            });
+            const postMessage = worker.postMessage.bind(worker);
+            worker.postMessage = (...postArgs) => {
+                if (postArgs[0]?.type === 'prepare-project') capture.requests += 1;
+                return postMessage(...postArgs);
+            };
+            worker.addEventListener('message', event => {
+                if (event.data?.type === 'project-prepared'
+                    || event.data?.type === 'project-preparation-failed') {
+                    capture.responses += 1;
+                }
+            });
+            return worker;
+        },
+    });
+});

@@ -17,10 +17,12 @@ import {
   vi,
 } from 'vitest';
 import {
-  createLocalWorkspaceStore,
   localWorkspaceStore,
   type LocalWorkspaceEnvironment,
 } from '../../../services/localWorkspace';
+import {
+  createLocalWorkspaceStoreForTesting as createLocalWorkspaceStore,
+} from '../../../services/localWorkspace/LocalWorkspaceStore';
 import type {
   WorkspaceBootstrapObserver,
   WorkspaceBootstrapResult,
