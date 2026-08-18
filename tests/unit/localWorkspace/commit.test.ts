@@ -265,6 +265,41 @@ const pendingImport = (
   createdAt: TEST_NOW,
 });
 
+const forkAttempt = (payloadDigit: string) => ({
+  sourceKeyDigest: '1'.repeat(64),
+  payloadDigest: payloadDigit.repeat(64),
+});
+
+const forkPendingImport = (
+  owner: 'a' | 'b',
+  id = `fork-import-${owner}`,
+  targetProjectId = `fork-target-${owner}`,
+): WorkspaceImportInput => ({
+  ...pendingImport(id, targetProjectId),
+  name: `Account ${owner.toUpperCase()} fork`,
+  cloud: {
+    projectId: `private-project-${owner}`,
+    lastSyncedCommitId: `private-commit-${owner}`,
+  },
+});
+
+const replaceForkImportCommand = (
+  oldPending = forkPendingImport('a'),
+  replacement = forkPendingImport('b'),
+): Extract<WorkspaceCommand, { type: 'replace-staged-import' }> => ({
+  type: 'replace-staged-import',
+  expected: {
+    importId: oldPending.id,
+    targetProjectId: oldPending.targetProjectId,
+    createdAt: oldPending.createdAt,
+    ...forkAttempt('2'),
+  },
+  replacement: {
+    pendingImport: replacement,
+    attemptProvenance: forkAttempt('3'),
+  },
+});
+
 const twoProjectValues = (): Record<string, string> => validLegacyValues({
   [LEGACY_KEYS.projects]: JSON.stringify([legacyProject(), secondProject()]),
   [LEGACY_KEYS.activeProject]: 'project-a',
@@ -1308,6 +1343,157 @@ describe('preset and import commands', () => {
       ...command,
       pendingImport: { ...command.pendingImport, createdAt: '2026-08-14T17:00:01.000Z' },
     })).rejects.toMatchObject({ code: 'conflict' });
+  });
+
+  it('replaces a fork pending import while keeping provenance private', async () => {
+    const { store, harness } = await readyStore();
+    const oldPending = forkPendingImport('a');
+    await store.commit({
+      type: 'stage-import',
+      pendingImport: oldPending,
+      attemptProvenance: forkAttempt('2'),
+    });
+
+    const replaced = await store.commit(replaceForkImportCommand(oldPending));
+
+    const forkPending = replaced.pendingImports.filter(item => item.id.startsWith('fork-import-'));
+    expect(forkPending).toHaveLength(1);
+    expect(forkPending[0]).toMatchObject({
+      id: 'fork-import-b',
+      targetProjectId: 'fork-target-b',
+      cloud: {
+        projectId: 'private-project-b',
+        lastSyncedCommitId: 'private-commit-b',
+      },
+    });
+    expect(Object.hasOwn(forkPending[0], 'attemptProvenance')).toBe(false);
+    expect(JSON.stringify(replaced)).not.toContain('private-project-a');
+    expect(JSON.stringify(replaced)).not.toContain('private-commit-a');
+    const durable = await inspect(harness);
+    expect(durable.pendingImports.find(record => record.id === 'fork-import-b')
+      ?.attemptProvenance).toEqual({
+      ...forkAttempt('3'),
+      pendingImportDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+    });
+
+    const recovery = JSON.parse(await (await store.exportRecoveryBundle('indexeddb-workspace')).text());
+    expect(JSON.stringify(recovery)).not.toContain('attemptProvenance');
+    expect(JSON.stringify(recovery)).not.toContain('consumedImportAttempt');
+    expect(JSON.stringify(recovery)).not.toContain('private-project-a');
+    expect(JSON.stringify(recovery)).not.toContain('private-commit-a');
+  });
+
+  it('adds a fork replacement when the old attempt never committed', async () => {
+    const { store, harness } = await readyStore();
+
+    const replaced = await store.commit(replaceForkImportCommand());
+
+    expect(replaced.pendingImports.filter(item => item.id === 'fork-import-b')).toHaveLength(1);
+    expect((await inspect(harness)).pendingImports.filter(record =>
+      record.id === 'fork-import-b')).toHaveLength(1);
+  });
+
+  it('reconciles an exact fork replacement after post-commit readback loss', async () => {
+    let failPostCommitRead = false;
+    const hook: TransactionHook = (stores, mode) => {
+      if (failPostCommitRead && mode === 'readonly' && sameStores(stores, READ_ALL_SCOPE)) {
+        failPostCommitRead = false;
+        throw new Error('Injected post-replacement read failure.');
+      }
+    };
+    const { store, harness } = await readyStore({ hook });
+    const oldPending = forkPendingImport('a');
+    await store.commit({
+      type: 'stage-import',
+      pendingImport: oldPending,
+      attemptProvenance: forkAttempt('2'),
+    });
+    const command = replaceForkImportCommand(oldPending);
+    failPostCommitRead = true;
+
+    await expect(store.commit(command)).rejects.toMatchObject({ code: 'io' });
+    expect((await inspect(harness)).pendingImports.map(record => record.id))
+      .toContain('fork-import-b');
+
+    const reloaded = createLocalWorkspaceStore(harness.environment);
+    await expect(reloaded.bootstrap()).resolves.toMatchObject({ status: 'ready' });
+    const reconciled = await reloaded.commit(structuredClone(command));
+    expect(reconciled.pendingImports.filter(item => item.id === 'fork-import-b')).toHaveLength(1);
+    expect(reconciled.pendingImports.some(item => item.id === 'fork-import-a')).toBe(false);
+  });
+
+  it('reconciles an exact consumed fork replacement without another project', async () => {
+    const { store, harness } = await readyStore();
+    const oldPending = forkPendingImport('a');
+    await store.commit({
+      type: 'stage-import',
+      pendingImport: oldPending,
+      attemptProvenance: forkAttempt('2'),
+    });
+    const command = replaceForkImportCommand(oldPending);
+    await store.commit(command);
+    await store.commit({ type: 'consume-import', importId: 'fork-import-b' });
+
+    const reconciled = await store.commit(structuredClone(command));
+
+    expect(reconciled.pendingImports.some(item => item.id.startsWith('fork-import-'))).toBe(false);
+    expect(reconciled.projects.filter(project => project.id === 'fork-target-b')).toHaveLength(1);
+    expect(reconciled.projects.some(project => project.id === 'fork-target-a')).toBe(false);
+    const durable = await inspect(harness);
+    expect(durable.projects.find(record => record.id === 'fork-target-b')?.consumedImportAttempt)
+      .toEqual({
+        ...forkAttempt('3'),
+        pendingImportDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+      });
+    expect(Object.hasOwn(
+      reconciled.projects.find(project => project.id === 'fork-target-b')!,
+      'consumedImportAttempt',
+    )).toBe(false);
+  });
+
+  it('rolls back a fork replacement fault without deleting the old pending import', async () => {
+    const { store, harness } = await readyStore();
+    const oldPending = forkPendingImport('a');
+    await store.commit({
+      type: 'stage-import',
+      pendingImport: oldPending,
+      attemptProvenance: forkAttempt('2'),
+    });
+    harness.setFault(new DOMException('No space.', 'QuotaExceededError'));
+
+    await expect(store.commit(replaceForkImportCommand(oldPending)))
+      .rejects.toMatchObject({ code: 'quota' });
+
+    const durable = await inspect(harness);
+    expect(durable.pendingImports.some(record => record.id === 'fork-import-a')).toBe(true);
+    expect(durable.pendingImports.some(record => record.id === 'fork-import-b')).toBe(false);
+  });
+
+  it('serializes store consume against fork replacement so only one wins', async () => {
+    const harness = createHarness();
+    const left = createLocalWorkspaceStore(harness.environment);
+    const right = createLocalWorkspaceStore(harness.environment);
+    await left.bootstrap();
+    await right.bootstrap();
+    const oldPending = forkPendingImport('a');
+    await left.commit({
+      type: 'stage-import',
+      pendingImport: oldPending,
+      attemptProvenance: forkAttempt('2'),
+    });
+    await right.bootstrap();
+
+    const results = await Promise.allSettled([
+      left.commit({ type: 'consume-import', importId: oldPending.id }),
+      right.commit(replaceForkImportCommand(oldPending)),
+    ]);
+
+    expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1);
+    const durable = await inspect(harness);
+    const consumedA = durable.projects.some(record => record.id === oldPending.targetProjectId);
+    const pendingB = durable.pendingImports.some(record => record.id === 'fork-import-b');
+    expect([consumedA, pendingB].filter(Boolean)).toHaveLength(1);
+    expect(durable.pendingImports.some(record => record.id === oldPending.id)).toBe(false);
   });
 
   it('reconciles an exact stage retry after post-commit read failure and later consumption', async () => {

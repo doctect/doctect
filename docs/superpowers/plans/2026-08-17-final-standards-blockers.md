@@ -13,6 +13,9 @@
 3. Replay the authenticated fork endpoint on every retry. Let server owner-scoped idempotency return/create the current user's fork, then fetch/stage only that fresh result.
 4. Retain attempt until durable local staging succeeds. Preserve existing error handling and once-per-consumed-import analytics behavior.
 5. Verify fork unit/server tests, import tests, boundary, typecheck, and build. Commit independently.
+6. Review follow-up: derive fork staging identity from the public source project ID and retained idempotency key, not returned private project or commit IDs. Keep generic import changed-payload retries conflicting; supersession is fork-only.
+7. Atomically replace an exact ambiguously committed fork pending import, or reconcile the exact replacement if it is already pending or consumed. Persist only hash provenance, carry it privately through consumption, and reject changed records, collisions, ambiguous provenance, and consume-versus-replace races without deleting the prior pending import.
+8. Add a real fork-to-import-to-bootstrap regression proving account B leaves one B import/project and one analytics event, while account A private metadata is absent from session metadata, durable records, public snapshots, and recovery exports. Re-run focused storage/fork/import/server tests, boundary, bounded full units, typecheck, build, and generated parity; commit the review fix independently.
 
 ## Task 2: Reserve Alternate Browser Capabilities
 

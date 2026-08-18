@@ -106,7 +106,10 @@ export async function stageForkImport(sourceProjectId: string): Promise<string> 
       state: commit.state,
       cloud: { projectId: project.id, lastSyncedCommitId: commit.id },
     },
-    { sourceKey: `gallery-fork:${project.id}:${commit.id}` },
+    {
+      sourceKey: `gallery-fork:${sourceProjectId}:${attempt.idempotencyKey}`,
+      replaceRetainedForkAttempt: true,
+    },
   );
   clearAttempt(attempt);
   return importId;

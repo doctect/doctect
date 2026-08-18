@@ -132,7 +132,10 @@ describe('stageForkImport', () => {
           lastSyncedCommitId: 'account-b-head-of-source-1',
         },
       },
-      { sourceKey: 'gallery-fork:account-b-fork-of-source-1:account-b-head-of-source-1' },
+      {
+        sourceKey: `gallery-fork:source-1:${firstKey}`,
+        replaceRetainedForkAttempt: true,
+      },
     );
   });
 
@@ -173,7 +176,10 @@ describe('stageForkImport', () => {
           lastSyncedCommitId: 'account-b-head-of-source-1',
         },
       },
-      { sourceKey: 'gallery-fork:account-b-fork-of-source-1:account-b-head-of-source-1' },
+      {
+        sourceKey: `gallery-fork:source-1:${firstKey}`,
+        replaceRetainedForkAttempt: true,
+      },
     ]);
     expect(stageImport.mock.calls[1]).not.toEqual(stageImport.mock.calls[0]);
     expect(window.sessionStorage.length).toBe(0);

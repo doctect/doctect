@@ -474,6 +474,23 @@ describe('target reconstruction', () => {
     malformedDigest.projects[0].consumedImportDigest = 'not-a-sha256-digest';
     expect(() => reconstructWorkspace(malformedDigest)).toThrow(/digest.*sha-256/i);
   });
+
+  it('rejects consumed fork attempt provenance with a different pending digest', async () => {
+    const prepared = await prepareInitialCopy(validSource(), deterministicEnvironment({
+      crypto: webcrypto as Crypto,
+    }));
+    const records: any = recordsFrom(prepared);
+    records.projects[0].consumedImportId = 'fork-import';
+    records.projects[0].consumedImportCreatedAt = '2026-08-15T12:00:00.000Z';
+    records.projects[0].consumedImportDigest = 'a'.repeat(64);
+    records.projects[0].consumedImportAttempt = {
+      sourceKeyDigest: 'b'.repeat(64),
+      payloadDigest: 'c'.repeat(64),
+      pendingImportDigest: 'd'.repeat(64),
+    };
+
+    expect(() => reconstructWorkspace(records)).toThrow(/attempt.*pending.*digest.*match/i);
+  });
 });
 
 describe('prepared-copy verification', () => {

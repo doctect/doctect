@@ -1,6 +1,7 @@
 import type { DBSchema } from 'idb';
 import type {
   WorkspaceCustomPreset,
+  WorkspaceImportAttemptProvenance,
   WorkspacePendingImport,
   WorkspaceProject,
 } from './contracts';
@@ -25,6 +26,7 @@ export interface StoredProject {
   consumedImportId?: string;
   consumedImportCreatedAt?: string;
   consumedImportDigest?: string;
+  consumedImportAttempt?: StoredImportAttemptProvenance;
 }
 
 export const storedProjectLineage = (
@@ -61,6 +63,11 @@ export interface StoredPendingImport {
   id: string;
   pendingImport: WorkspacePendingImport;
   position: number;
+  attemptProvenance?: StoredImportAttemptProvenance;
+}
+
+export interface StoredImportAttemptProvenance extends WorkspaceImportAttemptProvenance {
+  pendingImportDigest: string;
 }
 
 export interface KeyFingerprint {

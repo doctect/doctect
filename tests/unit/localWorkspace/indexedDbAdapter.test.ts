@@ -1,5 +1,6 @@
 // @vitest-environment node
 import 'fake-indexeddb/auto';
+import { webcrypto } from 'node:crypto';
 import {
   IDBDatabase as FakeIDBDatabase,
   IDBFactory,
@@ -12,6 +13,10 @@ import type {
   WorkspaceProject,
 } from '../../../services/localWorkspace/contracts';
 import { WorkspaceStoreError } from '../../../services/localWorkspace/contracts';
+import {
+  canonicalStringify,
+  sha256Hex,
+} from '../../../services/localWorkspace/canonical';
 import type { WorkspaceFaultPoint } from '../../../services/localWorkspace/faults';
 import {
   createIndexedDbAdapter,
@@ -161,6 +166,7 @@ const createTestAdapter = (options: TestAdapterOptions = {}): IndexedDbAdapter =
   const adapter = createIndexedDbAdapter({
     indexedDB: options.indexedDB ?? new IDBFactory(),
     now: options.now ?? (() => TEST_NOW),
+    crypto: webcrypto as unknown as Crypto,
     onAuthorityLost: options.onAuthorityLost,
     fault: options.fault ?? (point => {
       if (point === options.faultPoint) {
@@ -242,6 +248,19 @@ const seedRawRecord = async (
   database.close();
 };
 
+const deleteRawRecord = async (
+  indexedDB: IDBFactory,
+  name: string,
+  storeName: StoreName,
+  key: IDBValidKey,
+): Promise<void> => {
+  const database = await openRaw(indexedDB, name);
+  const transaction = database.transaction(storeName, 'readwrite');
+  transaction.objectStore(storeName).delete(key);
+  await transactionDone(transaction);
+  database.close();
+};
+
 const verificationExpectation = (copy: PreparedInitialCopy) => ({
   ledgerRevision: copy.ledger.ledgerRevision,
   sourceDigest: copy.ledger.sourceDigest,
@@ -267,6 +286,76 @@ const lineageOf = (
   incarnation: record.incarnation,
   revision: record.storageRevision,
 });
+
+const forkReplacement = async (copy: PreparedInitialCopy) => {
+  const oldPending: WorkspacePendingImport = {
+    ...structuredClone(copy.pendingImports[0].pendingImport),
+    id: 'fork-import-a',
+    targetProjectId: 'fork-target-a',
+    name: 'Account A fork',
+    cloud: { projectId: 'private-a', lastSyncedCommitId: 'private-commit-a' },
+  };
+  const replacement: WorkspacePendingImport = {
+    ...structuredClone(oldPending),
+    id: 'fork-import-b',
+    targetProjectId: 'fork-target-b',
+    name: 'Account B fork',
+    cloud: { projectId: 'private-b', lastSyncedCommitId: 'private-commit-b' },
+  };
+  const sourceKeyDigest = '1'.repeat(64);
+  const oldPayloadDigest = '2'.repeat(64);
+  const replacementPayloadDigest = '3'.repeat(64);
+  const subtle = (webcrypto as unknown as Crypto).subtle;
+  const oldPendingDigest = await sha256Hex(canonicalStringify(oldPending), subtle);
+  const replacementDigest = await sha256Hex(canonicalStringify(replacement), subtle);
+  return {
+    oldPending,
+    oldPendingDigest,
+    oldAttempt: { sourceKeyDigest, payloadDigest: oldPayloadDigest },
+    replacement,
+    replacementDigest,
+    request: {
+      expected: {
+        importId: oldPending.id,
+        targetProjectId: oldPending.targetProjectId,
+        createdAt: oldPending.createdAt,
+        sourceKeyDigest,
+        payloadDigest: oldPayloadDigest,
+      },
+      replacement,
+      replacementDigest,
+      replacementAttempt: {
+        sourceKeyDigest,
+        payloadDigest: replacementPayloadDigest,
+      },
+    },
+  };
+};
+
+const preparedConsumption = (
+  pending: WorkspacePendingImport,
+  digest: string,
+) => {
+  const project = {
+    id: pending.targetProjectId,
+    name: pending.name,
+    initialState: pending.state,
+    ...(pending.cloud ? { cloud: pending.cloud } : {}),
+  };
+  return {
+    pendingImportIdentity: JSON.stringify(pending),
+    project: {
+      id: project.id,
+      project,
+      incarnation: `consumed-${pending.id}`,
+      storageRevision: 0,
+      updatedAt: TEST_NOW,
+      consumedImportId: pending.id,
+      consumedImportCreatedAt: pending.createdAt,
+      consumedImportDigest: digest,
+    } as StoredProject,
+  };
+};
 
 const WRITE_OPERATIONS = [
   ['initial copy', (adapter: IndexedDbAdapter, copy: PreparedInitialCopy) =>
@@ -934,6 +1023,285 @@ describe('normal mutation compare-and-swap', () => {
       ...structuredClone(pending),
       name: 'Conflicting consumed import',
     } as WorkspacePendingImport, 'b'.repeat(64))).rejects.toMatchObject({ code: 'conflict' });
+  });
+
+  it('atomically replaces an exact fork pending import at the same position', async () => {
+    const adapter = createTestAdapter();
+    const copy = preparedCopy();
+    await copyAndVerify(adapter, copy);
+    const fixture = await forkReplacement(copy);
+    await adapter.stageImport(fixture.oldPending, fixture.oldPendingDigest, fixture.oldAttempt);
+    const before = await adapter.inspect();
+    const oldPosition = before.pendingImports
+      .find(record => record.id === fixture.oldPending.id)?.position;
+
+    await expect(adapter.replaceStagedImport(fixture.request)).resolves.toBeUndefined();
+
+    const stored = await adapter.inspect();
+    expect(stored.pendingImports.some(record => record.id === fixture.oldPending.id)).toBe(false);
+    expect(stored.pendingImports.find(record => record.id === fixture.replacement.id)).toEqual({
+      id: fixture.replacement.id,
+      pendingImport: fixture.replacement,
+      position: oldPosition,
+      attemptProvenance: {
+        ...fixture.request.replacementAttempt,
+        pendingImportDigest: fixture.replacementDigest,
+      },
+    });
+  });
+
+  it('adds the replacement when the old fork attempt never committed', async () => {
+    const adapter = createTestAdapter();
+    const copy = preparedCopy();
+    await copyAndVerify(adapter, copy);
+    const fixture = await forkReplacement(copy);
+
+    await expect(adapter.replaceStagedImport(fixture.request)).resolves.toBeUndefined();
+
+    const stored = (await adapter.inspect()).pendingImports
+      .sort((left, right) => left.position - right.position);
+    expect(stored.map(record => record.id)).toEqual([
+      copy.pendingImports[0].id,
+      fixture.replacement.id,
+    ]);
+    expect(stored[1].position).toBe(1);
+  });
+
+  it('accepts an exact replacement pending replay without duplicating it', async () => {
+    const adapter = createTestAdapter();
+    const copy = preparedCopy();
+    await copyAndVerify(adapter, copy);
+    const fixture = await forkReplacement(copy);
+    await adapter.stageImport(fixture.oldPending, fixture.oldPendingDigest, fixture.oldAttempt);
+    await adapter.replaceStagedImport(fixture.request);
+
+    await expect(adapter.replaceStagedImport(fixture.request)).resolves.toBeUndefined();
+
+    const stored = await adapter.inspect();
+    expect(stored.pendingImports.filter(record => record.id === fixture.replacement.id))
+      .toHaveLength(1);
+  });
+
+  it('accepts concurrent exact replacement retries without duplicating them', async () => {
+    const indexedDB = new IDBFactory();
+    const left = createTestAdapter({ indexedDB });
+    const right = createTestAdapter({ indexedDB });
+    const copy = preparedCopy();
+    await Promise.all([left.open(), right.open()]);
+    await copyAndVerify(left, copy);
+    const fixture = await forkReplacement(copy);
+    await left.stageImport(fixture.oldPending, fixture.oldPendingDigest, fixture.oldAttempt);
+
+    await expect(Promise.all([
+      left.replaceStagedImport(structuredClone(fixture.request)),
+      right.replaceStagedImport(structuredClone(fixture.request)),
+    ])).resolves.toEqual([undefined, undefined]);
+
+    const stored = await left.inspect();
+    expect(stored.pendingImports.filter(record => record.id === fixture.replacement.id))
+      .toHaveLength(1);
+    expect(stored.pendingImports.some(record => record.id === fixture.oldPending.id)).toBe(false);
+  });
+
+  it('accepts an exact consumed replacement replay with private provenance', async () => {
+    const adapter = createTestAdapter();
+    const copy = preparedCopy();
+    await copyAndVerify(adapter, copy);
+    const fixture = await forkReplacement(copy);
+    await adapter.stageImport(fixture.oldPending, fixture.oldPendingDigest, fixture.oldAttempt);
+    await adapter.replaceStagedImport(fixture.request);
+    await adapter.consumeImport(
+      fixture.replacement.id,
+      copy.workspace.revision,
+      preparedConsumption(fixture.replacement, fixture.replacementDigest),
+    );
+
+    await expect(adapter.replaceStagedImport(fixture.request)).resolves.toBeUndefined();
+
+    const consumed = (await adapter.inspect()).projects
+      .find(record => record.id === fixture.replacement.targetProjectId);
+    expect(consumed?.consumedImportAttempt).toEqual({
+      ...fixture.request.replacementAttempt,
+      pendingImportDigest: fixture.replacementDigest,
+    });
+  });
+
+  it('rejects consumption when fork pending digest provenance changed', async () => {
+    const indexedDB = new IDBFactory();
+    const adapter = createTestAdapter({ indexedDB });
+    const copy = preparedCopy();
+    await copyAndVerify(adapter, copy);
+    const fixture = await forkReplacement(copy);
+    await adapter.stageImport(fixture.oldPending, fixture.oldPendingDigest, fixture.oldAttempt);
+    const stored = (await adapter.inspect()).pendingImports
+      .find(record => record.id === fixture.oldPending.id)!;
+    await seedRawRecord(indexedDB, WORKSPACE_DB_NAME, 'pendingImports', {
+      ...stored,
+      attemptProvenance: {
+        ...stored.attemptProvenance,
+        pendingImportDigest: 'f'.repeat(64),
+      },
+    });
+
+    await expect(adapter.consumeImport(
+      fixture.oldPending.id,
+      copy.workspace.revision,
+      preparedConsumption(fixture.oldPending, fixture.oldPendingDigest),
+    )).rejects.toMatchObject({ code: 'conflict' });
+
+    const after = await adapter.inspect();
+    expect(after.pendingImports.some(record => record.id === fixture.oldPending.id)).toBe(true);
+    expect(after.projects.some(record => record.id === fixture.oldPending.targetProjectId)).toBe(false);
+  });
+
+  it('rejects replacement when the old pending payload changed without matching provenance', async () => {
+    const indexedDB = new IDBFactory();
+    const adapter = createTestAdapter({ indexedDB });
+    const copy = preparedCopy();
+    await copyAndVerify(adapter, copy);
+    const fixture = await forkReplacement(copy);
+    await adapter.stageImport(fixture.oldPending, fixture.oldPendingDigest, fixture.oldAttempt);
+    const stored = (await adapter.inspect()).pendingImports
+      .find(record => record.id === fixture.oldPending.id)!;
+    await seedRawRecord(indexedDB, WORKSPACE_DB_NAME, 'pendingImports', {
+      ...stored,
+      pendingImport: { ...stored.pendingImport, name: 'Tampered account A fork' },
+    });
+
+    await expect(adapter.replaceStagedImport(fixture.request))
+      .rejects.toMatchObject({ code: 'conflict' });
+    expect((await adapter.inspect()).pendingImports.find(record => record.id === stored.id))
+      .toMatchObject({ pendingImport: { name: 'Tampered account A fork' } });
+  });
+
+  it('rejects replacement after the old pending import was consumed', async () => {
+    const adapter = createTestAdapter();
+    const copy = preparedCopy();
+    await copyAndVerify(adapter, copy);
+    const fixture = await forkReplacement(copy);
+    await adapter.stageImport(fixture.oldPending, fixture.oldPendingDigest, fixture.oldAttempt);
+    await adapter.consumeImport(
+      fixture.oldPending.id,
+      copy.workspace.revision,
+      preparedConsumption(fixture.oldPending, fixture.oldPendingDigest),
+    );
+
+    await expect(adapter.replaceStagedImport(fixture.request))
+      .rejects.toMatchObject({ code: 'conflict' });
+    const stored = await adapter.inspect();
+    expect(stored.projects.some(record => record.id === fixture.oldPending.targetProjectId)).toBe(true);
+    expect(stored.pendingImports.some(record => record.id === fixture.replacement.id)).toBe(false);
+  });
+
+  it('rejects replacement when a missing old target was reused', async () => {
+    const indexedDB = new IDBFactory();
+    const adapter = createTestAdapter({ indexedDB });
+    const copy = preparedCopy();
+    await copyAndVerify(adapter, copy);
+    const fixture = await forkReplacement(copy);
+    await adapter.stageImport(fixture.oldPending, fixture.oldPendingDigest, fixture.oldAttempt);
+    await deleteRawRecord(indexedDB, WORKSPACE_DB_NAME, 'pendingImports', fixture.oldPending.id);
+    await seedRawRecord(indexedDB, WORKSPACE_DB_NAME, 'projects', {
+      ...copy.projects[0],
+      id: fixture.oldPending.targetProjectId,
+      project: {
+        ...copy.projects[0].project,
+        id: fixture.oldPending.targetProjectId,
+      },
+    });
+
+    await expect(adapter.replaceStagedImport(fixture.request))
+      .rejects.toMatchObject({ code: 'conflict' });
+    expect((await adapter.inspect()).pendingImports.some(record =>
+      record.id === fixture.replacement.id)).toBe(false);
+  });
+
+  it('rejects replacement target collisions without deleting the old pending import', async () => {
+    const adapter = createTestAdapter();
+    const copy = preparedCopy();
+    await copyAndVerify(adapter, copy);
+    const fixture = await forkReplacement(copy);
+    await adapter.stageImport(fixture.oldPending, fixture.oldPendingDigest, fixture.oldAttempt);
+    await adapter.stageImport({
+      ...structuredClone(copy.pendingImports[0].pendingImport),
+      id: 'colliding-import',
+      targetProjectId: fixture.replacement.targetProjectId,
+    }, '4'.repeat(64));
+
+    await expect(adapter.replaceStagedImport(fixture.request))
+      .rejects.toMatchObject({ code: 'conflict' });
+    expect((await adapter.inspect()).pendingImports.some(record =>
+      record.id === fixture.oldPending.id)).toBe(true);
+  });
+
+  it('requires verified authority for replacement', async () => {
+    const adapter = createTestAdapter();
+    const copy = preparedCopy();
+    const fixture = await forkReplacement(copy);
+    copy.pendingImports.push({
+      id: fixture.oldPending.id,
+      pendingImport: fixture.oldPending,
+      position: copy.pendingImports.length,
+      attemptProvenance: {
+        ...fixture.oldAttempt,
+        pendingImportDigest: fixture.oldPendingDigest,
+      },
+    });
+    await adapter.writeInitialCopy(copy);
+
+    await expect(adapter.replaceStagedImport(fixture.request))
+      .rejects.toMatchObject({ code: 'authority-lost' });
+    expect((await adapter.inspect()).pendingImports.some(record =>
+      record.id === fixture.oldPending.id)).toBe(true);
+  });
+
+  it('rolls back the complete replacement on a mutation fault', async () => {
+    let failReplacement = false;
+    const adapter = createTestAdapter({
+      fault(point) {
+        if (failReplacement && point === 'mutation.before-complete') {
+          throw new DOMException('No space.', 'QuotaExceededError');
+        }
+      },
+    });
+    const copy = preparedCopy();
+    await copyAndVerify(adapter, copy);
+    const fixture = await forkReplacement(copy);
+    await adapter.stageImport(fixture.oldPending, fixture.oldPendingDigest, fixture.oldAttempt);
+    failReplacement = true;
+
+    await expect(adapter.replaceStagedImport(fixture.request))
+      .rejects.toMatchObject({ code: 'quota' });
+    const stored = await adapter.inspect();
+    expect(stored.pendingImports.some(record => record.id === fixture.oldPending.id)).toBe(true);
+    expect(stored.pendingImports.some(record => record.id === fixture.replacement.id)).toBe(false);
+  });
+
+  it('serializes consume against replacement so only one transition wins', async () => {
+    const indexedDB = new IDBFactory();
+    const left = createTestAdapter({ indexedDB });
+    const right = createTestAdapter({ indexedDB });
+    const copy = preparedCopy();
+    await Promise.all([left.open(), right.open()]);
+    await copyAndVerify(left, copy);
+    const fixture = await forkReplacement(copy);
+    await left.stageImport(fixture.oldPending, fixture.oldPendingDigest, fixture.oldAttempt);
+
+    const results = await Promise.allSettled([
+      left.consumeImport(
+        fixture.oldPending.id,
+        copy.workspace.revision,
+        preparedConsumption(fixture.oldPending, fixture.oldPendingDigest),
+      ),
+      right.replaceStagedImport(fixture.request),
+    ]);
+
+    expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1);
+    const stored = await left.inspect();
+    const consumedA = stored.projects.some(record => record.id === fixture.oldPending.targetProjectId);
+    const pendingB = stored.pendingImports.some(record => record.id === fixture.replacement.id);
+    expect([consumedA, pendingB].filter(Boolean)).toHaveLength(1);
+    expect(stored.pendingImports.some(record => record.id === fixture.oldPending.id)).toBe(false);
   });
 
   it('uses immutable consumed digest after later project edits', async () => {

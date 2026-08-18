@@ -33,6 +33,17 @@ export interface WorkspacePendingImport extends Omit<WorkspaceImportInput, 'stat
   warnings: string[];
 }
 
+export interface WorkspaceImportAttemptProvenance {
+  sourceKeyDigest: string;
+  payloadDigest: string;
+}
+
+export interface WorkspaceStagedImportExpectation extends WorkspaceImportAttemptProvenance {
+  importId: string;
+  targetProjectId: string;
+  createdAt: string;
+}
+
 export interface WorkspaceSnapshot {
   projects: WorkspaceProject[];
   activeProjectId: string;
@@ -47,7 +58,19 @@ export type WorkspaceCommand =
   | { type: 'close-project'; projectId: string; successor?: WorkspaceProject }
   | { type: 'save-custom-preset'; preset: WorkspaceCustomPreset }
   | { type: 'delete-custom-preset'; presetId: string }
-  | { type: 'stage-import'; pendingImport: WorkspaceImportInput }
+  | {
+      type: 'stage-import';
+      pendingImport: WorkspaceImportInput;
+      attemptProvenance?: WorkspaceImportAttemptProvenance;
+    }
+  | {
+      type: 'replace-staged-import';
+      expected: WorkspaceStagedImportExpectation;
+      replacement: {
+        pendingImport: WorkspaceImportInput;
+        attemptProvenance: WorkspaceImportAttemptProvenance;
+      };
+    }
   | { type: 'consume-import'; importId: string }
   | { type: 'recover-legacy-as-copies'; recoveryId: string };
 

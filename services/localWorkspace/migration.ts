@@ -25,6 +25,7 @@ import {
   WORKSPACE_MIGRATION_ID,
   type LegacyBackupRecord,
   type MigrationLedger,
+  type StoredImportAttemptProvenance,
   type StoredPendingImport,
   type StoredPreset,
   type StoredProject,
@@ -178,6 +179,25 @@ const requireExactKeys = (
   const allowed = new Set([...required, ...optional]);
   const unknown = Object.keys(value).find(key => !allowed.has(key));
   if (unknown) throw targetError(`${label} contains unknown field ${unknown}.`);
+};
+
+const validateStoredImportAttempt = (
+  value: unknown,
+  label: string,
+): StoredImportAttemptProvenance => {
+  if (!isPlainObject(value)) throw targetError(`${label} must be an object.`);
+  requireExactKeys(
+    value,
+    ['sourceKeyDigest', 'payloadDigest', 'pendingImportDigest'],
+    [],
+    label,
+  );
+  for (const key of ['sourceKeyDigest', 'payloadDigest', 'pendingImportDigest'] as const) {
+    if (typeof value[key] !== 'string' || !/^[a-f0-9]{64}$/.test(value[key])) {
+      throw targetError(`${label} ${key} must be a lowercase SHA-256 digest.`);
+    }
+  }
+  return structuredClone(value) as unknown as StoredImportAttemptProvenance;
 };
 
 const fingerprintItems = async (
@@ -429,7 +449,12 @@ const validateProjectRecords = (records: unknown): Map<string, WorkspaceProject>
     requireExactKeys(
       rawRecord,
       ['id', 'project', 'incarnation', 'storageRevision', 'updatedAt'],
-      ['consumedImportId', 'consumedImportCreatedAt', 'consumedImportDigest'],
+      [
+        'consumedImportId',
+        'consumedImportCreatedAt',
+        'consumedImportDigest',
+        'consumedImportAttempt',
+      ],
       `Project record ${index}`,
     );
     if (typeof rawRecord.id !== 'string' || rawRecord.id.length === 0) {
@@ -479,6 +504,24 @@ const validateProjectRecords = (records: unknown): Map<string, WorkspaceProject>
         || !/^[a-f0-9]{64}$/.test(rawRecord.consumedImportDigest)) {
         throw targetError(
           `Project record ${rawRecord.id} consumedImportDigest must be a lowercase SHA-256 digest.`,
+        );
+      }
+    }
+    if (Object.hasOwn(rawRecord, 'consumedImportAttempt')) {
+      if (!Object.hasOwn(rawRecord, 'consumedImportId')
+        || !Object.hasOwn(rawRecord, 'consumedImportCreatedAt')
+        || !Object.hasOwn(rawRecord, 'consumedImportDigest')) {
+        throw targetError(
+          `Project record ${rawRecord.id} consumedImportAttempt requires complete consume provenance.`,
+        );
+      }
+      const consumedImportAttempt = validateStoredImportAttempt(
+        rawRecord.consumedImportAttempt,
+        `Project record ${rawRecord.id} consumedImportAttempt`,
+      );
+      if (consumedImportAttempt.pendingImportDigest !== rawRecord.consumedImportDigest) {
+        throw targetError(
+          `Project record ${rawRecord.id} consumedImportAttempt pending digest must match consumedImportDigest.`,
         );
       }
     }
@@ -551,7 +594,12 @@ const validatePendingRecords = (records: unknown): WorkspacePendingImport[] => {
   const ids = new Set<string>();
   const validated = records.map((rawRecord, index) => {
     if (!isPlainObject(rawRecord)) throw targetError(`Pending import record ${index} must be an object.`);
-    requireExactKeys(rawRecord, ['id', 'pendingImport', 'position'], [], `Pending import record ${index}`);
+    requireExactKeys(
+      rawRecord,
+      ['id', 'pendingImport', 'position'],
+      ['attemptProvenance'],
+      `Pending import record ${index}`,
+    );
     if (typeof rawRecord.id !== 'string' || rawRecord.id.length === 0) {
       throw targetError(`Pending import record ${index} id must be a non-empty string.`);
     }
@@ -572,6 +620,12 @@ const validatePendingRecords = (records: unknown): WorkspacePendingImport[] => {
     if (!Array.isArray(payload.warnings)
       || payload.warnings.some(warning => typeof warning !== 'string')) {
       throw targetError(`Pending import record ${rawRecord.id} warnings must be strings.`);
+    }
+    if (Object.hasOwn(rawRecord, 'attemptProvenance')) {
+      validateStoredImportAttempt(
+        rawRecord.attemptProvenance,
+        `Pending import record ${rawRecord.id} attemptProvenance`,
+      );
     }
     try {
       validateMigratedState(payload.state);

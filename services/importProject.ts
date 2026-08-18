@@ -17,14 +17,19 @@ export interface ImportPayload {
 
 export interface ImportStageOptions {
   sourceKey: string;
+  replaceRetainedForkAttempt?: true;
 }
 
-interface ImportStageAttempt {
-  sourceKey: string;
+interface ImportStageAttemptIdentity {
   importId: string;
   targetProjectId: string;
   createdAt: string;
   payloadHash: string;
+}
+
+interface ImportStageAttempt extends ImportStageAttemptIdentity {
+  sourceKey: string;
+  replaces?: ImportStageAttemptIdentity;
 }
 
 let volatileAttempts = new Map<string, ImportStageAttempt>();
@@ -34,19 +39,43 @@ const isCanonicalTimestamp = (value: string): boolean => {
   return !Number.isNaN(timestamp) && new Date(timestamp).toISOString() === value;
 };
 
-const isAttempt = (value: unknown): value is ImportStageAttempt => {
-  if (value === null || typeof value !== 'object') return false;
-  const candidate = value as Partial<ImportStageAttempt>;
-  return typeof candidate.sourceKey === 'string'
-    && candidate.sourceKey.length > 0
-    && typeof candidate.importId === 'string'
+const hasAttemptIdentity = (
+  candidate: Partial<ImportStageAttemptIdentity>,
+): candidate is ImportStageAttemptIdentity => (
+  typeof candidate.importId === 'string'
     && candidate.importId.length > 0
     && typeof candidate.targetProjectId === 'string'
     && candidate.targetProjectId.length > 0
     && typeof candidate.createdAt === 'string'
     && isCanonicalTimestamp(candidate.createdAt)
     && typeof candidate.payloadHash === 'string'
-    && /^[a-f0-9]{64}$/.test(candidate.payloadHash);
+    && /^[a-f0-9]{64}$/.test(candidate.payloadHash)
+);
+
+const isAttemptIdentity = (value: unknown): value is ImportStageAttemptIdentity => {
+  if (value === null || typeof value !== 'object') return false;
+  const candidate = value as Partial<ImportStageAttemptIdentity>;
+  return Object.keys(candidate).length === 4 && hasAttemptIdentity(candidate);
+};
+
+const isAttempt = (value: unknown): value is ImportStageAttempt => {
+  if (value === null || typeof value !== 'object') return false;
+  const candidate = value as Partial<ImportStageAttempt>;
+  const keys = Object.keys(candidate);
+  const replaces = candidate.replaces;
+  return (keys.length === 5 || keys.length === 6)
+    && keys.every(key => [
+      'sourceKey',
+      'importId',
+      'targetProjectId',
+      'createdAt',
+      'payloadHash',
+      'replaces',
+    ].includes(key))
+    && typeof candidate.sourceKey === 'string'
+    && candidate.sourceKey.length > 0
+    && hasAttemptIdentity(candidate)
+    && (replaces === undefined || isAttemptIdentity(replaces));
 };
 
 const readPersistedAttempts = (): Map<string, ImportStageAttempt> => {
@@ -91,7 +120,13 @@ const sameAttempt = (left: ImportStageAttempt, right: ImportStageAttempt): boole
   && left.importId === right.importId
   && left.targetProjectId === right.targetProjectId
   && left.createdAt === right.createdAt
-  && left.payloadHash === right.payloadHash;
+  && left.payloadHash === right.payloadHash
+  && (left.replaces === undefined || right.replaces === undefined
+    ? left.replaces === right.replaces
+    : left.replaces.importId === right.replaces.importId
+      && left.replaces.targetProjectId === right.replaces.targetProjectId
+      && left.replaces.createdAt === right.replaces.createdAt
+      && left.replaces.payloadHash === right.replaces.payloadHash);
 
 const clearAttempt = (attempt: ImportStageAttempt): void => {
   const attempts = readPersistedAttempts();
@@ -108,6 +143,13 @@ const createAttempt = (sourceKey: string, payloadHash: string): ImportStageAttem
   targetProjectId: `proj_${globalThis.crypto.randomUUID()}`,
   createdAt: new Date().toISOString(),
   payloadHash,
+});
+
+const attemptIdentity = (attempt: ImportStageAttempt): ImportStageAttemptIdentity => ({
+  importId: attempt.importId,
+  targetProjectId: attempt.targetProjectId,
+  createdAt: attempt.createdAt,
+  payloadHash: attempt.payloadHash,
 });
 
 const assertMatchingPayload = (
@@ -133,6 +175,28 @@ const attemptForSource = (sourceKey: string, payloadHash: string): ImportStageAt
   return attempt;
 };
 
+const forkAttemptForSource = (sourceKey: string, payloadHash: string): ImportStageAttempt => {
+  const attempts = readPersistedAttempts();
+  const persisted = attempts.get(sourceKey);
+  const attempt = persisted ?? volatileAttempts.get(sourceKey);
+  if (!attempt) {
+    const created = createAttempt(sourceKey, payloadHash);
+    persistAttempt(created);
+    return created;
+  }
+  volatileAttempts.set(sourceKey, attempt);
+  if (attempt.payloadHash === payloadHash) return attempt;
+  if (attempt.replaces) {
+    throw new WorkspaceStoreError('Fork import source changed during replacement.', 'conflict');
+  }
+  const replacement: ImportStageAttempt = {
+    ...createAttempt(sourceKey, payloadHash),
+    replaces: attemptIdentity(attempt),
+  };
+  persistAttempt(replacement);
+  return replacement;
+};
+
 export async function stageImport(
   payload: ImportPayload,
   options?: ImportStageOptions,
@@ -143,20 +207,37 @@ export async function stageImport(
   }
   const payloadHash = await sha256Hex(canonicalStringify(payload));
   const attempt = options
-    ? attemptForSource(options.sourceKey, payloadHash)
+    ? options.replaceRetainedForkAttempt
+      ? forkAttemptForSource(options.sourceKey, payloadHash)
+      : attemptForSource(options.sourceKey, payloadHash)
     : createAttempt('ordinary-caller', payloadHash);
-
-  await localWorkspaceStore.commit({
-    type: 'stage-import',
-    pendingImport: {
-      id: attempt.importId,
-      targetProjectId: attempt.targetProjectId,
-      name: payload.name,
-      state: payload.state,
-      ...(payload.cloud ? { cloud: payload.cloud } : {}),
-      createdAt: attempt.createdAt,
-    },
-  });
+  const pendingImport = {
+    id: attempt.importId,
+    targetProjectId: attempt.targetProjectId,
+    name: payload.name,
+    state: payload.state,
+    ...(payload.cloud ? { cloud: payload.cloud } : {}),
+    createdAt: attempt.createdAt,
+  };
+  if (options?.replaceRetainedForkAttempt) {
+    const sourceKeyDigest = await sha256Hex(options.sourceKey);
+    const attemptProvenance = { sourceKeyDigest, payloadDigest: payloadHash };
+    await localWorkspaceStore.commit(attempt.replaces
+      ? {
+          type: 'replace-staged-import',
+          expected: {
+            importId: attempt.replaces.importId,
+            targetProjectId: attempt.replaces.targetProjectId,
+            createdAt: attempt.replaces.createdAt,
+            sourceKeyDigest,
+            payloadDigest: attempt.replaces.payloadHash,
+          },
+          replacement: { pendingImport, attemptProvenance },
+        }
+      : { type: 'stage-import', pendingImport, attemptProvenance });
+  } else {
+    await localWorkspaceStore.commit({ type: 'stage-import', pendingImport });
+  }
   if (options) clearAttempt(attempt);
   return attempt.importId;
 }

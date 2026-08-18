@@ -6,10 +6,12 @@ import {
 import {
   WorkspaceStoreError,
   type WorkspaceCustomPreset,
+  type WorkspaceImportAttemptProvenance,
   type WorkspacePendingImport,
   type WorkspaceProject,
+  type WorkspaceStagedImportExpectation,
 } from './contracts';
-import { canonicalStringify } from './canonical';
+import { canonicalStringify, sha256Hex } from './canonical';
 import type { FaultInjector } from './faults';
 import type {
   PreparedInitialCopy,
@@ -29,6 +31,7 @@ import {
   type ProjectLineage,
   type RecoveryMarker,
   type StoredPendingImport,
+  type StoredImportAttemptProvenance,
   type StoredPreset,
   type StoredProject,
   type StoredWorkspace,
@@ -55,6 +58,7 @@ type WriteTransaction = IDBPTransaction<
 export interface IndexedDbAdapterEnvironment {
   indexedDB: IDBFactory;
   now(): string;
+  crypto?: Pick<Crypto, 'subtle'>;
   fault?: FaultInjector;
   onAuthorityLost?: (error: WorkspaceStoreError) => void;
 }
@@ -97,6 +101,13 @@ export interface PreparedProjectCreation {
   incarnation: string;
 }
 
+export interface PreparedImportReplacement {
+  expected: WorkspaceStagedImportExpectation;
+  replacement: WorkspacePendingImport;
+  replacementDigest: string;
+  replacementAttempt: WorkspaceImportAttemptProvenance;
+}
+
 export interface LegacyDriftExpectation {
   expectedLedgerRevision: number;
   expectedAcceptedLegacyDigest: string;
@@ -135,7 +146,12 @@ export interface IndexedDbAdapter {
   ): Promise<StoredWorkspace>;
   saveCustomPreset(preset: WorkspaceCustomPreset): Promise<void>;
   deleteCustomPreset(presetId: string): Promise<void>;
-  stageImport(pendingImport: WorkspacePendingImport, pendingImportDigest: string): Promise<void>;
+  stageImport(
+    pendingImport: WorkspacePendingImport,
+    pendingImportDigest: string,
+    attemptProvenance?: WorkspaceImportAttemptProvenance,
+  ): Promise<void>;
+  replaceStagedImport(prepared: PreparedImportReplacement): Promise<void>;
   consumeImport(
     importId: string,
     expectedWorkspaceRevision: number,
@@ -195,6 +211,35 @@ const conflict = (message: string): WorkspaceStoreError =>
 
 const validation = (message: string): WorkspaceStoreError =>
   new WorkspaceStoreError(message, 'validation');
+
+const isDigest = (value: unknown): value is string =>
+  typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
+
+const validateAttemptProvenance = (
+  value: WorkspaceImportAttemptProvenance,
+): WorkspaceImportAttemptProvenance => {
+  if (!isDigest(value.sourceKeyDigest) || !isDigest(value.payloadDigest)) {
+    throw validation('Import attempt provenance must contain lowercase SHA-256 digests.');
+  }
+  return value;
+};
+
+const storedAttemptProvenance = (
+  value: WorkspaceImportAttemptProvenance | undefined,
+  pendingImportDigest: string,
+): StoredImportAttemptProvenance | undefined => value
+  ? { ...validateAttemptProvenance(value), pendingImportDigest }
+  : undefined;
+
+const sameAttemptProvenance = (
+  left: StoredImportAttemptProvenance | undefined,
+  right: StoredImportAttemptProvenance | undefined,
+): boolean => {
+  if (left === undefined || right === undefined) return left === right;
+  return left.sourceKeyDigest === right.sourceKeyDigest
+    && left.payloadDigest === right.payloadDigest
+    && left.pendingImportDigest === right.pendingImportDigest;
+};
 
 const unverifiedAuthority = (): WorkspaceStoreError =>
   new WorkspaceStoreError('IndexedDB workspace authority is not verified.', 'authority-lost');
@@ -1020,10 +1065,12 @@ export const createIndexedDbAdapter = (
   const stageImport = async (
     pendingImport: WorkspacePendingImport,
     pendingImportDigest: string,
+    attemptProvenance?: WorkspaceImportAttemptProvenance,
   ): Promise<void> => {
-    if (!/^[a-f0-9]{64}$/.test(pendingImportDigest)) {
+    if (!isDigest(pendingImportDigest)) {
       throw validation('Pending import digest must be a lowercase SHA-256 digest.');
     }
+    const storedAttempt = storedAttemptProvenance(attemptProvenance, pendingImportDigest);
     const activeDatabase = await getDatabase();
     const storeNames = ['pendingImports', 'projects', 'migrationLedger'] as const;
     let transaction: WriteTransaction | undefined;
@@ -1048,7 +1095,8 @@ export const createIndexedDbAdapter = (
       }
       if (storedPending) {
         if (canonicalStringify(storedPending.pendingImport)
-          !== canonicalStringify(pendingImport)) {
+          !== canonicalStringify(pendingImport)
+          || !sameAttemptProvenance(storedPending.attemptProvenance, storedAttempt)) {
           throw conflict(`Pending import ${pendingImport.id} changed.`);
         }
         await importTransaction.done;
@@ -1061,7 +1109,8 @@ export const createIndexedDbAdapter = (
         const consumed = consumedProjects[0];
         if (consumed.id !== pendingImport.targetProjectId
           || consumed.consumedImportCreatedAt !== pendingImport.createdAt
-          || consumed.consumedImportDigest !== pendingImportDigest) {
+          || consumed.consumedImportDigest !== pendingImportDigest
+          || !sameAttemptProvenance(consumed.consumedImportAttempt, storedAttempt)) {
           throw conflict(`Consumed import ${pendingImport.id} changed.`);
         }
         await importTransaction.done;
@@ -1079,6 +1128,139 @@ export const createIndexedDbAdapter = (
         id: pendingImport.id,
         pendingImport,
         position,
+        ...(storedAttempt ? { attemptProvenance: storedAttempt } : {}),
+      }));
+      environment.fault?.('mutation.before-complete');
+      await Promise.all(requests);
+      await importTransaction.done;
+    } catch (error) {
+      return abortTransaction(transaction, requests, error);
+    }
+  };
+
+  const replaceStagedImport = async (
+    prepared: PreparedImportReplacement,
+  ): Promise<void> => {
+    const { expected, replacement, replacementDigest, replacementAttempt } = prepared;
+    if (!isDigest(replacementDigest)) {
+      throw validation('Replacement import digest must be a lowercase SHA-256 digest.');
+    }
+    validateAttemptProvenance(expected);
+    const nextAttempt = storedAttemptProvenance(replacementAttempt, replacementDigest)!;
+    const activeDatabase = await getDatabase();
+    const subtle = environment.crypto?.subtle;
+    if (!subtle) throw validation('Import replacement digest authority is unavailable.');
+    const preflightTransaction = activeDatabase.transaction('pendingImports', 'readonly');
+    const preflightRecords = await preflightTransaction.store.getAll();
+    await preflightTransaction.done;
+    const preflight = new Map<string, { identity: string; digest: string }>();
+    for (const record of preflightRecords) {
+      try {
+        const identity = canonicalStringify(record.pendingImport);
+        preflight.set(record.id, {
+          identity,
+          digest: await sha256Hex(identity, subtle),
+        });
+      } catch {
+        // Malformed records cannot satisfy replacement CAS.
+      }
+    }
+    const storeNames = ['pendingImports', 'projects', 'migrationLedger'] as const;
+    let transaction: WriteTransaction | undefined;
+    const requests: Promise<unknown>[] = [];
+    try {
+      const importTransaction = activeDatabase.transaction(storeNames, 'readwrite');
+      transaction = importTransaction as WriteTransaction;
+      const ledger = await importTransaction.objectStore('migrationLedger')
+        .get(WORKSPACE_MIGRATION_ID);
+      requireVerifiedAuthority(ledger);
+      const importStore = importTransaction.objectStore('pendingImports');
+      const projectStore = importTransaction.objectStore('projects');
+      const [pendingImports, projects] = await Promise.all([
+        importStore.getAll(),
+        projectStore.getAll(),
+      ]);
+      const oldPending = pendingImports.find(record => record.id === expected.importId);
+      const replacementPending = pendingImports.find(record => record.id === replacement.id);
+      const oldConsumed = projects.filter(record => record.consumedImportId === expected.importId);
+      const replacementConsumed = projects.filter(record =>
+        record.consumedImportId === replacement.id);
+      if ((oldPending && oldConsumed.length > 0)
+        || oldConsumed.length > 1
+        || (replacementPending && replacementConsumed.length > 0)
+        || replacementConsumed.length > 1) {
+        throw conflict('Import replacement provenance is ambiguous.');
+      }
+
+      const pendingDigestIsVerified = (record: StoredPendingImport): boolean => {
+        const observed = preflight.get(record.id);
+        if (!observed || !record.attemptProvenance) return false;
+        try {
+          return observed.identity === canonicalStringify(record.pendingImport)
+            && observed.digest === record.attemptProvenance.pendingImportDigest;
+        } catch {
+          return false;
+        }
+      };
+
+      if (replacementPending || replacementConsumed.length === 1) {
+        if (oldPending || oldConsumed.length > 0) {
+          throw conflict('Old and replacement import provenance coexist.');
+        }
+        if (replacementPending) {
+          if (canonicalStringify(replacementPending.pendingImport)
+              !== canonicalStringify(replacement)
+            || !sameAttemptProvenance(replacementPending.attemptProvenance, nextAttempt)) {
+            throw conflict(`Replacement import ${replacement.id} changed.`);
+          }
+        } else {
+          const consumed = replacementConsumed[0];
+          if (consumed.id !== replacement.targetProjectId
+            || consumed.consumedImportCreatedAt !== replacement.createdAt
+            || consumed.consumedImportDigest !== replacementDigest
+            || !sameAttemptProvenance(consumed.consumedImportAttempt, nextAttempt)) {
+            throw conflict(`Consumed replacement import ${replacement.id} changed.`);
+          }
+        }
+        await importTransaction.done;
+        return;
+      }
+
+      if (oldConsumed.length > 0) {
+        throw conflict(`Import ${expected.importId} was consumed before replacement.`);
+      }
+
+      let position: number;
+      if (oldPending) {
+        if (oldPending.pendingImport.targetProjectId !== expected.targetProjectId
+          || oldPending.pendingImport.createdAt !== expected.createdAt
+          || oldPending.attemptProvenance?.sourceKeyDigest !== expected.sourceKeyDigest
+          || oldPending.attemptProvenance?.payloadDigest !== expected.payloadDigest
+          || !pendingDigestIsVerified(oldPending)) {
+          throw conflict(`Pending import ${expected.importId} changed before replacement.`);
+        }
+        position = oldPending.position;
+      } else {
+        if (pendingImports.some(record =>
+          record.pendingImport.targetProjectId === expected.targetProjectId)
+          || projects.some(record => record.id === expected.targetProjectId)) {
+          throw conflict(`Old import target ${expected.targetProjectId} was reused.`);
+        }
+        position = Math.max(-1, ...pendingImports.map(record => record.position)) + 1;
+      }
+
+      if (pendingImports.some(record => record.id === replacement.id
+        || (record.id !== oldPending?.id
+          && record.pendingImport.targetProjectId === replacement.targetProjectId))
+        || projects.some(record => record.id === replacement.targetProjectId)) {
+        throw conflict(`Replacement import ${replacement.id} collides with stored data.`);
+      }
+      if (oldPending) requests.push(importStore.delete(oldPending.id));
+      requests.push(importStore.add({
+        id: replacement.id,
+        pendingImport: replacement,
+        position,
+        attemptProvenance: nextAttempt,
       }));
       environment.fault?.('mutation.before-complete');
       await Promise.all(requests);
@@ -1155,7 +1337,22 @@ export const createIndexedDbAdapter = (
       if (await projectStore.get(pending.targetProjectId)) {
         throw validation(`Project ${pending.targetProjectId} already exists.`);
       }
-      requests.push(projectStore.add(prepared.project));
+      if ((storedImport.attemptProvenance !== undefined
+          && storedImport.attemptProvenance.pendingImportDigest
+            !== prepared.project.consumedImportDigest)
+        || (prepared.project.consumedImportAttempt !== undefined
+        && !sameAttemptProvenance(
+          prepared.project.consumedImportAttempt,
+          storedImport.attemptProvenance,
+        ))) {
+        throw conflict(`Pending import ${importId} attempt provenance changed.`);
+      }
+      requests.push(projectStore.add({
+        ...prepared.project,
+        ...(storedImport.attemptProvenance
+          ? { consumedImportAttempt: storedImport.attemptProvenance }
+          : {}),
+      }));
       requests.push(importStore.delete(importId));
       for (const record of pendingImports) {
         if (record.position <= storedImport.position) continue;
@@ -1203,6 +1400,7 @@ export const createIndexedDbAdapter = (
     saveCustomPreset,
     deleteCustomPreset,
     stageImport,
+    replaceStagedImport,
     consumeImport,
   };
 };

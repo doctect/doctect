@@ -35,6 +35,17 @@ const stageForSource = (
   ) => ReturnType<typeof stageImport>
 )(payload, { sourceKey });
 
+const stageForkForSource = (
+  implementation: typeof stageImport,
+  sourceKey: string,
+  payload: Parameters<typeof stageImport>[0],
+): ReturnType<typeof stageImport> => (
+  implementation as unknown as (
+    nextPayload: Parameters<typeof stageImport>[0],
+    options: { sourceKey: string; replaceRetainedForkAttempt: true },
+  ) => ReturnType<typeof stageImport>
+)(payload, { sourceKey, replaceRetainedForkAttempt: true });
+
 describe('stageImport', () => {
   beforeEach(() => {
     vi.stubGlobal('crypto', webcrypto);
@@ -235,6 +246,101 @@ describe('stageImport', () => {
     expect(workspaceStore.commit.mock.calls[1][0])
       .toEqual(workspaceStore.commit.mock.calls[0][0]);
     expect(globalThis.crypto.randomUUID).toHaveBeenCalledTimes(2);
+    expect(window.sessionStorage.length).toBe(0);
+  });
+
+  it('persists and replays one hash-only fork replacement transition', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-15T12:00:00.000Z'));
+    workspaceStore.bootstrap.mockResolvedValue({
+      status: 'ready',
+      snapshot: workspaceSnapshot(),
+    });
+    workspaceStore.commit
+      .mockRejectedValueOnce(new Error('account A post-commit readback failed'))
+      .mockRejectedValueOnce(new Error('account B post-commit readback failed'))
+      .mockResolvedValueOnce(workspaceSnapshot());
+    const sourceKey = 'gallery-fork:source-1:fork_00000000-0000-4000-8000-000000000009';
+    const accountA = {
+      name: 'Account A private fork',
+      state: { privateText: 'account A document' },
+      cloud: { projectId: 'account-a-project', lastSyncedCommitId: 'account-a-commit' },
+    };
+    const accountB = {
+      name: 'Account B private fork',
+      state: { privateText: 'account B document' },
+      cloud: { projectId: 'account-b-project', lastSyncedCommitId: 'account-b-commit' },
+    };
+
+    await expect(stageForkForSource(stageImport, sourceKey, accountA))
+      .rejects.toThrow('account A post-commit readback failed');
+    const firstCommand = structuredClone(workspaceStore.commit.mock.calls[0][0]);
+    expect(firstCommand).toMatchObject({
+      type: 'stage-import',
+      pendingImport: {
+        id: 'import_00000000-0000-4000-8000-000000000001',
+        targetProjectId: 'proj_00000000-0000-4000-8000-000000000002',
+      },
+      attemptProvenance: {
+        sourceKeyDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+        payloadDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+      },
+    });
+    const retainedA = window.sessionStorage.getItem('doctect_import_stage_attempt') ?? '';
+    expect(retainedA).not.toContain('account-a-project');
+    expect(retainedA).not.toContain('account-a-commit');
+    expect(retainedA).not.toContain('Account A private fork');
+    expect(retainedA).not.toContain('account A document');
+
+    await expect(stageForkForSource(stageImport, sourceKey, accountB))
+      .rejects.toThrow('account B post-commit readback failed');
+    const replacementCommand = structuredClone(workspaceStore.commit.mock.calls[1][0]);
+    expect(replacementCommand).toEqual({
+      type: 'replace-staged-import',
+      expected: {
+        importId: firstCommand.pendingImport.id,
+        targetProjectId: firstCommand.pendingImport.targetProjectId,
+        createdAt: firstCommand.pendingImport.createdAt,
+        ...firstCommand.attemptProvenance,
+      },
+      replacement: {
+        pendingImport: {
+          id: 'import_00000000-0000-4000-8000-000000000003',
+          targetProjectId: 'proj_00000000-0000-4000-8000-000000000004',
+          name: accountB.name,
+          state: accountB.state,
+          cloud: accountB.cloud,
+          createdAt: firstCommand.pendingImport.createdAt,
+        },
+        attemptProvenance: {
+          sourceKeyDigest: firstCommand.attemptProvenance.sourceKeyDigest,
+          payloadDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+        },
+      },
+    });
+    expect(replacementCommand.replacement.attemptProvenance.payloadDigest)
+      .not.toBe(firstCommand.attemptProvenance.payloadDigest);
+    const retainedTransition = window.sessionStorage.getItem('doctect_import_stage_attempt') ?? '';
+    for (const forbidden of [
+      'account-a-project',
+      'account-a-commit',
+      'Account A private fork',
+      'account A document',
+      'account-b-project',
+      'account-b-commit',
+      'Account B private fork',
+      'account B document',
+    ]) {
+      expect(retainedTransition).not.toContain(forbidden);
+    }
+
+    vi.resetModules();
+    const reloaded = await import('../../services/importProject');
+    await expect(stageForkForSource(reloaded.stageImport, sourceKey, accountB))
+      .resolves.toBe('import_00000000-0000-4000-8000-000000000003');
+
+    expect(workspaceStore.commit.mock.calls[2][0]).toEqual(replacementCommand);
+    expect(globalThis.crypto.randomUUID).toHaveBeenCalledTimes(4);
     expect(window.sessionStorage.length).toBe(0);
   });
 

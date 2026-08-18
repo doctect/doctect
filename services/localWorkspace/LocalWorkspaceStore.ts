@@ -9,10 +9,12 @@ import {
   type WorkspaceBootstrapPhase,
   type WorkspaceBootstrapResult,
   type WorkspaceCommand,
+  type WorkspaceImportAttemptProvenance,
   type WorkspacePendingImport,
   type WorkspaceProject,
   type WorkspaceRecovery,
   type WorkspaceSnapshot,
+  type WorkspaceStagedImportExpectation,
 } from './contracts';
 import type { FaultInjector } from './faults';
 import {
@@ -491,6 +493,7 @@ const createLocalWorkspaceStoreAtVersion = (
     adapter ??= createIndexedDbAdapter({
       indexedDB: environment.indexedDB,
       now: environment.now,
+      crypto: environment.crypto,
       fault: environment.fault,
       onAuthorityLost: handleAuthorityLost,
     }, requestedIndexedDbVersion);
@@ -1310,6 +1313,56 @@ const createLocalWorkspaceStoreAtVersion = (
     return value;
   };
 
+  const prepareImportAttemptProvenance = (
+    value: unknown,
+    label: string,
+  ): WorkspaceImportAttemptProvenance => {
+    if (!isPlainObject(value)
+      || !hasExactKeys(value, ['sourceKeyDigest', 'payloadDigest'])
+      || !isDigest(value.sourceKeyDigest)
+      || !isDigest(value.payloadDigest)) {
+      throw new WorkspaceStoreError(
+        `${label} must contain exact lowercase SHA-256 digests.`,
+        'validation',
+      );
+    }
+    return {
+      sourceKeyDigest: value.sourceKeyDigest,
+      payloadDigest: value.payloadDigest,
+    };
+  };
+
+  const prepareStagedImportExpectation = (
+    value: unknown,
+  ): WorkspaceStagedImportExpectation => {
+    if (!isPlainObject(value)
+      || !hasExactKeys(value, [
+        'importId',
+        'targetProjectId',
+        'createdAt',
+        'sourceKeyDigest',
+        'payloadDigest',
+      ])) {
+      throw new WorkspaceStoreError('Import replacement expectation is malformed.', 'validation');
+    }
+    const createdAt = value.createdAt;
+    if (!isCanonicalTimestamp(createdAt)) {
+      throw new WorkspaceStoreError(
+        'Expected import timestamp must be canonical.',
+        'validation',
+      );
+    }
+    return {
+      importId: requireCommandId(value.importId, 'Expected import id'),
+      targetProjectId: requireCommandId(value.targetProjectId, 'Expected import target id'),
+      createdAt,
+      ...prepareImportAttemptProvenance({
+        sourceKeyDigest: value.sourceKeyDigest,
+        payloadDigest: value.payloadDigest,
+      }, 'Expected import provenance'),
+    };
+  };
+
   const createProjectIncarnation = (): string => {
     const incarnation = environment.randomUUID();
     if (typeof incarnation !== 'string' || incarnation.length === 0) {
@@ -1367,7 +1420,39 @@ const createLocalWorkspaceStoreAtVersion = (
             pendingImport: preparePendingImport(command.pendingImport, {
               warningPolicy: 'retain',
             }),
+            ...(command.attemptProvenance
+              ? {
+                  attemptProvenance: prepareImportAttemptProvenance(
+                    command.attemptProvenance,
+                    'Import attempt provenance',
+                  ),
+                }
+              : {}),
           };
+        case 'replace-staged-import': {
+          const expected = prepareStagedImportExpectation(command.expected);
+          const pendingImport = preparePendingImport(command.replacement.pendingImport, {
+            warningPolicy: 'retain',
+          });
+          const attemptProvenance = prepareImportAttemptProvenance(
+            command.replacement.attemptProvenance,
+            'Replacement import provenance',
+          );
+          if (expected.sourceKeyDigest !== attemptProvenance.sourceKeyDigest
+            || expected.payloadDigest === attemptProvenance.payloadDigest
+            || expected.importId === pendingImport.id
+            || expected.targetProjectId === pendingImport.targetProjectId) {
+            throw new WorkspaceStoreError(
+              'Import replacement must identify one changed source attempt.',
+              'validation',
+            );
+          }
+          return {
+            type: 'replace-staged-import',
+            expected,
+            replacement: { pendingImport, attemptProvenance },
+          };
+        }
         case 'consume-import':
           return { ...command, importId: requireCommandId(command.importId, 'Import id') };
         case 'recover-legacy-as-copies':
@@ -1563,8 +1648,22 @@ const createLocalWorkspaceStoreAtVersion = (
             canonicalStringify(command.pendingImport),
             environment.crypto.subtle,
           ),
+          command.attemptProvenance,
         );
         break;
+      case 'replace-staged-import': {
+        const replacement = command.replacement.pendingImport as WorkspacePendingImport;
+        await getAdapter().replaceStagedImport({
+          expected: command.expected,
+          replacement,
+          replacementDigest: await sha256Hex(
+            canonicalStringify(replacement),
+            environment.crypto.subtle,
+          ),
+          replacementAttempt: command.replacement.attemptProvenance,
+        });
+        break;
+      }
       case 'consume-import': {
         const knownTargetProjectId = consumedImportTargets.get(command.importId);
         await getAdapter().consumeImport(

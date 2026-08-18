@@ -195,7 +195,7 @@ describe('GalleryDetailPage generator source staging', () => {
 
     it('stages fork first-commit source byte-for-byte with cloud linkage', async () => {
         mockUseSession.mockReturnValue({ data: { user: { id: 'user-2', username: 'planner_pro' } } });
-        vi.spyOn(cloudApi, 'fork').mockResolvedValue({
+        const fork = vi.spyOn(cloudApi, 'fork').mockResolvedValue({
             project: { id: 'fork-1', name: 'Forked Project', headCommitId: 'fork-commit-1' },
         } as any);
         vi.spyOn(cloudApi, 'getCommit').mockResolvedValue({
@@ -211,7 +211,10 @@ describe('GalleryDetailPage generator source staging', () => {
                 state: rawGalleryState,
                 cloud: { projectId: 'fork-1', lastSyncedCommitId: 'fork-commit-1' },
             },
-            { sourceKey: 'gallery-fork:fork-1:fork-commit-1' },
+            {
+                sourceKey: `gallery-fork:proj-1:${fork.mock.calls[0][1]}`,
+                replaceRetainedForkAttempt: true,
+            },
         );
     });
 
@@ -251,13 +254,17 @@ describe('GalleryDetailPage generator source staging', () => {
         expect(getCommit.mock.calls[0]).toEqual(['fork-a', 'fork-commit-a']);
         expect(getCommit.mock.calls[1]).toEqual(['fork-b', 'fork-commit-b']);
         expect(importProject.stageImport).toHaveBeenCalledTimes(2);
+        const idempotencyKey = fork.mock.calls[0][1];
         expect(vi.mocked(importProject.stageImport).mock.calls[1]).toEqual([
             {
                 name: 'Account B Fork',
                 state: rawGalleryState,
                 cloud: { projectId: 'fork-b', lastSyncedCommitId: 'fork-commit-b' },
             },
-            { sourceKey: 'gallery-fork:fork-b:fork-commit-b' },
+            {
+                sourceKey: `gallery-fork:proj-1:${idempotencyKey}`,
+                replaceRetainedForkAttempt: true,
+            },
         ]);
     });
 
