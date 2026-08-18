@@ -215,15 +215,24 @@ describe('GalleryDetailPage generator source staging', () => {
         );
     });
 
-    it('retries compact fork metadata without repeating the remote fork POST', async () => {
+    it('replays the remote fork with the same key and fresh result metadata', async () => {
         mockUseSession.mockReturnValue({ data: { user: { id: 'user-2', username: 'planner_pro' } } });
-        const fork = vi.spyOn(cloudApi, 'fork').mockResolvedValue({
-            project: { id: 'fork-retry', name: 'Retained Fork', headCommitId: 'fork-commit-retry' },
-        } as any);
-        const getCommit = vi.spyOn(cloudApi, 'getCommit').mockResolvedValue({
-            id: 'fork-commit-retry', message: 'Fork', createdAt: '2026-07-14T12:40:00.000Z',
-            state: rawGalleryState,
-        });
+        const fork = vi.spyOn(cloudApi, 'fork')
+            .mockResolvedValueOnce({
+                project: { id: 'fork-a', name: 'Account A Fork', headCommitId: 'fork-commit-a' },
+            } as any)
+            .mockResolvedValueOnce({
+                project: { id: 'fork-b', name: 'Account B Fork', headCommitId: 'fork-commit-b' },
+            } as any);
+        const getCommit = vi.spyOn(cloudApi, 'getCommit')
+            .mockResolvedValueOnce({
+                id: 'fork-commit-a', message: 'Fork', createdAt: '2026-07-14T12:40:00.000Z',
+                state: rawGalleryState,
+            })
+            .mockResolvedValueOnce({
+                id: 'fork-commit-b', message: 'Fork', createdAt: '2026-07-14T12:41:00.000Z',
+                state: rawGalleryState,
+            });
         vi.mocked(importProject.stageImport)
             .mockRejectedValueOnce(new Error('post-commit readback failed'))
             .mockResolvedValueOnce('retained-fork-import');
@@ -236,12 +245,20 @@ describe('GalleryDetailPage generator source staging', () => {
         fireEvent.click(screen.getByRole('button', { name: /fork this project/i }));
 
         expect(await screen.findByText('APP_MARKER')).toBeInTheDocument();
-        expect(fork).toHaveBeenCalledOnce();
+        expect(fork).toHaveBeenCalledTimes(2);
+        expect(fork.mock.calls[1]).toEqual(fork.mock.calls[0]);
         expect(getCommit).toHaveBeenCalledTimes(2);
-        expect(getCommit.mock.calls[1]).toEqual(getCommit.mock.calls[0]);
+        expect(getCommit.mock.calls[0]).toEqual(['fork-a', 'fork-commit-a']);
+        expect(getCommit.mock.calls[1]).toEqual(['fork-b', 'fork-commit-b']);
         expect(importProject.stageImport).toHaveBeenCalledTimes(2);
-        expect(vi.mocked(importProject.stageImport).mock.calls[1])
-            .toEqual(vi.mocked(importProject.stageImport).mock.calls[0]);
+        expect(vi.mocked(importProject.stageImport).mock.calls[1]).toEqual([
+            {
+                name: 'Account B Fork',
+                state: rawGalleryState,
+                cloud: { projectId: 'fork-b', lastSyncedCommitId: 'fork-commit-b' },
+            },
+            { sourceKey: 'gallery-fork:fork-b:fork-commit-b' },
+        ]);
     });
 
     it('keeps the gallery project visible and announces an exact staging failure', async () => {

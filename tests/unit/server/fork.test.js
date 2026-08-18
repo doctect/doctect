@@ -3,11 +3,15 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import request from 'supertest';
 import { initTestApp, signUpUser, minimalState, PNG_1X1 } from './helpers.js';
 
-let app, ownerCookie, forkerCookie, publicId, privateId;
+let app, ownerCookie, forkerCookie, secondForkerCookie, publicId, privateId;
 beforeAll(async () => {
     app = await initTestApp();
     ownerCookie = await signUpUser(app, { email: 'fowner@test.dev', username: 'fork_owner' });
     forkerCookie = await signUpUser(app, { email: 'forker@test.dev', username: 'forker' });
+    secondForkerCookie = await signUpUser(app, {
+        email: 'second-forker@test.dev',
+        username: 'second_forker',
+    });
     const pub = await request(app).post('/api/projects').set('Cookie', ownerCookie)
         .send({ name: 'Forkable', state: minimalState('upstream') });
     publicId = pub.body.project.id;
@@ -29,9 +33,9 @@ const createPublishedSource = async (name) => {
     return projectId;
 };
 
-const keyedFork = (sourceId, key) => request(app)
+const keyedFork = (sourceId, key, cookie = forkerCookie) => request(app)
     .post(`/api/projects/${sourceId}/fork`)
-    .set('Cookie', forkerCookie)
+    .set('Cookie', cookie)
     .send({ idempotencyKey: key });
 
 describe('fork', () => {
@@ -88,6 +92,28 @@ describe('fork', () => {
         expect(projects).toEqual([{ id: projects[0].id, fork_idempotency_key: key }]);
         expect(Number(commits[0].n)).toBe(1);
         expect(after.body.project.forkCount).toBe(before.body.project.forkCount + 1);
+    });
+
+    it('scopes stable keyed replays independently to each authenticated owner', async () => {
+        const sourceId = await createPublishedSource('Owner-scoped replay source');
+        const key = 'fork_30000000-0000-4000-8000-000000000003';
+        const before = await request(app).get(`/api/gallery/${sourceId}`);
+
+        const firstOwner = await keyedFork(sourceId, key);
+        const secondOwner = await keyedFork(sourceId, key, secondForkerCookie);
+        const firstReplay = await keyedFork(sourceId, key);
+        const secondReplay = await keyedFork(sourceId, key, secondForkerCookie);
+
+        expect([firstOwner.status, secondOwner.status]).toEqual([201, 201]);
+        expect([firstReplay.status, secondReplay.status]).toEqual([200, 200]);
+        expect(firstOwner.body.project.id).not.toBe(secondOwner.body.project.id);
+        expect(firstReplay.body.project.id).toBe(firstOwner.body.project.id);
+        expect(firstReplay.body.project.headCommitId).toBe(firstOwner.body.project.headCommitId);
+        expect(secondReplay.body.project.id).toBe(secondOwner.body.project.id);
+        expect(secondReplay.body.project.headCommitId).toBe(secondOwner.body.project.headCommitId);
+
+        const after = await request(app).get(`/api/gallery/${sourceId}`);
+        expect(after.body.project.forkCount).toBe(before.body.project.forkCount + 2);
     });
 
     it('returns a completed keyed fork before rechecking project or storage allowances', async () => {

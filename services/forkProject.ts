@@ -4,16 +4,9 @@ import { stageImport } from './importProject';
 const FORK_ATTEMPT_STORAGE_KEY = 'doctect_fork_attempts';
 const FORK_KEY_PATTERN = /^[A-Za-z0-9_-]{16,128}$/;
 
-interface ForkResultMetadata {
-  projectId: string;
-  name: string;
-  headCommitId: string;
-}
-
 interface ForkAttempt {
   sourceProjectId: string;
   idempotencyKey: string;
-  result?: ForkResultMetadata;
 }
 
 let volatileAttempts = new Map<string, ForkAttempt>();
@@ -21,21 +14,15 @@ let volatileAttempts = new Map<string, ForkAttempt>();
 const nonEmptyString = (value: unknown): value is string =>
   typeof value === 'string' && value.length > 0;
 
-const isResult = (value: unknown): value is ForkResultMetadata => {
-  if (value === null || typeof value !== 'object') return false;
-  const candidate = value as Partial<ForkResultMetadata>;
-  return nonEmptyString(candidate.projectId)
-    && typeof candidate.name === 'string'
-    && nonEmptyString(candidate.headCommitId);
-};
-
 const isAttempt = (value: unknown): value is ForkAttempt => {
   if (value === null || typeof value !== 'object') return false;
   const candidate = value as Partial<ForkAttempt>;
-  return nonEmptyString(candidate.sourceProjectId)
+  return Object.keys(candidate).length === 2
+    && Object.hasOwn(candidate, 'sourceProjectId')
+    && Object.hasOwn(candidate, 'idempotencyKey')
+    && nonEmptyString(candidate.sourceProjectId)
     && typeof candidate.idempotencyKey === 'string'
-    && FORK_KEY_PATTERN.test(candidate.idempotencyKey)
-    && (candidate.result === undefined || isResult(candidate.result));
+    && FORK_KEY_PATTERN.test(candidate.idempotencyKey);
 };
 
 const readPersistedAttempts = (): Map<string, ForkAttempt> => {
@@ -104,31 +91,22 @@ const clearAttempt = (attempt: ForkAttempt): void => {
 
 export async function stageForkImport(sourceProjectId: string): Promise<string> {
   const attempt = attemptForSource(sourceProjectId);
-  let result = attempt.result;
-  if (!result) {
-    const response = await cloudApi.fork(sourceProjectId, attempt.idempotencyKey);
-    const project = response.project;
-    if (!nonEmptyString(project?.id)
-      || typeof project.name !== 'string'
-      || !nonEmptyString(project.headCommitId)) {
-      throw new Error('Fork response did not include durable project metadata.');
-    }
-    result = {
-      projectId: project.id,
-      name: project.name,
-      headCommitId: project.headCommitId,
-    };
-    saveAttempt({ ...attempt, result });
+  const response = await cloudApi.fork(sourceProjectId, attempt.idempotencyKey);
+  const project = response.project;
+  if (!nonEmptyString(project?.id)
+    || typeof project.name !== 'string'
+    || !nonEmptyString(project.headCommitId)) {
+    throw new Error('Fork response did not include durable project metadata.');
   }
 
-  const commit = await cloudApi.getCommit(result.projectId, result.headCommitId);
+  const commit = await cloudApi.getCommit(project.id, project.headCommitId);
   const importId = await stageImport(
     {
-      name: result.name,
+      name: project.name,
       state: commit.state,
-      cloud: { projectId: result.projectId, lastSyncedCommitId: commit.id },
+      cloud: { projectId: project.id, lastSyncedCommitId: commit.id },
     },
-    { sourceKey: `gallery-fork:${result.projectId}:${commit.id}` },
+    { sourceKey: `gallery-fork:${project.id}:${commit.id}` },
   );
   clearAttempt(attempt);
   return importId;
