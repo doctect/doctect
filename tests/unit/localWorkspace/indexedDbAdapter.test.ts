@@ -28,6 +28,7 @@ import type {
 } from '../../../services/localWorkspace/migration';
 import {
   WORKSPACE_DB_NAME,
+  WORKSPACE_DB_VERSION,
   WORKSPACE_MIGRATION_ID,
   type LegacyBackupRecord,
   type MigrationLedger,
@@ -103,7 +104,7 @@ const preparedCopy = (digest = 'source-digest'): PreparedInitialCopy => {
   };
   const ledger: MigrationLedger = {
     id: WORKSPACE_MIGRATION_ID,
-    indexedDbVersion: 1,
+    indexedDbVersion: WORKSPACE_DB_VERSION,
     state: 'copied',
     origin: 'legacy',
     ledgerRevision: 0,
@@ -234,6 +235,19 @@ const openRaw = (
 ): Promise<IDBDatabase> => requestResult(
   version === undefined ? indexedDB.open(name) : indexedDB.open(name, version),
 );
+
+const openVersionOneDatabase = async (
+  indexedDB: IDBFactory,
+  name = WORKSPACE_DB_NAME,
+): Promise<IDBDatabase> => {
+  const request = indexedDB.open(name, 1);
+  request.addEventListener('upgradeneeded', () => {
+    for (const storeName of STORE_NAMES) {
+      request.result.createObjectStore(storeName, { keyPath: 'id' });
+    }
+  }, { once: true });
+  return requestResult(request);
+};
 
 const seedRawRecord = async (
   indexedDB: IDBFactory,
@@ -369,14 +383,45 @@ const WRITE_OPERATIONS = [
 ] as const;
 
 describe('IndexedDB schema', () => {
-  it('opens exact database version 1 by default', async () => {
+  it('opens exact database version 2 by default', async () => {
     const indexedDB = new IDBFactory();
     const adapter = createTestAdapter({ indexedDB });
     await adapter.open();
 
     const rawDatabase = await openRaw(indexedDB, WORKSPACE_DB_NAME);
-    expect(rawDatabase.version).toBe(1);
+    expect(rawDatabase.version).toBe(2);
     rawDatabase.close();
+  });
+
+  it('opens a complete version-1 database at version 2 without changing records', async () => {
+    const indexedDB = new IDBFactory();
+    const versionOne = await openVersionOneDatabase(indexedDB);
+    const transaction = versionOne.transaction('projects', 'readwrite');
+    const historical = {
+      id: 'historical-project',
+      project: { marker: 'preserve-exactly' },
+      storageRevision: 4,
+      updatedAt: TEST_NOW,
+    };
+    transaction.objectStore('projects').put(historical);
+    await transactionDone(transaction);
+    versionOne.close();
+
+    const adapter = createTestAdapter({ indexedDB });
+    await adapter.open();
+
+    const upgraded = await openRaw(indexedDB, WORKSPACE_DB_NAME);
+    expect(upgraded.version).toBe(2);
+    upgraded.close();
+    expect((await adapter.inspect()).projects).toEqual([historical]);
+    expect(await adapter.describeSchema()).toEqual({
+      projects: [],
+      workspace: [],
+      presets: [],
+      pendingImports: [],
+      migrationLedger: [],
+      legacyBackup: [],
+    });
   });
 
   it('creates exactly six stores and no indexes', async () => {
@@ -489,7 +534,11 @@ describe('open lifecycle', () => {
     const adapter = createTestAdapter({ indexedDB, onAuthorityLost });
     await adapter.open();
 
-    const upgraded = await openRaw(indexedDB, tracked.names[0], 2);
+    const upgraded = await openRaw(
+      indexedDB,
+      tracked.names[0],
+      WORKSPACE_DB_VERSION + 1,
+    );
 
     expect(onAuthorityLost).toHaveBeenCalledWith(
       expect.objectContaining({ code: 'authority-lost' }),
@@ -548,7 +597,11 @@ describe('write transaction startup', () => {
     const databaseName = tracked.names[0];
     setupAdapter.close();
     await requestResult(indexedDB.deleteDatabase(databaseName));
-    const malformedDatabase = await openRaw(indexedDB, databaseName, 1);
+    const malformedDatabase = await openRaw(
+      indexedDB,
+      databaseName,
+      WORKSPACE_DB_VERSION,
+    );
     malformedDatabase.close();
     const adapter = createTestAdapter({ indexedDB });
     await adapter.open();

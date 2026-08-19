@@ -8,7 +8,7 @@ import type {
 import type { LegacyDocumentKey, LegacySnapshot } from './legacyTypes';
 
 export const WORKSPACE_DB_NAME = 'doctect-local-workspace';
-export const WORKSPACE_DB_VERSION = 1;
+export const WORKSPACE_DB_VERSION = 2;
 export const WORKSPACE_MIGRATION_ID = 'local-storage-to-indexeddb-v1';
 export const PERSISTENCE_ROLLOUT_EPOCH = 1;
 
@@ -28,6 +28,10 @@ export interface StoredProject {
   consumedImportDigest?: string;
   consumedImportAttempt?: StoredImportAttemptProvenance;
 }
+
+export type HistoricalStoredProjectV1 = Omit<StoredProject, 'incarnation'> & {
+  incarnation?: never;
+};
 
 export const storedProjectLineage = (
   record: Pick<StoredProject, 'incarnation' | 'storageRevision'>,
@@ -91,7 +95,7 @@ export interface RecoveryMarker {
 
 export interface MigrationLedger {
   id: 'local-storage-to-indexeddb-v1';
-  indexedDbVersion: 1;
+  indexedDbVersion: typeof WORKSPACE_DB_VERSION;
   state: 'copied' | 'verified' | 'cleanup-started' | 'cleanup-complete';
   origin: 'legacy' | 'native';
   ledgerRevision: number;
@@ -114,6 +118,10 @@ export interface MigrationLedger {
   persistenceRolloutEpoch: 1;
   unresolvedRecovery: RecoveryMarker | null;
 }
+
+export type HistoricalMigrationLedgerV1 = Omit<MigrationLedger, 'indexedDbVersion'> & {
+  indexedDbVersion: 1;
+};
 
 export interface LegacyBackupRecord {
   id: string;

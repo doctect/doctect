@@ -58,7 +58,7 @@ const pendingImport = () => ({
 describe('foundational contracts and fixtures', () => {
   it('pins database and rollout constants', () => {
     expect(WORKSPACE_DB_NAME).toBe('doctect-local-workspace');
-    expect(WORKSPACE_DB_VERSION).toBe(1);
+    expect(WORKSPACE_DB_VERSION).toBe(2);
     expect(WORKSPACE_MIGRATION_ID).toBe('local-storage-to-indexeddb-v1');
     expect(PERSISTENCE_ROLLOUT_EPOCH).toBe(1);
   });
