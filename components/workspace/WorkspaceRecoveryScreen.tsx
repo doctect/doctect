@@ -12,6 +12,11 @@ import type {
   RecoverySource,
   WorkspaceBootstrapResult,
 } from '../../services/localWorkspace/index';
+import {
+  OPEN_WORKSPACE_PRESENTATION,
+  PROJECT_COPY_HELPER_TEXT,
+  RECOVERY_SOURCE_PRESENTATION,
+} from './recoverySourcePresentation';
 
 export type WorkspaceBlockingResult = Extract<
   WorkspaceBootstrapResult,
@@ -28,12 +33,6 @@ export interface WorkspaceRecoveryScreenProps {
   isRecovering?: boolean;
   actionError?: string | null;
 }
-
-const EXPORT_LABELS: Record<RecoverySource, string> = {
-  'legacy-current': 'Download current browser copy',
-  'legacy-original': 'Download original backup',
-  'indexeddb-workspace': 'Download editor copy',
-};
 
 const downloadButtonClassName = 'inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition-colors hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 disabled:cursor-wait disabled:opacity-60';
 
@@ -55,17 +54,16 @@ export function WorkspaceRecoveryScreen({
   const returnFocusRef = useRef(false);
   const recovery = result.status === 'recovery' ? result.recovery : undefined;
   const splitBrain = recovery?.kind === 'split-brain';
-  const initialFailure = recovery !== undefined && !splitBrain;
   const heading = result.status === 'unavailable'
-    ? 'Local project storage is unavailable'
+    ? 'Doctect can’t open your saved projects'
     : splitBrain
-      ? 'Project copies changed in another tab'
-      : "We couldn't upgrade local projects";
+      ? 'We found two different saved project sets'
+      : 'We couldn’t finish preparing your projects';
   const supportingCopy = result.status === 'unavailable'
-    ? 'The editor cannot open safely. No existing project data was changed.'
+    ? 'Local project storage could not be opened. No saved project data was changed.'
     : splitBrain
-      ? 'Nothing was overwritten. Download either copy before choosing how to continue.'
-      : 'Your existing projects remain untouched. The upgrade did not finish, and the editor did not create replacement data.';
+      ? 'Another tab or an older Doctect version may have saved different changes. Nothing was overwritten.'
+      : 'Editor stayed closed to protect your work. Your saved projects were not replaced or deleted.';
   const technicalMessage = result.status === 'recovery'
     ? result.recovery.message
     : result.message;
@@ -121,78 +119,26 @@ export function WorkspaceRecoveryScreen({
       aria-labelledby="workspace-recovery-heading"
     >
       <section
-        role="alert"
-        aria-live="assertive"
         aria-hidden={confirmationOpen ? true : undefined}
         inert={confirmationOpen ? true : undefined}
         className="w-full max-w-2xl rounded-xl border border-red-200 bg-white p-6 shadow-[0_18px_45px_-28px_rgba(15,23,42,0.45)] sm:p-8"
       >
-        <div className="mb-5 flex size-12 items-center justify-center rounded-lg bg-red-50 text-red-700">
-          <AlertTriangle className="size-6" aria-hidden="true" />
-        </div>
-        <h1
-          id="workspace-recovery-heading"
-          className="text-2xl font-bold tracking-tight text-slate-900"
-        >
-          {heading}
-        </h1>
-        <p className="mt-3 max-w-[68ch] text-sm leading-6 text-slate-700 sm:text-base">
-          {supportingCopy}
-        </p>
-        <p className="mt-4 rounded-lg bg-slate-100 px-4 py-3 text-sm leading-6 text-slate-700">
-          <span className="font-semibold text-slate-900">Storage detail:</span>{' '}
-          {technicalMessage}
-        </p>
-        {actionError && (
-          <p className="mt-4 rounded-lg bg-red-50 px-4 py-3 text-sm font-medium text-red-800">
-            {actionError}
+        <div role="alert" aria-live="assertive">
+          <div className="mb-5 flex size-12 items-center justify-center rounded-lg bg-red-50 text-red-700">
+            <AlertTriangle className="size-6" aria-hidden="true" />
+          </div>
+          <h1
+            id="workspace-recovery-heading"
+            className="text-2xl font-bold tracking-tight text-slate-900"
+          >
+            {heading}
+          </h1>
+          <p className="mt-3 max-w-[68ch] text-sm leading-6 text-slate-700 sm:text-base">
+            {supportingCopy}
           </p>
-        )}
-
-        <div className="mt-7 border-t border-slate-200 pt-6">
-          <h2 className="text-base font-semibold text-slate-900">Recovery downloads</h2>
-          {onExportOpenWorkspace || availableExports.length > 0 ? (
-            <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
-              {onExportOpenWorkspace && (
-                <button
-                  type="button"
-                  onClick={onExportOpenWorkspace}
-                  disabled={busy}
-                  className={downloadButtonClassName}
-                >
-                  <Download className="size-4" aria-hidden="true" />
-                  Download open work
-                </button>
-              )}
-              {availableExports.map(source => {
-                const label = initialFailure && source === 'legacy-current'
-                  ? 'Download backup'
-                  : EXPORT_LABELS[source];
-                const downloading = activeExport === source;
-                return (
-                  <button
-                    key={source}
-                    type="button"
-                    onClick={() => onExport(source)}
-                    disabled={busy}
-                    className={downloadButtonClassName}
-                  >
-                    {downloading
-                      ? (
-                          <LoaderCircle
-                            className="size-4 animate-spin motion-reduce:animate-none"
-                            aria-hidden="true"
-                          />
-                        )
-                      : <Download className="size-4" aria-hidden="true" />}
-                    {downloading ? 'Preparing download' : label}
-                  </button>
-                );
-              })}
-            </div>
-          ) : (
-            <p className="mt-2 text-sm leading-6 text-slate-600">
-              No recovery downloads are currently available.
+          {actionError && (
+            <p className="mt-4 rounded-lg bg-red-50 px-4 py-3 text-sm font-medium text-red-800">
+              {actionError}
             </p>
           )}
         </div>
@@ -206,7 +152,7 @@ export function WorkspaceRecoveryScreen({
               className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition-colors hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 disabled:cursor-wait disabled:opacity-60"
             >
               <RefreshCw className="size-4" aria-hidden="true" />
-              Retry
+              Try again
             </button>
           )}
           {recovery?.canRecoverLegacyAsCopies && onRecoverAsCopies && (
@@ -225,10 +171,81 @@ export function WorkspaceRecoveryScreen({
                     />
                   )
                 : <DatabaseBackup className="size-4" aria-hidden="true" />}
-              {isRecovering ? 'Recovering copies' : 'Recover changed projects as copies'}
+              {isRecovering
+                ? 'Adding separate copies'
+                : 'Add changed projects without replacing anything'}
             </button>
           )}
         </div>
+
+        <div className="mt-7 border-t border-slate-200 pt-6">
+          <h2 className="text-base font-semibold text-slate-900">Save project copies</h2>
+          <p className="mt-2 text-sm leading-6 text-slate-600">{PROJECT_COPY_HELPER_TEXT}</p>
+          {onExportOpenWorkspace || availableExports.length > 0 ? (
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              {onExportOpenWorkspace && (
+                <article className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                  <h3 className="font-semibold text-slate-900">
+                    {OPEN_WORKSPACE_PRESENTATION.title}
+                  </h3>
+                  <p className="mt-1 text-sm leading-6 text-slate-600">
+                    {OPEN_WORKSPACE_PRESENTATION.explanation}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={onExportOpenWorkspace}
+                    disabled={busy}
+                    className={`${downloadButtonClassName} mt-3`}
+                  >
+                    <Download className="size-4" aria-hidden="true" />
+                    {OPEN_WORKSPACE_PRESENTATION.actionLabel}
+                  </button>
+                </article>
+              )}
+              {availableExports.map(source => {
+                const presentation = RECOVERY_SOURCE_PRESENTATION[source];
+                const downloading = activeExport === source;
+                return (
+                  <article
+                    key={source}
+                    className="rounded-lg border border-slate-200 bg-slate-50 p-4"
+                  >
+                    <h3 className="font-semibold text-slate-900">{presentation.title}</h3>
+                    <p className="mt-1 text-sm leading-6 text-slate-600">
+                      {presentation.explanation}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => onExport(source)}
+                      disabled={busy}
+                      className={`${downloadButtonClassName} mt-3`}
+                    >
+                      {downloading
+                        ? (
+                            <LoaderCircle
+                              className="size-4 animate-spin motion-reduce:animate-none"
+                              aria-hidden="true"
+                            />
+                          )
+                        : <Download className="size-4" aria-hidden="true" />}
+                      {downloading ? 'Preparing project file' : presentation.actionLabel}
+                    </button>
+                  </article>
+                );
+              })}
+            </div>
+          ) : (
+            <p className="mt-2 text-sm leading-6 text-slate-600">
+              No project copies are available to save right now.
+            </p>
+          )}
+        </div>
+        <details className="mt-6 rounded-lg bg-slate-100 px-4 py-3 text-sm text-slate-700">
+          <summary className="min-h-11 cursor-pointer font-semibold text-slate-900">
+            Technical details
+          </summary>
+          <p className="mt-2 leading-6">{technicalMessage}</p>
+        </details>
       </section>
 
       {confirmationOpen && (
@@ -244,7 +261,7 @@ export function WorkspaceRecoveryScreen({
             <div className="flex items-start justify-between gap-5">
               <div>
                 <h2 id={dialogHeadingId} className="text-xl font-bold tracking-tight text-slate-900">
-                  Recover changed projects as copies?
+                  Add changed projects as separate copies?
                 </h2>
                 <p id={dialogCopyId} className="mt-3 text-sm leading-6 text-slate-600">
                   Changed projects, presets, and pending imports will be added as local working
@@ -255,7 +272,7 @@ export function WorkspaceRecoveryScreen({
               <button
                 type="button"
                 onClick={closeConfirmation}
-                className="-mr-2 -mt-2 inline-flex size-10 shrink-0 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
+                className="-mr-2 -mt-2 inline-flex size-11 shrink-0 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
                 aria-label="Close recovery confirmation"
               >
                 <X className="size-5" aria-hidden="true" />
@@ -276,7 +293,7 @@ export function WorkspaceRecoveryScreen({
                 className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-[0_8px_18px_-12px_rgba(37,99,235,0.9)] transition-colors hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
               >
                 <DatabaseBackup className="size-4" aria-hidden="true" />
-                Recover as copies
+                Add separate copies
               </button>
             </div>
           </dialog>

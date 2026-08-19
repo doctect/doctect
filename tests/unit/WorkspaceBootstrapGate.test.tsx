@@ -9,6 +9,13 @@ import {
 } from '../../components/workspace/WorkspaceBootstrapGate';
 import { MigrationReceipt } from '../../components/workspace/MigrationReceipt';
 import { WorkspaceRecoveryScreen } from '../../components/workspace/WorkspaceRecoveryScreen';
+import {
+  OPEN_WORKSPACE_PRESENTATION,
+  PROJECT_COPY_HELPER_TEXT,
+  PROJECT_DOWNLOAD_ERROR,
+  RECOVERY_SOURCE_PRESENTATION,
+  SEPARATE_COPIES_ERROR,
+} from '../../components/workspace/recoverySourcePresentation';
 import { useWorkspaceProjectWrites } from '../../hooks/useWorkspaceProjectWrites';
 import { createBlankProject } from '../../services/presets';
 import type {
@@ -124,7 +131,9 @@ function ReplacementActionProbe({
 }) {
   useLayoutEffect(() => {
     if (downloadDuringLayout) {
-      screen.queryByRole('button', { name: 'Download current browser copy' })?.click();
+      screen.queryByRole('button', {
+        name: RECOVERY_SOURCE_PRESENTATION['legacy-current'].actionLabel,
+      })?.click();
     }
   }, [downloadDuringLayout, store]);
 
@@ -236,10 +245,13 @@ describe('WorkspaceBootstrapGate', () => {
     render(<WorkspaceBootstrapGate store={store} renderEditor={fakeEditorRenderer} />);
 
     expect(await screen.findByRole('heading', {
-      name: "We couldn't upgrade local projects",
+      name: 'We couldn’t finish preparing your projects',
     })).toBeVisible();
-    expect(screen.getByText('No recovery downloads are currently available.')).toBeVisible();
-    expect(screen.queryByRole('button', { name: 'Download backup' })).not.toBeInTheDocument();
+    expect(screen.getByText('No project copies are available to save right now.')).toBeVisible();
+    expect(screen.queryByRole('button', {
+      name: RECOVERY_SOURCE_PRESENTATION['legacy-current'].actionLabel,
+    }))
+      .not.toBeInTheDocument();
     expect(store.exportRecoveryBundle).not.toHaveBeenCalled();
   });
 
@@ -352,15 +364,20 @@ describe('WorkspaceBootstrapGate', () => {
     render(<WorkspaceBootstrapGate store={store} renderEditor={fakeEditorRenderer} />);
 
     const alert = await screen.findByRole('alert');
-    expect(within(alert).getByRole('button', { name: 'Retry' })).toBeEnabled();
-    expect(within(alert).getByRole('button', { name: 'Download open work' })).toBeEnabled();
-    expect(within(alert).queryByRole('button', { name: 'Download editor copy' }))
+    expect(within(alert).queryByRole('button')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeEnabled();
+    expect(screen.getByRole('button', {
+      name: OPEN_WORKSPACE_PRESENTATION.actionLabel,
+    })).toBeEnabled();
+    expect(screen.queryByRole('button', {
+      name: RECOVERY_SOURCE_PRESENTATION['indexeddb-workspace'].actionLabel,
+    }))
       .not.toBeInTheDocument();
     expect(screen.queryByTestId('editor-page')).not.toBeInTheDocument();
     expect(initial.pendingImports).toEqual([pending]);
     expect(trackEvent).not.toHaveBeenCalled();
 
-    fireEvent.click(within(alert).getByRole('button', { name: 'Retry' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     expect(await screen.findByTestId('editor-page')).toHaveTextContent('target-retry');
     expect(store.commit).toHaveBeenCalledTimes(2);
     expect(store.commit).toHaveBeenNthCalledWith(2, {
@@ -553,9 +570,11 @@ describe('WorkspaceBootstrapGate', () => {
       availableExports: [],
     })));
     expect(await screen.findByRole('heading', {
-      name: 'Local project storage is unavailable',
+      name: 'Doctect can’t open your saved projects',
     })).toBeVisible();
-    const staleDownload = screen.queryByRole('button', { name: 'Download open work' });
+    const staleDownload = screen.queryByRole('button', {
+      name: OPEN_WORKSPACE_PRESENTATION.actionLabel,
+    });
     if (staleDownload) fireEvent.click(staleDownload);
 
     expect(downloadJson).not.toHaveBeenCalledWith({
@@ -563,7 +582,7 @@ describe('WorkspaceBootstrapGate', () => {
       version: 1,
       capturedAt: expect.any(String),
       workspace: oldWorkspace,
-    }, 'doctect-open-workspace.json');
+    }, OPEN_WORKSPACE_PRESENTATION.filename);
     expect(staleDownload).not.toBeInTheDocument();
   });
 
@@ -574,7 +593,7 @@ describe('WorkspaceBootstrapGate', () => {
     const view = render(
       <ReplacementActionProbe store={firstStore} downloadDuringLayout={false} />,
     );
-    await screen.findByRole('heading', { name: 'Project copies changed in another tab' });
+    await screen.findByRole('heading', { name: 'We found two different saved project sets' });
 
     view.rerender(
       <ReplacementActionProbe store={replacementStore} downloadDuringLayout />,
@@ -582,7 +601,9 @@ describe('WorkspaceBootstrapGate', () => {
 
     expect(replacementStore.exportRecoveryBundle).not.toHaveBeenCalled();
     expect(firstStore.exportRecoveryBundle).not.toHaveBeenCalled();
-    expect(screen.queryByRole('button', { name: 'Download current browser copy' }))
+    expect(screen.queryByRole('button', {
+      name: RECOVERY_SOURCE_PRESENTATION['legacy-current'].actionLabel,
+    }))
       .not.toBeInTheDocument();
     expect(screen.getByRole('status')).toHaveTextContent('Opening local storage');
   });
@@ -616,13 +637,13 @@ describe('WorkspaceBootstrapGate', () => {
     }))));
 
     expect(await screen.findByRole('heading', {
-      name: 'Project copies changed in another tab',
+      name: 'We found two different saved project sets',
     })).toBeVisible();
     expect(screen.queryByTestId('editor-page')).not.toBeInTheDocument();
     expect(replacementStore.bootstrap).not.toHaveBeenCalled();
   });
 
-  it('shows the exact initial migration failure and offers retry and backup', async () => {
+  it('shows the exact initial migration failure and offers retry plus a project copy', async () => {
     const store = fakeStore({
       bootstrap: recoveryResult(workspaceRecovery({
         kind: 'migration-failed',
@@ -633,21 +654,66 @@ describe('WorkspaceBootstrapGate', () => {
 
     const alert = await screen.findByRole('alert');
     expect(within(alert).getByRole('heading', {
-      name: "We couldn't upgrade local projects",
+      name: 'We couldn’t finish preparing your projects',
     })).toBeVisible();
     expect(within(alert).getByText(
-      'Your existing projects remain untouched. The upgrade did not finish, and the editor did not create replacement data.',
+      'Editor stayed closed to protect your work. Your saved projects were not replaced or deleted.',
     )).toBeVisible();
-    const retry = within(alert).getByRole('button', { name: 'Retry' });
-    const download = within(alert).getByRole('button', { name: 'Download backup' });
+    expect(within(alert).queryByRole('button')).not.toBeInTheDocument();
+    const detailsTrigger = screen.getByText('Technical details');
+    expect(detailsTrigger).toHaveClass('min-h-11');
+    const details = detailsTrigger.closest('details');
+    expect(details).not.toHaveAttribute('open');
+    expect(alert).not.toContainElement(details);
+    const retry = screen.getByRole('button', { name: 'Try again' });
+    const copiesHeading = screen.getByRole('heading', { name: 'Save project copies' });
+    expect(retry.compareDocumentPosition(copiesHeading)
+      & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByText(
+      PROJECT_COPY_HELPER_TEXT,
+    )).toBeVisible();
+    expect(screen.getByRole('heading', {
+      name: RECOVERY_SOURCE_PRESENTATION['legacy-current'].title,
+    })).toBeVisible();
+    expect(screen.getByText(
+      RECOVERY_SOURCE_PRESENTATION['legacy-current'].explanation,
+    )).toBeVisible();
+    const download = screen.getByRole('button', {
+      name: RECOVERY_SOURCE_PRESENTATION['legacy-current'].actionLabel,
+    });
     expect(retry).toBeEnabled();
     expect(retry).toHaveClass('min-h-11');
     expect(download).toHaveClass('min-h-11');
 
     fireEvent.click(download);
     await waitFor(() => expect(store.exportRecoveryBundle).toHaveBeenCalledWith('legacy-current'));
-    await waitFor(() => expect(downloadBlob).toHaveBeenCalledOnce());
+    await waitFor(() => expect(downloadBlob).toHaveBeenCalledWith(
+      expect.any(Blob),
+      RECOVERY_SOURCE_PRESENTATION['legacy-current'].filename,
+    ));
     expect(screen.queryByTestId('editor-page')).not.toBeInTheDocument();
+  });
+
+  it('reports a project-copy download failure inside the outcome alert', async () => {
+    const exportBundle = deferred<Blob>();
+    const store = fakeStore({
+      bootstrap: recoveryResult(workspaceRecovery({
+        availableExports: ['legacy-current'],
+      })),
+      exportBundles: { 'legacy-current': exportBundle.promise },
+    });
+    render(<WorkspaceBootstrapGate store={store} renderEditor={fakeEditorRenderer} />);
+
+    fireEvent.click(await screen.findByRole('button', {
+      name: RECOVERY_SOURCE_PRESENTATION['legacy-current'].actionLabel,
+    }));
+    await act(async () => exportBundle.reject(new Error('download failed')));
+
+    const alert = screen.getByRole('alert');
+    expect(within(alert).getByText(
+      PROJECT_DOWNLOAD_ERROR,
+    )).toBeVisible();
+    expect(within(alert).queryByRole('button')).not.toBeInTheDocument();
   });
 
   it('ignores phase and authority callbacks retained by a stale retry attempt', async () => {
@@ -660,10 +726,10 @@ describe('WorkspaceBootstrapGate', () => {
     });
     render(<WorkspaceBootstrapGate store={store} renderEditor={fakeEditorRenderer} />);
     expect(await screen.findByRole('heading', {
-      name: "We couldn't upgrade local projects",
+      name: 'We couldn’t finish preparing your projects',
     })).toBeVisible();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     expect(screen.getByRole('status')).toHaveTextContent('Opening local storage');
 
     act(() => {
@@ -672,7 +738,7 @@ describe('WorkspaceBootstrapGate', () => {
     });
     expect(screen.getByRole('status')).toHaveTextContent('Opening local storage');
     expect(screen.queryByRole('heading', {
-      name: 'Local project storage is unavailable',
+      name: 'Doctect can’t open your saved projects',
     })).not.toBeInTheDocument();
 
     await act(async () => retry.resolve(readyResult()));
@@ -685,10 +751,10 @@ describe('WorkspaceBootstrapGate', () => {
 
     const alert = await screen.findByRole('alert');
     expect(within(alert).getByRole('heading', {
-      name: 'Local project storage is unavailable',
+      name: 'Doctect can’t open your saved projects',
     })).toBeVisible();
     expect(within(alert).getByText(
-      'The editor cannot open safely. No existing project data was changed.',
+      'Local project storage could not be opened. No saved project data was changed.',
     )).toBeVisible();
     expect(screen.queryByTestId('editor-page')).not.toBeInTheDocument();
   });
@@ -701,10 +767,10 @@ describe('WorkspaceBootstrapGate', () => {
     act(() => store.emitAuthorityLost(recoveryResult(splitBrainRecovery())));
 
     expect(await screen.findByRole('heading', {
-      name: 'Project copies changed in another tab',
+      name: 'We found two different saved project sets',
     })).toBeVisible();
     expect(screen.getByText(
-      'Nothing was overwritten. Download either copy before choosing how to continue.',
+      'Another tab or an older Doctect version may have saved different changes. Nothing was overwritten.',
     )).toBeVisible();
     expect(screen.queryByTestId('editor-page')).not.toBeInTheDocument();
   });
@@ -724,14 +790,20 @@ describe('WorkspaceBootstrapGate', () => {
 
     act(() => store.emitAuthorityLost(recoveryResult(splitBrainRecovery())));
     expect(screen.queryByTestId('editor-page')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Download open work' }));
+    expect(screen.getByRole('heading', {
+      name: OPEN_WORKSPACE_PRESENTATION.title,
+    })).toBeVisible();
+    expect(screen.getByText(OPEN_WORKSPACE_PRESENTATION.explanation)).toBeVisible();
+    fireEvent.click(screen.getByRole('button', {
+      name: OPEN_WORKSPACE_PRESENTATION.actionLabel,
+    }));
 
     expect(downloadJson).toHaveBeenCalledWith({
       format: 'doctect.open-workspace-recovery',
       version: 1,
       capturedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/),
       workspace: openWorkspace,
-    }, 'doctect-open-workspace.json');
+    }, OPEN_WORKSPACE_PRESENTATION.filename);
   });
 
   it('clones project-edit publication before synchronous authority-loss unmount', async () => {
@@ -756,14 +828,16 @@ describe('WorkspaceBootstrapGate', () => {
 
     fireEvent.click(await screen.findByTestId('editor-page'));
     expect(screen.queryByTestId('editor-page')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Download open work' }));
+    fireEvent.click(screen.getByRole('button', {
+      name: OPEN_WORKSPACE_PRESENTATION.actionLabel,
+    }));
 
     expect(downloadJson).toHaveBeenCalledWith({
       format: 'doctect.open-workspace-recovery',
       version: 1,
       capturedAt: expect.any(String),
       workspace: expected,
-    }, 'doctect-open-workspace.json');
+    }, OPEN_WORKSPACE_PRESENTATION.filename);
   });
 
   it('retries a provisional capture after initial clone failure while the editor stays blocked', async () => {
@@ -807,17 +881,22 @@ describe('WorkspaceBootstrapGate', () => {
     expect(screen.queryByTestId('editor-page')).not.toBeInTheDocument();
     const alert = screen.getByRole('alert');
     expect(within(alert).getByRole('heading', {
-      name: 'Project copies changed in another tab',
+      name: 'We found two different saved project sets',
     })).toBeVisible();
     expect(captureAttempts).toBe(1);
-    expect(within(alert).queryByRole('button', { name: 'Download open work' }))
-      .not.toBeInTheDocument();
-    expect(within(alert).getByRole('button', { name: 'Download current browser copy' }))
-      .toBeEnabled();
-    expect(within(alert).getByRole('button', { name: 'Download original backup' }))
-      .toBeEnabled();
-    expect(within(alert).getByRole('button', { name: 'Download editor copy' }))
-      .toBeEnabled();
+    expect(within(alert).queryByRole('button')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', {
+      name: OPEN_WORKSPACE_PRESENTATION.actionLabel,
+    })).not.toBeInTheDocument();
+    for (const source of [
+      'legacy-current',
+      'legacy-original',
+      'indexeddb-workspace',
+    ] as const satisfies readonly RecoverySource[]) {
+      expect(screen.getByRole('button', {
+        name: RECOVERY_SOURCE_PRESENTATION[source].actionLabel,
+      })).toBeEnabled();
+    }
     expect(store.commit).not.toHaveBeenCalled();
     expect(trackEvent).not.toHaveBeenCalled();
 
@@ -826,20 +905,26 @@ describe('WorkspaceBootstrapGate', () => {
       availableExports: ['indexeddb-workspace'],
     }));
     expect(screen.getByRole('heading', {
-      name: 'Local project storage is unavailable',
+      name: 'Doctect can’t open your saved projects',
     })).toBeVisible();
-    expect(screen.getByRole('button', { name: 'Download editor copy' })).toBeEnabled();
-    expect(screen.getByRole('button', { name: 'Download open work' })).toBeEnabled();
+    expect(screen.getByRole('button', {
+      name: RECOVERY_SOURCE_PRESENTATION['indexeddb-workspace'].actionLabel,
+    })).toBeEnabled();
+    expect(screen.getByRole('button', {
+      name: OPEN_WORKSPACE_PRESENTATION.actionLabel,
+    })).toBeEnabled();
     expect(screen.queryByTestId('editor-page')).not.toBeInTheDocument();
     expect(screen.getAllByRole('alert')).toHaveLength(1);
     expect(captureAttempts).toBe(2);
-    fireEvent.click(screen.getByRole('button', { name: 'Download open work' }));
+    fireEvent.click(screen.getByRole('button', {
+      name: OPEN_WORKSPACE_PRESENTATION.actionLabel,
+    }));
     expect(downloadJson).toHaveBeenCalledWith({
       format: 'doctect.open-workspace-recovery',
       version: 1,
       capturedAt: expect.any(String),
       workspace: initial,
-    }, 'doctect-open-workspace.json');
+    }, OPEN_WORKSPACE_PRESENTATION.filename);
   });
 
   it('keeps a successful protected capture when a repeated notification clone would fail', async () => {
@@ -875,21 +960,27 @@ describe('WorkspaceBootstrapGate', () => {
 
     emitAuthorityLost(recoveryResult(splitBrainRecovery({ recoveryId: 'protected-first' })));
     expect(screen.queryByTestId('editor-page')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Download open work' })).toBeEnabled();
+    expect(screen.getByRole('button', {
+      name: OPEN_WORKSPACE_PRESENTATION.actionLabel,
+    })).toBeEnabled();
 
     failCapture = true;
     emitAuthorityLost(unavailableResult({ availableExports: ['indexeddb-workspace'] }));
 
     expect(screen.queryByTestId('editor-page')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Download open work' })).toBeEnabled();
+    expect(screen.getByRole('button', {
+      name: OPEN_WORKSPACE_PRESENTATION.actionLabel,
+    })).toBeEnabled();
     expect(captureAttempts).toBe(1);
-    fireEvent.click(screen.getByRole('button', { name: 'Download open work' }));
+    fireEvent.click(screen.getByRole('button', {
+      name: OPEN_WORKSPACE_PRESENTATION.actionLabel,
+    }));
     expect(downloadJson).toHaveBeenCalledWith({
       format: 'doctect.open-workspace-recovery',
       version: 1,
       capturedAt: expect.any(String),
       workspace: initial,
-    }, 'doctect-open-workspace.json');
+    }, OPEN_WORKSPACE_PRESENTATION.filename);
   });
 
   it('does not replace protected open work when repeated cloning returns changed source', async () => {
@@ -933,18 +1024,22 @@ describe('WorkspaceBootstrapGate', () => {
 
     emitAuthorityLost(recoveryResult(splitBrainRecovery({ recoveryId: 'changed-source-first' })));
     expect(screen.queryByTestId('editor-page')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Download open work' })).toBeEnabled();
+    expect(screen.getByRole('button', {
+      name: OPEN_WORKSPACE_PRESENTATION.actionLabel,
+    })).toBeEnabled();
     emitAuthorityLost(recoveryResult(splitBrainRecovery({ recoveryId: 'changed-source-repeat' })));
 
     expect(screen.queryByTestId('editor-page')).not.toBeInTheDocument();
     expect(captureAttempts).toBe(1);
-    fireEvent.click(screen.getByRole('button', { name: 'Download open work' }));
+    fireEvent.click(screen.getByRole('button', {
+      name: OPEN_WORKSPACE_PRESENTATION.actionLabel,
+    }));
     expect(downloadJson).toHaveBeenCalledWith({
       format: 'doctect.open-workspace-recovery',
       version: 1,
       capturedAt: expect.any(String),
       workspace: firstProtected,
-    }, 'doctect-open-workspace.json');
+    }, OPEN_WORKSPACE_PRESENTATION.filename);
   });
 
   it('ignores stale publications and notifications after unmounting a protected blocked gate', async () => {
@@ -984,7 +1079,9 @@ describe('WorkspaceBootstrapGate', () => {
     } finally {
       cloningBlockedCapture = false;
     }
-    expect(screen.getByRole('button', { name: 'Download open work' })).toBeEnabled();
+    expect(screen.getByRole('button', {
+      name: OPEN_WORKSPACE_PRESENTATION.actionLabel,
+    })).toBeEnabled();
     expect(captureAttempts).toBe(1);
 
     view.unmount();
@@ -1013,14 +1110,16 @@ describe('WorkspaceBootstrapGate', () => {
     await screen.findByTestId('editor-page');
 
     act(() => store.emitAuthorityLost(recoveryResult(splitBrainRecovery())));
-    fireEvent.click(screen.getByRole('button', { name: 'Download open work' }));
+    fireEvent.click(screen.getByRole('button', {
+      name: OPEN_WORKSPACE_PRESENTATION.actionLabel,
+    }));
 
     expect(downloadJson).toHaveBeenCalledWith({
       format: 'doctect.open-workspace-recovery',
       version: 1,
       capturedAt: expect.any(String),
       workspace: initial,
-    }, 'doctect-open-workspace.json');
+    }, OPEN_WORKSPACE_PRESENTATION.filename);
   });
 
   it('refreshes a provisional import capture before the editor mount effect publishes', async () => {
@@ -1042,17 +1141,19 @@ describe('WorkspaceBootstrapGate', () => {
     render(<WorkspaceBootstrapGate store={store} renderEditor={renderEditor} />);
 
     expect(await screen.findByRole('heading', {
-      name: 'Local project storage is unavailable',
+      name: 'Doctect can’t open your saved projects',
     })).toBeVisible();
     expect(screen.queryByTestId('editor-page')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Download open work' }));
+    fireEvent.click(screen.getByRole('button', {
+      name: OPEN_WORKSPACE_PRESENTATION.actionLabel,
+    }));
 
     expect(downloadJson).toHaveBeenCalledWith({
       format: 'doctect.open-workspace-recovery',
       version: 1,
       capturedAt: expect.any(String),
       workspace: consumed,
-    }, 'doctect-open-workspace.json');
+    }, OPEN_WORKSPACE_PRESENTATION.filename);
   });
 
   it('refreshes a provisional capture after each import before a later import fails', async () => {
@@ -1066,7 +1167,9 @@ describe('WorkspaceBootstrapGate', () => {
       .mockRejectedValueOnce(new Error('second import failed'));
     render(<WorkspaceBootstrapGate store={store} renderEditor={fakeEditorRenderer} />);
 
-    const download = await screen.findByRole('button', { name: 'Download open work' });
+    const download = await screen.findByRole('button', {
+      name: OPEN_WORKSPACE_PRESENTATION.actionLabel,
+    });
     expect(store.commit).toHaveBeenCalledTimes(2);
     expect(screen.queryByTestId('editor-page')).not.toBeInTheDocument();
     fireEvent.click(download);
@@ -1076,10 +1179,10 @@ describe('WorkspaceBootstrapGate', () => {
       version: 1,
       capturedAt: expect.any(String),
       workspace: afterFirst,
-    }, 'doctect-open-workspace.json');
+    }, OPEN_WORKSPACE_PRESENTATION.filename);
   });
 
-  it('protects a provisional seed once blocked before Retry imports finish', async () => {
+  it('protects a provisional seed once blocked before Try again imports finish', async () => {
     const initial = workspaceSnapshot({ activeProjectId: 'provisional-before-block' });
     const pending = pendingImport('blocked-provisional-import', 'blocked-import-project');
     const retried = workspaceSnapshot({
@@ -1102,20 +1205,22 @@ describe('WorkspaceBootstrapGate', () => {
       canRetry: true,
     }))));
 
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     expect(await screen.findByTestId('editor-page')).toHaveTextContent('blocked-import-project');
     act(() => store.emitAuthorityLost(unavailableResult({ availableExports: [] }), 1));
-    fireEvent.click(screen.getByRole('button', { name: 'Download open work' }));
+    fireEvent.click(screen.getByRole('button', {
+      name: OPEN_WORKSPACE_PRESENTATION.actionLabel,
+    }));
 
     expect(downloadJson).toHaveBeenCalledWith({
       format: 'doctect.open-workspace-recovery',
       version: 1,
       capturedAt: expect.any(String),
       workspace: initial,
-    }, 'doctect-open-workspace.json');
+    }, OPEN_WORKSPACE_PRESENTATION.filename);
   });
 
-  it('retains blocked open work through Retry until the replacement editor publishes', async () => {
+  it('retains blocked open work through Try again until the replacement editor publishes', async () => {
     const initial = workspaceSnapshot({ activeProjectId: 'initial-project' });
     const blockedOpenWork = workspaceSnapshot({
       activeProjectId: 'initial-project',
@@ -1142,23 +1247,25 @@ describe('WorkspaceBootstrapGate', () => {
       canRetry: true,
     }))));
 
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     expect(await screen.findByTestId('editor-page')).toHaveTextContent('retried-project');
     act(() => store.emitAuthorityLost(recoveryResult(workspaceRecovery({
       recoveryId: 'retry-retained-open-work-again',
       availableExports: [],
     })), 1));
-    fireEvent.click(screen.getByRole('button', { name: 'Download open work' }));
+    fireEvent.click(screen.getByRole('button', {
+      name: OPEN_WORKSPACE_PRESENTATION.actionLabel,
+    }));
 
     expect(downloadJson).toHaveBeenCalledWith({
       format: 'doctect.open-workspace-recovery',
       version: 1,
       capturedAt: expect.any(String),
       workspace: blockedOpenWork,
-    }, 'doctect-open-workspace.json');
+    }, OPEN_WORKSPACE_PRESENTATION.filename);
   });
 
-  it('retains blocked open work through recover-as-copies completion', async () => {
+  it('retains blocked open work through add-separate-copies completion', async () => {
     const initial = workspaceSnapshot({ activeProjectId: 'before-recovery' });
     const blockedOpenWork = workspaceSnapshot({
       activeProjectId: 'before-recovery',
@@ -1182,22 +1289,24 @@ describe('WorkspaceBootstrapGate', () => {
     }))));
 
     fireEvent.click(screen.getByRole('button', {
-      name: 'Recover changed projects as copies',
+      name: 'Add changed projects without replacing anything',
     }));
-    fireEvent.click(screen.getByRole('button', { name: 'Recover as copies' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add separate copies' }));
     expect(await screen.findByTestId('editor-page')).toHaveTextContent('recovered-project');
     act(() => store.emitAuthorityLost(unavailableResult({ availableExports: [] })));
-    fireEvent.click(screen.getByRole('button', { name: 'Download open work' }));
+    fireEvent.click(screen.getByRole('button', {
+      name: OPEN_WORKSPACE_PRESENTATION.actionLabel,
+    }));
 
     expect(downloadJson).toHaveBeenCalledWith({
       format: 'doctect.open-workspace-recovery',
       version: 1,
       capturedAt: expect.any(String),
       workspace: blockedOpenWork,
-    }, 'doctect-open-workspace.json');
+    }, OPEN_WORKSPACE_PRESENTATION.filename);
   });
 
-  it('retains blocked open work while a Retry receipt finishes', async () => {
+  it('retains blocked open work while a retry receipt finishes', async () => {
     const initial = workspaceSnapshot({ activeProjectId: 'before-receipt' });
     const blockedOpenWork = workspaceSnapshot({
       activeProjectId: 'before-receipt',
@@ -1227,22 +1336,24 @@ describe('WorkspaceBootstrapGate', () => {
       canRetry: true,
     }))));
 
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     await screen.findByRole('heading', { name: 'Local projects upgraded' });
     fireEvent.click(screen.getByRole('button', { name: 'Continue to editor' }));
     expect(await screen.findByTestId('editor-page')).toHaveTextContent('after-receipt');
     act(() => store.emitAuthorityLost(unavailableResult({ availableExports: [] }), 1));
-    fireEvent.click(screen.getByRole('button', { name: 'Download open work' }));
+    fireEvent.click(screen.getByRole('button', {
+      name: OPEN_WORKSPACE_PRESENTATION.actionLabel,
+    }));
 
     expect(downloadJson).toHaveBeenCalledWith({
       format: 'doctect.open-workspace-recovery',
       version: 1,
       capturedAt: expect.any(String),
       workspace: blockedOpenWork,
-    }, 'doctect-open-workspace.json');
+    }, OPEN_WORKSPACE_PRESENTATION.filename);
   });
 
-  it('retains blocked open work while Retry consumes a pending import', async () => {
+  it('retains blocked open work while Try again consumes a pending import', async () => {
     const initial = workspaceSnapshot({ activeProjectId: 'before-import' });
     const blockedOpenWork = workspaceSnapshot({
       activeProjectId: 'before-import',
@@ -1275,28 +1386,30 @@ describe('WorkspaceBootstrapGate', () => {
       canRetry: true,
     }))));
 
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     expect(await screen.findByTestId('editor-page')).toHaveTextContent('imported-project');
     expect(store.commit).toHaveBeenCalledWith({
       type: 'consume-import',
       importId: 'retained-open-work-import',
     });
     act(() => store.emitAuthorityLost(unavailableResult({ availableExports: [] }), 1));
-    fireEvent.click(screen.getByRole('button', { name: 'Download open work' }));
+    fireEvent.click(screen.getByRole('button', {
+      name: OPEN_WORKSPACE_PRESENTATION.actionLabel,
+    }));
 
     expect(downloadJson).toHaveBeenCalledWith({
       format: 'doctect.open-workspace-recovery',
       version: 1,
       capturedAt: expect.any(String),
       workspace: blockedOpenWork,
-    }, 'doctect-open-workspace.json');
+    }, OPEN_WORKSPACE_PRESENTATION.filename);
   });
 
-  it('rejects a retained prior-mount callback after Retry', async () => {
+  it('rejects a retained prior-mount callback after Try again', async () => {
     const initial = workspaceSnapshot({ activeProjectId: 'before-stale-callback' });
     const blockedOpenWork = workspaceSnapshot({
       activeProjectId: 'before-stale-callback',
-      projects: [{ ...initial.projects[0], name: 'Captured before Retry' }],
+      projects: [{ ...initial.projects[0], name: 'Captured before retry' }],
     });
     const staleWorkspace = workspaceSnapshot({
       activeProjectId: 'stale-prior-mount',
@@ -1322,18 +1435,20 @@ describe('WorkspaceBootstrapGate', () => {
       canRetry: true,
     }))));
 
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     expect(await screen.findByTestId('editor-page')).toHaveTextContent('after-retry');
     act(() => priorPublish(staleWorkspace));
     act(() => store.emitAuthorityLost(unavailableResult({ availableExports: [] }), 1));
-    fireEvent.click(screen.getByRole('button', { name: 'Download open work' }));
+    fireEvent.click(screen.getByRole('button', {
+      name: OPEN_WORKSPACE_PRESENTATION.actionLabel,
+    }));
 
     expect(downloadJson).toHaveBeenCalledWith({
       format: 'doctect.open-workspace-recovery',
       version: 1,
       capturedAt: expect.any(String),
       workspace: blockedOpenWork,
-    }, 'doctect-open-workspace.json');
+    }, OPEN_WORKSPACE_PRESENTATION.filename);
   });
 
   it('replaces retained work when the real write hook publishes a replacement mount', async () => {
@@ -1380,19 +1495,21 @@ describe('WorkspaceBootstrapGate', () => {
     }))));
     publications.mockClear();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     await screen.findByTestId('editor-page');
     await waitFor(() => expect(publications).toHaveBeenCalledWith(replacement));
     expect(publications).toHaveBeenCalledOnce();
     act(() => store.emitAuthorityLost(unavailableResult({ availableExports: [] }), 1));
-    fireEvent.click(screen.getByRole('button', { name: 'Download open work' }));
+    fireEvent.click(screen.getByRole('button', {
+      name: OPEN_WORKSPACE_PRESENTATION.actionLabel,
+    }));
 
     expect(downloadJson).toHaveBeenCalledWith({
       format: 'doctect.open-workspace-recovery',
       version: 1,
       capturedAt: expect.any(String),
       workspace: replacement,
-    }, 'doctect-open-workspace.json');
+    }, OPEN_WORKSPACE_PRESENTATION.filename);
   });
 
   it('downloads nested open work published by the real write hook before save settles', async () => {
@@ -1434,16 +1551,18 @@ describe('WorkspaceBootstrapGate', () => {
     act(() => store.emitAuthorityLost(recoveryResult(splitBrainRecovery())));
     expect(screen.queryByTestId('editor-page')).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Download open work' }));
+    fireEvent.click(screen.getByRole('button', {
+      name: OPEN_WORKSPACE_PRESENTATION.actionLabel,
+    }));
     expect(downloadJson).toHaveBeenCalledWith({
       format: 'doctect.open-workspace-recovery',
       version: 1,
       capturedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/),
       workspace: openWorkspace,
-    }, 'doctect-open-workspace.json');
+    }, OPEN_WORKSPACE_PRESENTATION.filename);
   });
 
-  it('requires confirmation before recovering changed legacy data as copies', async () => {
+  it('requires confirmation before adding changed legacy data as separate copies', async () => {
     const recovered = workspaceSnapshot({ activeProjectId: 'recovered-project' });
     const recovery = splitBrainRecovery({ recoveryId: 'recovery-confirmed' });
     const store = fakeStore({
@@ -1451,18 +1570,18 @@ describe('WorkspaceBootstrapGate', () => {
       commit: recovered,
     });
     render(<WorkspaceBootstrapGate store={store} renderEditor={fakeEditorRenderer} />);
-    await screen.findByRole('heading', { name: 'Project copies changed in another tab' });
+    await screen.findByRole('heading', { name: 'We found two different saved project sets' });
 
     fireEvent.click(screen.getByRole('button', {
-      name: 'Recover changed projects as copies',
+      name: 'Add changed projects without replacing anything',
     }));
     const dialog = screen.getByRole('dialog', {
-      name: 'Recover changed projects as copies?',
+      name: 'Add changed projects as separate copies?',
     });
     expect(within(dialog).getByText(/Cloud links are removed from working copies\./)).toBeVisible();
     expect(store.commit).not.toHaveBeenCalled();
 
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Recover as copies' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Add separate copies' }));
     await waitFor(() => expect(store.commit).toHaveBeenCalledWith({
       type: 'recover-legacy-as-copies',
       recoveryId: 'recovery-confirmed',
@@ -1475,12 +1594,12 @@ describe('WorkspaceBootstrapGate', () => {
     const recoveryB = splitBrainRecovery({ recoveryId: 'recovery-b' });
     const store = fakeStore({ bootstrap: recoveryResult(recoveryA) });
     render(<WorkspaceBootstrapGate store={store} renderEditor={fakeEditorRenderer} />);
-    await screen.findByRole('heading', { name: 'Project copies changed in another tab' });
+    await screen.findByRole('heading', { name: 'We found two different saved project sets' });
 
     fireEvent.click(screen.getByRole('button', {
-      name: 'Recover changed projects as copies',
+      name: 'Add changed projects without replacing anything',
     }));
-    const staleConfirm = screen.getByRole('button', { name: 'Recover as copies' });
+    const staleConfirm = screen.getByRole('button', { name: 'Add separate copies' });
 
     act(() => store.emitAuthorityLost(recoveryResult(recoveryB)));
 
@@ -1489,9 +1608,9 @@ describe('WorkspaceBootstrapGate', () => {
     expect(store.commit).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole('button', {
-      name: 'Recover changed projects as copies',
+      name: 'Add changed projects without replacing anything',
     }));
-    fireEvent.click(screen.getByRole('button', { name: 'Recover as copies' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add separate copies' }));
     await waitFor(() => expect(store.commit).toHaveBeenCalledWith({
       type: 'recover-legacy-as-copies',
       recoveryId: 'recovery-b',
@@ -1505,20 +1624,25 @@ describe('WorkspaceBootstrapGate', () => {
   it('contains confirmation focus, closes on Escape, and restores the recovery trigger', async () => {
     const store = fakeStore({ bootstrap: recoveryResult(splitBrainRecovery()) });
     render(<WorkspaceBootstrapGate store={store} renderEditor={fakeEditorRenderer} />);
-    await screen.findByRole('heading', { name: 'Project copies changed in another tab' });
+    await screen.findByRole('heading', { name: 'We found two different saved project sets' });
     const trigger = screen.getByRole('button', {
-      name: 'Recover changed projects as copies',
+      name: 'Add changed projects without replacing anything',
     });
-    const recoveryContent = screen.getByRole('alert');
+    const alert = screen.getByRole('alert');
+    const recoveryContent = alert.closest('section');
+    expect(recoveryContent).not.toBeNull();
 
     fireEvent.click(trigger);
     const dialog = screen.getByRole('dialog', {
-      name: 'Recover changed projects as copies?',
+      name: 'Add changed projects as separate copies?',
     });
     const close = within(dialog).getByRole('button', {
       name: 'Close recovery confirmation',
     });
-    const confirm = within(dialog).getByRole('button', { name: 'Recover as copies' });
+    const confirm = within(dialog).getByRole('button', { name: 'Add separate copies' });
+    expect(trigger).toHaveClass('min-h-11');
+    expect(close).toHaveClass('size-11');
+    expect(confirm).toHaveClass('min-h-11');
     expect(confirm).toHaveFocus();
     expect(recoveryContent).toHaveAttribute('inert');
     expect(recoveryContent).toHaveAttribute('aria-hidden', 'true');
@@ -1545,20 +1669,20 @@ describe('WorkspaceBootstrapGate', () => {
       commit: recoveryCommit.promise,
     });
     render(<WorkspaceBootstrapGate store={store} renderEditor={fakeEditorRenderer} />);
-    await screen.findByRole('heading', { name: 'Project copies changed in another tab' });
+    await screen.findByRole('heading', { name: 'We found two different saved project sets' });
 
     fireEvent.click(screen.getByRole('button', {
-      name: 'Recover changed projects as copies',
+      name: 'Add changed projects without replacing anything',
     }));
-    fireEvent.click(screen.getByRole('button', { name: 'Recover as copies' }));
-    expect(screen.getByRole('button', { name: 'Recovering copies' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Add separate copies' }));
+    expect(screen.getByRole('button', { name: 'Adding separate copies' })).toBeDisabled();
     await act(async () => recoveryCommit.reject(new Error('quota exhausted')));
 
     expect(await screen.findByText(
-      'Recovery failed. Nothing was overwritten. Try again or download a backup.',
+      SEPARATE_COPIES_ERROR,
     )).toBeVisible();
     expect(screen.getByRole('button', {
-      name: 'Recover changed projects as copies',
+      name: 'Add changed projects without replacing anything',
     })).toBeEnabled();
     expect(screen.queryByTestId('editor-page')).not.toBeInTheDocument();
   });
@@ -1584,13 +1708,33 @@ describe('recovery export capabilities', () => {
     'legacy-original',
     'indexeddb-workspace',
   ] as const satisfies readonly RecoverySource[];
-  const labels: Record<RecoverySource, string> = {
-    'legacy-current': 'Download current browser copy',
-    'legacy-original': 'Download original backup',
-    'indexeddb-workspace': 'Download editor copy',
-  };
   const combinations = Array.from({ length: 2 ** sources.length }, (_, mask) =>
     sources.filter((_, index) => (mask & (1 << index)) !== 0));
+
+  it('explains each advertised project set after the primary split-brain action', () => {
+    render(<WorkspaceRecoveryScreen
+      result={recoveryResult(splitBrainRecovery())}
+      onExport={vi.fn()}
+      onRecoverAsCopies={vi.fn()}
+    />);
+
+    expect(screen.getByRole('heading', {
+      name: 'We found two different saved project sets',
+    })).toBeVisible();
+    expect(screen.getByRole('heading', { name: 'Save project copies' })).toBeVisible();
+    const primaryAction = screen.getByRole('button', {
+      name: 'Add changed projects without replacing anything',
+    });
+    const copiesHeading = screen.getByRole('heading', { name: 'Save project copies' });
+    expect(primaryAction.compareDocumentPosition(copiesHeading)
+      & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    for (const source of sources) {
+      const presentation = RECOVERY_SOURCE_PRESENTATION[source];
+      expect(screen.getByRole('heading', { name: presentation.title })).toBeVisible();
+      expect(screen.getByText(presentation.explanation)).toBeVisible();
+      expect(screen.getByRole('button', { name: presentation.actionLabel })).toBeEnabled();
+    }
+  });
 
   it('keeps recovery loaders visible but static under reduced motion', () => {
     const view = render(<WorkspaceRecoveryScreen
@@ -1623,7 +1767,9 @@ describe('recovery export capabilities', () => {
         render(<WorkspaceRecoveryScreen result={result} onExport={onExport} />);
 
         for (const source of sources) {
-          const button = screen.queryByRole('button', { name: labels[source] });
+          const button = screen.queryByRole('button', {
+            name: RECOVERY_SOURCE_PRESENTATION[source].actionLabel,
+          });
           if (availableExports.includes(source)) {
             expect(button).toBeEnabled();
             fireEvent.click(button!);
