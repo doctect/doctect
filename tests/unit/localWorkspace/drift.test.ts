@@ -31,6 +31,7 @@ import { captureLegacySnapshot } from '../../../services/localWorkspace/legacy';
 import { digestLegacySnapshot } from '../../../services/localWorkspace/canonical';
 import {
   WORKSPACE_DB_NAME,
+  WORKSPACE_DB_VERSION,
 } from '../../../services/localWorkspace/schema';
 import { inheritInstalledProjectAuthority } from '../../../services/localWorkspace/projectAuthority';
 import {
@@ -584,7 +585,10 @@ describe('connection version changes', () => {
     harness.dispatch(LEGACY_KEYS.projects);
     await hashStarted.promise;
 
-    const upgraded = await requestResult(harness.indexedDB.open(WORKSPACE_DB_NAME, 2));
+    const upgraded = await requestResult(harness.indexedDB.open(
+      WORKSPACE_DB_NAME,
+      WORKSPACE_DB_VERSION + 1,
+    ));
     releaseHash.resolve();
 
     await vi.waitFor(() => expect(onAuthorityLost).toHaveBeenCalled());
@@ -601,7 +605,7 @@ describe('connection version changes', () => {
     const onAuthorityLost = vi.fn();
     const { store } = await readyStore(harness, onAuthorityLost);
 
-    const upgrade = harness.indexedDB.open(WORKSPACE_DB_NAME, 2);
+    const upgrade = harness.indexedDB.open(WORKSPACE_DB_NAME, WORKSPACE_DB_VERSION + 1);
     upgrade.addEventListener('upgradeneeded', () => {});
     const upgraded = await requestResult(upgrade);
 

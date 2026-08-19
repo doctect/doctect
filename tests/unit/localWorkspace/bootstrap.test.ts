@@ -43,6 +43,7 @@ import {
 } from '../../../services/localWorkspace/migration';
 import {
   WORKSPACE_DB_NAME,
+  WORKSPACE_DB_VERSION,
   WORKSPACE_MIGRATION_ID,
   storedProjectLineage,
   type MigrationLedger,
@@ -1465,7 +1466,7 @@ describe('concurrency, retries, and observers', () => {
     ]);
     expect(abortedPhases).toEqual([]);
 
-    const upgraded = await openRaw(harness.indexedDB, 2);
+    const upgraded = await openRaw(harness.indexedDB, WORKSPACE_DB_VERSION + 1);
     expect(firstLost).toHaveBeenCalledOnce();
     expect(laterLost).toHaveBeenCalledOnce();
     expect(abortedLost).not.toHaveBeenCalled();

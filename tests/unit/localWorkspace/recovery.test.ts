@@ -33,6 +33,7 @@ import {
 } from '../../../services/localWorkspace/recovery';
 import {
   WORKSPACE_DB_NAME,
+  WORKSPACE_DB_VERSION,
   storedProjectLineage,
 } from '../../../services/localWorkspace/schema';
 import {
@@ -1295,7 +1296,10 @@ describe('explicit recover legacy as copies', () => {
     const settledCommit = commit.then(() => undefined, () => undefined);
     await hashStarted.promise;
 
-    const upgraded = await requestResult(harness.indexedDB.open(WORKSPACE_DB_NAME, 2));
+    const upgraded = await requestResult(harness.indexedDB.open(
+      WORKSPACE_DB_NAME,
+      WORKSPACE_DB_VERSION + 1,
+    ));
     releaseHash.resolve();
     await settledCommit;
 
