@@ -2338,7 +2338,11 @@ const createLocalWorkspaceStoreAtVersion = (
 
       if (source === 'legacy-original') {
         try {
-          const ledger = await readRecognizedLedger();
+          const candidate: unknown = await getAdapter().readMigrationLedger();
+          if (!isRecognizedLedger(candidate) && !isHistoricalLineageLedger(candidate)) {
+            throw new WorkspaceStoreError('Migration ledger is unavailable.', 'unavailable');
+          }
+          const ledger = candidate;
           const backup = await validateBackup(
             await getAdapter().readLegacyBackup(ledger.originalLegacyBackupId),
             {

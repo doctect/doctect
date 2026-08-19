@@ -1077,7 +1077,24 @@ describe('historical version-1 lineage repair', () => {
 
       const result = recoveryResult(await store.bootstrap());
 
-      expect(result.recovery.availableExports).toContain('indexeddb-workspace');
+      expect(result.recovery.availableExports).toEqual([
+        'legacy-current',
+        'legacy-original',
+        'indexeddb-workspace',
+      ]);
+      const originalBundle = JSON.parse(await (await store.exportRecoveryBundle(
+        'legacy-original',
+      )).text());
+      expect(originalBundle).toEqual({
+        format: 'doctect.legacy-workspace-recovery',
+        version: 1,
+        capturedAt: historical.copy.backup.capturedAt,
+        entries: LEGACY_DOCUMENT_KEYS.map(key => ({
+          key,
+          ...historical.copy.backup.snapshot[key],
+        })),
+        digest: historical.copy.backup.digest,
+      });
       const bundle = JSON.parse(await (await store.exportRecoveryBundle(
         'indexeddb-workspace',
       )).text());
