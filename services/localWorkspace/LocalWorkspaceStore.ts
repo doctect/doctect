@@ -31,6 +31,10 @@ import {
   monitorLegacyKeys,
 } from './legacy';
 import {
+  prepareLineageRepair,
+  type PreparedLineageRepair,
+} from './lineageRepair';
+import {
   LEGACY_DOCUMENT_KEYS,
   type LegacySnapshot,
 } from './legacyTypes';
@@ -65,6 +69,7 @@ import {
   PERSISTENCE_ROLLOUT_EPOCH,
   WORKSPACE_DB_VERSION,
   WORKSPACE_MIGRATION_ID,
+  type HistoricalMigrationLedgerV1,
   type LegacyBackupRecord,
   type MigrationLedger,
   type ProjectLineage,
@@ -208,12 +213,14 @@ const isItemFingerprints = (
   });
 };
 
-const isRecognizedLedger = (value: unknown): value is MigrationLedger => {
+type SupportedMigrationLedger = MigrationLedger | HistoricalMigrationLedgerV1;
+
+const isLedgerAtVersion = (value: unknown, expectedVersion: 1 | 2): boolean => {
   if (!isPlainObject(value) || !hasExactKeys(value, LEDGER_KEYS)) return false;
   const projectFingerprints = value.projectFingerprints;
   const presetFingerprints = value.presetFingerprints;
   if (value.id !== WORKSPACE_MIGRATION_ID
-    || value.indexedDbVersion !== WORKSPACE_DB_VERSION
+    || value.indexedDbVersion !== expectedVersion
     || value.persistenceRolloutEpoch !== PERSISTENCE_ROLLOUT_EPOCH
     || !(
       value.state === 'copied'
@@ -269,6 +276,13 @@ const isRecognizedLedger = (value: unknown): value is MigrationLedger => {
 
   return true;
 };
+
+const isRecognizedLedger = (value: unknown): value is MigrationLedger =>
+  isLedgerAtVersion(value, WORKSPACE_DB_VERSION);
+
+const isHistoricalLineageLedger = (
+  value: unknown,
+): value is HistoricalMigrationLedgerV1 => isLedgerAtVersion(value, 1);
 
 const allStoresEmpty = (inspection: IndexedDbInspection): boolean =>
   inspection.projects.length === 0
@@ -698,7 +712,7 @@ const createLocalWorkspaceStoreAtVersion = (
   };
 
   const readVerificationInputs = async (
-    ledger: MigrationLedger,
+    ledger: SupportedMigrationLedger,
   ): Promise<{
     records: WorkspaceRecords;
     originalBackup: LegacyBackupRecord;
@@ -759,7 +773,7 @@ const createLocalWorkspaceStoreAtVersion = (
   };
 
   const validatedRecoverySources = async (
-    knownLedger?: MigrationLedger,
+    knownLedger?: SupportedMigrationLedger,
   ): Promise<RecoverySource[]> => {
     const sources: RecoverySource[] = [];
     try {
@@ -773,7 +787,9 @@ const createLocalWorkspaceStoreAtVersion = (
     if (!ledger) {
       try {
         const candidate = await getAdapter().readMigrationLedger();
-        if (isRecognizedLedger(candidate)) ledger = candidate;
+        if (isRecognizedLedger(candidate) || isHistoricalLineageLedger(candidate)) {
+          ledger = candidate;
+        }
       } catch {
         // Durable exports remain unavailable when their ledger cannot be read.
       }
@@ -792,34 +808,40 @@ const createLocalWorkspaceStoreAtVersion = (
         // Invalid or missing backup must not be advertised.
       }
     }
-    try {
-      reconstructWorkspace(await getAdapter().readWorkspaceRecords());
+    if (protectedIndexedDbRecoveryBundle) {
       sources.push('indexeddb-workspace');
-    } catch {
-      // Invalid or missing target must not be advertised.
+    } else {
+      try {
+        reconstructWorkspace(await getAdapter().readWorkspaceRecords());
+        sources.push('indexeddb-workspace');
+      } catch {
+        // Invalid or missing target must not be advertised.
+      }
     }
     return sources;
   };
 
   const populateCapabilities = async (
     result: NonReadyResult,
-    knownLedger?: MigrationLedger,
+    knownLedger?: SupportedMigrationLedger,
   ): Promise<NonReadyResult> => {
     const exports = await validatedRecoverySources(knownLedger);
     if (result.status !== 'recovery') return { ...result, availableExports: exports };
 
-    let ledger = knownLedger;
-    if (!ledger) {
+    let currentLedger = knownLedger && isRecognizedLedger(knownLedger)
+      ? knownLedger
+      : undefined;
+    if (!currentLedger) {
       try {
-        ledger = await readRecognizedLedger();
+        currentLedger = await readRecognizedLedger();
       } catch {
         // Recovery command stays unavailable without a validated ledger.
       }
     }
     let canRecoverLegacyAsCopies = false;
-    const marker = ledger?.unresolvedRecovery;
+    const marker = currentLedger?.unresolvedRecovery;
     if (result.recovery.kind === 'split-brain'
-      && ledger?.state === 'verified'
+      && currentLedger?.state === 'verified'
       && marker?.kind === 'legacy-drift'
       && marker.id === result.recovery.recoveryId
       && marker.observedLegacyDigest !== undefined
@@ -827,10 +849,10 @@ const createLocalWorkspaceStoreAtVersion = (
       && exports.includes('indexeddb-workspace')) {
       try {
         const acceptedBackup = await validateBackup(
-          await getAdapter().readLegacyBackup(ledger.acceptedLegacyBackupId),
+          await getAdapter().readLegacyBackup(currentLedger.acceptedLegacyBackupId),
           {
-            id: ledger.acceptedLegacyBackupId,
-            digest: ledger.acceptedLegacyDigest,
+            id: currentLedger.acceptedLegacyBackupId,
+            digest: currentLedger.acceptedLegacyDigest,
           },
         );
         const current = await captureObservedLegacy();
@@ -1040,20 +1062,25 @@ const createLocalWorkspaceStoreAtVersion = (
     return true;
   };
 
+  type InspectionClassification =
+    | { kind: 'empty' }
+    | { kind: 'current'; ledger: MigrationLedger }
+    | { kind: 'historical-lineage'; ledger: HistoricalMigrationLedgerV1 }
+    | { kind: 'unrecognized' };
+
   const classifyInspection = (
     inspection: IndexedDbInspection,
-  ):
-    | { kind: 'none' }
-    | { kind: 'unrecognized' }
-    | { kind: 'recognized'; ledger: MigrationLedger } => {
+  ): InspectionClassification => {
     if (inspection.migrationLedger.length === 0) {
-      return allStoresEmpty(inspection) ? { kind: 'none' } : { kind: 'unrecognized' };
+      return allStoresEmpty(inspection) ? { kind: 'empty' } : { kind: 'unrecognized' };
     }
-    if (inspection.migrationLedger.length !== 1
-      || !isRecognizedLedger(inspection.migrationLedger[0])) {
-      return { kind: 'unrecognized' };
+    if (inspection.migrationLedger.length !== 1) return { kind: 'unrecognized' };
+    const candidate: unknown = inspection.migrationLedger[0];
+    if (isRecognizedLedger(candidate)) return { kind: 'current', ledger: candidate };
+    if (isHistoricalLineageLedger(candidate)) {
+      return { kind: 'historical-lineage', ledger: candidate };
     }
-    return { kind: 'recognized', ledger: inspection.migrationLedger[0] };
+    return { kind: 'unrecognized' };
   };
 
   const bootstrapOperation = async (
@@ -1149,12 +1176,82 @@ const createLocalWorkspaceStoreAtVersion = (
     const followInspection = async (
       inspection: IndexedDbInspection,
       allowCopiedReplacement: boolean,
+      lineageRepairAttempt = 0,
     ): Promise<WorkspaceBootstrapResult> => {
       const classification = classifyInspection(inspection);
-      if (classification.kind === 'none' || classification.kind === 'unrecognized') {
+      if (classification.kind === 'empty' || classification.kind === 'unrecognized') {
         retryableCopiedLedger = undefined;
         return recovery('unrecognized-target');
       }
+      if (classification.kind === 'historical-lineage') {
+        const ledger = classification.ledger;
+        if (ledger.state === 'cleanup-started' || ledger.state === 'cleanup-complete') {
+          retryableCopiedLedger = undefined;
+          return recovery('unsupported-cleanup-state');
+        }
+        if (lineageRepairAttempt >= 3) {
+          return verificationFailure(new WorkspaceMigrationError(
+            'Historical lineage repair changed repeatedly.',
+            'verification-failed',
+          ));
+        }
+
+        emit('verifying-projects');
+        let inputs: Awaited<ReturnType<typeof readVerificationInputs>>;
+        try {
+          inputs = await readVerificationInputs(ledger);
+        } catch (error) {
+          if (error instanceof WorkspaceStoreError) return unavailable();
+          if (error instanceof WorkspaceMigrationError) return verificationFailure(error);
+          throw error;
+        }
+
+        let prepared: PreparedLineageRepair;
+        try {
+          prepared = await prepareLineageRepair(ledger, inputs.records, {
+            crypto: environment.crypto,
+            randomUUID: environment.randomUUID,
+          });
+          protectedIndexedDbRecoveryBundle = createProtectedIndexedDbRecoveryBundle(
+            prepared.snapshot,
+            environment.now(),
+          );
+        } catch (error) {
+          if (error instanceof WorkspaceMigrationError) return verificationFailure(error);
+          return migrationFailure(error);
+        }
+
+        emit('copying-projects');
+        try {
+          await adapter.repairHistoricalLineage(prepared);
+        } catch (error) {
+          if (error instanceof WorkspaceStoreError && error.code === 'conflict') {
+            try {
+              return followInspection(
+                await adapter.inspect(),
+                false,
+                lineageRepairAttempt + 1,
+              );
+            } catch (inspectionError) {
+              if (inspectionError instanceof WorkspaceStoreError) return unavailable();
+              throw inspectionError;
+            }
+          }
+          if (error instanceof WorkspaceStoreError && error.code === 'unavailable') {
+            return unavailable();
+          }
+          if (error instanceof WorkspaceStoreError) return migrationFailure(error);
+          throw error;
+        }
+
+        try {
+          return followInspection(await adapter.inspect(), false, lineageRepairAttempt + 1);
+        } catch (error) {
+          if (error instanceof WorkspaceStoreError) return unavailable();
+          throw error;
+        }
+      }
+
       const ledger = classification.ledger;
       if (ledger.state === 'cleanup-started' || ledger.state === 'cleanup-complete') {
         retryableCopiedLedger = undefined;
@@ -1311,7 +1408,10 @@ const createLocalWorkspaceStoreAtVersion = (
       retryableCopiedLedger = undefined;
       return recovery('unrecognized-target');
     }
-    if (classification.kind === 'recognized') return followInspection(initialInspection, true);
+    if (classification.kind === 'current'
+      || classification.kind === 'historical-lineage') {
+      return followInspection(initialInspection, true);
+    }
     retryableCopiedLedger = undefined;
 
     let prepared: PreparedInitialCopy;

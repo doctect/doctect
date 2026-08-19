@@ -37,6 +37,7 @@ import {
   digestLegacySnapshot,
 } from '../../../services/localWorkspace/canonical';
 import { captureLegacySnapshot } from '../../../services/localWorkspace/legacy';
+import { prepareLineageRepair } from '../../../services/localWorkspace/lineageRepair';
 import {
   prepareInitialCopy,
   type PreparedInitialCopy,
@@ -46,6 +47,7 @@ import {
   WORKSPACE_DB_VERSION,
   WORKSPACE_MIGRATION_ID,
   storedProjectLineage,
+  type HistoricalMigrationLedgerV1,
   type MigrationLedger,
 } from '../../../services/localWorkspace/schema';
 import {
@@ -83,6 +85,13 @@ const COPY_TRANSACTION_FAULTS = [
   'copy.after-backup',
   'copy.after-ledger',
   'copy.before-complete',
+] as const satisfies readonly WorkspaceFaultPoint[];
+
+const LINEAGE_REPAIR_FAULTS = [
+  'lineage-repair.before-transaction',
+  'lineage-repair.after-project-write',
+  'lineage-repair.after-ledger-write',
+  'lineage-repair.before-complete',
 ] as const satisfies readonly WorkspaceFaultPoint[];
 
 beforeAll(() => Object.defineProperty(globalThis, 'crypto', {
@@ -235,6 +244,56 @@ const prepareFor = (
   source,
   migrationEnvironment(harness.environment),
 );
+
+const seedHistoricalLineage = async (
+  harness: TestHarness,
+  options: {
+    state?: 'copied' | 'verified' | 'cleanup-started' | 'cleanup-complete';
+    preserveIncarnation?: boolean;
+    corruptIncarnation?: unknown;
+    physicalVersionTwo?: boolean;
+  } = {},
+) => {
+  const copy = await prepareFor(harness);
+  const projects = structuredClone(copy.projects) as unknown as Array<Record<string, unknown>>;
+  if (!options.preserveIncarnation) delete projects[0].incarnation;
+  if (Object.hasOwn(options, 'corruptIncarnation')) {
+    projects[0].incarnation = options.corruptIncarnation;
+  }
+  const state = options.state ?? 'verified';
+  const ledger = {
+    ...structuredClone(copy.ledger),
+    indexedDbVersion: 1,
+    state,
+    ledgerRevision: state === 'copied' ? 0 : 1,
+    verifiedAt: state === 'copied' ? null : VERIFIED_NOW,
+  } as HistoricalMigrationLedgerV1;
+
+  const request = harness.indexedDB.open(WORKSPACE_DB_NAME, 1);
+  request.addEventListener('upgradeneeded', () => {
+    for (const storeName of STORE_NAMES) {
+      request.result.createObjectStore(storeName, { keyPath: 'id' });
+    }
+  }, { once: true });
+  const database = await requestResult(request);
+  const transaction = database.transaction(STORE_NAMES, 'readwrite');
+  for (const project of projects) transaction.objectStore('projects').put(project);
+  transaction.objectStore('workspace').put(copy.workspace);
+  for (const preset of copy.presets) transaction.objectStore('presets').put(preset);
+  for (const pending of copy.pendingImports) {
+    transaction.objectStore('pendingImports').put(pending);
+  }
+  transaction.objectStore('migrationLedger').put(ledger);
+  transaction.objectStore('legacyBackup').put(copy.backup);
+  await transactionDone(transaction);
+  database.close();
+
+  if (options.physicalVersionTwo) {
+    const upgraded = await openRaw(harness.indexedDB, 2);
+    upgraded.close();
+  }
+  return { copy, projects, ledger };
+};
 
 const verificationExpectation = (copy: PreparedInitialCopy) => ({
   ledgerRevision: copy.ledger.ledgerRevision,
@@ -923,6 +982,168 @@ describe('initial bootstrap and authority transition', () => {
 
     harness.setFault();
     await expect(store.bootstrap()).resolves.toMatchObject({ status: 'ready' });
+  });
+});
+
+describe('historical version-1 lineage repair', () => {
+  it.each(['copied', 'verified'] as const)(
+    'repairs a recognized %s ledger before ordinary verification',
+    async state => {
+      const randomUUID = vi.fn(() => 'repaired-incarnation');
+      const harness = createHarness({ randomUUID });
+      const historical = await seedHistoricalLineage(harness, { state });
+      randomUUID.mockClear();
+
+      const result = readyResult(
+        await createLocalWorkspaceStore(harness.environment).bootstrap(),
+      );
+
+      expect(result.snapshot.projects).toEqual(
+        historical.copy.projects.map(record => record.project),
+      );
+      expect(result.receipt?.id).toBe(
+        `${WORKSPACE_MIGRATION_ID}:${historical.copy.sourceDigest}`,
+      );
+      const stored = await inspect(harness);
+      expect(stored.projects[0]).toEqual({
+        ...historical.copy.projects[0],
+        incarnation: 'repaired-incarnation',
+      });
+      expect(stored.migrationLedger[0]).toMatchObject({
+        indexedDbVersion: 2,
+        state: 'verified',
+        ledgerRevision: 2,
+      });
+      expect((harness.storage as MemoryStorage).mutations).toEqual([]);
+      expect(randomUUID).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it('resumes physical version 2 with a historical ledger after a crash', async () => {
+    const harness = createHarness({ randomUUID: () => 'resumed-incarnation' });
+    await seedHistoricalLineage(harness, { physicalVersionTwo: true });
+
+    await expect(createLocalWorkspaceStore(harness.environment).bootstrap())
+      .resolves.toMatchObject({ status: 'ready' });
+    expect((await inspect(harness)).projects[0].incarnation).toBe('resumed-incarnation');
+  });
+
+  it('resumes strict verification after repair committed before readback', async () => {
+    const harness = createHarness({ randomUUID: () => 'post-commit-incarnation' });
+    const historical = await seedHistoricalLineage(harness);
+    const adapter = createIndexedDbAdapter({
+      indexedDB: harness.indexedDB,
+      now: () => VERIFIED_NOW,
+    });
+    await adapter.open();
+    const candidate = await adapter.inspect();
+    const prepared = await prepareLineageRepair(historical.ledger, {
+      projects: candidate.projects,
+      workspace: candidate.workspace[0],
+      presets: candidate.presets,
+      pendingImports: candidate.pendingImports,
+    }, {
+      crypto: webcrypto as unknown as Crypto,
+      randomUUID: harness.environment.randomUUID,
+    });
+    await adapter.repairHistoricalLineage(prepared);
+    adapter.close();
+
+    await expect(createLocalWorkspaceStore(harness.environment).bootstrap())
+      .resolves.toMatchObject({ status: 'ready' });
+    expect((await inspect(harness)).projects[0].incarnation)
+      .toBe('post-commit-incarnation');
+  });
+
+  it('preserves a valid incarnation and advances only ledger metadata', async () => {
+    const randomUUID = vi.fn(() => 'unused');
+    const harness = createHarness({ randomUUID });
+    const historical = await seedHistoricalLineage(harness, { preserveIncarnation: true });
+    randomUUID.mockClear();
+
+    await expect(createLocalWorkspaceStore(harness.environment).bootstrap())
+      .resolves.toMatchObject({ status: 'ready' });
+    expect((await inspect(harness)).projects).toEqual(historical.copy.projects);
+    expect(randomUUID).not.toHaveBeenCalled();
+  });
+
+  it.each(LINEAGE_REPAIR_FAULTS)(
+    'keeps exact historical data and protected editor export at %s',
+    async faultPoint => {
+      const harness = createHarness();
+      const historical = await seedHistoricalLineage(harness);
+      harness.setFault(faultPoint);
+      const store = createLocalWorkspaceStore(harness.environment);
+
+      const result = recoveryResult(await store.bootstrap());
+
+      expect(result.recovery.availableExports).toContain('indexeddb-workspace');
+      const bundle = JSON.parse(await (await store.exportRecoveryBundle(
+        'indexeddb-workspace',
+      )).text());
+      expect(bundle.workspace.projects).toEqual(
+        historical.copy.projects.map(record => record.project),
+      );
+      const stored = await inspect(harness);
+      expect(Object.hasOwn(stored.projects[0], 'incarnation')).toBe(false);
+      expect(stored.migrationLedger[0]).toEqual(historical.ledger);
+      expect((harness.storage as MemoryStorage).mutations).toEqual([]);
+    },
+  );
+
+  it('does not repair invalid present incarnation or unsupported cleanup state', async () => {
+    const invalid = createHarness();
+    await seedHistoricalLineage(invalid, { corruptIncarnation: '' });
+    expect(recoveryResult(
+      await createLocalWorkspaceStore(invalid.environment).bootstrap(),
+    ).recovery.kind).toBe('verification-failed');
+
+    const cleanup = createHarness();
+    const historical = await seedHistoricalLineage(cleanup, { state: 'cleanup-started' });
+    expect(recoveryResult(
+      await createLocalWorkspaceStore(cleanup.environment).bootstrap(),
+    ).recovery.kind).toBe('unsupported-cleanup-state');
+    expect((await inspect(cleanup)).migrationLedger[0]).toEqual(historical.ledger);
+  });
+
+  it('preserves an unresolved recovery marker byte-exactly across repair', async () => {
+    const harness = createHarness();
+    const historical = await seedHistoricalLineage(harness);
+    const marker = {
+      id: 'historical-target-marker',
+      kind: 'target-mismatch' as const,
+      detectedAt: VERIFIED_NOW,
+    };
+    await putRaw(harness.indexedDB, 'migrationLedger', {
+      ...historical.ledger,
+      unresolvedRecovery: marker,
+    });
+
+    const result = recoveryResult(
+      await createLocalWorkspaceStore(harness.environment).bootstrap(),
+    );
+
+    expect(result.recovery.kind).toBe('verification-failed');
+    expect((await inspect(harness)).migrationLedger[0]).toMatchObject({
+      indexedDbVersion: 2,
+      ledgerRevision: historical.ledger.ledgerRevision + 1,
+      unresolvedRecovery: marker,
+    });
+  });
+
+  it('lets concurrent stores follow one repair winner', async () => {
+    const harness = createHarness();
+    await seedHistoricalLineage(harness);
+    const left = createLocalWorkspaceStore(harness.environment);
+    const right = createLocalWorkspaceStore(harness.environment);
+
+    const results = await Promise.all([left.bootstrap(), right.bootstrap()]);
+
+    expect(results.map(result => result.status)).toEqual(['ready', 'ready']);
+    expect((await inspect(harness)).migrationLedger[0]).toMatchObject({
+      indexedDbVersion: 2,
+      ledgerRevision: 2,
+    });
   });
 });
 
