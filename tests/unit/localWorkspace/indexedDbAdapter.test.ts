@@ -22,6 +22,7 @@ import {
   createIndexedDbAdapter,
   type IndexedDbAdapter,
 } from '../../../services/localWorkspace/indexedDbAdapter';
+import type { PreparedLineageRepair } from '../../../services/localWorkspace/lineageRepair';
 import type {
   PreparedInitialCopy,
   WorkspaceRecords,
@@ -30,6 +31,7 @@ import {
   WORKSPACE_DB_NAME,
   WORKSPACE_DB_VERSION,
   WORKSPACE_MIGRATION_ID,
+  type HistoricalMigrationLedgerV1,
   type LegacyBackupRecord,
   type MigrationLedger,
   type StoredProject,
@@ -59,6 +61,13 @@ const COPY_TRANSACTION_FAULTS = [
   'copy.after-backup',
   'copy.after-ledger',
   'copy.before-complete',
+] as const satisfies readonly WorkspaceFaultPoint[];
+
+const LINEAGE_REPAIR_FAULTS = [
+  'lineage-repair.before-transaction',
+  'lineage-repair.after-project-write',
+  'lineage-repair.after-ledger-write',
+  'lineage-repair.before-complete',
 ] as const satisfies readonly WorkspaceFaultPoint[];
 
 const preparedCopy = (digest = 'source-digest'): PreparedInitialCopy => {
@@ -140,6 +149,36 @@ const preparedCopy = (digest = 'source-digest'): PreparedInitialCopy => {
     backup,
     ledger,
   };
+};
+
+const historicalRepairFixture = () => {
+  const copy = preparedCopy();
+  const first = structuredClone(copy.projects[0]) as Partial<StoredProject> & { id: string };
+  delete first.incarnation;
+  const second = structuredClone(copy.projects[1]);
+  const expectedLedger = {
+    ...structuredClone(copy.ledger),
+    indexedDbVersion: 1,
+  } as HistoricalMigrationLedgerV1;
+  const replacement = {
+    ...structuredClone(copy.projects[0]),
+    incarnation: 'repair-incarnation-a',
+  };
+  const prepared: PreparedLineageRepair = {
+    expectedLedger,
+    expectedProjects: [
+      { id: first.id, record: first },
+      { id: second.id, record: second },
+    ],
+    replacementProjects: [replacement],
+    ledger: {
+      ...expectedLedger,
+      indexedDbVersion: WORKSPACE_DB_VERSION,
+      ledgerRevision: expectedLedger.ledgerRevision + 1,
+    },
+    snapshot: workspaceSnapshot(),
+  };
+  return { copy, first, second, expectedLedger, replacement, prepared };
 };
 
 const emptyInspection = () => ({
@@ -258,6 +297,28 @@ const seedRawRecord = async (
   const database = await openRaw(indexedDB, name);
   const transaction = database.transaction(storeName, 'readwrite');
   transaction.objectStore(storeName).put(value);
+  await transactionDone(transaction);
+  database.close();
+};
+
+const seedHistoricalRepairFixture = async (
+  indexedDB: IDBFactory,
+  fixture: ReturnType<typeof historicalRepairFixture>,
+): Promise<void> => {
+  const setup = createTestAdapter({ indexedDB });
+  await setup.open();
+  setup.close();
+  const database = await openRaw(indexedDB, WORKSPACE_DB_NAME);
+  const transaction = database.transaction(STORE_NAMES, 'readwrite');
+  transaction.objectStore('projects').put(fixture.first);
+  transaction.objectStore('projects').put(fixture.second);
+  transaction.objectStore('workspace').put(fixture.copy.workspace);
+  for (const preset of fixture.copy.presets) transaction.objectStore('presets').put(preset);
+  for (const pending of fixture.copy.pendingImports) {
+    transaction.objectStore('pendingImports').put(pending);
+  }
+  transaction.objectStore('migrationLedger').put(fixture.expectedLedger);
+  transaction.objectStore('legacyBackup').put(fixture.copy.backup);
   await transactionDone(transaction);
   database.close();
 };
@@ -806,6 +867,86 @@ describe('atomic copied target replacement', () => {
     })).rejects.toMatchObject({ code: 'conflict' });
 
     expect(await adapter.inspect()).toEqual(before);
+  });
+});
+
+describe('atomic historical lineage repair', () => {
+  it('writes only missing incarnations and advances the exact ledger', async () => {
+    const indexedDB = new IDBFactory();
+    const fixture = historicalRepairFixture();
+    await seedHistoricalRepairFixture(indexedDB, fixture);
+    const adapter = createTestAdapter({ indexedDB });
+
+    await adapter.repairHistoricalLineage(fixture.prepared);
+
+    const inspection = await adapter.inspect();
+    expect(inspection.projects).toEqual([fixture.replacement, fixture.second]);
+    expect(inspection.migrationLedger).toEqual([fixture.prepared.ledger]);
+    expect(inspection.workspace).toEqual([fixture.copy.workspace]);
+    expect(inspection.presets).toEqual(fixture.copy.presets);
+    expect(inspection.pendingImports).toEqual(fixture.copy.pendingImports);
+    expect(inspection.legacyBackup).toEqual([fixture.copy.backup]);
+  });
+
+  it.each(LINEAGE_REPAIR_FAULTS)('rolls back exact historical state at %s', async faultPoint => {
+    const indexedDB = new IDBFactory();
+    const fixture = historicalRepairFixture();
+    await seedHistoricalRepairFixture(indexedDB, fixture);
+    const adapter = createTestAdapter({ indexedDB, faultPoint });
+    const before = await adapter.inspect();
+
+    await expect(adapter.repairHistoricalLineage(fixture.prepared))
+      .rejects.toMatchObject({ code: 'io' });
+    expect(await adapter.inspect()).toEqual(before);
+  });
+
+  it('rejects changed ledger, project bytes, and project key set', async () => {
+    for (const mutate of [
+      async (indexedDB: IDBFactory, fixture: ReturnType<typeof historicalRepairFixture>) =>
+        seedRawRecord(indexedDB, WORKSPACE_DB_NAME, 'migrationLedger', {
+          ...fixture.expectedLedger,
+          ledgerRevision: fixture.expectedLedger.ledgerRevision + 1,
+        }),
+      async (indexedDB: IDBFactory, fixture: ReturnType<typeof historicalRepairFixture>) =>
+        seedRawRecord(indexedDB, WORKSPACE_DB_NAME, 'projects', {
+          ...fixture.first,
+          updatedAt: '2026-08-14T17:00:00.000Z',
+        }),
+      async (indexedDB: IDBFactory) => seedRawRecord(
+        indexedDB,
+        WORKSPACE_DB_NAME,
+        'projects',
+        { id: 'unexpected-project' },
+      ),
+    ]) {
+      const indexedDB = new IDBFactory();
+      const fixture = historicalRepairFixture();
+      await seedHistoricalRepairFixture(indexedDB, fixture);
+      await mutate(indexedDB, fixture);
+      const adapter = createTestAdapter({ indexedDB });
+      const before = await adapter.inspect();
+      await expect(adapter.repairHistoricalLineage(fixture.prepared))
+        .rejects.toMatchObject({ code: 'conflict' });
+      expect(await adapter.inspect()).toEqual(before);
+    }
+  });
+
+  it('allows one concurrent repair winner and one exact conflict', async () => {
+    const indexedDB = new IDBFactory();
+    const fixture = historicalRepairFixture();
+    await seedHistoricalRepairFixture(indexedDB, fixture);
+    const left = createTestAdapter({ indexedDB });
+    const right = createTestAdapter({ indexedDB });
+
+    const results = await Promise.allSettled([
+      left.repairHistoricalLineage(fixture.prepared),
+      right.repairHistoricalLineage(fixture.prepared),
+    ]);
+
+    expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1);
+    const rejected = results.find(result => result.status === 'rejected');
+    expect(rejected).toMatchObject({ reason: { code: 'conflict' } });
+    expect((await left.inspect()).migrationLedger).toEqual([fixture.prepared.ledger]);
   });
 });
 

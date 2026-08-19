@@ -8,6 +8,10 @@ export type WorkspaceFaultPoint =
   | 'copy.after-ledger'
   | 'copy.before-complete'
   | 'mutation.before-complete'
-  | 'recovery.before-complete';
+  | 'recovery.before-complete'
+  | 'lineage-repair.before-transaction'
+  | 'lineage-repair.after-project-write'
+  | 'lineage-repair.after-ledger-write'
+  | 'lineage-repair.before-complete';
 
 export type FaultInjector = (point: WorkspaceFaultPoint) => void;

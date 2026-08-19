@@ -13,6 +13,7 @@ import {
 } from './contracts';
 import { canonicalStringify, sha256Hex } from './canonical';
 import type { FaultInjector } from './faults';
+import type { PreparedLineageRepair } from './lineageRepair';
 import type {
   PreparedInitialCopy,
   WorkspaceRecords,
@@ -125,6 +126,7 @@ export interface IndexedDbAdapter {
     prepared: PreparedInitialCopy,
     expectedLedger: MigrationLedger,
   ): Promise<void>;
+  repairHistoricalLineage(prepared: PreparedLineageRepair): Promise<void>;
   readWorkspaceRecords(): Promise<WorkspaceRecords>;
   readLegacyBackup(id: string): Promise<LegacyBackupRecord | undefined>;
   readMigrationLedger(): Promise<MigrationLedger | undefined>;
@@ -574,6 +576,58 @@ export const createIndexedDbAdapter = (
       enqueuePreparedCopy(transaction, prepared, requests);
       await Promise.all(requests);
       await transaction.done;
+    } catch (error) {
+      return abortTransaction(transaction, requests, error);
+    }
+  };
+
+  const repairHistoricalLineage = async (
+    prepared: PreparedLineageRepair,
+  ): Promise<void> => {
+    const activeDatabase = await getDatabase();
+    try {
+      environment.fault?.('lineage-repair.before-transaction');
+    } catch (error) {
+      throw mappedError(error);
+    }
+
+    let transaction: WriteTransaction | undefined;
+    const requests: Promise<unknown>[] = [];
+    try {
+      const repairTransaction = activeDatabase.transaction(
+        ['projects', 'migrationLedger'],
+        'readwrite',
+      );
+      transaction = repairTransaction as WriteTransaction;
+      const projectStore = repairTransaction.objectStore('projects');
+      const ledgerStore = repairTransaction.objectStore('migrationLedger');
+      const currentLedger = await ledgerStore.get(WORKSPACE_MIGRATION_ID);
+      if (canonicalStringify(currentLedger)
+        !== canonicalStringify(prepared.expectedLedger)) {
+        throw conflict('Historical migration ledger changed before lineage repair.');
+      }
+
+      const actualKeys = (await projectStore.getAllKeys()).map(String).sort();
+      const expectedKeys = prepared.expectedProjects.map(item => item.id).sort();
+      if (canonicalStringify(actualKeys) !== canonicalStringify(expectedKeys)) {
+        throw conflict('Historical project key set changed before lineage repair.');
+      }
+      for (const expected of prepared.expectedProjects) {
+        const current = await projectStore.get(expected.id);
+        if (canonicalStringify(current) !== canonicalStringify(expected.record)) {
+          throw conflict(`Historical project ${expected.id} changed before lineage repair.`);
+        }
+      }
+
+      for (const replacement of prepared.replacementProjects) {
+        requests.push(projectStore.put(replacement));
+        environment.fault?.('lineage-repair.after-project-write');
+      }
+      requests.push(ledgerStore.put(prepared.ledger));
+      environment.fault?.('lineage-repair.after-ledger-write');
+      environment.fault?.('lineage-repair.before-complete');
+      await Promise.all(requests);
+      await repairTransaction.done;
     } catch (error) {
       return abortTransaction(transaction, requests, error);
     }
@@ -1386,6 +1440,7 @@ export const createIndexedDbAdapter = (
     inspect,
     writeInitialCopy,
     replaceCopiedInitialCopy,
+    repairHistoricalLineage,
     readWorkspaceRecords,
     readLegacyBackup,
     readMigrationLedger,
