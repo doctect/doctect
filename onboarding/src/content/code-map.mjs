@@ -10,7 +10,7 @@ export const CODE_MAP = {
         { path: 'server/migrations', note: 'The migration ledger (index.js). NEVER edit an applied migration — append a new one. Three of them install database triggers: 011 and 014 make the audit tables append-only, 012 refuses sessions for suspended users.' },
         { path: 'server/middleware', note: 'checkOrigin (CSRF), rate limits, requireAdmin/requireOwner (live config membership on every request), requireUsername.' },
         { path: 'shared', note: 'Plain ESM imported by BOTH client and server — generator metadata and shared validation rules. The diff engine lives here too, but only the server imports it today.' },
-        { path: 'hooks', note: 'Two React hooks: useCurrentUser (session) and useGalleryDetail (shared by gallery page + modal).' },
+        { path: 'hooks', note: 'Three React hooks: useCurrentUser (session), useGalleryDetail (shared by gallery page + modal), and useWorkspaceProjectWrites (working-copy publication and coalesced local saves).' },
         { path: 'lib', note: 'Docs content loading/validation/search + the better-auth browser client.' },
         { path: 'tests', note: 'Component vitest suites flat in tests/unit, server suites in tests/unit/server, Playwright e2e in tests/e2e, shared helpers (incl. the gallery-sample harness) in tests/helpers.' },
         { path: 'docs-content', note: 'The in-app /docs product: 25 tutorials + 83 reference entries as markdown, validated at load — a bad link fails the unit suite.' },

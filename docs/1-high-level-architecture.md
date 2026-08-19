@@ -16,7 +16,7 @@ PDF Architect's core editor is a client-side web application. It relies heavily 
 
 The core of the application routing is defined in `App.tsx`.
 
-It uses `react-router-dom`'s `<BrowserRouter>` to manage the following routes:
+It defines a `react-router-dom` data router with `createBrowserRouter()` and mounts it through `<RouterProvider>` to manage the following routes:
 
 1.  **`/` (LandingPage.tsx)**: The marketing page.
 2.  **`/app` (EditorPage.tsx)**: The main workspace. This is where users spend most of their time building planners. It initializes the `ProjectEditor` components.
