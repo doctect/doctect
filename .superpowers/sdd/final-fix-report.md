@@ -2,11 +2,78 @@
 
 ## Status
 
-Complete. Critical save-lineage defect and Important static-policy/workflow gap from
-`final-review-findings.md` are closed. Retained Minors remain unchanged as requested.
+Complete. IndexedDB local persistence implementation and all final Standards/Spec corrections are
+closed. Independent final reviews report no Critical, Important, or Minor findings.
 
 - Review base: `6feb8dfffe9c5452225014705d24e81aa88628aa`
-- Reviewed head: `25027d07d7591a620ef8d13dda7c14807456e7f4`
+- Reviewed and verified head: `5f826ff`
+
+## Final Exact-Head Evidence
+
+- Focused final-correction suites: `155/155` storage/CI tests and `72/72` docs/onboarding tests.
+- Static boundary: `615/615` with one worker and `615/615` with four workers.
+- Complete bounded unit suite: `231/231` files and `3,286/3,286` tests.
+- Generated onboarding parity: `41/41` tests.
+- `npx tsc --noEmit`: exit 0, no diagnostics.
+- `npm run build`: exit 0, `2,452` modules transformed; private module Worker asset emitted as
+  `projectPreparationWorker-JJK2Oewh.js` (16.01 kB).
+- `git diff --check`: exit 0.
+
+## Final Supported-Browser Evidence
+
+- Official image:
+  `mcr.microsoft.com/playwright:v1.57.0-noble@sha256:3bed4b1a12f2338642f3d8cba28e291deef3c66bd4a964bbeb3e57bbff511dbd`
+- Runtime check:
+  `{"node":"v22.23.2","platformOverride":null,"skipHostValidation":null}`
+- Five-project source matrix, one worker, zero retries: `47 passed`, `6 intentional skips`,
+  `0 failed` in 3.8 minutes. Projects: Chromium, Firefox, WebKit,
+  `workspace-large-chromium`, and `workspace-large-firefox`.
+- Separate CI-equivalent built-bundle Chromium proof: `1 passed` in 32.1 seconds; completion marker
+  present. Near-limit state: `5,241,856` bytes; clone p90: `11.2 ms`; editor interaction p90:
+  `22.2 ms`; ratio: `1.98x`; one Worker, one request, one response, one physical write/readback.
+- Six source-matrix skips are deliberate: three built-bundle-only Worker cases and three
+  standard-project large-source cases. Both skipped behaviors run in their dedicated gates.
+
+## Closed Final Blockers
+
+- Fork retry state is account-neutral. Every retry replays authenticated server ownership;
+  ambiguous prior-owner pending imports are superseded atomically using private digest provenance.
+- Static policy reserves enumerated alternate Window/Storage acquisition syntax while retaining
+  explicit bounded semantics and exact safe iframe forms.
+- Project saves clone at admission, coalesce before expensive preparation, prepare through a private
+  fail-closed module Worker, write latest bytes once, and fan out one isolated readback publication.
+- Post-write ambiguity, readback loss, installation/publication clone failure, and explicit recovery
+  installation failure now transition terminally to authority loss with truthful recovery options.
+- App-state root validation requires own-node membership; inherited prototype names cannot verify.
+- Blocked-state capture failure always unmounts editor; protected captures survive repeated events;
+  async close actions are single-flight.
+- Pull-request workflow requires bounded units, exact TypeScript validation, five-project migration
+  matrix, and a non-skippable built Chromium Worker proof. Anti-rot tests reject relocation,
+  conditions, continue-on-error, ambiguous duplicate YAML keys, and near-miss command tokens.
+- Aborted bootstrap observers are removed instead of retaining stale UI closures.
+- Architecture and onboarding maps match the data router and all three React hooks.
+
+## Final Review
+
+- Standards axis: `PASS` — Critical 0, Important 0, Minor 0.
+- Spec axis: `PASS` — Critical 0, Important 0, Minor 0.
+- Public `LocalWorkspaceStore` surface remains exactly `bootstrap`, `commit`, and
+  `exportRecoveryBundle`.
+- No cleanup, dual-write, fallback editing, serialized authority token, or silent conflict
+  resolution was introduced.
+
+## Residual Nonblocking Output
+
+- Existing React Router future-flag warnings and Vite large-chunk warning remain.
+- Container install reports 48 dependency audit findings; final correction chain adds no dependency.
+- Browser tests modify tracked `server/analytics.db`; this generated artifact is excluded from every
+  commit and must be restored before integration.
+
+<details>
+<summary>Historical review-fix evidence at <code>25027d0</code></summary>
+
+The remaining sections are retained only as earlier branch evidence. They are superseded by the
+exact-head results above.
 
 ## Critical: Admission-Time Project Revision Lineage
 
@@ -114,3 +181,5 @@ mock failure; that file passed 17/17 in isolation and the unchanged complete rer
 - Existing React Router future-flag warnings and Vite chunk-size warning are unchanged.
 - Host Docker storage remains nearly full; local browser verification needs tmpfs or freed Docker
   storage. This does not affect application behavior or supported-host results.
+
+</details>
