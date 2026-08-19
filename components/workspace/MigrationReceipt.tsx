@@ -1,5 +1,6 @@
 import { ArrowRight, CheckCircle2, Download, LoaderCircle } from 'lucide-react';
 import type { MigrationReceipt as MigrationReceiptValue } from '../../services/localWorkspace/index';
+import { RECOVERY_SOURCE_PRESENTATION } from './recoverySourcePresentation';
 
 export interface MigrationReceiptProps {
   receipt: MigrationReceiptValue;
@@ -19,6 +20,8 @@ export function MigrationReceipt({
   isDownloading = false,
   downloadError,
 }: MigrationReceiptProps) {
+  const originalProjects = RECOVERY_SOURCE_PRESENTATION['legacy-original'];
+
   return (
     <main
       className="flex min-h-screen items-center justify-center bg-slate-50 px-4 py-10 text-slate-900 sm:px-6"
@@ -37,10 +40,10 @@ export function MigrationReceipt({
           id="migration-receipt-heading"
           className="text-2xl font-bold tracking-tight text-slate-900"
         >
-          Local projects upgraded
+          Your projects are ready
         </h1>
         <p className="mt-3 text-sm leading-6 text-slate-600 sm:text-base">
-          Your projects are verified and ready in local project storage.
+          Doctect moved and checked your local projects.
         </p>
 
         <ul className="mt-6 divide-y divide-slate-200 rounded-lg border border-slate-200 bg-slate-50 px-4 text-sm text-slate-700">
@@ -64,7 +67,7 @@ export function MigrationReceipt({
         </ul>
 
         <p className="mt-5 max-w-[68ch] text-sm leading-6 text-slate-600">
-          Original browser-storage values will stay unchanged for this release and the next release.
+          Doctect kept the previous saved project data unchanged in case recovery is needed.
         </p>
         {downloadError && (
           <p role="alert" className="mt-4 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700">
@@ -87,7 +90,7 @@ export function MigrationReceipt({
                   />
                 )
               : <Download className="size-4" aria-hidden="true" />}
-            {isDownloading ? 'Preparing backup' : 'Download original backup'}
+            {isDownloading ? 'Preparing project file' : originalProjects.actionLabel}
           </button>
           <button
             type="button"
