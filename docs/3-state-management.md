@@ -66,6 +66,21 @@ void updateProject(
 
 ## Storage Cutover and Recovery
 
-The IndexedDB database has six stores: `projects`, `workspace`, `presets`, `pendingImports`, `migrationLedger`, and `legacyBackup`. Initial migration validates all projects and presets in memory, writes all six stores atomically, independently reads them back, and switches authority only after the ledger becomes `verified`.
+The IndexedDB database is physical version 2 and has six stores: `projects`,
+`workspace`, `presets`, `pendingImports`, `migrationLedger`, and `legacyBackup`.
+Initial migration validates all projects and presets in memory, writes all six stores atomically,
+independently reads them back, and switches authority only
+after the ledger becomes `verified`.
 
-Legacy `localStorage` document keys are retained only as read-only migration and recovery input. They are monitored for old-tab or rollback drift but never become a silent editing fallback. This rollout performs no legacy cleanup and no dual write; divergence blocks editing and preserves both sources for explicit recovery.
+Bootstrap classifies storage as empty, current version 2, exact historical
+version-1 lineage state, or unrecognized. The historical path validates the
+complete workspace and backups, protects an editor-project export, then adds
+only missing private incarnations and advances ledger metadata in one exact CAS
+transaction. Physical version 2 with a historical ledger is a supported
+crash-intermediate state, so retry resumes without clearing or replacing data.
+
+Legacy `localStorage` document keys are retained only as read-only migration and
+recovery input. They are monitored for old-tab or rollback drift but never
+become a silent editing fallback. This rollout performs no legacy cleanup and no
+dual write; divergence blocks editing and preserves every source for explicit
+recovery.

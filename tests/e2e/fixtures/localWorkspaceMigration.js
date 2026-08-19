@@ -186,6 +186,80 @@ export const prepareValidLegacyWorkspace = async (page, options) => {
     return { ...legacy, seed };
 };
 
+export const prepareHistoricalVersionOneWorkspace = async page => {
+    await resetLocalWorkspace(page);
+    const legacy = await createValidLegacyWorkspace(page);
+    const seed = await seedLegacyRaw(page, legacy.raw);
+    const evidence = await page.evaluate(async ({ databaseName, stores }) => {
+        const [{ captureLegacySnapshot }, { prepareInitialCopy }, { createBlankProject }] = await Promise.all([
+            import('/services/localWorkspace/legacy.ts'),
+            import('/services/localWorkspace/migration.ts'),
+            import('/services/presets.ts'),
+        ]);
+        let uuid = 0;
+        const prepared = await prepareInitialCopy(captureLegacySnapshot(localStorage), {
+            crypto: globalThis.crypto,
+            now: () => '2026-08-18T12:00:00.000Z',
+            randomUUID: () => `historical-seed-${++uuid}`,
+            createBlankProject,
+        });
+        const historicalProjects = prepared.projects.map(record => {
+            const historical = structuredClone(record);
+            delete historical.incarnation;
+            return historical;
+        });
+        const historicalLedger = {
+            ...structuredClone(prepared.ledger),
+            indexedDbVersion: 1,
+            state: 'verified',
+            ledgerRevision: 1,
+            verifiedAt: '2026-08-18T12:01:00.000Z',
+        };
+        const expectedWorkspace = {
+            projects: prepared.projects.map(record => record.project),
+            activeProjectId: prepared.workspace.activeProjectId,
+            customPresets: prepared.presets.map(record => record.preset),
+            pendingImports: prepared.pendingImports.map(record => record.pendingImport),
+        };
+
+        await new Promise((resolve, reject) => {
+            const deletion = indexedDB.deleteDatabase(databaseName);
+            deletion.addEventListener('success', resolve, { once: true });
+            deletion.addEventListener('error', () => reject(deletion.error), { once: true });
+        });
+        const database = await new Promise((resolve, reject) => {
+            const request = indexedDB.open(databaseName, 1);
+            request.addEventListener('upgradeneeded', () => {
+                for (const store of stores) {
+                    request.result.createObjectStore(store, { keyPath: 'id' });
+                }
+            }, { once: true });
+            request.addEventListener('success', () => resolve(request.result), { once: true });
+            request.addEventListener('error', () => reject(request.error), { once: true });
+        });
+        const transaction = database.transaction(stores, 'readwrite');
+        for (const project of historicalProjects) transaction.objectStore('projects').put(project);
+        transaction.objectStore('workspace').put(prepared.workspace);
+        for (const preset of prepared.presets) transaction.objectStore('presets').put(preset);
+        for (const pending of prepared.pendingImports) transaction.objectStore('pendingImports').put(pending);
+        transaction.objectStore('migrationLedger').put(historicalLedger);
+        transaction.objectStore('legacyBackup').put(prepared.backup);
+        await new Promise((resolve, reject) => {
+            transaction.addEventListener('complete', resolve, { once: true });
+            transaction.addEventListener('abort', () => reject(transaction.error), { once: true });
+            transaction.addEventListener('error', () => reject(transaction.error), { once: true });
+        });
+        database.close();
+        return {
+            expectedWorkspace,
+            expectedTargetDigest: prepared.targetDigest,
+            historicalProjects,
+            historicalLedger,
+        };
+    }, { databaseName: WORKSPACE_DB_NAME, stores: WORKSPACE_STORE_NAMES });
+    return { ...legacy, seed, ...evidence };
+};
+
 export const prepareLegacyFailure = async (page, kind) => {
     await resetLocalWorkspace(page);
     const legacy = await createLegacyFailure(page, kind);

@@ -28,6 +28,7 @@ import {
     legacyRawFromBundle,
     mountVersionTwoWorkspaceGate,
     navigateSpaToEditor,
+    prepareHistoricalVersionOneWorkspace,
     prepareLargeLegacyWorkspace,
     prepareNearLimitLegacyWorkspaceFromBuiltEditor,
     prepareLegacyFailure,
@@ -46,7 +47,7 @@ import {
 } from './fixtures/localWorkspaceMigration.js';
 
 const editorPane = page => page.getByTestId('project-pane');
-const receiptHeading = page => page.getByRole('heading', { name: 'Local projects upgraded' });
+const receiptHeading = page => page.getByRole('heading', { name: 'Your projects are ready' });
 const recoveryAlert = page => page.getByRole('alert');
 
 const continueToEditor = async page => {
@@ -107,6 +108,54 @@ test.describe('local workspace migration release gate', () => {
         expect(await readLegacyRaw(page)).toEqual(legacy.raw);
     });
 
+    test('repairs recognized version-1 records missing only incarnation before opening editor', async ({ page }) => {
+        const historical = await prepareHistoricalVersionOneWorkspace(page);
+
+        await page.goto('/app');
+
+        await expect(recoveryAlert(page)).toHaveCount(0);
+        await expect(receiptHeading(page)).toBeVisible();
+        expect(await readWorkspace(page)).toEqual(historical.expectedWorkspace);
+        expect(await readLegacyRaw(page)).toEqual(historical.raw);
+        const repaired = await inspectWorkspaceDatabase(page);
+        expect(repaired.version).toBe(2);
+        expectIndexFreeSchema(repaired);
+        expect(repaired.records.migrationLedger).toEqual([{
+            ...historical.historicalLedger,
+            indexedDbVersion: 2,
+            ledgerRevision: historical.historicalLedger.ledgerRevision + 1,
+        }]);
+        expect(repaired.records.migrationLedger[0].expectedTargetDigest)
+            .toBe(historical.expectedTargetDigest);
+        expect(repaired.records.projects).toHaveLength(historical.historicalProjects.length);
+        for (const historicalProject of historical.historicalProjects) {
+            const current = repaired.records.projects.find(record => record.id === historicalProject.id);
+            expect(current).toEqual({
+                ...historicalProject,
+                incarnation: expect.any(String),
+            });
+            expect(current.incarnation.length).toBeGreaterThan(0);
+        }
+        const repairedIncarnations = Object.fromEntries(
+            repaired.records.projects.map(record => [record.id, record.incarnation]),
+        );
+
+        await continueToEditor(page);
+        await page.reload();
+
+        await expect(editorPane(page).first()).toBeVisible();
+        await expect(recoveryAlert(page)).toHaveCount(0);
+        const reloaded = await inspectWorkspaceDatabase(page);
+        expect(reloaded.version).toBe(2);
+        expect(reloaded.records.migrationLedger[0].expectedTargetDigest)
+            .toBe(historical.expectedTargetDigest);
+        for (const [id, incarnation] of Object.entries(repairedIncarnations)) {
+            expect(reloaded.records.projects.find(record => record.id === id)?.incarnation)
+                .toBe(incarnation);
+        }
+        expect(await readLegacyRaw(page)).toEqual(historical.raw);
+    });
+
     test('receipt reports exact counts, preserves pending import, and downloads original raw bytes', async ({ page }) => {
         const legacy = await prepareValidLegacyWorkspace(page);
 
@@ -116,7 +165,7 @@ test.describe('local workspace migration release gate', () => {
         await expect(page.getByText('2 projects', { exact: true })).toBeVisible();
         await expect(page.getByText('2 custom presets', { exact: true })).toBeVisible();
         await expect(page.getByText('Pending import preserved', { exact: true })).toBeVisible();
-        const bundle = await downloadJson(page, 'Download original backup');
+        const bundle = await downloadJson(page, 'Download projects from before the update');
         expect(bundle.format).toBe('doctect.legacy-workspace-recovery');
         expect(legacyRawFromBundle(bundle)).toEqual(legacy.raw);
         expect(await readLegacyRaw(page)).toEqual(legacy.raw);
@@ -177,7 +226,7 @@ test.describe('local workspace migration release gate', () => {
                         : { affectedItem: legacy.expected.affectedItem }),
                 });
                 expect(result.recovery.message).toContain(legacy.expected.message);
-                const bundle = await downloadJson(page, 'Download backup');
+                const bundle = await downloadJson(page, 'Download older-version projects');
                 expect(legacyRawFromBundle(bundle)).toEqual(legacy.raw);
                 expect(await readLegacyRaw(page)).toEqual(legacy.raw);
                 expect(totalStoredRecords(await inspectWorkspaceDatabase(page))).toBe(0);
@@ -198,7 +247,7 @@ test.describe('local workspace migration release gate', () => {
 
             await navigateSpaToEditor(page);
 
-            await expect(page.getByRole('heading', { name: 'Local project storage is unavailable' })).toBeVisible();
+            await expect(page.getByRole('heading', { name: 'Doctect can’t open your saved projects' })).toBeVisible();
             await expect(editorPane(page)).toHaveCount(0);
             expect(await readLegacyRaw(page)).toEqual(legacy.raw);
             await page.goto('/');
@@ -223,7 +272,7 @@ test.describe('local workspace migration release gate', () => {
                 await readHeldWorkspaceSignals(page)
             ).versionChangeCount).toBe(1);
             await expect(page.getByRole('heading', {
-                name: 'Local project storage is unavailable',
+                name: 'Doctect can’t open your saved projects',
             })).toBeVisible();
             await expect(page.getByTestId('blocked-upgrade-editor')).toHaveCount(0);
             await expect(editorPane(page)).toHaveCount(0);
@@ -355,7 +404,7 @@ test.describe('local workspace migration release gate', () => {
                 await expect(recoveryAlert(page)).toBeVisible();
                 await expect(editorPane(page)).toHaveCount(0);
                 await expect(page.locator('#workspace-recovery-heading')).toContainText(
-                    /couldn't upgrade local projects|Project copies changed in another tab/,
+                    /We couldn’t finish preparing your projects|We found two different saved project sets/,
                 );
                 expect(await readLegacyRaw(page)).toEqual(changed.raw);
                 await oldPage.close();
@@ -382,17 +431,17 @@ test.describe('local workspace migration release gate', () => {
         await writeLegacyRaw(oldPage, changed.raw);
         await waitForLegacyStorageEvent(page);
 
-        await expect(page.getByRole('heading', { name: 'Project copies changed in another tab' })).toBeVisible();
+        await expect(page.getByRole('heading', { name: 'We found two different saved project sets' })).toBeVisible();
         await expect(editorPane(page)).toHaveCount(0);
-        const currentBundle = await downloadJson(page, 'Download current browser copy');
-        const originalBundle = await downloadJson(page, 'Download original backup');
-        const editorBundle = await downloadJson(page, 'Download editor copy');
+        const currentBundle = await downloadJson(page, 'Download older-version projects');
+        const originalBundle = await downloadJson(page, 'Download projects from before the update');
+        const editorBundle = await downloadJson(page, 'Download editor projects');
         expect(legacyRawFromBundle(currentBundle)).toEqual(changed.raw);
         expect(legacyRawFromBundle(originalBundle)).toEqual(legacy.raw);
         expect(editorBundle.workspace).toEqual(durableBeforeRecovery);
 
-        await page.getByRole('button', { name: 'Recover changed projects as copies' }).click();
-        await page.getByRole('button', { name: 'Recover as copies' }).click();
+        await page.getByRole('button', { name: 'Add changed projects without replacing anything' }).click();
+        await page.getByRole('button', { name: 'Add separate copies' }).click();
         await expect(editorPane(page).first()).toBeVisible();
         const recoveredWorkspace = await readWorkspace(page);
         const durableProject = recoveredWorkspace.projects.find(project => project.id === legacy.projects[0].id);
@@ -423,11 +472,11 @@ test.describe('local workspace migration release gate', () => {
         await armLegacyStorageEvent(page);
         await writeLegacyRaw(oldPage, first.raw);
         await waitForLegacyStorageEvent(page);
-        await expect(page.getByRole('heading', { name: 'Project copies changed in another tab' })).toBeVisible();
+        await expect(page.getByRole('heading', { name: 'We found two different saved project sets' })).toBeVisible();
         const firstInspection = await inspectWorkspaceDatabase(page);
         const firstRecoveryId = firstInspection.records.migrationLedger[0].unresolvedRecovery.id;
-        await page.getByRole('button', { name: 'Recover changed projects as copies' }).click();
-        await page.getByRole('button', { name: 'Recover as copies' }).click();
+        await page.getByRole('button', { name: 'Add changed projects without replacing anything' }).click();
+        await page.getByRole('button', { name: 'Add separate copies' }).click();
         await expect(editorPane(page).first()).toBeVisible();
 
         const second = createChangedLegacyWorkspace(legacy, 'Second rollback', 'second');
@@ -435,7 +484,7 @@ test.describe('local workspace migration release gate', () => {
         await writeLegacyRaw(oldPage, second.raw);
         await waitForLegacyStorageEvent(page);
 
-        await expect(page.getByRole('heading', { name: 'Project copies changed in another tab' })).toBeVisible();
+        await expect(page.getByRole('heading', { name: 'We found two different saved project sets' })).toBeVisible();
         const inspection = await inspectWorkspaceDatabase(page);
         const secondRecoveryId = inspection.records.migrationLedger[0].unresolvedRecovery.id;
         expect(secondRecoveryId).not.toBe(firstRecoveryId);
@@ -658,9 +707,9 @@ test.describe('local workspace migration release gate', () => {
         await armLegacyStorageEvent(page);
         await writeLegacyRaw(oldPage, changed.raw);
         await waitForLegacyStorageEvent(page);
-        await expect(page.getByRole('heading', { name: 'Project copies changed in another tab' })).toBeVisible();
+        await expect(page.getByRole('heading', { name: 'We found two different saved project sets' })).toBeVisible();
         await expect(editorPane(page)).toHaveCount(0);
-        const editorBundle = await downloadJson(page, 'Download editor copy');
+        const editorBundle = await downloadJson(page, 'Download editor projects');
         expect(editorBundle.workspace.projects.find(project => project.id === nearLimitProject.id))
             .toMatchObject({ initialState: { showGrid: true } });
         await oldPage.close();
