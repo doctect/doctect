@@ -18,6 +18,9 @@ jobs:
       - run: npm run check:workspace-boundary --legacy-peer-deps
       - name: Complete unit suite
         run: npx vitest run --maxWorkers=4
+      - name: TypeScript check
+        run: |
+          npx tsc --noEmit
       - run: npm run build --legacy-peer-deps
       - name: Browser migration matrix
         run: >-

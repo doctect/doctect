@@ -461,12 +461,24 @@ const createLocalWorkspaceStoreAtVersion = (
   let protectedIndexedDbRecoveryBundle: Blob | undefined;
 
   const registerObserver = (observer?: WorkspaceBootstrapObserver): void => {
-    if (observer && !observer.signal?.aborted) observers.add(observer);
+    if (!observer || observer.signal?.aborted || observers.has(observer)) return;
+    observers.add(observer);
+    if (!observer.signal) return;
+    try {
+      observer.signal.addEventListener('abort', () => {
+        observers.delete(observer);
+      }, { once: true });
+    } catch {
+      observers.delete(observer);
+    }
   };
 
   const notifyAuthorityLost = (result: NonReadyResult): void => {
     for (const observer of observers) {
-      if (observer.signal?.aborted) continue;
+      if (observer.signal?.aborted) {
+        observers.delete(observer);
+        continue;
+      }
       try {
         observer.onAuthorityLost?.(result);
       } catch {

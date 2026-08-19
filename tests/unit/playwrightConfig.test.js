@@ -17,6 +17,7 @@ const sourceProjects = [
     'workspace-large-firefox',
 ];
 const requiredMigrationSteps = [
+    'TypeScript check',
     'Browser migration matrix',
     'Built Chromium Worker save proof',
 ];
@@ -413,6 +414,10 @@ const releaseGateJobIsUnconditional = workflow => {
 
 const assertMigrationWorkflow = workflow => {
     expect(releaseGateJobIsUnconditional(workflow)).toBe(true);
+    expect(extractNamedWorkflowStep(workflow, 'TypeScript check')).toEqual({
+        env: {},
+        commands: [['npx', 'tsc', '--noEmit']],
+    });
     expect(extractNamedWorkflowStep(workflow, 'Browser migration matrix')).toEqual({
         env: {},
         commands: [[

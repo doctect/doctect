@@ -1530,6 +1530,25 @@ describe('concurrency, retries, and observers', () => {
     await expect(store.bootstrap()).resolves.toMatchObject({ status: 'unavailable' });
   });
 
+  it('removes retained authority observers when their signal aborts', async () => {
+    const indexedDB = new IDBFactory();
+    const opened = trackOpened(indexedDB);
+    const harness = createHarness({ indexedDB });
+    const store = createLocalWorkspaceStore(harness.environment);
+    const controller = new AbortController();
+    const addEventListener = vi.spyOn(controller.signal, 'addEventListener');
+    const onAuthorityLost = vi.fn();
+
+    await store.bootstrap({ signal: controller.signal, onAuthorityLost });
+
+    expect(addEventListener).toHaveBeenCalledWith('abort', expect.any(Function), { once: true });
+    controller.abort();
+    forceCloseDatabase((await opened[0]) as never);
+
+    await expect(store.bootstrap()).resolves.toMatchObject({ status: 'unavailable' });
+    expect(onAuthorityLost).not.toHaveBeenCalled();
+  });
+
   it('synchronously freezes then restores authority for a byte-identical legacy event', async () => {
     const harness = createHarness();
     const onAuthorityLost = vi.fn();
