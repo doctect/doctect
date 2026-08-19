@@ -1,9 +1,10 @@
 # IndexedDB v2 Lineage Repair and Recovery UX — Design
 
 **Date:** 2026-08-18
-**Status:** approved in conversation; written review pending
+**Status:** approved
 **Parent design:** `docs/superpowers/specs/2026-08-14-indexeddb-local-persistence-migration-design.md`
 **Parent plan:** `docs/superpowers/plans/2026-08-14-indexeddb-local-persistence-migration.md`
+**Implementation plan:** `docs/superpowers/plans/2026-08-18-indexeddb-v2-lineage-repair-recovery-ux.md`
 
 ## Goal
 
