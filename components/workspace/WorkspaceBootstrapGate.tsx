@@ -18,12 +18,6 @@ import {
   WorkspaceRecoveryScreen,
   type WorkspaceBlockingResult,
 } from './WorkspaceRecoveryScreen';
-import {
-  OPEN_WORKSPACE_PRESENTATION,
-  PROJECT_DOWNLOAD_ERROR,
-  RECOVERY_SOURCE_PRESENTATION,
-  SEPARATE_COPIES_ERROR,
-} from './recoverySourcePresentation';
 
 export interface WorkspaceEditorMount {
   store: LocalWorkspaceStore;
@@ -144,6 +138,12 @@ const unacknowledgedWarnings = (store: LocalWorkspaceStore) => {
     initialWarnings.push(...delivery.warnings);
   }
   return { warningImportIds, initialWarnings };
+};
+
+const DOWNLOAD_FILENAMES: Record<RecoverySource, string> = {
+  'legacy-current': 'doctect-current-browser-copy.json',
+  'legacy-original': 'doctect-original-browser-backup.json',
+  'indexeddb-workspace': 'doctect-editor-copy.json',
 };
 
 const rejectedBootstrapResult = (error: unknown): WorkspaceBlockingResult => ({
@@ -457,13 +457,13 @@ export function WorkspaceBootstrapGate({
         || controllerRef.current?.signal.aborted) {
         return;
       }
-      downloadBlob(blob, RECOVERY_SOURCE_PRESENTATION[source].filename);
+      downloadBlob(blob, DOWNLOAD_FILENAMES[source]);
     } catch {
       if (actionRef.current === action
         && attemptRef.current === attempt
         && authorityVersionRef.current === authorityVersion
         && committedStoreRef.current === actionStore) {
-        setActionError(PROJECT_DOWNLOAD_ERROR);
+        setActionError('Backup download failed. Nothing was changed. Try again.');
       }
     } finally {
       if (actionRef.current === action && committedStoreRef.current === actionStore) {
@@ -480,9 +480,9 @@ export function WorkspaceBootstrapGate({
         version: 1,
         capturedAt: new Date().toISOString(),
         workspace: structuredClone(snapshot),
-      }, OPEN_WORKSPACE_PRESENTATION.filename);
+      }, 'doctect-open-workspace.json');
     } catch {
-      setActionError(PROJECT_DOWNLOAD_ERROR);
+      setActionError('Open-work download failed. Nothing was changed. Try again.');
     }
   };
 
@@ -519,7 +519,9 @@ export function WorkspaceBootstrapGate({
         && attemptRef.current === attempt
         && authorityVersionRef.current === authorityVersion
         && committedStoreRef.current === actionStore) {
-        setActionError(SEPARATE_COPIES_ERROR);
+        setActionError(
+          'Recovery failed. Nothing was overwritten. Try again or download a backup.',
+        );
       }
     } finally {
       if (actionRef.current === action && committedStoreRef.current === actionStore) {

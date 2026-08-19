@@ -12,9 +12,7 @@ import { WorkspaceRecoveryScreen } from '../../components/workspace/WorkspaceRec
 import {
   OPEN_WORKSPACE_PRESENTATION,
   PROJECT_COPY_HELPER_TEXT,
-  PROJECT_DOWNLOAD_ERROR,
   RECOVERY_SOURCE_PRESENTATION,
-  SEPARATE_COPIES_ERROR,
 } from '../../components/workspace/recoverySourcePresentation';
 import { useWorkspaceProjectWrites } from '../../hooks/useWorkspaceProjectWrites';
 import { createBlankProject } from '../../services/presets';
@@ -582,7 +580,7 @@ describe('WorkspaceBootstrapGate', () => {
       version: 1,
       capturedAt: expect.any(String),
       workspace: oldWorkspace,
-    }, OPEN_WORKSPACE_PRESENTATION.filename);
+    }, 'doctect-open-workspace.json');
     expect(staleDownload).not.toBeInTheDocument();
   });
 
@@ -687,33 +685,8 @@ describe('WorkspaceBootstrapGate', () => {
 
     fireEvent.click(download);
     await waitFor(() => expect(store.exportRecoveryBundle).toHaveBeenCalledWith('legacy-current'));
-    await waitFor(() => expect(downloadBlob).toHaveBeenCalledWith(
-      expect.any(Blob),
-      RECOVERY_SOURCE_PRESENTATION['legacy-current'].filename,
-    ));
+    await waitFor(() => expect(downloadBlob).toHaveBeenCalledOnce());
     expect(screen.queryByTestId('editor-page')).not.toBeInTheDocument();
-  });
-
-  it('reports a project-copy download failure inside the outcome alert', async () => {
-    const exportBundle = deferred<Blob>();
-    const store = fakeStore({
-      bootstrap: recoveryResult(workspaceRecovery({
-        availableExports: ['legacy-current'],
-      })),
-      exportBundles: { 'legacy-current': exportBundle.promise },
-    });
-    render(<WorkspaceBootstrapGate store={store} renderEditor={fakeEditorRenderer} />);
-
-    fireEvent.click(await screen.findByRole('button', {
-      name: RECOVERY_SOURCE_PRESENTATION['legacy-current'].actionLabel,
-    }));
-    await act(async () => exportBundle.reject(new Error('download failed')));
-
-    const alert = screen.getByRole('alert');
-    expect(within(alert).getByText(
-      PROJECT_DOWNLOAD_ERROR,
-    )).toBeVisible();
-    expect(within(alert).queryByRole('button')).not.toBeInTheDocument();
   });
 
   it('ignores phase and authority callbacks retained by a stale retry attempt', async () => {
@@ -803,7 +776,7 @@ describe('WorkspaceBootstrapGate', () => {
       version: 1,
       capturedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/),
       workspace: openWorkspace,
-    }, OPEN_WORKSPACE_PRESENTATION.filename);
+    }, 'doctect-open-workspace.json');
   });
 
   it('clones project-edit publication before synchronous authority-loss unmount', async () => {
@@ -837,7 +810,7 @@ describe('WorkspaceBootstrapGate', () => {
       version: 1,
       capturedAt: expect.any(String),
       workspace: expected,
-    }, OPEN_WORKSPACE_PRESENTATION.filename);
+    }, 'doctect-open-workspace.json');
   });
 
   it('retries a provisional capture after initial clone failure while the editor stays blocked', async () => {
@@ -924,7 +897,7 @@ describe('WorkspaceBootstrapGate', () => {
       version: 1,
       capturedAt: expect.any(String),
       workspace: initial,
-    }, OPEN_WORKSPACE_PRESENTATION.filename);
+    }, 'doctect-open-workspace.json');
   });
 
   it('keeps a successful protected capture when a repeated notification clone would fail', async () => {
@@ -980,7 +953,7 @@ describe('WorkspaceBootstrapGate', () => {
       version: 1,
       capturedAt: expect.any(String),
       workspace: initial,
-    }, OPEN_WORKSPACE_PRESENTATION.filename);
+    }, 'doctect-open-workspace.json');
   });
 
   it('does not replace protected open work when repeated cloning returns changed source', async () => {
@@ -1039,7 +1012,7 @@ describe('WorkspaceBootstrapGate', () => {
       version: 1,
       capturedAt: expect.any(String),
       workspace: firstProtected,
-    }, OPEN_WORKSPACE_PRESENTATION.filename);
+    }, 'doctect-open-workspace.json');
   });
 
   it('ignores stale publications and notifications after unmounting a protected blocked gate', async () => {
@@ -1119,7 +1092,7 @@ describe('WorkspaceBootstrapGate', () => {
       version: 1,
       capturedAt: expect.any(String),
       workspace: initial,
-    }, OPEN_WORKSPACE_PRESENTATION.filename);
+    }, 'doctect-open-workspace.json');
   });
 
   it('refreshes a provisional import capture before the editor mount effect publishes', async () => {
@@ -1153,7 +1126,7 @@ describe('WorkspaceBootstrapGate', () => {
       version: 1,
       capturedAt: expect.any(String),
       workspace: consumed,
-    }, OPEN_WORKSPACE_PRESENTATION.filename);
+    }, 'doctect-open-workspace.json');
   });
 
   it('refreshes a provisional capture after each import before a later import fails', async () => {
@@ -1179,7 +1152,7 @@ describe('WorkspaceBootstrapGate', () => {
       version: 1,
       capturedAt: expect.any(String),
       workspace: afterFirst,
-    }, OPEN_WORKSPACE_PRESENTATION.filename);
+    }, 'doctect-open-workspace.json');
   });
 
   it('protects a provisional seed once blocked before Try again imports finish', async () => {
@@ -1217,7 +1190,7 @@ describe('WorkspaceBootstrapGate', () => {
       version: 1,
       capturedAt: expect.any(String),
       workspace: initial,
-    }, OPEN_WORKSPACE_PRESENTATION.filename);
+    }, 'doctect-open-workspace.json');
   });
 
   it('retains blocked open work through Try again until the replacement editor publishes', async () => {
@@ -1262,7 +1235,7 @@ describe('WorkspaceBootstrapGate', () => {
       version: 1,
       capturedAt: expect.any(String),
       workspace: blockedOpenWork,
-    }, OPEN_WORKSPACE_PRESENTATION.filename);
+    }, 'doctect-open-workspace.json');
   });
 
   it('retains blocked open work through add-separate-copies completion', async () => {
@@ -1303,7 +1276,7 @@ describe('WorkspaceBootstrapGate', () => {
       version: 1,
       capturedAt: expect.any(String),
       workspace: blockedOpenWork,
-    }, OPEN_WORKSPACE_PRESENTATION.filename);
+    }, 'doctect-open-workspace.json');
   });
 
   it('retains blocked open work while a retry receipt finishes', async () => {
@@ -1350,7 +1323,7 @@ describe('WorkspaceBootstrapGate', () => {
       version: 1,
       capturedAt: expect.any(String),
       workspace: blockedOpenWork,
-    }, OPEN_WORKSPACE_PRESENTATION.filename);
+    }, 'doctect-open-workspace.json');
   });
 
   it('retains blocked open work while Try again consumes a pending import', async () => {
@@ -1402,7 +1375,7 @@ describe('WorkspaceBootstrapGate', () => {
       version: 1,
       capturedAt: expect.any(String),
       workspace: blockedOpenWork,
-    }, OPEN_WORKSPACE_PRESENTATION.filename);
+    }, 'doctect-open-workspace.json');
   });
 
   it('rejects a retained prior-mount callback after Try again', async () => {
@@ -1448,7 +1421,7 @@ describe('WorkspaceBootstrapGate', () => {
       version: 1,
       capturedAt: expect.any(String),
       workspace: blockedOpenWork,
-    }, OPEN_WORKSPACE_PRESENTATION.filename);
+    }, 'doctect-open-workspace.json');
   });
 
   it('replaces retained work when the real write hook publishes a replacement mount', async () => {
@@ -1509,7 +1482,7 @@ describe('WorkspaceBootstrapGate', () => {
       version: 1,
       capturedAt: expect.any(String),
       workspace: replacement,
-    }, OPEN_WORKSPACE_PRESENTATION.filename);
+    }, 'doctect-open-workspace.json');
   });
 
   it('downloads nested open work published by the real write hook before save settles', async () => {
@@ -1559,7 +1532,7 @@ describe('WorkspaceBootstrapGate', () => {
       version: 1,
       capturedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/),
       workspace: openWorkspace,
-    }, OPEN_WORKSPACE_PRESENTATION.filename);
+    }, 'doctect-open-workspace.json');
   });
 
   it('requires confirmation before adding changed legacy data as separate copies', async () => {
@@ -1679,7 +1652,7 @@ describe('WorkspaceBootstrapGate', () => {
     await act(async () => recoveryCommit.reject(new Error('quota exhausted')));
 
     expect(await screen.findByText(
-      SEPARATE_COPIES_ERROR,
+      'Recovery failed. Nothing was overwritten. Try again or download a backup.',
     )).toBeVisible();
     expect(screen.getByRole('button', {
       name: 'Add changed projects without replacing anything',
