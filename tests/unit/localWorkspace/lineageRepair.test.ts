@@ -4,9 +4,11 @@ import { describe, expect, it, vi } from 'vitest';
 import { digestWorkspaceContent } from '../../../services/localWorkspace/canonical';
 import {
   prepareLineageRepair,
-  type LineageRepairCandidateRecords,
 } from '../../../services/localWorkspace/lineageRepair';
-import { prepareInitialCopy } from '../../../services/localWorkspace/migration';
+import {
+  prepareInitialCopy,
+  type WorkspaceRecordCandidates,
+} from '../../../services/localWorkspace/migration';
 import type {
   HistoricalMigrationLedgerV1,
   StoredProject,
@@ -28,7 +30,7 @@ const candidate = async () => {
     ...structuredClone(initial.ledger),
     indexedDbVersion: 1,
   } as HistoricalMigrationLedgerV1;
-  const records: LineageRepairCandidateRecords = {
+  const records: WorkspaceRecordCandidates = {
     projects,
     workspace: structuredClone(initial.workspace),
     presets: structuredClone(initial.presets),

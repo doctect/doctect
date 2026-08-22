@@ -132,7 +132,10 @@ export interface LegacyBackupRecord {
 }
 
 export interface LocalWorkspaceDatabase extends DBSchema {
-  projects: { key: string; value: StoredProject };
+  // DBSchema describes values this rollout intentionally writes or upgrades.
+  // readWorkspaceRecords still exposes unknown candidates because IndexedDB can
+  // contain malformed values outside this authorized physical model.
+  projects: { key: string; value: StoredProject | HistoricalStoredProjectV1 };
   workspace: { key: 'current'; value: StoredWorkspace };
   presets: { key: string; value: StoredPreset };
   pendingImports: { key: string; value: StoredPendingImport };

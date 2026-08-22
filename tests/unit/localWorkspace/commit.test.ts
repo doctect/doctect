@@ -35,10 +35,12 @@ import {
   canonicalStringify,
   sha256Hex,
 } from '../../../services/localWorkspace/canonical';
+import { reconstructWorkspaceRecords } from '../../../services/localWorkspace/migration';
 import {
   WORKSPACE_DB_NAME,
   WORKSPACE_DB_VERSION,
   storedProjectLineage,
+  type StoredProject,
 } from '../../../services/localWorkspace/schema';
 import {
   getInstalledProjectAuthorityToken,
@@ -395,14 +397,28 @@ const readyStore = async (
   return { store, harness, snapshot: result.snapshot };
 };
 
-const inspect = async (harness: Harness): Promise<IndexedDbInspection> => {
+type CurrentIndexedDbInspection = Omit<IndexedDbInspection, 'projects'> & {
+  projects: StoredProject[];
+};
+
+const currentInspection = (inspection: IndexedDbInspection): CurrentIndexedDbInspection => {
+  const { records } = reconstructWorkspaceRecords({
+    projects: inspection.projects,
+    workspace: inspection.workspace[0],
+    presets: inspection.presets,
+    pendingImports: inspection.pendingImports,
+  });
+  return { ...inspection, projects: records.projects };
+};
+
+const inspect = async (harness: Harness): Promise<CurrentIndexedDbInspection> => {
   const adapter = createIndexedDbAdapter({
     indexedDB: harness.indexedDB,
     now: () => TEST_NOW,
   });
   try {
     await adapter.open();
-    return await adapter.inspect();
+    return currentInspection(await adapter.inspect());
   } finally {
     adapter.close();
   }
@@ -506,7 +522,8 @@ describe('project save queues', () => {
     const beforeAToken = getInstalledProjectAuthorityToken(beforeA!);
     const beforeBToken = getInstalledProjectAuthorityToken(beforeB!);
     const foreign = createIndexedDbAdapter({ indexedDB: harness.indexedDB, now: () => TEST_NOW });
-    const foreignA = (await foreign.inspect()).projects.find(record => record.id === 'project-a')!;
+    const foreignA = currentInspection(await foreign.inspect())
+      .projects.find(record => record.id === 'project-a')!;
     await foreign.saveProject(projectNamed('Foreign A'), storedProjectLineage(foreignA));
 
     const observed = await store.commit({ type: 'activate-project', projectId: 'project-a' });
@@ -516,7 +533,8 @@ describe('project save queues', () => {
     expect(getInstalledProjectAuthorityToken(observedA)).not.toBe(beforeAToken);
     expect(observedA.name).toBe('Foreign A');
     expect(getInstalledProjectAuthorityToken(observedB)).toBe(beforeBToken);
-    const foreignRecord = (await foreign.inspect()).projects.find(record => record.id === 'project-a')!;
+    const foreignRecord = currentInspection(await foreign.inspect())
+      .projects.find(record => record.id === 'project-a')!;
     expect(foreignRecord.incarnation).toBe(initialRecord.incarnation);
     expect(foreignRecord.storageRevision).toBe(initialRecord.storageRevision + 1);
     foreign.close();
@@ -1554,7 +1572,8 @@ describe('project structure commands', () => {
   it('rejects close when another same-version tab saved the target project', async () => {
     const { store, harness } = await readyStore({ values: twoProjectValues() });
     const other = createIndexedDbAdapter({ indexedDB: harness.indexedDB, now: () => TEST_NOW });
-    const foreignBase = (await other.inspect()).projects.find(record => record.id === 'project-a')!;
+    const foreignBase = currentInspection(await other.inspect())
+      .projects.find(record => record.id === 'project-a')!;
     await other.saveProject(projectNamed('Saved elsewhere'), storedProjectLineage(foreignBase));
 
     await expect(store.commit({
@@ -2099,7 +2118,8 @@ describe('failure handling and private revisions', () => {
     const { store, harness, snapshot } = await readyStore();
     const cached = await store.bootstrap();
     const other = createIndexedDbAdapter({ indexedDB: harness.indexedDB, now: () => TEST_NOW });
-    const foreignBase = (await other.inspect()).projects.find(record => record.id === 'project-a')!;
+    const foreignBase = currentInspection(await other.inspect())
+      .projects.find(record => record.id === 'project-a')!;
     await other.saveProject(projectNamed('Other tab'), storedProjectLineage(foreignBase));
     harness.records.length = 0;
     useQueueTimers();
@@ -2360,7 +2380,7 @@ describe('failure handling and private revisions', () => {
       indexedDB: harness.indexedDB,
       now: () => TEST_NOW,
     });
-    const committedRecord = (await foreign.inspect()).projects
+    const committedRecord = currentInspection(await foreign.inspect()).projects
       .find(record => record.id === 'project-a')!;
     await foreign.saveProject(
       projectNamed('Foreign write after publication failure'),
@@ -2371,7 +2391,8 @@ describe('failure handling and private revisions', () => {
     ).text();
 
     expect(protectedAfterForeignWrite).toBe(protectedBeforeForeignWrite);
-    expect((await foreign.inspect()).projects.find(record => record.id === 'project-a'))
+    expect(currentInspection(await foreign.inspect()).projects
+      .find(record => record.id === 'project-a'))
       .toMatchObject({ project: { name: 'Foreign write after publication failure' } });
     foreign.close();
     await expect(store.bootstrap()).resolves.toMatchObject({

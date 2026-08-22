@@ -17,6 +17,7 @@ import type { FaultInjector } from './faults';
 import type { PreparedLineageRepair } from './lineageRepair';
 import type {
   PreparedInitialCopy,
+  WorkspaceRecordCandidates,
   WorkspaceRecords,
 } from './migration';
 import {
@@ -27,6 +28,7 @@ import {
   WORKSPACE_DB_NAME,
   WORKSPACE_DB_VERSION,
   WORKSPACE_MIGRATION_ID,
+  type HistoricalStoredProjectV1,
   type LegacyBackupRecord,
   type LocalWorkspaceDatabase,
   type MigrationLedger,
@@ -75,7 +77,7 @@ export interface IndexedDbSchemaDescription {
 }
 
 export interface IndexedDbInspection {
-  projects: StoredProject[];
+  projects: Array<StoredProject | HistoricalStoredProjectV1>;
   workspace: StoredWorkspace[];
   presets: StoredPreset[];
   pendingImports: StoredPendingImport[];
@@ -128,7 +130,7 @@ export interface IndexedDbAdapter {
     expectedLedger: MigrationLedger,
   ): Promise<void>;
   repairHistoricalLineage(prepared: PreparedLineageRepair): Promise<void>;
-  readWorkspaceRecords(): Promise<WorkspaceRecords>;
+  readWorkspaceRecords(): Promise<WorkspaceRecordCandidates>;
   readLegacyBackup(id: string): Promise<LegacyBackupRecord | undefined>;
   readMigrationLedger(): Promise<unknown>;
   markVerified(expected: VerificationExpectation): Promise<MigrationLedger>;
@@ -176,6 +178,10 @@ const recognizedLedger = (value: unknown): value is MigrationLedger => {
       || candidate.state === 'cleanup-complete'
     );
 };
+
+const isCurrentStoredProject = (
+  value: StoredProject | HistoricalStoredProjectV1,
+): value is StoredProject => typeof value.incarnation === 'string';
 
 const errorName = (error: unknown): string | undefined => {
   if (error === null || (typeof error !== 'object' && typeof error !== 'function')) {
@@ -463,7 +469,7 @@ export const createIndexedDbAdapter = (
       ] = await Promise.all(requests);
       await transaction.done;
       return {
-        projects: projects as StoredProject[],
+        projects,
         workspace: workspace as StoredWorkspace[],
         presets: presets as StoredPreset[],
         pendingImports: pendingImports as StoredPendingImport[],
@@ -634,7 +640,7 @@ export const createIndexedDbAdapter = (
     }
   };
 
-  const readWorkspaceRecords = async (): Promise<WorkspaceRecords> => {
+  const readWorkspaceRecords = async (): Promise<WorkspaceRecordCandidates> => {
     const activeDatabase = await getDatabase();
     const storeNames = ['projects', 'workspace', 'presets', 'pendingImports'] as const;
     let transaction;
@@ -649,7 +655,7 @@ export const createIndexedDbAdapter = (
       await transaction.done;
       return {
         projects,
-        workspace: workspace as StoredWorkspace,
+        workspace,
         presets,
         pendingImports,
       };
@@ -807,7 +813,7 @@ export const createIndexedDbAdapter = (
       }
       if (!workspace) throw conflict('Workspace record changed before legacy recovery.');
 
-      const currentRecords: WorkspaceRecords = {
+      const currentRecords: WorkspaceRecordCandidates = {
         projects,
         workspace,
         presets,
@@ -849,7 +855,9 @@ export const createIndexedDbAdapter = (
         .get(WORKSPACE_MIGRATION_ID);
       requireVerifiedAuthority(ledger);
       const stored = await projectTransaction.objectStore('projects').get(project.id);
-      if (!stored || !sameProjectLineage(storedProjectLineage(stored), expectedLineage)) {
+      if (!stored
+        || !isCurrentStoredProject(stored)
+        || !sameProjectLineage(storedProjectLineage(stored), expectedLineage)) {
         throw conflict(`Project ${project.id} storage lineage changed.`);
       }
       const next: StoredProject = {
@@ -1012,7 +1020,9 @@ export const createIndexedDbAdapter = (
       const projectStore = workspaceTransaction.objectStore('projects');
       const target = await projectStore.get(projectId);
       const targetIndex = workspace.projectOrder.indexOf(projectId);
-      if (!target || !sameProjectLineage(storedProjectLineage(target), expectedLineage)) {
+      if (!target
+        || !isCurrentStoredProject(target)
+        || !sameProjectLineage(storedProjectLineage(target), expectedLineage)) {
         throw conflict(`Project ${projectId} storage lineage changed.`);
       }
       if (targetIndex < 0) throw validation(`Project ${projectId} does not exist.`);

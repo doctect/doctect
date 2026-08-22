@@ -71,11 +71,23 @@ export interface PreparedInitialCopy {
   receipt?: MigrationReceipt;
 }
 
-export interface WorkspaceRecords {
+export interface WorkspaceRecordCandidates {
+  projects: unknown;
+  workspace: unknown;
+  presets: unknown;
+  pendingImports: unknown;
+}
+
+export interface WorkspaceRecords extends WorkspaceRecordCandidates {
   projects: StoredProject[];
   workspace: StoredWorkspace;
   presets: StoredPreset[];
   pendingImports: StoredPendingImport[];
+}
+
+export interface ReconstructedWorkspaceRecords {
+  records: WorkspaceRecords;
+  snapshot: WorkspaceSnapshot;
 }
 
 type MigrationErrorCategory = 'legacy-invalid' | 'target-invalid' | 'verification-failed';
@@ -647,7 +659,9 @@ const validatePendingRecords = (records: unknown): WorkspacePendingImport[] => {
   return orderedByPosition(validated, 'Pending import record').map(record => record.pendingImport);
 };
 
-export function reconstructWorkspace(records: WorkspaceRecords): WorkspaceSnapshot {
+export function reconstructWorkspaceRecords(
+  records: WorkspaceRecordCandidates,
+): ReconstructedWorkspaceRecords {
   if (!isPlainObject(records)) throw targetError('Workspace records must be an object.');
   const projectsById = validateProjectRecords(records.projects);
   const workspace = validateWorkspaceRecord(records.workspace);
@@ -660,12 +674,17 @@ export function reconstructWorkspace(records: WorkspaceRecords): WorkspaceSnapsh
     throw targetError('Workspace activeProjectId must reference an ordered project.');
   }
 
-  return {
+  const snapshot: WorkspaceSnapshot = {
     projects: order.map(id => projectsById.get(id) as WorkspaceProject),
     activeProjectId: workspace.activeProjectId,
     customPresets: validatePresetRecords(records.presets),
     pendingImports: validatePendingRecords(records.pendingImports),
   };
+  return { records: records as WorkspaceRecords, snapshot };
+}
+
+export function reconstructWorkspace(records: WorkspaceRecordCandidates): WorkspaceSnapshot {
+  return reconstructWorkspaceRecords(records).snapshot;
 }
 
 const sameStrings = (left: readonly string[], right: readonly string[]): boolean =>
@@ -673,11 +692,11 @@ const sameStrings = (left: readonly string[], right: readonly string[]): boolean
 
 export async function verifyPreparedCopy(
   prepared: PreparedInitialCopy,
-  records: WorkspaceRecords,
+  reconstructedRecords: ReconstructedWorkspaceRecords,
   currentLegacy: LegacySnapshot,
   subtle: SubtleCrypto = globalThis.crypto.subtle,
 ): Promise<WorkspaceSnapshot> {
-  const reconstructed = reconstructWorkspace(records);
+  const { records, snapshot: reconstructed } = reconstructedRecords;
   const observed = {
     targetDigest: await digestWorkspaceContent(reconstructed, subtle),
     sourceDigest: await digestLegacySnapshot(currentLegacy, subtle),

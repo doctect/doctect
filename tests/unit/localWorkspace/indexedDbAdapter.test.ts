@@ -23,9 +23,9 @@ import {
   type IndexedDbAdapter,
 } from '../../../services/localWorkspace/indexedDbAdapter';
 import type { PreparedLineageRepair } from '../../../services/localWorkspace/lineageRepair';
-import type {
-  PreparedInitialCopy,
-  WorkspaceRecords,
+import {
+  reconstructWorkspaceRecords,
+  type PreparedInitialCopy,
 } from '../../../services/localWorkspace/migration';
 import {
   WORKSPACE_DB_NAME,
@@ -984,10 +984,11 @@ describe('independent reads and ledger transition', () => {
     const copy = preparedCopy();
     await adapter.writeInitialCopy(copy);
 
-    const records = await adapter.readWorkspaceRecords();
+    const candidates = await adapter.readWorkspaceRecords();
+    const { records } = reconstructWorkspaceRecords(candidates);
     const backup = await adapter.readLegacyBackup(copy.backup.id);
 
-    expect(records).toEqual<WorkspaceRecords>({
+    expect(records).toEqual({
       projects: copy.projects,
       workspace: copy.workspace,
       presets: copy.presets,
@@ -998,7 +999,8 @@ describe('independent reads and ledger transition', () => {
 
     records.projects[0].project.name = 'Mutated read result';
     (backup as LegacyBackupRecord).digest = 'mutated';
-    expect((await adapter.readWorkspaceRecords()).projects[0].project.name)
+    const rereadCandidates = await adapter.readWorkspaceRecords();
+    expect(reconstructWorkspaceRecords(rereadCandidates).records.projects[0].project.name)
       .toBe(copy.projects[0].project.name);
     expect((await adapter.readLegacyBackup(copy.backup.id))?.digest).toBe(copy.backup.digest);
   });

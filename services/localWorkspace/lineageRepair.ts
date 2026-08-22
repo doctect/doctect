@@ -2,29 +2,21 @@ import { digestWorkspaceContent } from './canonical';
 import type { WorkspaceSnapshot } from './contracts';
 import {
   reconstructWorkspace,
+  reconstructWorkspaceRecords,
   WorkspaceMigrationError,
+  type WorkspaceRecordCandidates,
   type WorkspaceRecords,
 } from './migration';
 import {
   WORKSPACE_DB_VERSION,
   type HistoricalMigrationLedgerV1,
   type MigrationLedger,
-  type StoredPendingImport,
-  type StoredPreset,
   type StoredProject,
-  type StoredWorkspace,
 } from './schema';
 
 export interface LineageRepairPreparationEnvironment {
   crypto: Pick<Crypto, 'subtle'>;
   randomUUID(): string;
-}
-
-export interface LineageRepairCandidateRecords {
-  projects: unknown;
-  workspace: unknown;
-  presets: unknown;
-  pendingImports: unknown;
 }
 
 export interface ExpectedLineageRepairProject {
@@ -62,7 +54,7 @@ const generatedIncarnation = (
 
 export async function prepareLineageRepair(
   ledger: HistoricalMigrationLedgerV1,
-  records: LineageRepairCandidateRecords,
+  records: WorkspaceRecordCandidates,
   environment: LineageRepairPreparationEnvironment,
 ): Promise<PreparedLineageRepair> {
   if (!Array.isArray(records.projects)) {
@@ -79,12 +71,16 @@ export async function prepareLineageRepair(
       ? cloned
       : { ...cloned, incarnation: 'historical-lineage-validation' };
   });
-  const validationSnapshot = reconstructWorkspace({
-    projects: validationProjects as unknown as StoredProject[],
-    workspace: structuredClone(records.workspace) as StoredWorkspace,
-    presets: structuredClone(records.presets) as StoredPreset[],
-    pendingImports: structuredClone(records.pendingImports) as StoredPendingImport[],
-  });
+  const validationRecords: WorkspaceRecordCandidates = {
+    projects: validationProjects,
+    workspace: structuredClone(records.workspace),
+    presets: structuredClone(records.presets),
+    pendingImports: structuredClone(records.pendingImports),
+  };
+  const {
+    records: validatedRecords,
+    snapshot: validationSnapshot,
+  } = reconstructWorkspaceRecords(validationRecords);
   const validationDigest = await digestWorkspaceContent(
     validationSnapshot,
     environment.crypto.subtle,
@@ -97,23 +93,21 @@ export async function prepareLineageRepair(
   }
 
   const replacementProjects: StoredProject[] = [];
-  const upgradedProjects = validationProjects.map((validatedRecord, index) => {
+  const upgradedProjects = validatedRecords.projects.map((validatedRecord, index) => {
     if (Object.hasOwn(records.projects[index], 'incarnation')) {
-      return validatedRecord as unknown as StoredProject;
+      return validatedRecord;
     }
     const replacement = {
       ...validatedRecord,
       incarnation: generatedIncarnation(environment, index),
-    } as unknown as StoredProject;
+    };
     replacementProjects.push(structuredClone(replacement));
     return replacement;
   });
 
   const upgradedRecords: WorkspaceRecords = {
+    ...validatedRecords,
     projects: upgradedProjects,
-    workspace: structuredClone(records.workspace) as StoredWorkspace,
-    presets: structuredClone(records.presets) as StoredPreset[],
-    pendingImports: structuredClone(records.pendingImports) as StoredPendingImport[],
   };
   const snapshot = reconstructWorkspace(upgradedRecords);
   const observedDigest = await digestWorkspaceContent(snapshot, environment.crypto.subtle);

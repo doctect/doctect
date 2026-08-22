@@ -11,6 +11,7 @@ import {
 import {
   prepareInitialCopy,
   reconstructWorkspace,
+  reconstructWorkspaceRecords,
   verifyPreparedCopy,
   type PreparedInitialCopy,
   type WorkspaceRecords,
@@ -505,7 +506,11 @@ describe('prepared-copy verification', () => {
       crypto: webcrypto as Crypto,
     }));
 
-    const verified = await verifyPreparedCopy(prepared, recordsFrom(prepared), source);
+    const verified = await verifyPreparedCopy(
+      prepared,
+      reconstructWorkspaceRecords(recordsFrom(prepared)),
+      source,
+    );
 
     expect(verified).toEqual(reconstructWorkspace(recordsFrom(prepared)));
   });
@@ -518,7 +523,11 @@ describe('prepared-copy verification', () => {
     const changed = structuredClone(source);
     changed[LEGACY_KEYS.projects].raw += ' ';
 
-    await expect(verifyPreparedCopy(prepared, recordsFrom(prepared), changed))
+    await expect(verifyPreparedCopy(
+      prepared,
+      reconstructWorkspaceRecords(recordsFrom(prepared)),
+      changed,
+    ))
       .rejects.toMatchObject({ category: 'verification-failed' });
   });
 
@@ -529,12 +538,20 @@ describe('prepared-copy verification', () => {
     }));
     const changedRecords = recordsFrom(prepared);
     changedRecords.projects[0].project.name = 'Changed';
-    await expect(verifyPreparedCopy(prepared, changedRecords, source))
+    await expect(verifyPreparedCopy(
+      prepared,
+      reconstructWorkspaceRecords(changedRecords),
+      source,
+    ))
       .rejects.toMatchObject({ category: 'verification-failed' });
 
     const changedLedger = structuredClone(prepared);
     changedLedger.ledger.counts.targetProjects += 1;
-    await expect(verifyPreparedCopy(changedLedger, recordsFrom(prepared), source))
+    await expect(verifyPreparedCopy(
+      changedLedger,
+      reconstructWorkspaceRecords(recordsFrom(prepared)),
+      source,
+    ))
       .rejects.toMatchObject({ category: 'verification-failed' });
   });
 });

@@ -26,7 +26,10 @@ import {
 } from '../../../services/localWorkspace/indexedDbAdapter';
 import { captureLegacySnapshot } from '../../../services/localWorkspace/legacy';
 import { digestLegacySnapshot } from '../../../services/localWorkspace/canonical';
-import { reconstructWorkspace } from '../../../services/localWorkspace/migration';
+import {
+  reconstructWorkspace,
+  reconstructWorkspaceRecords,
+} from '../../../services/localWorkspace/migration';
 import {
   decodeLegacyRecoveryBundle,
   prepareLegacyRecovery,
@@ -35,6 +38,7 @@ import {
   WORKSPACE_DB_NAME,
   WORKSPACE_DB_VERSION,
   storedProjectLineage,
+  type StoredProject,
 } from '../../../services/localWorkspace/schema';
 import {
   LEGACY_DOCUMENT_KEYS,
@@ -198,14 +202,28 @@ const createHarness = (options: HarnessOptions = {}): Harness => {
   };
 };
 
-const inspect = async (harness: Harness): Promise<IndexedDbInspection> => {
+type CurrentIndexedDbInspection = Omit<IndexedDbInspection, 'projects'> & {
+  projects: StoredProject[];
+};
+
+const currentInspection = (inspection: IndexedDbInspection): CurrentIndexedDbInspection => {
+  const { records } = reconstructWorkspaceRecords({
+    projects: inspection.projects,
+    workspace: inspection.workspace[0],
+    presets: inspection.presets,
+    pendingImports: inspection.pendingImports,
+  });
+  return { ...inspection, projects: records.projects };
+};
+
+const inspect = async (harness: Harness): Promise<CurrentIndexedDbInspection> => {
   const adapter = createIndexedDbAdapter({
     indexedDB: harness.indexedDB,
     now: () => TEST_NOW,
   });
   try {
     await adapter.open();
-    return await adapter.inspect();
+    return currentInspection(await adapter.inspect());
   } finally {
     adapter.close();
   }

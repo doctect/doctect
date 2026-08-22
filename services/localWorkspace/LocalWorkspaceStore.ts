@@ -43,8 +43,10 @@ import {
   WorkspaceMigrationError,
   prepareInitialCopy,
   reconstructWorkspace,
+  reconstructWorkspaceRecords,
   verifyPreparedCopy,
   type PreparedInitialCopy,
+  type WorkspaceRecordCandidates,
   type WorkspaceRecords,
 } from './migration';
 import {
@@ -716,12 +718,12 @@ const createLocalWorkspaceStoreAtVersion = (
   const readVerificationInputs = async (
     ledger: SupportedMigrationLedger,
   ): Promise<{
-    records: WorkspaceRecords;
+    records: WorkspaceRecordCandidates;
     originalBackup: LegacyBackupRecord;
     acceptedBackup: LegacyBackupRecord;
   }> => {
     const activeAdapter = getAdapter();
-    let records: WorkspaceRecords;
+    let records: WorkspaceRecordCandidates;
     let originalBackup: LegacyBackupRecord | undefined;
     let acceptedBackup: LegacyBackupRecord | undefined;
     try {
@@ -1129,9 +1131,10 @@ const createLocalWorkspaceStoreAtVersion = (
         throw error;
       }
 
+      let records: WorkspaceRecords;
       let snapshot: WorkspaceSnapshot;
       try {
-        snapshot = reconstructWorkspace(inputs.records);
+        ({ records, snapshot } = reconstructWorkspaceRecords(inputs.records));
       } catch (error) {
         return verificationFailure(error);
       }
@@ -1176,7 +1179,7 @@ const createLocalWorkspaceStoreAtVersion = (
           ? recovery('legacy-changing')
           : recovery('split-brain');
       }
-      const installed = installDurableState(inputs.records, snapshot);
+      const installed = installDurableState(records, snapshot);
       return ready(cloneWorkspaceSnapshotWithProjectAuthority(installed), ledger);
     };
 
@@ -1331,23 +1334,26 @@ const createLocalWorkspaceStoreAtVersion = (
       }
 
       const currentLegacy = captureLegacySnapshot(environment.legacyStorage);
+      let records: WorkspaceRecords;
       let snapshot: WorkspaceSnapshot;
       try {
+        const reconstructed = reconstructWorkspaceRecords(inputs.records);
+        ({ records, snapshot } = reconstructed);
         const prepared: PreparedInitialCopy = {
           origin: ledger.origin,
           source: inputs.originalBackup.snapshot,
           sourceDigest: ledger.sourceDigest,
           targetDigest: ledger.expectedTargetDigest,
-          projects: inputs.records.projects,
-          workspace: inputs.records.workspace,
-          presets: inputs.records.presets,
-          pendingImports: inputs.records.pendingImports,
+          projects: records.projects,
+          workspace: records.workspace,
+          presets: records.presets,
+          pendingImports: records.pendingImports,
           backup: inputs.originalBackup,
           ledger,
         };
         snapshot = await verifyPreparedCopy(
           prepared,
-          inputs.records,
+          reconstructed,
           currentLegacy,
           environment.crypto.subtle,
         );
@@ -1405,7 +1411,7 @@ const createLocalWorkspaceStoreAtVersion = (
       )) {
         return copiedFailure();
       }
-      const installed = installDurableState(inputs.records, snapshot);
+      const installed = installDurableState(records, snapshot);
       retryableCopiedLedger = undefined;
       return ready(cloneWorkspaceSnapshotWithProjectAuthority(installed), verifiedLedger);
     };
@@ -1637,11 +1643,12 @@ const createLocalWorkspaceStoreAtVersion = (
   const readPostCommandSnapshot = async (
     preserveProjectAuthority?: { projectId: string; lineage: ProjectLineage },
   ): Promise<WorkspaceSnapshot> => {
+    let candidates: WorkspaceRecordCandidates;
     let records: WorkspaceRecords;
     let snapshot: WorkspaceSnapshot;
     try {
-      records = await getAdapter().readWorkspaceRecords();
-      snapshot = reconstructWorkspace(records);
+      candidates = await getAdapter().readWorkspaceRecords();
+      ({ records, snapshot } = reconstructWorkspaceRecords(candidates));
     } catch (error) {
       const cause = error instanceof WorkspaceStoreError
         ? error
@@ -1902,15 +1909,16 @@ const createLocalWorkspaceStoreAtVersion = (
             );
           }
 
+          let candidates: WorkspaceRecordCandidates;
           let records: WorkspaceRecords;
           let acceptedBackup: LegacyBackupRecord | undefined;
           try {
-            [records, acceptedBackup] = await Promise.all([
+            [candidates, acceptedBackup] = await Promise.all([
               getAdapter().readWorkspaceRecords(),
               getAdapter().readLegacyBackup(ledger.acceptedLegacyBackupId),
             ]);
             assertRecoveryLifecycle();
-            reconstructWorkspace(records);
+            ({ records } = reconstructWorkspaceRecords(candidates));
             acceptedBackup = await validateBackup(acceptedBackup, {
               id: ledger.acceptedLegacyBackupId,
               digest: ledger.acceptedLegacyDigest,
@@ -1971,12 +1979,13 @@ const createLocalWorkspaceStoreAtVersion = (
 
     const nextLedger = await getAdapter().recoverLegacyAsCopies(prepared);
     assertRecoveryLifecycle();
+    let candidates: WorkspaceRecordCandidates;
     let records: WorkspaceRecords;
     let snapshot: WorkspaceSnapshot;
     try {
-      records = await getAdapter().readWorkspaceRecords();
+      candidates = await getAdapter().readWorkspaceRecords();
       assertRecoveryLifecycle();
-      snapshot = reconstructWorkspace(records);
+      ({ records, snapshot } = reconstructWorkspaceRecords(candidates));
     } catch (error) {
       if (!recoveryLifecycleIsCurrent()) throw error;
       const cause = error instanceof WorkspaceStoreError
