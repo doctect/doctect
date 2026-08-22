@@ -1,6 +1,7 @@
 import type { AppState } from '../../types';
 import { canonicalStringify, digestLegacySnapshot, sha256Hex } from './canonical';
 import {
+  INDEXED_DB_UPGRADE_BLOCKED_MESSAGE,
   WorkspaceStoreError,
   type LocalWorkspaceStore,
   type MigrationReceipt,
@@ -375,9 +376,10 @@ const recovery = (
 
 const unavailable = (
   availableExports: RecoverySource[] = [],
+  message = 'Local workspace storage is unavailable.',
 ): Extract<WorkspaceBootstrapResult, { status: 'unavailable' }> => ({
   status: 'unavailable',
-  message: 'Local workspace storage is unavailable.',
+  message,
   availableExports,
 });
 
@@ -759,7 +761,7 @@ const createLocalWorkspaceStoreAtVersion = (
   };
 
   const readRecognizedLedger = async (): Promise<MigrationLedger> => {
-    let ledger: MigrationLedger | undefined;
+    let ledger: unknown;
     try {
       ledger = await getAdapter().readMigrationLedger();
     } catch (error) {
@@ -1092,7 +1094,12 @@ const createLocalWorkspaceStoreAtVersion = (
     try {
       await adapter.open();
     } catch (error) {
-      if (error instanceof WorkspaceStoreError) return unavailable();
+      if (error instanceof WorkspaceStoreError) {
+        return unavailable(
+          [],
+          error.message === INDEXED_DB_UPGRADE_BLOCKED_MESSAGE ? error.message : undefined,
+        );
+      }
       throw error;
     }
 

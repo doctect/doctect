@@ -265,7 +265,10 @@ test.describe('local workspace migration release gate', () => {
         try {
             const gateEvidence = await mountVersionTwoWorkspaceGate(page);
             expect(gateEvidence).toMatchObject({
-                result: { status: 'unavailable' },
+                result: {
+                    status: 'unavailable',
+                    message: 'IndexedDB upgrade is blocked.',
+                },
                 gateBootstrapCalls: 1,
             });
             await expect.poll(async () => (
@@ -274,6 +277,10 @@ test.describe('local workspace migration release gate', () => {
             await expect(page.getByRole('heading', {
                 name: 'Doctect can’t open your saved projects',
             })).toBeVisible();
+            await expect(page.getByText(
+                'Close other Doctect tabs, then reload this page.',
+            )).toBeVisible();
+            await expect(page.getByRole('button', { name: 'Try again' })).toHaveCount(0);
             await expect(page.getByTestId('blocked-upgrade-editor')).toHaveCount(0);
             await expect(editorPane(page)).toHaveCount(0);
             const heldInspection = await inspectHeldWorkspaceDatabase(page);

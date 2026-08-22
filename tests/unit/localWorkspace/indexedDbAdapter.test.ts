@@ -900,6 +900,34 @@ describe('atomic historical lineage repair', () => {
     expect(await adapter.inspect()).toEqual(before);
   });
 
+  it('rolls back both project writes when the second write callback fails', async () => {
+    const indexedDB = new IDBFactory();
+    const fixture = historicalRepairFixture();
+    delete (fixture.second as Partial<StoredProject>).incarnation;
+    fixture.prepared.expectedProjects[1].record = structuredClone(fixture.second);
+    fixture.prepared.replacementProjects.push({
+      ...structuredClone(fixture.copy.projects[1]),
+      incarnation: 'repair-incarnation-b',
+    });
+    await seedHistoricalRepairFixture(indexedDB, fixture);
+    let projectWriteCallbacks = 0;
+    const fault = vi.fn((point: WorkspaceFaultPoint) => {
+      if (point !== 'lineage-repair.after-project-write') return;
+      projectWriteCallbacks += 1;
+      if (projectWriteCallbacks === 2) throw new Error('Injected second project write fault.');
+    });
+    const adapter = createTestAdapter({ indexedDB, fault });
+    const before = await adapter.inspect();
+
+    await expect(adapter.repairHistoricalLineage(fixture.prepared))
+      .rejects.toMatchObject({ code: 'io' });
+
+    expect(fault.mock.calls.filter(
+      ([point]) => point === 'lineage-repair.after-project-write',
+    )).toHaveLength(2);
+    expect(await adapter.inspect()).toEqual(before);
+  });
+
   it('rejects changed ledger, project bytes, and project key set', async () => {
     for (const mutate of [
       async (indexedDB: IDBFactory, fixture: ReturnType<typeof historicalRepairFixture>) =>

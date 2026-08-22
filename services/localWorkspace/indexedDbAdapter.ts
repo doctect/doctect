@@ -4,6 +4,7 @@ import {
   type IDBPTransaction,
 } from 'idb';
 import {
+  INDEXED_DB_UPGRADE_BLOCKED_MESSAGE,
   WorkspaceStoreError,
   type WorkspaceCustomPreset,
   type WorkspaceImportAttemptProvenance,
@@ -129,7 +130,7 @@ export interface IndexedDbAdapter {
   repairHistoricalLineage(prepared: PreparedLineageRepair): Promise<void>;
   readWorkspaceRecords(): Promise<WorkspaceRecords>;
   readLegacyBackup(id: string): Promise<LegacyBackupRecord | undefined>;
-  readMigrationLedger(): Promise<MigrationLedger | undefined>;
+  readMigrationLedger(): Promise<unknown>;
   markVerified(expected: VerificationExpectation): Promise<MigrationLedger>;
   markLegacyDrift(expected: LegacyDriftExpectation): Promise<MigrationLedger>;
   recoverLegacyAsCopies(prepared: PreparedLegacyRecovery): Promise<MigrationLedger>;
@@ -357,7 +358,7 @@ export const createIndexedDbAdapter = (
           },
           blocked() {
             blockedError ??= new WorkspaceStoreError(
-              'IndexedDB upgrade is blocked.',
+              INDEXED_DB_UPGRADE_BLOCKED_MESSAGE,
               'unavailable',
             );
             authorityError ??= blockedError;
@@ -674,7 +675,7 @@ export const createIndexedDbAdapter = (
     }
   };
 
-  const readMigrationLedger = async (): Promise<MigrationLedger | undefined> => {
+  const readMigrationLedger = async (): Promise<unknown> => {
     const activeDatabase = await getDatabase();
     let transaction;
     try {

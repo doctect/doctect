@@ -8,9 +8,10 @@ import {
   RefreshCw,
   X,
 } from 'lucide-react';
-import type {
-  RecoverySource,
-  WorkspaceBootstrapResult,
+import {
+  INDEXED_DB_UPGRADE_BLOCKED_MESSAGE,
+  type RecoverySource,
+  type WorkspaceBootstrapResult,
 } from '../../services/localWorkspace/index';
 import {
   OPEN_WORKSPACE_PRESENTATION,
@@ -54,13 +55,17 @@ export function WorkspaceRecoveryScreen({
   const returnFocusRef = useRef(false);
   const recovery = result.status === 'recovery' ? result.recovery : undefined;
   const splitBrain = recovery?.kind === 'split-brain';
+  const blockedUpgrade = result.status === 'unavailable'
+    && result.message === INDEXED_DB_UPGRADE_BLOCKED_MESSAGE;
   const heading = result.status === 'unavailable'
     ? 'Doctect can’t open your saved projects'
     : splitBrain
       ? 'We found two different saved project sets'
       : 'We couldn’t finish preparing your projects';
   const supportingCopy = result.status === 'unavailable'
-    ? 'Local project storage could not be opened. No saved project data was changed.'
+    ? blockedUpgrade
+      ? 'Close other Doctect tabs, then reload this page.'
+      : 'Local project storage could not be opened. No saved project data was changed.'
     : splitBrain
       ? 'Another tab or an older Doctect version may have saved different changes. Nothing was overwritten.'
       : 'Editor stayed closed to protect your work. Your saved projects were not replaced or deleted.';

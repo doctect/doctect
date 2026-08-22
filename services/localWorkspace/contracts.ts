@@ -94,6 +94,8 @@ export type RecoverySource =
   | 'legacy-original'
   | 'indexeddb-workspace';
 
+export const INDEXED_DB_UPGRADE_BLOCKED_MESSAGE = 'IndexedDB upgrade is blocked.';
+
 export interface WorkspaceRecovery {
   recoveryId: string;
   kind:

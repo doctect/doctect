@@ -734,6 +734,26 @@ describe('WorkspaceBootstrapGate', () => {
     expect(screen.queryByTestId('editor-page')).not.toBeInTheDocument();
   });
 
+  it('guides a blocked IndexedDB upgrade without retrying the frozen adapter', async () => {
+    const store = fakeStore({
+      bootstrap: unavailableResult({ message: 'IndexedDB upgrade is blocked.' }),
+    });
+    render(<WorkspaceBootstrapGate store={store} renderEditor={fakeEditorRenderer} />);
+
+    await screen.findByRole('heading', {
+      name: 'Doctect can’t open your saved projects',
+    });
+    expect(screen.getByText(
+      'Close other Doctect tabs, then reload this page.',
+    )).toBeVisible();
+    expect(screen.queryByText(
+      'Local project storage could not be opened. No saved project data was changed.',
+    )).not.toBeInTheDocument();
+    expect(screen.getByText('IndexedDB upgrade is blocked.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument();
+    expect(screen.queryByTestId('editor-page')).not.toBeInTheDocument();
+  });
+
   it('unmounts a ready editor immediately when storage authority is lost', async () => {
     const store = fakeReadyStore();
     render(<WorkspaceBootstrapGate store={store} renderEditor={fakeEditorRenderer} />);

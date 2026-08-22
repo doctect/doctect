@@ -1105,23 +1105,38 @@ describe('historical version-1 lineage repair', () => {
       expect(Object.hasOwn(stored.projects[0], 'incarnation')).toBe(false);
       expect(stored.migrationLedger[0]).toEqual(historical.ledger);
       expect((harness.storage as MemoryStorage).mutations).toEqual([]);
+      expect(result.recovery.canRecoverLegacyAsCopies).toBe(false);
+
+      await expect(store.commit({
+        type: 'recover-legacy-as-copies',
+        recoveryId: result.recovery.recoveryId,
+      })).rejects.toMatchObject({ code: 'unavailable' });
+      expect(await inspect(harness)).toEqual(stored);
+      expect((harness.storage as MemoryStorage).mutations).toEqual([]);
     },
   );
 
-  it('does not repair invalid present incarnation or unsupported cleanup state', async () => {
+  it('does not repair invalid present incarnation', async () => {
     const invalid = createHarness();
     await seedHistoricalLineage(invalid, { corruptIncarnation: '' });
     expect(recoveryResult(
       await createLocalWorkspaceStore(invalid.environment).bootstrap(),
     ).recovery.kind).toBe('verification-failed');
-
-    const cleanup = createHarness();
-    const historical = await seedHistoricalLineage(cleanup, { state: 'cleanup-started' });
-    expect(recoveryResult(
-      await createLocalWorkspaceStore(cleanup.environment).bootstrap(),
-    ).recovery.kind).toBe('unsupported-cleanup-state');
-    expect((await inspect(cleanup)).migrationLedger[0]).toEqual(historical.ledger);
   });
+
+  it.each(['cleanup-started', 'cleanup-complete'] as const)(
+    'leaves historical %s state exactly unchanged',
+    async state => {
+      const cleanup = createHarness();
+      await seedHistoricalLineage(cleanup, { state });
+      const before = await inspect(cleanup);
+
+      expect(recoveryResult(
+        await createLocalWorkspaceStore(cleanup.environment).bootstrap(),
+      ).recovery.kind).toBe('unsupported-cleanup-state');
+      expect(await inspect(cleanup)).toEqual(before);
+    },
+  );
 
   it('preserves an unresolved recovery marker byte-exactly across repair', async () => {
     const harness = createHarness();
@@ -1151,16 +1166,26 @@ describe('historical version-1 lineage repair', () => {
   it('lets concurrent stores follow one repair winner', async () => {
     const harness = createHarness();
     await seedHistoricalLineage(harness);
+    const randomUUID = vi.fn()
+      .mockReturnValueOnce('concurrent-incarnation-left')
+      .mockReturnValueOnce('concurrent-incarnation-right');
+    harness.environment.randomUUID = randomUUID;
     const left = createLocalWorkspaceStore(harness.environment);
     const right = createLocalWorkspaceStore(harness.environment);
 
     const results = await Promise.all([left.bootstrap(), right.bootstrap()]);
 
     expect(results.map(result => result.status)).toEqual(['ready', 'ready']);
-    expect((await inspect(harness)).migrationLedger[0]).toMatchObject({
+    const persisted = await inspect(harness);
+    expect(persisted.migrationLedger[0]).toMatchObject({
       indexedDbVersion: 2,
       ledgerRevision: 2,
     });
+    expect(randomUUID).toHaveBeenCalledTimes(2);
+    expect([
+      'concurrent-incarnation-left',
+      'concurrent-incarnation-right',
+    ]).toContain(persisted.projects[0].incarnation);
   });
 });
 
@@ -1856,7 +1881,7 @@ describe('IndexedDB availability and lifecycle loss', () => {
 
     expect(result).toMatchObject({
       status: 'unavailable',
-      message: expect.any(String),
+      message: 'IndexedDB upgrade is blocked.',
       availableExports: ['legacy-current'],
     });
   });

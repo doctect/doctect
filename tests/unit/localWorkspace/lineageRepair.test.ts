@@ -43,9 +43,11 @@ describe('version-1 lineage repair preparation', () => {
     const before = structuredClone(fixture.records);
     const beforeProjects = structuredClone(fixture.records.projects) as unknown[];
     const randomUUID = vi.fn(() => 'repair-incarnation-a');
+    const digest = vi.fn((algorithm: AlgorithmIdentifier, data: BufferSource) =>
+      webcrypto.subtle.digest(algorithm, data));
 
     const prepared = await prepareLineageRepair(fixture.ledger, fixture.records, {
-      crypto: webcrypto as unknown as Crypto,
+      crypto: { subtle: { digest } as unknown as SubtleCrypto },
       randomUUID,
     });
 
@@ -66,6 +68,7 @@ describe('version-1 lineage repair preparation', () => {
     expect(prepared.snapshot.projects).toEqual(
       fixture.initial.projects.map(record => record.project),
     );
+    expect(digest).toHaveBeenCalledTimes(2);
     expect(await digestWorkspaceContent(
       prepared.snapshot,
       (webcrypto as unknown as Crypto).subtle,
@@ -96,26 +99,33 @@ describe('version-1 lineage repair preparation', () => {
     const record = (fixture.records.projects as Record<string, unknown>[])[0];
     corrupt(record);
     const before = structuredClone(fixture.records);
+    const randomUUID = vi.fn(() => 'repair-incarnation-a');
 
     await expect(prepareLineageRepair(fixture.ledger, fixture.records, {
       crypto: webcrypto as unknown as Crypto,
-      randomUUID: () => 'repair-incarnation-a',
+      randomUUID,
     })).rejects.toMatchObject({ category: 'target-invalid' });
     expect(fixture.records).toEqual(before);
+    expect(randomUUID).not.toHaveBeenCalled();
   });
 
-  it('rejects empty generated incarnation and digest mismatch', async () => {
+  it('rejects empty generated incarnation', async () => {
     const empty = await candidate();
     await expect(prepareLineageRepair(empty.ledger, empty.records, {
       crypto: webcrypto as unknown as Crypto,
       randomUUID: () => '',
     })).rejects.toMatchObject({ category: 'target-invalid' });
+  });
 
+  it('rejects a pre-repair digest mismatch without generating lineage', async () => {
     const mismatched = await candidate();
     mismatched.ledger.expectedTargetDigest = 'f'.repeat(64);
+    const randomUUID = vi.fn(() => 'repair-incarnation-a');
+
     await expect(prepareLineageRepair(mismatched.ledger, mismatched.records, {
       crypto: webcrypto as unknown as Crypto,
-      randomUUID: () => 'repair-incarnation-a',
+      randomUUID,
     })).rejects.toMatchObject({ category: 'verification-failed' });
+    expect(randomUUID).not.toHaveBeenCalled();
   });
 });

@@ -1137,7 +1137,7 @@ describe('explicit recover legacy as copies', () => {
       now: () => TEST_NOW,
     });
     await adapter.open();
-    const resolvedLedger = await adapter.readMigrationLedger();
+    const resolvedLedger = (await adapter.inspect()).migrationLedger[0];
     if (!resolvedLedger) throw new Error('Expected resolved recovery ledger.');
     await adapter.markLegacyDrift({
       expectedLedgerRevision: resolvedLedger.ledgerRevision,

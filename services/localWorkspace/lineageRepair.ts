@@ -70,17 +70,39 @@ export async function prepareLineageRepair(
   }
 
   const expectedRawProjects = structuredClone(records.projects);
-  const replacementProjects: StoredProject[] = [];
-  const upgradedProjects = records.projects.map((rawRecord, index) => {
+  const validationProjects = records.projects.map((rawRecord, index) => {
     if (!isPlainObject(rawRecord)) {
       throw targetError(`Project record ${index} must be an object.`);
     }
     const cloned = structuredClone(rawRecord);
-    if (Object.hasOwn(cloned, 'incarnation')) {
-      return cloned as unknown as StoredProject;
+    return Object.hasOwn(cloned, 'incarnation')
+      ? cloned
+      : { ...cloned, incarnation: 'historical-lineage-validation' };
+  });
+  const validationSnapshot = reconstructWorkspace({
+    projects: validationProjects as unknown as StoredProject[],
+    workspace: structuredClone(records.workspace) as StoredWorkspace,
+    presets: structuredClone(records.presets) as StoredPreset[],
+    pendingImports: structuredClone(records.pendingImports) as StoredPendingImport[],
+  });
+  const validationDigest = await digestWorkspaceContent(
+    validationSnapshot,
+    environment.crypto.subtle,
+  );
+  if (validationDigest !== ledger.expectedTargetDigest) {
+    throw new WorkspaceMigrationError(
+      'Historical workspace digest changed before lineage preparation.',
+      'verification-failed',
+    );
+  }
+
+  const replacementProjects: StoredProject[] = [];
+  const upgradedProjects = validationProjects.map((validatedRecord, index) => {
+    if (Object.hasOwn(records.projects[index], 'incarnation')) {
+      return validatedRecord as unknown as StoredProject;
     }
     const replacement = {
-      ...cloned,
+      ...validatedRecord,
       incarnation: generatedIncarnation(environment, index),
     } as unknown as StoredProject;
     replacementProjects.push(structuredClone(replacement));
