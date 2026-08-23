@@ -227,13 +227,14 @@ describe('WorkspaceBootstrapGate', () => {
       <WorkspaceBootstrapGate store={store} renderEditor={fakeEditorRenderer} />,
     );
 
-    expect(screen.getByRole('status')).toHaveTextContent('Opening local storage');
+    expect(screen.getByRole('status')).toHaveTextContent('Opening project storage');
     expect(view.container.querySelector('.animate-spin'))
       .toHaveClass('motion-reduce:animate-none');
-    expect(screen.getByRole('heading', { name: 'Preparing your local projects' })).toBeVisible();
+    expect(screen.getByRole('heading', { name: 'Opening your projects' })).toBeVisible();
     expect(screen.getByText(
-      'Keep this tab open. Existing projects remain untouched until verification finishes.',
+      'Doctect is checking your saved projects before opening the editor.',
     )).toBeVisible();
+    expect(screen.queryByText('Preparing your local projects')).not.toBeInTheDocument();
     expect(screen.queryByTestId('editor-page')).not.toBeInTheDocument();
   });
 
@@ -260,17 +261,18 @@ describe('WorkspaceBootstrapGate', () => {
     const store = fakeStore({ bootstrap: bootstrap.promise });
     render(<WorkspaceBootstrapGate store={store} renderEditor={fakeEditorRenderer} />);
     const phases: Array<[WorkspaceBootstrapPhase, string]> = [
-      ['opening-local-storage', 'Opening local storage'],
-      ['checking-existing-projects', 'Checking existing projects'],
-      ['copying-projects', 'Copying projects'],
-      ['verifying-projects', 'Verifying projects'],
-      ['finishing-upgrade', 'Finishing upgrade'],
+      ['opening-local-storage', 'Opening project storage'],
+      ['checking-existing-projects', 'Checking saved projects'],
+      ['copying-projects', 'Preparing saved projects'],
+      ['verifying-projects', 'Checking project data'],
+      ['finishing-upgrade', 'Getting the editor ready'],
     ];
 
     for (const [phase, label] of phases) {
       act(() => store.emitPhase(phase));
       expect(screen.getByRole('status')).toHaveTextContent(label);
     }
+    expect(screen.queryByText('Finishing upgrade')).not.toBeInTheDocument();
     expect(screen.queryByText(/%/)).not.toBeInTheDocument();
   });
 
@@ -537,7 +539,7 @@ describe('WorkspaceBootstrapGate', () => {
 
     expect(renderEditor).not.toHaveBeenCalled();
     expect(screen.queryByTestId('editor-page')).not.toBeInTheDocument();
-    expect(screen.getByRole('status')).toHaveTextContent('Opening local storage');
+    expect(screen.getByRole('status')).toHaveTextContent('Opening project storage');
     expect(replacementStore.bootstrap).toHaveBeenCalledOnce();
   });
 
@@ -563,7 +565,7 @@ describe('WorkspaceBootstrapGate', () => {
       publishDuringLayout
       workspace={oldWorkspace}
     />);
-    expect(screen.getByRole('status')).toHaveTextContent('Opening local storage');
+    expect(screen.getByRole('status')).toHaveTextContent('Opening project storage');
     expect(replacementStore.bootstrap).toHaveBeenCalledOnce();
 
     await act(async () => replacementBootstrap.resolve(unavailableResult({
@@ -605,7 +607,7 @@ describe('WorkspaceBootstrapGate', () => {
       name: RECOVERY_SOURCE_PRESENTATION['legacy-current'].actionLabel,
     }))
       .not.toBeInTheDocument();
-    expect(screen.getByRole('status')).toHaveTextContent('Opening local storage');
+    expect(screen.getByRole('status')).toHaveTextContent('Opening project storage');
   });
 
   it('keeps committed store authority active when a replacement render is interrupted', async () => {
@@ -705,13 +707,13 @@ describe('WorkspaceBootstrapGate', () => {
     })).toBeVisible();
 
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
-    expect(screen.getByRole('status')).toHaveTextContent('Opening local storage');
+    expect(screen.getByRole('status')).toHaveTextContent('Opening project storage');
 
     act(() => {
       store.emitPhase('finishing-upgrade', 0);
       store.emitAuthorityLost(unavailableResult(), 0);
     });
-    expect(screen.getByRole('status')).toHaveTextContent('Opening local storage');
+    expect(screen.getByRole('status')).toHaveTextContent('Opening project storage');
     expect(screen.queryByRole('heading', {
       name: 'Doctect can’t open your saved projects',
     })).not.toBeInTheDocument();

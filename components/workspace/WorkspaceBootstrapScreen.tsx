@@ -2,11 +2,11 @@ import { Database, LoaderCircle } from 'lucide-react';
 import type { WorkspaceBootstrapPhase } from '../../services/localWorkspace/index';
 
 export const PHASE_LABELS: Record<WorkspaceBootstrapPhase, string> = {
-  'opening-local-storage': 'Opening local storage',
-  'checking-existing-projects': 'Checking existing projects',
-  'copying-projects': 'Copying projects',
-  'verifying-projects': 'Verifying projects',
-  'finishing-upgrade': 'Finishing upgrade',
+  'opening-local-storage': 'Opening project storage',
+  'checking-existing-projects': 'Checking saved projects',
+  'copying-projects': 'Preparing saved projects',
+  'verifying-projects': 'Checking project data',
+  'finishing-upgrade': 'Getting the editor ready',
 };
 
 interface WorkspaceBootstrapScreenProps {
@@ -27,10 +27,10 @@ export function WorkspaceBootstrapScreen({ phase }: WorkspaceBootstrapScreenProp
           id="workspace-bootstrap-heading"
           className="text-2xl font-bold tracking-tight text-slate-900"
         >
-          Preparing your local projects
+          Opening your projects
         </h1>
         <p className="mt-3 max-w-[68ch] text-sm leading-6 text-slate-600 sm:text-base">
-          Keep this tab open. Existing projects remain untouched until verification finishes.
+          Doctect is checking your saved projects before opening the editor.
         </p>
         <div
           role="status"

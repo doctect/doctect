@@ -506,11 +506,11 @@ test.describe('local workspace migration release gate', () => {
     test('bootstrap held at every named phase renders no editor and writes no blank project', async ({ page }) => {
         test.setTimeout(60_000);
         const phases = {
-            'opening-local-storage': 'Opening local storage',
-            'checking-existing-projects': 'Checking existing projects',
-            'copying-projects': 'Copying projects',
-            'verifying-projects': 'Verifying projects',
-            'finishing-upgrade': 'Finishing upgrade',
+            'opening-local-storage': 'Opening project storage',
+            'checking-existing-projects': 'Checking saved projects',
+            'copying-projects': 'Preparing saved projects',
+            'verifying-projects': 'Checking project data',
+            'finishing-upgrade': 'Getting the editor ready',
         };
         for (const [phase, label] of Object.entries(phases)) {
             await test.step(phase, async () => {
